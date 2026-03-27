@@ -1,0 +1,13 @@
+{
+  "name": "@stdo/example-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@stdo/shared-types": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ../../scripts/copy-static.mjs . static dist/extension"
+  }
+}
+

@@ -1,0 +1,25 @@
+{
+  "name": "st-delegation-of-authority",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @stdo/shared-types && npm run build --workspace @stdo/server-plugin && npm run build --workspace @stdo/sdk-extension && npm run build --workspace @stdo/example-extension",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "dev:link": "npm run build && node ./scripts/link-dev.mjs",
+    "dev:unlink": "node ./scripts/unlink-dev.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "webpack": "^5.100.2",
+    "webpack-cli": "^6.0.1"
+  }
+}
+

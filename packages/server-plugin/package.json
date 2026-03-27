@@ -1,0 +1,13 @@
+{
+  "name": "@stdo/server-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "webpack --config webpack.config.cjs && node ../../scripts/copy-static.mjs . static dist/authority"
+  },
+  "dependencies": {
+    "@stdo/shared-types": "0.1.0"
+  }
+}
+

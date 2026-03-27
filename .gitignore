@@ -1,0 +1,7 @@
+node_modules/
+dist/
+**/dist/
+coverage/
+.vitest/
+*.log
+*.tsbuildinfo

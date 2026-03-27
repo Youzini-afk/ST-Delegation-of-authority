@@ -1,0 +1,83 @@
+<div class="authority-example-panel">
+  <div class="authority-example-panel__header">
+    <div>
+      <h2>Authority Example</h2>
+      <p>这个示例扩展用来验证 session、KV、Blob、HTTP、Jobs 和 SSE 能力是否完整闭环。</p>
+    </div>
+    <div class="authority-example-actions">
+      <button type="button" class="menu_button" data-action="refresh-session">刷新会话</button>
+      <button type="button" class="menu_button" data-action="open-security-center">打开安全中心</button>
+    </div>
+  </div>
+
+  <div class="authority-example-grid">
+    <section class="authority-example-card">
+      <h3>Session</h3>
+      <pre data-output="session"></pre>
+    </section>
+
+    <section class="authority-example-card">
+      <h3>KV</h3>
+      <input data-field="kv-key" type="text" placeholder="key" />
+      <textarea data-field="kv-value" rows="5" placeholder="value"></textarea>
+      <div class="authority-example-actions">
+        <button type="button" class="menu_button" data-action="kv-set">写入</button>
+        <button type="button" class="menu_button" data-action="kv-get">读取</button>
+        <button type="button" class="menu_button" data-action="kv-delete">删除</button>
+        <button type="button" class="menu_button" data-action="kv-list">列出</button>
+      </div>
+    </section>
+
+    <section class="authority-example-card">
+      <h3>Blob</h3>
+      <input data-field="blob-name" type="text" placeholder="filename" />
+      <textarea data-field="blob-content" rows="5" placeholder="blob content"></textarea>
+      <div class="authority-example-actions">
+        <button type="button" class="menu_button" data-action="blob-put">写入</button>
+        <button type="button" class="menu_button" data-action="blob-get">读取</button>
+        <button type="button" class="menu_button" data-action="blob-delete">删除</button>
+        <button type="button" class="menu_button" data-action="blob-list">列出</button>
+      </div>
+    </section>
+
+    <section class="authority-example-card">
+      <h3>HTTP</h3>
+      <input data-field="http-url" type="text" placeholder="https://jsonplaceholder.typicode.com/todos/1" />
+      <div class="authority-example-actions">
+        <button type="button" class="menu_button" data-action="http-fetch">发起请求</button>
+      </div>
+    </section>
+
+    <section class="authority-example-card">
+      <h3>Jobs</h3>
+      <input data-field="job-duration" type="number" placeholder="duration ms" />
+      <input data-field="job-message" type="text" placeholder="message" />
+      <input data-field="job-id" type="text" placeholder="job id" />
+      <div class="authority-example-actions">
+        <button type="button" class="menu_button" data-action="job-create">创建</button>
+        <button type="button" class="menu_button" data-action="job-get">读取</button>
+        <button type="button" class="menu_button" data-action="job-list">列出</button>
+        <button type="button" class="menu_button" data-action="job-cancel">取消</button>
+      </div>
+    </section>
+
+    <section class="authority-example-card">
+      <h3>Events</h3>
+      <div class="authority-example-actions">
+        <button type="button" class="menu_button" data-action="events-connect">连接 SSE</button>
+        <button type="button" class="menu_button" data-action="events-disconnect">断开 SSE</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="authority-example-grid authority-example-grid--bottom">
+    <section class="authority-example-card">
+      <h3>最近结果</h3>
+      <pre data-output="result"></pre>
+    </section>
+    <section class="authority-example-card">
+      <h3>事件日志</h3>
+      <pre data-output="log"></pre>
+    </section>
+  </div>
+</div>

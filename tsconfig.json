@@ -1,0 +1,18 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/shared-types"
+    },
+    {
+      "path": "./packages/server-plugin"
+    },
+    {
+      "path": "./packages/sdk-extension"
+    },
+    {
+      "path": "./packages/example-extension"
+    }
+  ]
+}
+

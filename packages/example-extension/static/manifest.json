@@ -1,0 +1,14 @@
+{
+  "display_name": "Authority Example",
+  "loading_order": 10,
+  "requires": [],
+  "optional": [],
+  "dependencies": [
+    "third-party/st-authority-sdk"
+  ],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "OpenAI Codex",
+  "version": "0.1.0",
+  "homePage": "https://github.com/openai"
+}
