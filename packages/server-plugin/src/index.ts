@@ -8,6 +8,6 @@ export const info = {
 };
 
 export async function init(router: any): Promise<void> {
-    registerRoutes(router);
+    const runtime = registerRoutes(router);
+    void runtime.install.bootstrap();
 }
-

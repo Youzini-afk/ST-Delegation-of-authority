@@ -121,3 +121,30 @@ export interface SessionInitInput {
     uiLabel?: string;
 }
 
+export type InstallStatusCode = 'ready' | 'installed' | 'updated' | 'conflict' | 'error' | 'missing';
+
+export interface AuthorityReleaseMetadata {
+    pluginId: string;
+    pluginVersion: string;
+    sdkExtensionId: string;
+    sdkVersion: string;
+    assetHash: string;
+    buildTime: string;
+}
+
+export interface AuthorityManagedMetadata {
+    managedBy: string;
+    pluginVersion: string;
+    sdkVersion: string;
+    assetHash: string;
+    installedAt: string;
+    targetPath: string;
+}
+
+export interface InstallStatusSnapshot {
+    installStatus: InstallStatusCode;
+    installMessage: string;
+    pluginVersion: string;
+    sdkBundledVersion: string;
+    sdkDeployedVersion: string | null;
+}

@@ -2,24 +2,93 @@
 
 ST-Delegation-of-authority 是一个面向 SillyTavern 的基石型权限治理项目。
 
-它的目标不是再做一个“具体业务扩展”，而是提供一个可被 SillyTavern 原生加载的服务端插件，加上一套前端 SDK 扩展，让后续第三方扩展在不重复安装复杂服务端能力的前提下，也能获得受治理的服务端权限、能力和审计能力。
+它提供一个可被 SillyTavern 原生加载的服务端插件 `authority`，并在启动时自动部署前端扩展 `third-party/st-authority-sdk`，让后续第三方扩展在不重复安装复杂服务端能力的前提下，也能获得受治理的服务端权限、能力和审计能力。
 
-V1 重点是把这三件事打通：
+## 快速安装
 
-- 安全中心
-- 授权治理
-- 通用服务端能力
+最终用户安装不需要执行 `npm install` 或 `npm run build`。
 
-V1 明确不做：
+### 方式一：直接克隆到服务端插件目录
 
-- 任意服务端代码托管
-- shell 执行
-- vm 执行
-- 任意文件系统访问
+```bash
+git clone https://github.com/Youzini-afk/ST-Delegation-of-authority.git SillyTavern/plugins/authority
+```
+
+### 方式二：用 SillyTavern 自带安装命令
+
+```bash
+cd SillyTavern
+node plugins.js install https://github.com/Youzini-afk/ST-Delegation-of-authority.git
+```
+
+说明：
+
+- 目录名不必等于插件 ID，`authority` 会按模块自身的 `info.id` 被加载。
+- 两种方式都不会自动修改你的 SillyTavern 配置文件。
+
+## 启用步骤
+
+1. 打开 SillyTavern 配置文件，确认 `enableServerPlugins: true`。
+2. 建议把 `enableServerPluginsAutoUpdate` 也一起确认好。
+3. 启动 SillyTavern。
+4. 首次启动后，`authority` 会自动把 `st-authority-sdk` 部署到 `public/scripts/extensions/third-party/st-authority-sdk`。
+5. 打开扩展菜单，确认能看到 `Authority Security Center`。
+
+## 升级
+
+如果你是直接克隆到 `plugins/authority`：
+
+```bash
+cd SillyTavern/plugins/authority
+git pull
+```
+
+如果你开启了 `enableServerPluginsAutoUpdate: true`，SillyTavern 启动时也会尝试拉取插件更新。
+
+更新完成后，`authority` 会在下次启动时自动检查并同步内置的 SDK 版本。
+
+## 卸载
+
+删除服务端插件目录 `SillyTavern/plugins/authority`。
+
+如果你希望连同自动部署的前端 SDK 一起移除，再删除：
+
+```text
+SillyTavern/public/scripts/extensions/third-party/st-authority-sdk
+```
+
+`authority` 只会管理它自己部署的 `st-authority-sdk`，不会接管其他扩展目录。
+
+## 冲突处理
+
+如果 `public/scripts/extensions/third-party/st-authority-sdk` 已经存在，但不是 `authority` 管理的目录，插件会进入 `conflict` 状态并拒绝覆盖。
+
+这时请按下面的方式处理：
+
+1. 备份现有 `st-authority-sdk` 目录。
+2. 删除或改名旧目录。
+3. 重启 SillyTavern，让 `authority` 重新自动部署。
+
+你也可以调用 `POST /api/plugins/authority/probe` 查看安装状态：
+
+- `pluginVersion`
+- `sdkBundledVersion`
+- `sdkDeployedVersion`
+- `installStatus`
+- `installMessage`
+
+`installStatus` 的取值为：
+
+- `ready`
+- `installed`
+- `updated`
+- `conflict`
+- `error`
+- `missing`
 
 ## V1 能力范围
 
-当前实现已经覆盖以下可治理能力：
+当前已实现的可治理能力：
 
 - `storage.kv`
 - `storage.blob`
@@ -27,7 +96,7 @@ V1 明确不做：
 - `jobs.background`
 - `events.stream`
 
-当前实现已经覆盖以下治理能力：
+当前已实现的治理能力：
 
 - 扩展注册与会话初始化
 - 会话级授权与持久授权
@@ -39,33 +108,33 @@ V1 明确不做：
 - 安全中心 UI
 - 统一权限请求弹窗
 
-## 技术路线
+V1 明确不做：
 
-V1 固定为：
-
-- `TypeScript + Node.js`
-- `npm workspaces`
-- 服务端插件使用 Webpack 打包为单文件插件目录
-- 前端扩展使用 TypeScript 编译为扁平 ESM 产物
-
-本仓库当前验证环境：
-
-- Node.js `v24.13.1`
-- npm `11.8.0`
+- 任意服务端代码托管
+- shell 执行
+- vm 执行
+- 任意文件系统访问
 
 ## 仓库结构
 
+这个仓库现在同时承担两种角色：
+
+- 仓库根目录：可直接被 SillyTavern 当作 `authority` 服务端插件加载
+- `packages/`：monorepo 源码、测试和开发脚本
+
 ```text
 ST-Delegation-of-authority/
+├─ runtime/                # 受管服务端运行时产物
+├─ managed/
+│  └─ sdk-extension/       # 受管前端 SDK 运行时产物
 ├─ packages/
-│  ├─ server-plugin/        # SillyTavern 服务端插件 authority
-│  ├─ sdk-extension/        # Authority SDK + Security Center
-│  ├─ example-extension/    # 示例扩展，演示能力闭环
-│  └─ shared-types/         # 共享类型定义
-├─ scripts/                 # 构建、联调链接脚本
-├─ stubs/                   # SillyTavern 前端类型 stub
-├─ package.json
-└─ README.md
+│  ├─ server-plugin/
+│  ├─ sdk-extension/
+│  ├─ example-extension/
+│  └─ shared-types/
+├─ scripts/
+├─ .authority-release.json
+└─ package.json
 ```
 
 固定命名如下：
@@ -75,77 +144,65 @@ ST-Delegation-of-authority/
 - 示例扩展目录/ID: `third-party/st-authority-example`
 - 安全中心显示名: `Authority Security Center`
 
-## 包说明
+## 开发命令
 
-### `packages/server-plugin`
+开发者常用命令：
 
-SillyTavern 服务端插件，导出标准：
+```bash
+npm install
+npm run typecheck
+npm run build
+npm test
+npm run sync:installable
+npm run check:installable
+npm run dev:link
+npm run dev:unlink
+```
 
-- `info`
-- `init(router)`
+这些命令分别用于：
 
-内部按四层拆分：
+- `npm install`: 安装 workspace 依赖
+- `npm run typecheck`: 全仓类型检查
+- `npm run build`: 构建四个 package
+- `npm test`: 运行 Vitest 测试
+- `npm run sync:installable`: 重新生成根目录可直装产物
+- `npm run check:installable`: 校验根目录可直装产物是否与源码一致
+- `npm run dev:link`: 构建并把开发产物链接进本地 SillyTavern
+- `npm run dev:unlink`: 清理本地联调链接
 
-- `routes`
-- `services`
-- `store`
-- `events`
+## 本地联调
 
-主要职责：
+当前 `dev:link` 脚本假设你的目录结构是：
 
-- 会话初始化
-- 权限判定与授权落盘
-- KV / Blob / HTTP / Jobs / SSE 能力实现
-- 审计日志落盘
-- 管理员策略读写
+```text
+E:\cursor_project\ST-Delegation of authority\
+├─ SillyTavern
+└─ ST-Delegation-of-authority
+```
 
-### `packages/sdk-extension`
+联调步骤：
 
-提供两部分内容：
+1. `npm install`
+2. `npm run build`
+3. `npm run dev:link`
+4. 确认 SillyTavern 配置里已启用 `enableServerPlugins: true`
+5. 建议本地联调时把 `enableServerPluginsAutoUpdate` 设为 `false`，避免 SillyTavern 启动时自动拉取开发仓库
 
-- 运行时 `AuthoritySDK`
-- 独立安全中心 UI
+`dev:link` 会自动创建以下联调链接：
 
-主要职责：
+- `SillyTavern/plugins/authority`
+- `SillyTavern/public/scripts/extensions/third-party/st-authority-sdk`
+- `SillyTavern/public/scripts/extensions/third-party/st-authority-example`
 
-- 封装 `/api/plugins/authority/*` 接口
-- 统一权限弹窗
-- 统一会话管理
-- 打开安全中心
-- 给其他扩展提供稳定接入入口
+## 运行时入口
 
-当前运行时入口：
+当前前端接入入口：
 
-- 全局对象 `window.STAuthority`
+- `window.STAuthority`
 - `window.STAuthority.AuthoritySDK`
 - `window.STAuthority.openSecurityCenter()`
 
-### `packages/example-extension`
-
-示例扩展只用于验证平台能力，不承担真实业务。
-
-它覆盖了最小闭环：
-
-- `session/init`
-- `storage.kv`
-- `storage.blob`
-- `http.fetch`
-- `jobs`
-- `events`
-
-### `packages/shared-types`
-
-放共享的协议类型和能力模型：
-
-- 权限资源
-- 授权状态
-- 会话响应
-- 策略结构
-- Blob / Job 类型
-
-## 已实现的接口
-
-服务端插件当前已实现这些路由：
+服务端公开接口：
 
 - `POST /probe`
 - `POST /session/init`
@@ -170,178 +227,11 @@ SillyTavern 服务端插件，导出标准：
 - `GET /events/stream`
 - `GET /admin/policies`
 - `POST /admin/policies`
-
-另外实现了一个辅助路由：
-
 - `POST /extensions/:id/grants/reset`
-
-这个路由用于安全中心里手动重置某个扩展的持久授权记录。
-
-## 权限模型
-
-当前授权状态：
-
-- `granted`
-- `denied`
-- `prompt`
-- `blocked`
-
-当前用户决策：
-
-- `allow-once`
-- `allow-session`
-- `allow-always`
-- `deny`
-
-当前授权粒度：
-
-- `storage.kv` 按资源域授权
-- `storage.blob` 按资源域授权
-- `http.fetch` 按 `extension + hostname`
-- `jobs.background` 按 `jobType`
-- `events.stream` 按 `channel`
-
-当前实现约束：
-
-- 用户侧不支持 hostname 通配符授权
-- 用户侧不能一次性放开整个 `http.fetch`
-- 高风险域不对外开放
-- `deny` 为持久拒绝，只有在安全中心重置后才会重新进入 `prompt`
-
-## 数据落盘
-
-Authority 数据按每用户目录落盘在：
-
-```text
-extensions-data/authority/
-├─ state/
-│  ├─ extensions.json
-│  ├─ permissions.json
-│  └─ policies.json
-├─ audit/
-│  ├─ permissions.jsonl
-│  ├─ usage.jsonl
-│  └─ errors.jsonl
-├─ jobs/
-│  └─ jobs.json
-└─ storage/
-   ├─ kv/
-   │  └─ <extension-id>.json
-   └─ blobs/
-      └─ <extension-id>/
-```
-
-管理员全局策略额外会落在：
-
-```text
-<DATA_ROOT>/_authority-global/authority/state/policies.json
-```
-
-## 开发命令
-
-根目录常用命令：
-
-```bash
-npm install
-npm run typecheck
-npm run build
-npm test
-npm run dev:link
-npm run dev:unlink
-```
-
-这些命令分别用于：
-
-- `npm install`: 安装 workspace 依赖
-- `npm run typecheck`: 全仓类型检查
-- `npm run build`: 构建四个 package
-- `npm test`: 运行 Vitest 测试
-- `npm run dev:link`: 构建并把产物链接进本地 SillyTavern
-- `npm run dev:unlink`: 清理本地联调链接
-
-## 本地联调
-
-### 前置条件
-
-当前 `dev:link` 脚本假设你的目录结构是：
-
-```text
-E:\cursor_project\ST-Delegation of authority\
-├─ SillyTavern
-└─ ST-Delegation-of-authority
-```
-
-也就是：
-
-- 本仓库与 `SillyTavern` 是同级目录
-
-### 1. 安装依赖
-
-```bash
-npm install
-```
-
-### 2. 构建
-
-```bash
-npm run build
-```
-
-### 3. 链接到本地 SillyTavern
-
-```bash
-npm run dev:link
-```
-
-它会自动创建以下联调链接：
-
-- `SillyTavern/plugins/authority`
-- `SillyTavern/public/scripts/extensions/third-party/st-authority-sdk`
-- `SillyTavern/public/scripts/extensions/third-party/st-authority-example`
-
-### 4. 启用 SillyTavern 服务端插件
-
-SillyTavern 默认不一定开启服务端插件加载。
-
-请确认你的 SillyTavern 配置里已经启用：
-
-- `enableServerPlugins`
-
-否则 `authority` 不会被加载。
-
-### 5. 启动 SillyTavern 后验证
-
-建议按这个顺序验证：
-
-1. 确认服务端日志里 `authority` 插件被加载
-2. 打开扩展菜单，确认能看到 `Authority Security Center`
-3. 打开扩展菜单，确认能看到 `Authority Example`
-4. 在示例扩展里测试 KV / Blob / HTTP / Jobs / SSE
-5. 在安全中心里查看授权、活动和策略
-
-## 手动安装产物
-
-如果不想使用 `dev:link`，也可以手动复制构建产物。
-
-构建输出目录：
-
-- 服务端插件输出: `packages/server-plugin/dist/authority`
-- SDK 扩展输出: `packages/sdk-extension/dist/extension`
-- 示例扩展输出: `packages/example-extension/dist/extension`
-
-手动复制目标：
-
-- `packages/server-plugin/dist/authority` -> `SillyTavern/plugins/authority`
-- `packages/sdk-extension/dist/extension` -> `SillyTavern/public/scripts/extensions/third-party/st-authority-sdk`
-- `packages/example-extension/dist/extension` -> `SillyTavern/public/scripts/extensions/third-party/st-authority-example`
 
 ## 在其他扩展中接入
 
-接入方扩展需要依赖：
-
-- `third-party/st-authority-sdk`
-
-`manifest.json` 里建议声明：
+接入方扩展建议声明：
 
 ```json
 {
@@ -366,22 +256,9 @@ const client = await window.STAuthority.AuthoritySDK.init({
 });
 ```
 
-然后就可以通过 `client` 使用：
-
-- `client.getSession()`
-- `client.getCapabilities()`
-- `client.ensurePermission()`
-- `client.requestPermission()`
-- `client.storage.kv.*`
-- `client.storage.blob.*`
-- `client.http.fetch()`
-- `client.jobs.*`
-- `client.events.subscribe()`
-- `client.openSecurityCenter()`
-
 ## 测试覆盖
 
-当前已落地的服务端测试包括：
+当前测试覆盖包括：
 
 - 权限状态流转
 - 一次性授权消费
@@ -389,12 +266,15 @@ const client = await window.STAuthority.AuthoritySDK.init({
 - KV 命名空间隔离
 - Blob 读写与删除
 - 内建 delay 任务创建 / 完成 / 取消
+- Managed SDK 首装、幂等、升级、冲突保护、漂移修复
+- 根目录可直装产物一致性检查
 
-运行方式：
+CI 当前会运行：
 
-```bash
-npm test
-```
+- `npm run typecheck`
+- `npm run build`
+- `npm test`
+- `npm run check:installable`
 
 ## 当前限制
 
@@ -407,34 +287,3 @@ npm test
 - 不支持任意服务端代码托管
 - 不支持直接把 REST 直连当 first-class 接入方式
 - 安全中心 UI 以联调和验证为主，仍可继续打磨
-
-## 当前状态
-
-当前仓库已经完成：
-
-- monorepo 初始化
-- 服务端插件实现
-- SDK 扩展实现
-- 安全中心实现
-- 统一权限弹窗实现
-- 示例扩展实现
-- 关键测试实现
-- 本地 `dev:link` 联调脚本
-
-并且已经验证通过：
-
-```bash
-npm run typecheck
-npm run build
-npm test
-npm run dev:link
-```
-
-## 后续
-
-- 更完整的安全中心交互优化
-- 更细的管理员策略编辑体验
-- 更多内建任务类型
-- 更稳定的扩展接入文档
-- API 文档与权限声明规范文档
-- CI 工作流

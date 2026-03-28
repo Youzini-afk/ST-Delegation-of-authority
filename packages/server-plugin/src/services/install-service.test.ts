@@ -1,0 +1,203 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+    AUTHORITY_MANAGED_FILE,
+    AUTHORITY_PLUGIN_ID,
+    AUTHORITY_RELEASE_FILE,
+    AUTHORITY_SDK_EXTENSION_ID,
+} from '../constants.js';
+import type { AuthorityManagedMetadata, AuthorityReleaseMetadata } from '../types.js';
+import { InstallService } from './install-service.js';
+
+const cleanupDirs: string[] = [];
+
+describe('InstallService', () => {
+    afterEach(() => {
+        while (cleanupDirs.length > 0) {
+            const dir = cleanupDirs.pop();
+            if (dir) {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    it('deploys the bundled SDK when the target directory is missing', async () => {
+        const setup = createInstallFixture();
+        const service = createService(setup);
+
+        const status = await service.bootstrap();
+        const targetDir = getTargetDir(setup.sillyTavernRoot);
+        const managed = readJson<AuthorityManagedMetadata>(path.join(targetDir, AUTHORITY_MANAGED_FILE));
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.sdkDeployedVersion).toBe('0.1.0');
+        expect(fs.existsSync(path.join(targetDir, 'index.js'))).toBe(true);
+        expect(managed.managedBy).toBe(AUTHORITY_PLUGIN_ID);
+        expect(managed.sdkVersion).toBe('0.1.0');
+    });
+
+    it('is idempotent when the bundled SDK is already deployed', async () => {
+        const setup = createInstallFixture();
+        const service = createService(setup);
+
+        await service.bootstrap();
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('ready');
+        expect(status.sdkDeployedVersion).toBe('0.1.0');
+    });
+
+    it('updates the deployed SDK when the bundled version changes', async () => {
+        const setup = createInstallFixture({ sdkVersion: '0.1.0', sdkScript: 'window.STAuthority={version:"0.1.0"};\n' });
+        const initialService = createService(setup);
+        await initialService.bootstrap();
+
+        writeBundledSdk(setup.pluginRoot, '0.2.0', 'window.STAuthority={version:"0.2.0"};\n');
+        const updatedService = createService(setup);
+        const status = await updatedService.bootstrap();
+        const deployedScript = fs.readFileSync(path.join(getTargetDir(setup.sillyTavernRoot), 'index.js'), 'utf8');
+
+        expect(status.installStatus).toBe('updated');
+        expect(status.sdkDeployedVersion).toBe('0.2.0');
+        expect(deployedScript).toContain('0.2.0');
+    });
+
+    it('does not overwrite an unmanaged target directory', async () => {
+        const setup = createInstallFixture();
+        const targetDir = getTargetDir(setup.sillyTavernRoot);
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(path.join(targetDir, 'index.js'), 'window.LegacyAuthority=true;\n', 'utf8');
+
+        const service = createService(setup);
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('conflict');
+        expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain('LegacyAuthority');
+        expect(fs.existsSync(path.join(targetDir, AUTHORITY_MANAGED_FILE))).toBe(false);
+    });
+
+    it('repairs drift in an authority-managed target directory', async () => {
+        const setup = createInstallFixture();
+        const service = createService(setup);
+        await service.bootstrap();
+
+        const targetDir = getTargetDir(setup.sillyTavernRoot);
+        fs.writeFileSync(path.join(targetDir, 'index.js'), 'window.STAuthority={version:"tampered"};\n', 'utf8');
+
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('updated');
+        expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain('0.1.0');
+    });
+});
+
+interface InstallFixture {
+    pluginRoot: string;
+    sillyTavernRoot: string;
+}
+
+function createInstallFixture(options: { sdkVersion?: string; sdkScript?: string } = {}): InstallFixture {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-install-'));
+    cleanupDirs.push(baseDir);
+
+    const pluginRoot = path.join(baseDir, 'plugin-root');
+    const sillyTavernRoot = path.join(baseDir, 'SillyTavern');
+    fs.mkdirSync(path.join(pluginRoot, 'runtime'), { recursive: true });
+    fs.mkdirSync(path.join(sillyTavernRoot, 'plugins'), { recursive: true });
+    fs.mkdirSync(path.join(sillyTavernRoot, 'public', 'scripts', 'extensions'), { recursive: true });
+
+    writeBundledSdk(
+        pluginRoot,
+        options.sdkVersion ?? '0.1.0',
+        options.sdkScript ?? 'window.STAuthority={version:"0.1.0"};\n',
+    );
+
+    return {
+        pluginRoot,
+        sillyTavernRoot,
+    };
+}
+
+function createService(setup: InstallFixture): InstallService {
+    return new InstallService({
+        runtimeDir: path.join(setup.pluginRoot, 'runtime'),
+        cwd: setup.sillyTavernRoot,
+        env: {},
+        logger: {
+            info() {},
+            warn() {},
+            error() {},
+        },
+    });
+}
+
+function writeBundledSdk(pluginRoot: string, sdkVersion: string, sdkScript: string): void {
+    const bundledDir = path.join(pluginRoot, 'managed', 'sdk-extension');
+    fs.rmSync(bundledDir, { recursive: true, force: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.writeFileSync(path.join(bundledDir, 'index.js'), sdkScript, 'utf8');
+    fs.writeFileSync(path.join(bundledDir, 'style.css'), '.authority{}\n', 'utf8');
+    fs.writeFileSync(path.join(bundledDir, 'menu-button.html'), '<button>Authority</button>\n', 'utf8');
+    fs.writeFileSync(path.join(bundledDir, 'security-center.html'), '<div>Authority Security Center</div>\n', 'utf8');
+    fs.writeFileSync(path.join(bundledDir, 'permission-dialog.html'), '<div>Permission</div>\n', 'utf8');
+    fs.writeFileSync(path.join(bundledDir, 'manifest.json'), JSON.stringify({
+        display_name: 'Authority Security Center',
+        js: 'index.js',
+        css: 'style.css',
+        version: sdkVersion,
+    }, null, 2), 'utf8');
+
+    const release: AuthorityReleaseMetadata = {
+        pluginId: AUTHORITY_PLUGIN_ID,
+        pluginVersion: sdkVersion,
+        sdkExtensionId: AUTHORITY_SDK_EXTENSION_ID,
+        sdkVersion,
+        assetHash: hashDirectory(bundledDir),
+        buildTime: new Date().toISOString(),
+    };
+
+    fs.writeFileSync(path.join(pluginRoot, AUTHORITY_RELEASE_FILE), JSON.stringify(release, null, 2), 'utf8');
+}
+
+function getTargetDir(sillyTavernRoot: string): string {
+    return path.join(sillyTavernRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-authority-sdk');
+}
+
+function readJson<T>(filePath: string): T {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
+}
+
+function hashDirectory(rootDir: string): string {
+    const hash = crypto.createHash('sha256');
+    for (const filePath of listFiles(rootDir)) {
+        const relativePath = path.relative(rootDir, filePath).replace(/\\/g, '/');
+        hash.update(relativePath);
+        hash.update('\0');
+        hash.update(fs.readFileSync(filePath));
+        hash.update('\0');
+    }
+    return hash.digest('hex');
+}
+
+function listFiles(rootDir: string): string[] {
+    const files: string[] = [];
+    const visit = (currentDir: string): void => {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true })
+            .sort((left, right) => left.name.localeCompare(right.name));
+
+        for (const entry of entries) {
+            const fullPath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                visit(fullPath);
+            } else if (entry.isFile()) {
+                files.push(fullPath);
+            }
+        }
+    };
+
+    visit(rootDir);
+    return files;
+}

@@ -27,10 +27,16 @@ export function registerRoutes(router: RouterLike): AuthorityRuntime {
     const runtime = createAuthorityRuntime();
 
     router.post('/probe', async (_req, res) => {
+        const install = runtime.install.getStatus();
         ok(res, {
             id: 'authority',
             online: true,
-            version: '0.1.0',
+            version: install.pluginVersion,
+            pluginVersion: install.pluginVersion,
+            sdkBundledVersion: install.sdkBundledVersion,
+            sdkDeployedVersion: install.sdkDeployedVersion,
+            installStatus: install.installStatus,
+            installMessage: install.installMessage,
         });
     });
 
@@ -390,4 +396,3 @@ export function registerRoutes(router: RouterLike): AuthorityRuntime {
 
     return runtime;
 }
-

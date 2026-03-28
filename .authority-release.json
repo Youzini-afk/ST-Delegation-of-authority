@@ -1,0 +1,8 @@
+{
+  "pluginId": "authority",
+  "pluginVersion": "0.1.0",
+  "sdkExtensionId": "third-party/st-authority-sdk",
+  "sdkVersion": "0.1.0",
+  "assetHash": "bc289b958fee4d5397b3e5cc989fe481035a6c4abe4da20b5a82c1ffe4b212ca",
+  "buildTime": "2026-03-28T15:22:13+08:00"
+}
