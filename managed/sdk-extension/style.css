@@ -147,8 +147,7 @@ body.authority-workspace-open {
 
 .authority-workspace__toolbar,
 .authority-workspace__tabs,
-.authority-workspace__actions,
-.authority-workspace-strip {
+.authority-workspace__actions {
   display: flex;
   gap: 8px;
 }
@@ -168,8 +167,7 @@ body.authority-workspace-open {
   height: 100%;
 }
 
-.authority-workspace__tab,
-.authority-workspace-strip__tab {
+.authority-workspace__tab {
   align-items: center;
   background: rgba(2, 6, 23, 0.62);
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -182,8 +180,7 @@ body.authority-workspace-open {
   padding: 10px 14px;
 }
 
-.authority-workspace__tab--active,
-.authority-workspace-strip__tab--active {
+.authority-workspace__tab--active {
   background: linear-gradient(135deg, rgba(124, 109, 255, 0.42), rgba(34, 211, 238, 0.22));
   border-color: rgba(124, 109, 255, 0.44);
   box-shadow: 0 12px 36px rgba(15, 23, 42, 0.24);
@@ -194,9 +191,21 @@ body.authority-workspace-open {
   min-width: 96px;
 }
 
-.authority-workspace-strip {
-  margin-bottom: 10px;
-  width: 100%;
+.authority-top-drawer {
+  position: relative;
+}
+
+.authority-top-drawer__toggle {
+  cursor: pointer;
+}
+
+.authority-top-drawer .drawer-icon {
+  color: #e2e8f0;
+}
+
+.authority-top-drawer--active .drawer-icon {
+  color: #ffffff;
+  filter: drop-shadow(0 0 10px rgba(124, 109, 255, 0.26));
 }
 
 .authority-panel__body {
@@ -688,8 +697,7 @@ body.authority-workspace-open {
     flex-direction: column;
   }
 
-  .authority-workspace__tab,
-  .authority-workspace-strip__tab {
+  .authority-workspace__tab {
     justify-content: center;
     width: 100%;
   }

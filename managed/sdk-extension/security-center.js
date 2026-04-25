@@ -14,8 +14,8 @@ const RESOURCE_OPTIONS = ['storage.kv', 'storage.blob', 'fs.private', 'sql.priva
 const STATUS_OPTIONS = ['prompt', 'granted', 'denied', 'blocked'];
 const POPUP_TEXT_TYPE = POPUP_TYPE.TEXT ?? 0;
 const WORKSPACE_HOST_ID = 'authority-security-center-workspace';
-const WORKSPACE_STRIP_ID = 'authority-security-center-strip';
-const WORKSPACE_TAB_ID = 'authority-security-center-tab';
+const TOP_BAR_DRAWER_ID = 'authority-security-center-drawer';
+const TOP_BAR_ICON_ID = 'authority-security-center-drawer-icon';
 let bootPromise = null;
 let workspaceRenderToken = 0;
 export function bootstrapSecurityCenter() {
@@ -59,15 +59,15 @@ async function doBootstrapSecurityCenter() {
         console.warn('Authority Security Center menu bootstrap failed:', error);
     }
     try {
-        await Promise.all([waitForElement('#sheld'), waitForElement('#chat')]);
-        mountSecurityCenterStrip();
+        await waitForElement('#top-settings-holder');
+        mountSecurityCenterTopBarButton();
     }
     catch (error) {
-        console.warn('Authority Security Center page launcher bootstrap failed:', error);
+        console.warn('Authority Security Center top bar launcher bootstrap failed:', error);
     }
 }
 async function openSecurityCenterWorkspace(options) {
-    mountSecurityCenterStrip();
+    mountSecurityCenterTopBarButton();
     const content = ensureSecurityCenterWorkspace();
     if (!content) {
         return false;
@@ -137,35 +137,59 @@ function ensureSecurityCenterWorkspace() {
     }
     return host.querySelector('[data-role="workspace-content"]');
 }
-function mountSecurityCenterStrip() {
-    const sheld = document.getElementById('sheld');
-    const chat = document.getElementById('chat');
-    if (!(sheld instanceof HTMLElement) || !(chat instanceof HTMLElement)) {
+function mountSecurityCenterTopBarButton() {
+    const holder = document.querySelector('#top-settings-holder');
+    if (!holder) {
         return;
     }
-    if (sheld.querySelector(`#${WORKSPACE_STRIP_ID}`)) {
+    if (holder.querySelector(`#${TOP_BAR_DRAWER_ID}`)) {
         return;
     }
-    const strip = htmlToElement(`
-        <div id="${WORKSPACE_STRIP_ID}" class="authority-workspace-strip">
-            <button type="button" id="${WORKSPACE_TAB_ID}" class="authority-workspace-strip__tab">
-                <i class="fa-solid fa-shield-halved"></i>
-                <span>Authority</span>
-            </button>
+    const drawer = htmlToElement(`
+        <div id="${TOP_BAR_DRAWER_ID}" class="drawer authority-top-drawer">
+            <div class="drawer-toggle drawer-header authority-top-drawer__toggle">
+                <div id="${TOP_BAR_ICON_ID}" class="drawer-icon fa-solid fa-shield-halved fa-fw closedIcon" title="Authority Security Center" data-i18n="[title]Authority Security Center"></div>
+            </div>
         </div>
     `);
-    strip.addEventListener('click', event => {
-        const target = event.target instanceof HTMLElement ? event.target : null;
-        if (!target?.closest(`#${WORKSPACE_TAB_ID}`)) {
-            return;
-        }
+    const toggle = drawer.querySelector('.authority-top-drawer__toggle');
+    const icon = drawer.querySelector(`#${TOP_BAR_ICON_ID}`);
+    if (toggle) {
+        toggle.tabIndex = 0;
+    }
+    if (icon) {
+        icon.tabIndex = 0;
+    }
+    const handleToggle = (event) => {
+        event?.preventDefault();
         if (document.body.classList.contains('authority-workspace-open')) {
             closeSecurityCenterWorkspace();
             return;
         }
         void openSecurityCenter();
+    };
+    drawer.addEventListener('click', event => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (!target?.closest(`#${TOP_BAR_DRAWER_ID}`)) {
+            return;
+        }
+        handleToggle(event);
     });
-    sheld.insertBefore(strip, chat);
+    drawer.addEventListener('keydown', event => {
+        if (!(event instanceof KeyboardEvent)) {
+            return;
+        }
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+        handleToggle(event);
+    });
+    const anchor = holder.querySelector('#WI-SP-button');
+    if (anchor) {
+        holder.insertBefore(drawer, anchor);
+        return;
+    }
+    holder.appendChild(drawer);
 }
 function closeSecurityCenterWorkspace() {
     workspaceRenderToken += 1;
@@ -184,9 +208,14 @@ function closeSecurityCenterWorkspace() {
     syncSecurityCenterLauncherState(false);
 }
 function syncSecurityCenterLauncherState(isOpen) {
-    const tab = document.getElementById(WORKSPACE_TAB_ID);
-    if (tab instanceof HTMLButtonElement) {
-        tab.classList.toggle('authority-workspace-strip__tab--active', isOpen);
+    const drawer = document.getElementById(TOP_BAR_DRAWER_ID);
+    const icon = document.getElementById(TOP_BAR_ICON_ID);
+    if (drawer instanceof HTMLElement) {
+        drawer.classList.toggle('authority-top-drawer--active', isOpen);
+    }
+    if (icon instanceof HTMLElement) {
+        icon.classList.toggle('openIcon', isOpen);
+        icon.classList.toggle('closedIcon', !isOpen);
     }
 }
 class SecurityCenterView {
