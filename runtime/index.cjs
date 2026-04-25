@@ -233,6 +233,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             sdkDeployedVersion: install.sdkDeployedVersion,
             coreBundledVersion: install.coreBundledVersion,
             coreArtifactPlatform: install.coreArtifactPlatform,
+            coreArtifactPlatforms: install.coreArtifactPlatforms,
             coreArtifactHash: install.coreArtifactHash,
             coreBinarySha256: install.coreBinarySha256,
             coreVerified: install.coreVerified,
@@ -1592,6 +1593,8 @@ class InstallService {
         this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
         const pluginVersion = this.releaseMetadata?.pluginVersion ?? readPackageVersion(this.pluginRoot) ?? DEFAULT_VERSION;
         const sdkBundledVersion = this.releaseMetadata?.sdkVersion ?? readBundledSdkVersion(this.pluginRoot) ?? pluginVersion;
+        const coreArtifactPlatforms = getReleaseCorePlatforms(this.releaseMetadata);
+        const expectedCorePlatform = getCurrentCorePlatform();
         this.status = {
             installStatus: 'missing',
             installMessage: 'Authority SDK deployment has not run yet.',
@@ -1599,14 +1602,22 @@ class InstallService {
             sdkBundledVersion,
             sdkDeployedVersion: null,
             coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
-            coreArtifactPlatform: this.releaseMetadata?.coreArtifactPlatform ?? null,
+            coreArtifactPlatform: coreArtifactPlatforms.includes(expectedCorePlatform)
+                ? expectedCorePlatform
+                : this.releaseMetadata?.coreArtifactPlatform ?? null,
+            coreArtifactPlatforms,
             coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
-            coreBinarySha256: this.releaseMetadata?.coreBinarySha256 ?? null,
+            coreBinarySha256: this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
+                ?? this.releaseMetadata?.coreBinarySha256
+                ?? null,
             coreVerified: false,
         };
     }
     getStatus() {
-        return { ...this.status };
+        return {
+            ...this.status,
+            coreArtifactPlatforms: [...this.status.coreArtifactPlatforms],
+        };
     }
     async bootstrap() {
         const bundledDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_SDK_DIR);
@@ -1724,11 +1735,12 @@ class InstallService {
         if (!release) {
             return { ok: false, message: 'Authority release metadata is missing.' };
         }
-        const expectedPlatform = `${process.platform}-${process.arch}`;
-        if (release.coreArtifactPlatform && release.coreArtifactPlatform !== expectedPlatform) {
+        const expectedPlatform = getCurrentCorePlatform();
+        const releasePlatforms = getReleaseCorePlatforms(release);
+        if (releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)) {
             return {
                 ok: false,
-                message: `Managed authority-core artifact targets ${release.coreArtifactPlatform}, but this runtime needs ${expectedPlatform}.`,
+                message: `Managed authority-core artifacts target ${releasePlatforms.join(', ')}, but this runtime needs ${expectedPlatform}.`,
             };
         }
         const platformDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
@@ -1772,11 +1784,27 @@ class InstallService {
                 message: 'Managed authority-core binary hash does not match its metadata.',
             };
         }
-        if (release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
+        const releaseArtifact = release.coreArtifacts?.[expectedPlatform];
+        if (releaseArtifact && releaseArtifact.binarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match platform release metadata.',
+            };
+        }
+        if (!releaseArtifact && release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
             return {
                 ok: false,
                 message: 'Managed authority-core binary hash does not match release metadata.',
             };
+        }
+        if (releaseArtifact) {
+            const platformArtifactHash = hashDirectory(platformDir);
+            if (releaseArtifact.artifactHash !== platformArtifactHash) {
+                return {
+                    ok: false,
+                    message: 'Managed authority-core platform artifact hash does not match release metadata.',
+                };
+            }
         }
         if (release.coreArtifactHash) {
             const artifactHash = hashDirectory(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_CORE_DIR));
@@ -1831,6 +1859,21 @@ function resolvePluginRoot(runtimeDir) {
 }
 function readReleaseMetadata(pluginRoot) {
     return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_RELEASE_FILE), null);
+}
+function getCurrentCorePlatform() {
+    return `${process.platform}-${process.arch}`;
+}
+function getReleaseCorePlatforms(release) {
+    if (!release) {
+        return [];
+    }
+    if (Array.isArray(release.coreArtifactPlatforms) && release.coreArtifactPlatforms.length > 0) {
+        return [...release.coreArtifactPlatforms].sort();
+    }
+    if (release.coreArtifacts && Object.keys(release.coreArtifacts).length > 0) {
+        return Object.keys(release.coreArtifacts).sort();
+    }
+    return release.coreArtifactPlatform ? [release.coreArtifactPlatform] : [];
 }
 function readPackageVersion(pluginRoot) {
     const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(pluginRoot, 'package.json');

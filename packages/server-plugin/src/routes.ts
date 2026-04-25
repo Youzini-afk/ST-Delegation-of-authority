@@ -95,6 +95,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             sdkDeployedVersion: install.sdkDeployedVersion,
             coreBundledVersion: install.coreBundledVersion,
             coreArtifactPlatform: install.coreArtifactPlatform,
+            coreArtifactPlatforms: install.coreArtifactPlatforms,
             coreArtifactHash: install.coreArtifactHash,
             coreBinarySha256: install.coreBinarySha256,
             coreVerified: install.coreVerified,

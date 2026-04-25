@@ -121,6 +121,14 @@ export interface AuthorityReleaseMetadata {
     coreVersion?: string;
     coreArtifactHash?: string;
     coreArtifactPlatform?: string;
+    coreArtifactPlatforms?: string[];
+    coreArtifacts?: Record<string, {
+        platform: string;
+        arch: string;
+        binaryName: string;
+        binarySha256: string;
+        artifactHash: string;
+    }>;
     coreBinarySha256?: string;
     buildTime: string;
 }
@@ -152,6 +160,7 @@ export interface InstallStatusSnapshot {
     sdkDeployedVersion: string | null;
     coreBundledVersion: string | null;
     coreArtifactPlatform: string | null;
+    coreArtifactPlatforms: string[];
     coreArtifactHash: string | null;
     coreBinarySha256: string | null;
     coreVerified: boolean;

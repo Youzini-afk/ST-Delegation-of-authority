@@ -1,0 +1,184 @@
+name: Core Artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/core-artifacts.yml
+      - crates/authority-core/**
+      - packages/**
+      - scripts/**
+      - scripts/build-core.mjs
+      - scripts/installable.mjs
+      - package.json
+      - package-lock.json
+      - Cargo.lock
+      - README.md
+      - LICENSE
+  pull_request:
+    paths:
+      - .github/workflows/core-artifacts.yml
+      - crates/authority-core/**
+      - packages/**
+      - scripts/**
+      - scripts/build-core.mjs
+      - scripts/installable.mjs
+      - package.json
+      - package-lock.json
+      - Cargo.lock
+      - README.md
+      - LICENSE
+
+jobs:
+  build-core:
+    name: Build ${{ matrix.platform_id }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform_id: win32-x64
+            os: windows-latest
+            target_platform: win32
+            target_arch: x64
+            target_triple: x86_64-pc-windows-msvc
+            binary_name: authority-core.exe
+          - platform_id: linux-x64
+            os: ubuntu-latest
+            target_platform: linux
+            target_arch: x64
+            target_triple: x86_64-unknown-linux-gnu
+            binary_name: authority-core
+          - platform_id: linux-arm64
+            os: ubuntu-latest
+            target_platform: linux
+            target_arch: arm64
+            target_triple: aarch64-unknown-linux-gnu
+            binary_name: authority-core
+          - platform_id: android-arm64
+            os: ubuntu-latest
+            target_platform: android
+            target_arch: arm64
+            target_triple: aarch64-linux-android
+            binary_name: authority-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target_triple }}
+
+      - name: Install Linux cross linker
+        if: matrix.target_triple == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure Linux ARM64 linker
+        if: matrix.target_triple == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> "$GITHUB_ENV"
+
+      - name: Resolve Android NDK path
+        if: matrix.target_triple == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          ndk_home="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
+          if [ -z "$ndk_home" ]; then
+            echo "Android NDK was not found on this runner." >&2
+            exit 1
+          fi
+          echo "AUTHORITY_ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
+
+      - name: Configure Android NDK linker
+        if: matrix.target_triple == 'aarch64-linux-android'
+        run: |
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$AUTHORITY_ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$AUTHORITY_ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$AUTHORITY_ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build authority-core
+        run: node ./scripts/build-core.mjs
+        env:
+          AUTHORITY_CORE_TARGET_PLATFORM: ${{ matrix.target_platform }}
+          AUTHORITY_CORE_TARGET_ARCH: ${{ matrix.target_arch }}
+          AUTHORITY_CORE_TARGET_TRIPLE: ${{ matrix.target_triple }}
+          AUTHORITY_CORE_BINARY_NAME: ${{ matrix.binary_name }}
+
+      - name: Upload managed core artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-core-${{ matrix.platform_id }}
+          path: managed/core/${{ matrix.platform_id }}
+          if-no-files-found: error
+
+  assemble-installable:
+    name: Assemble multi-platform installable
+    runs-on: ubuntu-latest
+    needs: build-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build JS artifacts
+        run: |
+          npm run build --workspace @stdo/shared-types
+          npm run build --workspace @stdo/server-plugin
+          npm run build --workspace @stdo/sdk-extension
+          npm run build --workspace @stdo/example-extension
+
+      - name: Download managed core artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: managed-core-*
+          path: downloaded-core
+
+      - name: Assemble managed core directory
+        shell: bash
+        run: |
+          rm -rf managed/core
+          mkdir -p managed/core
+          for artifact_dir in downloaded-core/managed-core-*; do
+            platform_id="${artifact_dir##*/managed-core-}"
+            mkdir -p "managed/core/${platform_id}"
+            cp -R "${artifact_dir}/." "managed/core/${platform_id}/"
+          done
+          find managed/core -maxdepth 2 -type f | sort
+
+      - name: Generate and validate installable runtime
+        run: |
+          node ./scripts/installable.mjs sync
+          node ./scripts/installable.mjs check
+
+      - name: Upload multi-platform installable
+        uses: actions/upload-artifact@v4
+        with:
+          name: authority-installable-multiplatform
+          path: |
+            index.js
+            package.json
+            LICENSE
+            README.md
+            .authority-release.json
+            runtime/**
+            managed/**
+          if-no-files-found: error

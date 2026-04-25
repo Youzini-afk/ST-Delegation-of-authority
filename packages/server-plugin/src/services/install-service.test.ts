@@ -130,6 +130,20 @@ describe('InstallService', () => {
         expect(status.coreVerified).toBe(false);
         expect(status.installMessage).toContain('Managed authority-core metadata is missing');
     });
+
+    it('verifies the current platform from multi-platform core metadata', async () => {
+        const setup = createInstallFixture();
+        addExtraCoreArtifact(setup.pluginRoot, 'android', 'arm64');
+        const service = createService(setup);
+
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.coreVerified).toBe(true);
+        expect(status.coreArtifactPlatform).toBe(`${process.platform}-${process.arch}`);
+        expect(status.coreArtifactPlatforms).toContain(`${process.platform}-${process.arch}`);
+        expect(status.coreArtifactPlatforms).toContain('android-arm64');
+    });
 });
 
 interface InstallFixture {
@@ -198,6 +212,16 @@ function writeBundledSdk(pluginRoot: string, sdkVersion: string, sdkScript: stri
         coreVersion: sdkVersion,
         coreArtifactHash: core.artifactHash,
         coreArtifactPlatform: core.artifactPlatform,
+        coreArtifactPlatforms: [core.artifactPlatform],
+        coreArtifacts: {
+            [core.artifactPlatform]: {
+                platform: process.platform,
+                arch: process.arch,
+                binaryName: core.binaryName,
+                binarySha256: core.binarySha256,
+                artifactHash: core.platformArtifactHash,
+            },
+        },
         coreBinarySha256: core.binarySha256,
         buildTime: new Date().toISOString(),
     };
@@ -205,7 +229,7 @@ function writeBundledSdk(pluginRoot: string, sdkVersion: string, sdkScript: stri
     fs.writeFileSync(path.join(pluginRoot, AUTHORITY_RELEASE_FILE), JSON.stringify(release, null, 2), 'utf8');
 }
 
-function writeBundledCore(pluginRoot: string, version: string): { artifactHash: string; artifactPlatform: string; binarySha256: string } {
+function writeBundledCore(pluginRoot: string, version: string): { artifactHash: string; artifactPlatform: string; binaryName: string; binarySha256: string; platformArtifactHash: string } {
     const artifactPlatform = `${process.platform}-${process.arch}`;
     const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
     const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
@@ -227,8 +251,49 @@ function writeBundledCore(pluginRoot: string, version: string): { artifactHash: 
     return {
         artifactHash: hashDirectory(coreRoot),
         artifactPlatform,
+        binaryName,
         binarySha256,
+        platformArtifactHash: hashDirectory(platformDir),
     };
+}
+
+function addExtraCoreArtifact(pluginRoot: string, platform: string, arch: string): void {
+    const releasePath = path.join(pluginRoot, AUTHORITY_RELEASE_FILE);
+    const release = readJson<AuthorityReleaseMetadata>(releasePath);
+    const platformId = `${platform}-${arch}`;
+    const binaryName = platform === 'win32' ? 'authority-core.exe' : 'authority-core';
+    const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
+    const platformDir = path.join(coreRoot, platformId);
+    const binaryPath = path.join(platformDir, binaryName);
+    fs.mkdirSync(platformDir, { recursive: true });
+    fs.writeFileSync(binaryPath, `authority-core ${release.coreVersion} ${platformId}\n`, 'utf8');
+    const binarySha256 = hashFile(binaryPath);
+    fs.writeFileSync(path.join(platformDir, 'authority-core.json'), JSON.stringify({
+        managedBy: AUTHORITY_PLUGIN_ID,
+        version: release.coreVersion,
+        platform,
+        arch,
+        binaryName,
+        binarySha256,
+        builtAt: new Date().toISOString(),
+    }, null, 2), 'utf8');
+
+    release.coreArtifactPlatforms = Array.from(new Set([
+        ...(release.coreArtifactPlatforms ?? []),
+        platformId,
+    ])).sort();
+    release.coreArtifacts = {
+        ...(release.coreArtifacts ?? {}),
+        [platformId]: {
+            platform,
+            arch,
+            binaryName,
+            binarySha256,
+            artifactHash: hashDirectory(platformDir),
+        },
+    };
+    release.coreArtifactHash = hashDirectory(coreRoot);
+    fs.writeFileSync(releasePath, JSON.stringify(release, null, 2), 'utf8');
 }
 
 function getTargetDir(sillyTavernRoot: string): string {

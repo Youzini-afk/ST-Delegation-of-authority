@@ -11,12 +11,45 @@ if (mode !== 'sync' && mode !== 'check') {
     process.exit(1);
 }
 
-function readCoreArtifactPlatform(managedCoreDir) {
+function readCoreArtifacts(managedCoreDir) {
     const entries = fs.readdirSync(managedCoreDir, { withFileTypes: true }).filter(entry => entry.isDirectory());
     if (entries.length === 0) {
         throw new Error('No managed authority-core artifact directory found.');
     }
-    return entries[0].name;
+
+    return Object.fromEntries(entries
+        .map(entry => entry.name)
+        .sort()
+        .map(platformId => {
+            const platformDir = path.join(managedCoreDir, platformId);
+            const metadata = readJson(path.join(platformDir, 'authority-core.json'));
+            const expectedPlatformId = `${metadata.platform}-${metadata.arch}`;
+            if (platformId !== expectedPlatformId) {
+                throw new Error(`Managed authority-core metadata mismatch: ${platformId} contains ${expectedPlatformId}.`);
+            }
+
+            const binaryPath = path.join(platformDir, metadata.binaryName);
+            assertExists(binaryPath, `Managed authority-core binary missing for ${platformId}.`);
+            const binarySha256 = hashFile(binaryPath);
+            if (metadata.binarySha256 !== binarySha256) {
+                throw new Error(`Managed authority-core binary hash mismatch for ${platformId}.`);
+            }
+
+            return [platformId, {
+                platform: metadata.platform,
+                arch: metadata.arch,
+                binaryName: metadata.binaryName,
+                binarySha256,
+                artifactHash: hashDirectory(platformDir),
+            }];
+        }));
+}
+
+function choosePrimaryCoreArtifactPlatform(coreArtifactPlatforms) {
+    const currentPlatform = `${process.platform}-${process.arch}`;
+    return coreArtifactPlatforms.includes(currentPlatform)
+        ? currentPlatform
+        : coreArtifactPlatforms[0];
 }
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -66,8 +99,9 @@ function stageInstallable() {
     const assetHash = hashDirectory(managedSdkDir);
     const coreArtifactHash = hashDirectory(managedCoreDir);
     const buildTime = resolveBuildTime(pluginVersion, assetHash, coreArtifactHash);
-    const coreArtifactPlatform = readCoreArtifactPlatform(managedCoreDir);
-    const coreMetadata = readJson(path.join(managedCoreDir, coreArtifactPlatform, 'authority-core.json'));
+    const coreArtifacts = readCoreArtifacts(managedCoreDir);
+    const coreArtifactPlatforms = Object.keys(coreArtifacts).sort();
+    const coreArtifactPlatform = choosePrimaryCoreArtifactPlatform(coreArtifactPlatforms);
 
     const release = {
         pluginId: 'authority',
@@ -78,7 +112,9 @@ function stageInstallable() {
         coreVersion: pluginVersion,
         coreArtifactHash,
         coreArtifactPlatform,
-        coreBinarySha256: coreMetadata.binarySha256,
+        coreArtifactPlatforms,
+        coreArtifacts,
+        coreBinarySha256: coreArtifacts[coreArtifactPlatform].binarySha256,
         buildTime,
     };
 
@@ -220,6 +256,10 @@ function hashDirectory(rootDir) {
         hash.update('\0');
     }
     return hash.digest('hex');
+}
+
+function hashFile(filePath) {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
 function listFiles(rootDir) {

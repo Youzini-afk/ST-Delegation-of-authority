@@ -10,14 +10,21 @@ const manifestPath = path.join(repoRoot, 'crates', 'authority-core', 'Cargo.toml
 const rootPackage = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
 const version = String(rootPackage.version ?? '0.0.0-dev');
 const profile = process.env.AUTHORITY_CORE_PROFILE === 'debug' ? 'debug' : 'release';
-const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
-const managedRoot = path.join(repoRoot, 'managed', 'core', `${process.platform}-${process.arch}`);
+const targetPlatform = process.env.AUTHORITY_CORE_TARGET_PLATFORM || process.platform;
+const targetArch = process.env.AUTHORITY_CORE_TARGET_ARCH || process.arch;
+const targetTriple = process.env.AUTHORITY_CORE_TARGET_TRIPLE || '';
+const binaryName = process.env.AUTHORITY_CORE_BINARY_NAME || (targetPlatform === 'win32' ? 'authority-core.exe' : 'authority-core');
+const managedRoot = path.join(repoRoot, 'managed', 'core', `${targetPlatform}-${targetArch}`);
 const metadataPath = path.join(managedRoot, 'authority-core.json');
 const targetBinaryPath = path.join(managedRoot, binaryName);
 const cargoArgs = ['build', '--manifest-path', manifestPath];
 
 if (profile === 'release') {
     cargoArgs.push('--release');
+}
+
+if (targetTriple) {
+    cargoArgs.push('--target', targetTriple);
 }
 
 const result = spawnSync('cargo', cargoArgs, {
@@ -29,7 +36,9 @@ if (result.status !== 0) {
     process.exit(result.status ?? 1);
 }
 
-const builtBinaryPath = path.join(repoRoot, 'target', profile, binaryName);
+const builtBinaryPath = targetTriple
+    ? path.join(repoRoot, 'target', targetTriple, profile, binaryName)
+    : path.join(repoRoot, 'target', profile, binaryName);
 
 if (!fs.existsSync(builtBinaryPath)) {
     throw new Error(`Built core binary not found at ${builtBinaryPath}`);
@@ -45,8 +54,8 @@ fs.copyFileSync(builtBinaryPath, targetBinaryPath);
 const binarySha256 = crypto.createHash('sha256').update(fs.readFileSync(targetBinaryPath)).digest('hex');
 const builtAt = existingMetadata
     && existingMetadata.version === version
-    && existingMetadata.platform === process.platform
-    && existingMetadata.arch === process.arch
+    && existingMetadata.platform === targetPlatform
+    && existingMetadata.arch === targetArch
     && existingMetadata.binaryName === binaryName
     && existingMetadata.binarySha256 === binarySha256
     && typeof existingMetadata.builtAt === 'string'
@@ -55,8 +64,8 @@ const builtAt = existingMetadata
 const metadata = {
     managedBy: 'authority',
     version,
-    platform: process.platform,
-    arch: process.arch,
+    platform: targetPlatform,
+    arch: targetArch,
     binaryName,
     binarySha256,
     builtAt,
