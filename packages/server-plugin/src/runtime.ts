@@ -7,6 +7,7 @@ import { InstallService } from './services/install-service.js';
 import { JobService } from './services/job-service.js';
 import { PermissionService } from './services/permission-service.js';
 import { PolicyService } from './services/policy-service.js';
+import { PrivateFsService } from './services/private-fs-service.js';
 import { SessionService } from './services/session-service.js';
 import { StorageService } from './services/storage-service.js';
 
@@ -20,6 +21,7 @@ export interface AuthorityRuntime {
     permissions: PermissionService;
     sessions: SessionService;
     storage: StorageService;
+    files: PrivateFsService;
     http: HttpService;
     jobs: JobService;
 }
@@ -34,6 +36,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const permissions = new PermissionService(policies, core);
     const sessions = new SessionService(core);
     const storage = new StorageService(core);
+    const files = new PrivateFsService(core);
     const http = new HttpService(core);
     const jobs = new JobService(core);
 
@@ -47,6 +50,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         permissions,
         sessions,
         storage,
+        files,
         http,
         jobs,
     };

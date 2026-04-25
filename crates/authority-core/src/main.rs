@@ -28,6 +28,7 @@ const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 512 * 1024;
 const MAX_HTTP_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EVENT_POLL_LIMIT: usize = 200;
+const MAX_PRIVATE_READ_DIR_LIMIT: usize = 200;
 const JOB_PROGRESS_INTERVAL_MS: u64 = 250;
 
 struct RuntimeState {
@@ -547,6 +548,85 @@ struct ControlAuditRecord {
     details: Option<JsonValue>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileMkdirRequest {
+    root_dir: String,
+    path: String,
+    recursive: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileReadDirRequest {
+    root_dir: String,
+    path: String,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileWriteRequest {
+    root_dir: String,
+    path: String,
+    content: String,
+    encoding: Option<String>,
+    create_parents: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileReadRequest {
+    root_dir: String,
+    path: String,
+    encoding: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileDeleteRequest {
+    root_dir: String,
+    path: String,
+    recursive: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileStatRequest {
+    root_dir: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileEntry {
+    name: String,
+    path: String,
+    kind: String,
+    size_bytes: i64,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileResponse {
+    entry: PrivateFileEntry,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileListResponse {
+    entries: Vec<PrivateFileEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileReadResponse {
+    entry: PrivateFileEntry,
+    content: String,
+    encoding: String,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let host = env::var("AUTHORITY_CORE_HOST").unwrap_or_else(|_| String::from("127.0.0.1"));
     let port = env::var("AUTHORITY_CORE_PORT")
@@ -636,6 +716,12 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
         ("POST", "/v1/storage/blob/get") => parse_json_body::<StorageBlobGetRequest>(&request).and_then(handle_storage_blob_get),
         ("POST", "/v1/storage/blob/delete") => parse_json_body::<StorageBlobDeleteRequest>(&request).and_then(handle_storage_blob_delete),
         ("POST", "/v1/storage/blob/list") => parse_json_body::<StorageBlobListRequest>(&request).and_then(handle_storage_blob_list),
+        ("POST", "/v1/fs/private/mkdir") => parse_json_body::<PrivateFileMkdirRequest>(&request).and_then(handle_private_file_mkdir),
+        ("POST", "/v1/fs/private/read-dir") => parse_json_body::<PrivateFileReadDirRequest>(&request).and_then(handle_private_file_read_dir),
+        ("POST", "/v1/fs/private/write-file") => parse_json_body::<PrivateFileWriteRequest>(&request).and_then(handle_private_file_write),
+        ("POST", "/v1/fs/private/read-file") => parse_json_body::<PrivateFileReadRequest>(&request).and_then(handle_private_file_read),
+        ("POST", "/v1/fs/private/delete") => parse_json_body::<PrivateFileDeleteRequest>(&request).and_then(handle_private_file_delete),
+        ("POST", "/v1/fs/private/stat") => parse_json_body::<PrivateFileStatRequest>(&request).and_then(handle_private_file_stat),
         ("POST", "/v1/http/fetch") => parse_json_body::<CoreHttpFetchRequest>(&request).and_then(handle_http_fetch),
         ("POST", "/v1/sql/query") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_query),
         ("POST", "/v1/sql/exec") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_exec),
@@ -1254,6 +1340,7 @@ fn handle_storage_blob_delete(request: StorageBlobDeleteRequest) -> Result<JsonV
             return Err(to_internal_error(error));
         }
     }
+
     Ok(json!({ "ok": true }))
 }
 
@@ -1266,6 +1353,227 @@ fn handle_storage_blob_list(request: StorageBlobListRequest) -> Result<JsonValue
     ensure_control_schema(&connection)?;
     let entries = fetch_blob_records(&connection, &request.user_handle, &request.extension_id)?;
     Ok(json!({ "entries": entries }))
+}
+
+fn handle_private_file_mkdir(request: PrivateFileMkdirRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("rootDir", &request.root_dir)?;
+    let root_dir = PathBuf::from(&request.root_dir);
+    let (target_path, virtual_path) = resolve_private_path(&root_dir, &request.path)?;
+    ensure_private_path_components_safe(&root_dir, &virtual_path)?;
+
+    fs::create_dir_all(&root_dir).map_err(to_internal_error)?;
+    if target_path.exists() {
+        let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+        if !metadata.is_dir() {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("private_path_is_not_directory"),
+            });
+        }
+        let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
+        return Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"));
+    }
+
+    if request.recursive.unwrap_or(false) {
+        fs::create_dir_all(&target_path).map_err(to_internal_error)?;
+    } else {
+        let parent = target_path.parent().ok_or_else(|| ApiError {
+            status_code: 400,
+            message: String::from("private_path_missing_parent"),
+        })?;
+        if parent != root_dir.as_path() && !parent.exists() {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("private_parent_directory_missing"),
+            });
+        }
+        fs::create_dir(&target_path).map_err(to_internal_error)?;
+    }
+
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
+    Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"))
+}
+
+fn handle_private_file_read_dir(request: PrivateFileReadDirRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("rootDir", &request.root_dir)?;
+    let root_dir = PathBuf::from(&request.root_dir);
+    let (target_path, virtual_path) = resolve_private_path(&root_dir, &request.path)?;
+    ensure_private_path_components_safe(&root_dir, &virtual_path)?;
+
+    if !target_path.exists() {
+        if virtual_path == "/" {
+            return Ok(serde_json::to_value(PrivateFileListResponse { entries: Vec::new() }).expect("private file list should serialize"));
+        }
+        return Err(ApiError {
+            status_code: 404,
+            message: String::from("private_path_not_found"),
+        });
+    }
+
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    if !metadata.is_dir() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("private_path_is_not_directory"),
+        });
+    }
+
+    let limit = request.limit.unwrap_or(MAX_PRIVATE_READ_DIR_LIMIT).min(MAX_PRIVATE_READ_DIR_LIMIT);
+    let mut entries = fs::read_dir(&target_path)
+        .map_err(to_internal_error)?
+        .take(limit)
+        .map(|entry| {
+            let entry = entry.map_err(to_internal_error)?;
+            let child_path = entry.path();
+            let child_metadata = entry.metadata().map_err(to_internal_error)?;
+            build_private_file_entry(&root_dir, &child_path, &child_metadata)
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(serde_json::to_value(PrivateFileListResponse { entries }).expect("private file list should serialize"))
+}
+
+fn handle_private_file_write(request: PrivateFileWriteRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("rootDir", &request.root_dir)?;
+    let root_dir = PathBuf::from(&request.root_dir);
+    let (target_path, virtual_path) = resolve_private_path(&root_dir, &request.path)?;
+    ensure_private_path_components_safe(&root_dir, &virtual_path)?;
+    if virtual_path == "/" {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("private_path_must_target_file"),
+        });
+    }
+
+    let payload = decode_blob_content(request.encoding.as_deref(), &request.content)?;
+    if payload.len() > MAX_BLOB_BYTES {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("Private file exceeds {} bytes", MAX_BLOB_BYTES),
+        });
+    }
+
+    fs::create_dir_all(&root_dir).map_err(to_internal_error)?;
+    let parent = target_path.parent().ok_or_else(|| ApiError {
+        status_code: 400,
+        message: String::from("private_path_missing_parent"),
+    })?;
+    if request.create_parents.unwrap_or(false) {
+        fs::create_dir_all(parent).map_err(to_internal_error)?;
+    } else if parent != root_dir.as_path() && !parent.exists() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("private_parent_directory_missing"),
+        });
+    }
+
+    if target_path.exists() {
+        let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+        if metadata.is_dir() {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("private_path_is_directory"),
+            });
+        }
+    }
+
+    fs::write(&target_path, &payload).map_err(to_internal_error)?;
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
+    Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"))
+}
+
+fn handle_private_file_read(request: PrivateFileReadRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("rootDir", &request.root_dir)?;
+    let root_dir = PathBuf::from(&request.root_dir);
+    let (target_path, virtual_path) = resolve_private_path(&root_dir, &request.path)?;
+    ensure_private_path_components_safe(&root_dir, &virtual_path)?;
+    if !target_path.exists() {
+        return Err(ApiError {
+            status_code: 404,
+            message: String::from("private_path_not_found"),
+        });
+    }
+
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    if !metadata.is_file() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("private_path_is_not_file"),
+        });
+    }
+    if metadata.len() > MAX_BLOB_BYTES as u64 {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("Private file exceeds {} bytes", MAX_BLOB_BYTES),
+        });
+    }
+
+    let bytes = fs::read(&target_path).map_err(to_internal_error)?;
+    let encoding = request.encoding.as_deref().unwrap_or("utf8");
+    let content = encode_private_file_content(encoding, &bytes)?;
+    let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
+    Ok(serde_json::to_value(PrivateFileReadResponse {
+        entry,
+        content,
+        encoding: encoding.to_string(),
+    }).expect("private file read response should serialize"))
+}
+
+fn handle_private_file_delete(request: PrivateFileDeleteRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("rootDir", &request.root_dir)?;
+    let root_dir = PathBuf::from(&request.root_dir);
+    let (target_path, virtual_path) = resolve_private_path(&root_dir, &request.path)?;
+    ensure_private_path_components_safe(&root_dir, &virtual_path)?;
+    if virtual_path == "/" {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("private_root_delete_forbidden"),
+        });
+    }
+    if !target_path.exists() {
+        return Err(ApiError {
+            status_code: 404,
+            message: String::from("private_path_not_found"),
+        });
+    }
+
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    if metadata.is_dir() {
+        if request.recursive.unwrap_or(false) {
+            fs::remove_dir_all(&target_path).map_err(to_internal_error)?;
+        } else if let Err(error) = fs::remove_dir(&target_path) {
+            if error.kind() == std::io::ErrorKind::DirectoryNotEmpty {
+                return Err(ApiError {
+                    status_code: 400,
+                    message: String::from("private_directory_not_empty"),
+                });
+            }
+            return Err(to_internal_error(error));
+        }
+    } else {
+        fs::remove_file(&target_path).map_err(to_internal_error)?;
+    }
+
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_private_file_stat(request: PrivateFileStatRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("rootDir", &request.root_dir)?;
+    let root_dir = PathBuf::from(&request.root_dir);
+    let (target_path, virtual_path) = resolve_private_path(&root_dir, &request.path)?;
+    ensure_private_path_components_safe(&root_dir, &virtual_path)?;
+    if !target_path.exists() {
+        return Err(ApiError {
+            status_code: 404,
+            message: String::from("private_path_not_found"),
+        });
+    }
+
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
+    Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"))
 }
 
 fn handle_http_fetch(request: CoreHttpFetchRequest) -> Result<JsonValue, ApiError> {
@@ -1855,6 +2163,7 @@ fn default_control_policies_document() -> ControlPoliciesDocument {
     let mut defaults = HashMap::new();
     defaults.insert(String::from("storage.kv"), String::from("prompt"));
     defaults.insert(String::from("storage.blob"), String::from("prompt"));
+    defaults.insert(String::from("fs.private"), String::from("prompt"));
     defaults.insert(String::from("sql.private"), String::from("prompt"));
     defaults.insert(String::from("http.fetch"), String::from("prompt"));
     defaults.insert(String::from("jobs.background"), String::from("prompt"));
@@ -2281,6 +2590,139 @@ fn blob_binary_path(blob_dir: &str, extension_id: &str, blob_id: &str) -> PathBu
         .join(format!("{}.bin", sanitize_file_segment(blob_id)))
 }
 
+fn resolve_private_path(root_dir: &Path, value: &str) -> Result<(PathBuf, String), ApiError> {
+    let normalized = normalize_private_virtual_path(value)?;
+    if normalized == "/" {
+        return Ok((root_dir.to_path_buf(), normalized));
+    }
+
+    let target = normalized
+        .trim_start_matches('/')
+        .split('/')
+        .fold(root_dir.to_path_buf(), |current, segment| current.join(segment));
+    Ok((target, normalized))
+}
+
+fn normalize_private_virtual_path(value: &str) -> Result<String, ApiError> {
+    let normalized = value.trim().replace('\\', "/");
+    if normalized.is_empty() || normalized == "/" || normalized == "." {
+        return Ok(String::from("/"));
+    }
+
+    let mut segments = Vec::new();
+    for segment in normalized.split('/') {
+        let item = segment.trim();
+        if item.is_empty() || item == "." {
+            continue;
+        }
+        if item == ".." {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("private_path_escape_not_allowed"),
+            });
+        }
+        if item.contains(':') {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("private_absolute_paths_not_allowed"),
+            });
+        }
+        segments.push(item.to_string());
+    }
+
+    if segments.is_empty() {
+        return Ok(String::from("/"));
+    }
+    Ok(format!("/{}", segments.join("/")))
+}
+
+fn ensure_private_path_components_safe(root_dir: &Path, virtual_path: &str) -> Result<(), ApiError> {
+    if root_dir.exists() {
+        let metadata = fs::symlink_metadata(root_dir).map_err(to_internal_error)?;
+        if metadata.file_type().is_symlink() {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("private_root_symlink_not_allowed"),
+            });
+        }
+    }
+
+    let mut current = root_dir.to_path_buf();
+    for segment in virtual_path.trim_start_matches('/').split('/') {
+        if segment.is_empty() {
+            continue;
+        }
+        current = current.join(segment);
+        if current.exists() {
+            let metadata = fs::symlink_metadata(&current).map_err(to_internal_error)?;
+            if metadata.file_type().is_symlink() {
+                return Err(ApiError {
+                    status_code: 400,
+                    message: String::from("private_symlink_not_allowed"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn build_private_file_entry(root_dir: &Path, target_path: &Path, metadata: &fs::Metadata) -> Result<PrivateFileEntry, ApiError> {
+    let relative = target_path.strip_prefix(root_dir).map_err(|_| ApiError {
+        status_code: 400,
+        message: String::from("private_path_outside_root"),
+    })?;
+    let path = if relative.as_os_str().is_empty() {
+        String::from("/")
+    } else {
+        format!(
+            "/{}",
+            relative
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        )
+    };
+    let updated_at = metadata.modified().ok().and_then(system_time_to_iso).unwrap_or_else(current_timestamp_iso);
+
+    Ok(PrivateFileEntry {
+        name: if path == "/" {
+            String::from("/")
+        } else {
+            target_path
+                .file_name()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| String::from("/"))
+        },
+        path,
+        kind: if metadata.is_dir() {
+            String::from("directory")
+        } else {
+            String::from("file")
+        },
+        size_bytes: if metadata.is_file() {
+            i64::try_from(metadata.len()).unwrap_or(i64::MAX)
+        } else {
+            0
+        },
+        updated_at,
+    })
+}
+
+fn encode_private_file_content(encoding: &str, bytes: &[u8]) -> Result<String, ApiError> {
+    match encoding {
+        "utf8" => String::from_utf8(bytes.to_vec()).map_err(|error| ApiError {
+            status_code: 400,
+            message: format!("invalid_utf8_private_file: {error}"),
+        }),
+        "base64" => Ok(BASE64_STANDARD.encode(bytes)),
+        value => Err(ApiError {
+            status_code: 400,
+            message: format!("private file encoding has unsupported value: {value}"),
+        }),
+    }
+}
+
 fn sanitize_file_segment(input: &str) -> String {
     input
         .chars()
@@ -2301,9 +2743,9 @@ fn normalize_hostname(value: &str) -> Result<String, ApiError> {
     })?;
     let hostname = url.host_str().ok_or_else(|| ApiError {
         status_code: 400,
-        message: String::from("invalid_url: missing hostname"),
+        message: String::from("missing_url_hostname"),
     })?;
-    Ok(hostname.to_lowercase())
+    Ok(hostname.to_ascii_lowercase())
 }
 
 fn is_textual_content_type(content_type: &str) -> bool {
@@ -2611,6 +3053,7 @@ fn validate_supported_resource(field_name: &str, value: &str) -> Result<(), ApiE
         &[
             "storage.kv",
             "storage.blob",
+            "fs.private",
             "sql.private",
             "http.fetch",
             "jobs.background",
@@ -2675,6 +3118,11 @@ fn current_timestamp_iso() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| current_timestamp_millis())
+}
+
+fn system_time_to_iso(value: SystemTime) -> Option<String> {
+    let timestamp: OffsetDateTime = value.into();
+    timestamp.format(&Rfc3339).ok()
 }
 
 fn write_json(stream: &mut TcpStream, status_code: u16, body: &str) -> std::io::Result<()> {
@@ -2820,6 +3268,71 @@ mod tests {
     }
 
     #[test]
+    fn private_files_support_round_trip_operations() {
+        let root_dir = test_private_root("round-trip");
+
+        let created = handle_private_file_mkdir(PrivateFileMkdirRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes"),
+            recursive: Some(true),
+        }).expect("mkdir should succeed");
+        assert_eq!(created["entry"]["kind"], json!("directory"));
+
+        let written = handle_private_file_write(PrivateFileWriteRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes/hello.txt"),
+            content: String::from("hello authority"),
+            encoding: Some(String::from("utf8")),
+            create_parents: Some(true),
+        }).expect("write should succeed");
+        assert_eq!(written["entry"]["path"], json!("/notes/hello.txt"));
+
+        let listed = handle_private_file_read_dir(PrivateFileReadDirRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes"),
+            limit: Some(10),
+        }).expect("list should succeed");
+        assert_eq!(listed["entries"].as_array().expect("entries should be an array").len(), 1);
+
+        let read = handle_private_file_read(PrivateFileReadRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes/hello.txt"),
+            encoding: Some(String::from("utf8")),
+        }).expect("read should succeed");
+        assert_eq!(read["content"], json!("hello authority"));
+
+        let stat = handle_private_file_stat(PrivateFileStatRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes/hello.txt"),
+        }).expect("stat should succeed");
+        assert_eq!(stat["entry"]["kind"], json!("file"));
+
+        handle_private_file_delete(PrivateFileDeleteRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes/hello.txt"),
+            recursive: Some(false),
+        }).expect("file delete should succeed");
+        handle_private_file_delete(PrivateFileDeleteRequest {
+            root_dir,
+            path: String::from("notes"),
+            recursive: Some(false),
+        }).expect("directory delete should succeed");
+    }
+
+    #[test]
+    fn private_files_reject_escape_paths() {
+        let root_dir = test_private_root("escape");
+        let error = handle_private_file_write(PrivateFileWriteRequest {
+            root_dir,
+            path: String::from("../escape.txt"),
+            content: String::from("bad"),
+            encoding: Some(String::from("utf8")),
+            create_parents: Some(true),
+        }).expect_err("escape path should fail");
+        assert!(error.message.contains("escape"));
+    }
+
+    #[test]
     fn runtime_diagnostics_are_monotonic() {
         let started_at = current_unix_millis().saturating_sub(50).to_string();
         assert!(runtime_uptime_ms(&started_at) >= 50);
@@ -2885,6 +3398,12 @@ mod tests {
     fn test_db_path(name: &str) -> String {
         let path = env::temp_dir()
             .join(format!("authority-core-test-{}-{}-{}.sqlite", name, process::id(), current_unix_millis()));
+        path.to_string_lossy().into_owned()
+    }
+
+    fn test_private_root(name: &str) -> String {
+        let path = env::temp_dir()
+            .join(format!("authority-core-private-{}-{}-{}", name, process::id(), current_unix_millis()));
         path.to_string_lossy().into_owned()
     }
 }

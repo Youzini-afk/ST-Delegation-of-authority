@@ -3,6 +3,7 @@ export type InstallType = 'system' | 'local' | 'global';
 export type PermissionResource =
     | 'storage.kv'
     | 'storage.blob'
+    | 'fs.private'
     | 'sql.private'
     | 'http.fetch'
     | 'jobs.background'
@@ -13,11 +14,16 @@ export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always'
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type GrantScope = 'session' | 'persistent' | 'policy';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type PrivateFileKind = 'file' | 'directory';
+export type PrivateFileEncoding = 'utf8' | 'base64';
 
 export interface DeclaredPermissions {
     storage?: {
         kv?: boolean;
         blob?: boolean;
+    };
+    fs?: {
+        private?: boolean;
     };
     sql?: {
         private?: boolean | string[];
@@ -303,6 +309,95 @@ export interface ControlBlobListResponse {
     entries: BlobRecord[];
 }
 
+export interface PrivateFileEntry {
+    name: string;
+    path: string;
+    kind: PrivateFileKind;
+    sizeBytes: number;
+    updatedAt: string;
+}
+
+export interface PrivateFileUsageSummary {
+    fileCount: number;
+    directoryCount: number;
+    totalSizeBytes: number;
+    latestUpdatedAt: string | null;
+}
+
+export interface PrivateFileScopeRequest {
+    path: string;
+}
+
+export interface PrivateFileMkdirRequest extends PrivateFileScopeRequest {
+    recursive?: boolean;
+}
+
+export interface PrivateFileReadDirRequest extends PrivateFileScopeRequest {
+    limit?: number;
+}
+
+export interface PrivateFileWriteRequest extends PrivateFileScopeRequest {
+    content: string;
+    encoding?: PrivateFileEncoding;
+    createParents?: boolean;
+}
+
+export interface PrivateFileReadRequest extends PrivateFileScopeRequest {
+    encoding?: PrivateFileEncoding;
+}
+
+export interface PrivateFileDeleteRequest extends PrivateFileScopeRequest {
+    recursive?: boolean;
+}
+
+export interface PrivateFileStatRequest extends PrivateFileScopeRequest {}
+
+export interface PrivateFileResponse {
+    entry: PrivateFileEntry;
+}
+
+export interface PrivateFileReadResponse {
+    entry: PrivateFileEntry;
+    content: string;
+    encoding: PrivateFileEncoding;
+}
+
+export interface PrivateFileListResponse {
+    entries: PrivateFileEntry[];
+}
+
+export interface PrivateFileDeleteResponse {
+    ok: true;
+}
+
+export interface ControlPrivateFileScopeRequest extends PrivateFileScopeRequest {
+    rootDir: string;
+}
+
+export interface ControlPrivateFileMkdirRequest extends ControlPrivateFileScopeRequest {
+    recursive?: boolean;
+}
+
+export interface ControlPrivateFileReadDirRequest extends ControlPrivateFileScopeRequest {
+    limit?: number;
+}
+
+export interface ControlPrivateFileWriteRequest extends ControlPrivateFileScopeRequest {
+    content: string;
+    encoding?: PrivateFileEncoding;
+    createParents?: boolean;
+}
+
+export interface ControlPrivateFileReadRequest extends ControlPrivateFileScopeRequest {
+    encoding?: PrivateFileEncoding;
+}
+
+export interface ControlPrivateFileDeleteRequest extends ControlPrivateFileScopeRequest {
+    recursive?: boolean;
+}
+
+export interface ControlPrivateFileStatRequest extends ControlPrivateFileScopeRequest {}
+
 export interface ControlEventRecord {
     id: number;
     timestamp: string;
@@ -478,4 +573,3 @@ export interface HttpFetchResponse {
     bodyEncoding: 'utf8' | 'base64';
     contentType: string;
 }
-

@@ -20,6 +20,7 @@ export const MAX_AUDIT_LINES = 200;
 export const SUPPORTED_RESOURCES: PermissionResource[] = [
     'storage.kv',
     'storage.blob',
+    'fs.private',
     'sql.private',
     'http.fetch',
     'jobs.background',
@@ -29,6 +30,7 @@ export const SUPPORTED_RESOURCES: PermissionResource[] = [
 export const RESOURCE_RISK: Record<PermissionResource, RiskLevel> = {
     'storage.kv': 'low',
     'storage.blob': 'low',
+    'fs.private': 'medium',
     'sql.private': 'medium',
     'http.fetch': 'medium',
     'jobs.background': 'medium',
@@ -38,6 +40,7 @@ export const RESOURCE_RISK: Record<PermissionResource, RiskLevel> = {
 export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus> = {
     'storage.kv': 'prompt',
     'storage.blob': 'prompt',
+    'fs.private': 'prompt',
     'sql.private': 'prompt',
     'http.fetch': 'prompt',
     'jobs.background': 'prompt',

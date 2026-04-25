@@ -6,6 +6,7 @@ export interface UserAuthorityPaths {
     sqlPrivateDir: string;
     kvDir: string;
     blobDir: string;
+    filesDir: string;
     controlDbFile: string;
 }
 
@@ -23,6 +24,7 @@ export function getUserAuthorityPaths(user: UserContext): UserAuthorityPaths {
         sqlPrivateDir: path.join(sqlDir, 'private'),
         kvDir: path.join(storageDir, 'kv'),
         blobDir: path.join(storageDir, 'blobs'),
+        filesDir: path.join(storageDir, 'files'),
         controlDbFile: path.join(stateDir, 'control.sqlite'),
     };
 }

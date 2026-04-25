@@ -9,6 +9,12 @@ import type {
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
     PermissionResource,
+    PrivateFileDeleteRequest,
+    PrivateFileEntry,
+    PrivateFileReadDirRequest,
+    PrivateFileReadRequest,
+    PrivateFileReadResponse,
+    PrivateFileWriteRequest,
     SessionInitResponse,
     SqlBatchRequest,
     SqlBatchResponse,
@@ -84,6 +90,15 @@ export class AuthorityClient {
             delete: (id: string) => Promise<void>;
             list: () => Promise<BlobRecord[]>;
         };
+    };
+
+    readonly fs: {
+        mkdir: (path: string, options?: { recursive?: boolean }) => Promise<PrivateFileEntry>;
+        readDir: (path?: string, options?: Omit<PrivateFileReadDirRequest, 'path'>) => Promise<PrivateFileEntry[]>;
+        writeFile: (path: string, content: string, options?: Omit<PrivateFileWriteRequest, 'path' | 'content'>) => Promise<PrivateFileEntry>;
+        readFile: (path: string, options?: Omit<PrivateFileReadRequest, 'path'>) => Promise<PrivateFileReadResponse>;
+        delete: (path: string, options?: Omit<PrivateFileDeleteRequest, 'path'>) => Promise<void>;
+        stat: (path: string) => Promise<PrivateFileEntry>;
     };
 
     readonly sql: {
@@ -176,6 +191,72 @@ export class AuthorityClient {
                     });
                     return response.entries;
                 },
+            },
+        };
+
+        this.fs = {
+            mkdir: async (path, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `在私有文件夹中创建目录 ${path}` });
+                const response = await this.requestWithSession<{ entry: PrivateFileEntry }>('/fs/private/mkdir', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        recursive: options.recursive,
+                    },
+                });
+                return response.entry;
+            },
+            readDir: async (path = '/', options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `列出私有目录 ${path}` });
+                const response = await this.requestWithSession<{ entries: PrivateFileEntry[] }>('/fs/private/read-dir', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        limit: options.limit,
+                    },
+                });
+                return response.entries;
+            },
+            writeFile: async (path, content, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `写入私有文件 ${path}` });
+                const response = await this.requestWithSession<{ entry: PrivateFileEntry }>('/fs/private/write-file', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        content,
+                        encoding: options.encoding,
+                        createParents: options.createParents,
+                    },
+                });
+                return response.entry;
+            },
+            readFile: async (path, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `读取私有文件 ${path}` });
+                return await this.requestWithSession<PrivateFileReadResponse>('/fs/private/read-file', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        encoding: options.encoding,
+                    },
+                });
+            },
+            delete: async (path, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `删除私有路径 ${path}` });
+                await this.requestWithSession('/fs/private/delete', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        recursive: options.recursive,
+                    },
+                });
+            },
+            stat: async path => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `查看私有路径 ${path}` });
+                const response = await this.requestWithSession<{ entry: PrivateFileEntry }>('/fs/private/stat', {
+                    method: 'POST',
+                    body: { path },
+                });
+                return response.entry;
             },
         };
 
@@ -580,6 +661,7 @@ function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items:
     const result = {
         'storage.kv': [],
         'storage.blob': [],
+        'fs.private': [],
         'sql.private': [],
         'http.fetch': [],
         'jobs.background': [],
@@ -607,7 +689,8 @@ function getPermissionFailureMessage(
     target: string,
     decision: PermissionEvaluateResponse['decision'],
 ): string {
-    const resourceLabel = target && target !== '*' ? `${resource} (${target})` : resource;
+    const resourceName = getPermissionResourceLabel(resource);
+    const resourceLabel = target && target !== '*' ? `${resourceName} (${target})` : resourceName;
     if (decision === 'denied') {
         return `${displayName} 对 ${resourceLabel} 的请求已被拒绝，请在安全中心手动重置。`;
     }
@@ -617,6 +700,27 @@ function getPermissionFailureMessage(
     }
 
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
+}
+
+function getPermissionResourceLabel(resource: PermissionResource): string {
+    switch (resource) {
+        case 'storage.kv':
+            return 'KV 存储';
+        case 'storage.blob':
+            return 'Blob 存储';
+        case 'fs.private':
+            return '私有文件夹';
+        case 'sql.private':
+            return '私有 SQL 数据库';
+        case 'http.fetch':
+            return 'HTTP 访问';
+        case 'jobs.background':
+            return '后台任务';
+        case 'events.stream':
+            return '事件流';
+        default:
+            return resource;
+    }
 }
 
 function getSqlDatabaseName(value: unknown): string {

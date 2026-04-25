@@ -2,8 +2,10 @@ import type {
     AuthorityGrant,
     AuthorityInitConfig,
     AuthorityPolicyEntry,
+    ControlExtensionRecord,
     DeclaredPermissions,
     JobRecord,
+    PrivateFileUsageSummary,
     PermissionResource,
     PermissionStatus,
     SessionInitResponse,
@@ -31,17 +33,19 @@ interface ActivityRecord {
     details?: Record<string, unknown>;
 }
 
-interface ExtensionSummary {
-    id: string;
-    displayName: string;
-    version: string;
-    installType: string;
-    firstSeenAt: string;
-    lastSeenAt: string;
-    declaredPermissions: DeclaredPermissions;
-    uiLabel?: string;
+interface ExtensionSummary extends ControlExtensionRecord {
     grantedCount: number;
     deniedCount: number;
+    storage: ExtensionStorageSummary;
+}
+
+interface ExtensionStorageSummary {
+    kvEntries: number;
+    blobCount: number;
+    blobBytes: number;
+    databaseCount: number;
+    databaseBytes: number;
+    files: PrivateFileUsageSummary;
 }
 
 interface ProbeResponse {
@@ -87,7 +91,7 @@ interface ProbeResponse {
 }
 
 interface ExtensionDetailResponse {
-    extension: ExtensionSummary;
+    extension: ControlExtensionRecord;
     grants: AuthorityGrant[];
     policies: AuthorityPolicyEntry[];
     activity: {
@@ -97,6 +101,7 @@ interface ExtensionDetailResponse {
     };
     jobs: JobRecord[];
     databases: SqlDatabaseRecord[];
+    storage: ExtensionStorageSummary;
 }
 
 interface DatabaseGroupSummary {
@@ -135,7 +140,7 @@ const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
     uiLabel: 'Authority Security Center',
 };
 
-const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];
+const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];
 const STATUS_OPTIONS: PermissionStatus[] = ['prompt', 'granted', 'denied', 'blocked'];
 
 let bootPromise: Promise<void> | null = null;
@@ -598,6 +603,7 @@ class SecurityCenterView {
         const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
         const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
         const databases = [...detail.databases].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const storage = detail.storage;
 
         container.innerHTML = `
             <div class="authority-card-grid">
@@ -615,6 +621,10 @@ class SecurityCenterView {
                         <div><strong>首次见到</strong><div>${escapeHtml(formatDate(detail.extension.firstSeenAt))}</div></div>
                         <div><strong>最近活跃</strong><div>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</div></div>
                     </div>
+                </section>
+                <section class="authority-card">
+                    <h3>资源占用</h3>
+                    ${renderStorageSummary(storage)}
                 </section>
                 <section class="authority-card">
                     <h3>声明权限</h3>
@@ -959,6 +969,22 @@ function renderDatabaseGroupList(items: DatabaseGroupSummary[], emptyText: strin
     `;
 }
 
+function renderStorageSummary(storage: ExtensionStorageSummary): string {
+    return `
+        <div class="authority-kv-grid">
+            <div><strong>KV 条目</strong><div>${storage.kvEntries}</div></div>
+            <div><strong>Blob 文件</strong><div>${storage.blobCount}</div></div>
+            <div><strong>Blob 体积</strong><div>${escapeHtml(formatBytes(storage.blobBytes))}</div></div>
+            <div><strong>SQL 数据库</strong><div>${storage.databaseCount}</div></div>
+            <div><strong>SQL 体积</strong><div>${escapeHtml(formatBytes(storage.databaseBytes))}</div></div>
+            <div><strong>私有文件</strong><div>${storage.files.fileCount}</div></div>
+            <div><strong>私有目录</strong><div>${storage.files.directoryCount}</div></div>
+            <div><strong>文件体积</strong><div>${escapeHtml(formatBytes(storage.files.totalSizeBytes))}</div></div>
+            <div><strong>最近文件更新</strong><div>${escapeHtml(storage.files.latestUpdatedAt ? formatDate(storage.files.latestUpdatedAt) : 'n/a')}</div></div>
+        </div>
+    `;
+}
+
 function getDatabaseGroupSummaries(extensions: ExtensionSummary[], details: Map<string, ExtensionDetailResponse>): DatabaseGroupSummary[] {
     return extensions.map(extension => {
         const databases = [...(details.get(extension.id)?.databases ?? [])]
@@ -1016,6 +1042,7 @@ function getDeclaredPermissionLabels(declaredPermissions: DeclaredPermissions): 
     const labels: string[] = [];
     if (declaredPermissions.storage?.kv) labels.push('storage.kv');
     if (declaredPermissions.storage?.blob) labels.push('storage.blob');
+    if (declaredPermissions.fs?.private) labels.push('fs.private');
     if (declaredPermissions.sql?.private) labels.push(Array.isArray(declaredPermissions.sql.private) ? `sql.private -> ${declaredPermissions.sql.private.join(', ')}` : 'sql.private');
     if (declaredPermissions.http?.allow?.length) labels.push(`http.fetch -> ${declaredPermissions.http.allow.join(', ')}`);
     if (declaredPermissions.jobs?.background) labels.push(Array.isArray(declaredPermissions.jobs.background) ? `jobs.background -> ${declaredPermissions.jobs.background.join(', ')}` : 'jobs.background');
@@ -1027,6 +1054,7 @@ function getResourceLabel(resource: PermissionResource): string {
     switch (resource) {
         case 'storage.kv': return 'KV 存储';
         case 'storage.blob': return 'Blob 存储';
+        case 'fs.private': return '私有文件夹';
         case 'sql.private': return '私有 SQL 数据库';
         case 'http.fetch': return 'HTTP 访问';
         case 'jobs.background': return '后台任务';
@@ -1060,6 +1088,7 @@ function getRiskLevel(resource: PermissionResource): 'low' | 'medium' | 'high' {
         case 'storage.blob':
         case 'events.stream':
             return 'low';
+        case 'fs.private':
         case 'sql.private':
         case 'http.fetch':
         case 'jobs.background':

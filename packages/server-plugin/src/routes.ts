@@ -2,8 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type {
     AuthorityInitConfig,
+    BlobRecord,
     PermissionEvaluateRequest,
     PermissionResolveRequest,
+    PrivateFileDeleteRequest,
+    PrivateFileMkdirRequest,
+    PrivateFileReadDirRequest,
+    PrivateFileReadRequest,
+    PrivateFileUsageSummary,
+    PrivateFileWriteRequest,
+    PrivateFileStatRequest,
     SqlBatchRequest,
     SqlExecRequest,
     SqlListDatabasesResponse,
@@ -78,6 +86,51 @@ function listPrivateSqlDatabases(user: ReturnType<typeof getUserContext>, extens
 function previewSqlStatement(statement: string): string {
     const normalized = statement.replace(/\s+/g, ' ').trim();
     return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+
+function summarizeBlobRecords(records: BlobRecord[]): { count: number; totalSizeBytes: number } {
+    return {
+        count: records.length,
+        totalSizeBytes: records.reduce((sum, record) => sum + record.size, 0),
+    };
+}
+
+function summarizeDatabases(databases: SqlListDatabasesResponse['databases']): { count: number; totalSizeBytes: number } {
+    return {
+        count: databases.length,
+        totalSizeBytes: databases.reduce((sum, record) => sum + record.sizeBytes, 0),
+    };
+}
+
+async function buildExtensionStorageSummary(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    extensionId: string,
+    databases = listPrivateSqlDatabases(user, extensionId).databases,
+): Promise<{
+    kvEntries: number;
+    blobCount: number;
+    blobBytes: number;
+    databaseCount: number;
+    databaseBytes: number;
+    files: PrivateFileUsageSummary;
+}> {
+    const [kvEntries, blobs, files] = await Promise.all([
+        runtime.storage.listKv(user, extensionId),
+        runtime.storage.listBlobs(user, extensionId),
+        runtime.files.getUsageSummary(user, extensionId),
+    ]);
+    const blobSummary = summarizeBlobRecords(blobs);
+    const databaseSummary = summarizeDatabases(databases);
+
+    return {
+        kvEntries: Object.keys(kvEntries).length,
+        blobCount: blobSummary.count,
+        blobBytes: blobSummary.totalSizeBytes,
+        databaseCount: databaseSummary.count,
+        databaseBytes: databaseSummary.totalSizeBytes,
+        files,
+    };
 }
 
 export function registerRoutes(router: RouterLike, runtime = createAuthorityRuntime()): AuthorityRuntime {
@@ -166,10 +219,12 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const user = getUserContext(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async extension => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
+                const databases = listPrivateSqlDatabases(user, extension.id).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
                     deniedCount: grants.filter(grant => grant.status === 'denied').length,
+                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, databases),
                 };
             }));
             ok(res, list);
@@ -187,13 +242,16 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Extension not found');
             }
 
+            const databases = listPrivateSqlDatabases(user, extensionId).databases;
+
             ok(res, {
                 extension,
                 grants: await runtime.permissions.listPersistentGrants(user, extensionId),
                 policies: await runtime.permissions.getPolicyEntries(user, extensionId),
                 activity: await runtime.audit.getRecentActivity(user, extensionId),
                 jobs: await runtime.jobs.list(user, extensionId),
-                databases: listPrivateSqlDatabases(user, extensionId).databases,
+                databases,
+                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases),
             });
         } catch (error) {
             fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
@@ -340,6 +398,108 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             ok(res, { entries: await runtime.storage.listBlobs(user, session.extension.id) });
         } catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
+        }
+    });
+
+    router.post('/fs/private/mkdir', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileMkdirRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            const entry = await runtime.files.mkdir(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file mkdir', { path: payload.path });
+            ok(res, { entry });
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+
+    router.post('/fs/private/read-dir', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileReadDirRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            const entries = await runtime.files.readDir(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read dir', { path: payload.path });
+            ok(res, { entries });
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+
+    router.post('/fs/private/write-file', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileWriteRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            const entry = await runtime.files.writeFile(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file write', { path: payload.path });
+            ok(res, { entry });
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+
+    router.post('/fs/private/read-file', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileReadRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            const result = await runtime.files.readFile(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+
+    router.post('/fs/private/delete', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileDeleteRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            await runtime.files.delete(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file delete', { path: payload.path });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+
+    router.post('/fs/private/stat', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileStatRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            const entry = await runtime.files.stat(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file stat', { path: payload.path });
+            ok(res, { entry });
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
         }
     });
 

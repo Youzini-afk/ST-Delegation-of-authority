@@ -47,10 +47,21 @@ import type {
     ControlPoliciesRequest,
     ControlPoliciesResponse,
     ControlPoliciesSaveRequest,
+    ControlPrivateFileDeleteRequest,
+    ControlPrivateFileMkdirRequest,
+    ControlPrivateFileReadDirRequest,
+    ControlPrivateFileReadRequest,
+    ControlPrivateFileStatRequest,
+    ControlPrivateFileWriteRequest,
     ControlSessionResponse,
     ControlSessionSnapshot,
     HttpFetchRequest,
     HttpFetchResponse,
+    PrivateFileDeleteResponse,
+    PrivateFileEntry,
+    PrivateFileListResponse,
+    PrivateFileReadResponse,
+    PrivateFileResponse,
     SqlBatchRequest,
     SqlBatchResponse,
     SqlExecRequest,
@@ -487,6 +498,37 @@ export class CoreService {
             ...request,
         });
         return response.entries;
+    }
+
+    async mkdirPrivateFile(request: ControlPrivateFileMkdirRequest): Promise<PrivateFileEntry> {
+        const response = await this.request<PrivateFileResponse>('/v1/fs/private/mkdir', request);
+        return response.entry;
+    }
+
+    async readPrivateDir(request: ControlPrivateFileReadDirRequest): Promise<PrivateFileEntry[]> {
+        const response = await this.request<PrivateFileListResponse>('/v1/fs/private/read-dir', request);
+        return response.entries;
+    }
+
+    async writePrivateFile(request: ControlPrivateFileWriteRequest): Promise<PrivateFileEntry> {
+        const response = await this.request<PrivateFileResponse>('/v1/fs/private/write-file', request);
+        return response.entry;
+    }
+
+    async readPrivateFile(request: ControlPrivateFileReadRequest): Promise<PrivateFileReadResponse> {
+        return await this.request<PrivateFileReadResponse>('/v1/fs/private/read-file', request);
+    }
+
+    async deletePrivateFile(request: ControlPrivateFileDeleteRequest): Promise<void> {
+        const response = await this.request<PrivateFileDeleteResponse>('/v1/fs/private/delete', request);
+        if (!response.ok) {
+            throw new Error('Private file delete returned unsuccessful response');
+        }
+    }
+
+    async statPrivateFile(request: ControlPrivateFileStatRequest): Promise<PrivateFileEntry> {
+        const response = await this.request<PrivateFileResponse>('/v1/fs/private/stat', request);
+        return response.entry;
     }
 
     async fetchHttp(request: HttpFetchRequest): Promise<HttpFetchResponse> {
