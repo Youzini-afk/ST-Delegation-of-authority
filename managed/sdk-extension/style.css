@@ -114,10 +114,6 @@
   min-width: 88px;
 }
 
-.authority-top-drawer {
-  position: relative;
-}
-
 .authority-top-drawer__toggle {
   cursor: pointer;
 }
