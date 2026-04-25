@@ -1370,13 +1370,21 @@
 }
 
 .authority-section-heading--summary {
+  align-items: flex-start;
   cursor: pointer;
+  gap: 10px;
+  justify-content: flex-start;
   list-style: none;
   user-select: none;
 }
 
 .authority-section-heading--summary::-webkit-details-marker {
   display: none;
+}
+
+.authority-section-heading--summary > div {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .authority-collapsible-section {
