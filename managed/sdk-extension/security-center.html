@@ -1,37 +1,36 @@
 <div class="authority-panel authority-panel--security-center">
-  <div class="authority-console">
-    <div class="authority-panel__header">
-      <div class="authority-title-block">
-        <div class="authority-eyebrow">权限控制台</div>
-        <h2>扩展权限中心</h2>
-        <p>集中查看扩展权限、运行状态、存储与策略设置</p>
+  <div class="authority-workbench">
+    <header class="authority-workbench__bar">
+      <div class="authority-workbench__brand">
+        <div class="authority-workbench__title">扩展权限中心</div>
+        <div class="authority-workbench__subtitle">本地权限、后台服务与策略控制</div>
       </div>
-      <div class="authority-header-actions">
+      <nav class="authority-tabs">
+        <button type="button" class="authority-tab" data-tab="overview">总览</button>
+        <button type="button" class="authority-tab" data-tab="detail">扩展详情</button>
+        <button type="button" class="authority-tab" data-tab="databases">存储与数据库</button>
+        <button type="button" class="authority-tab" data-tab="activity">活动日志</button>
+        <button type="button" class="authority-tab" data-tab="policies">管理员策略</button>
+      </nav>
+      <div class="authority-workbench__actions">
         <div class="authority-health-badges" data-role="health-badges"></div>
         <button type="button" class="menu_button authority-primary-action" data-action="refresh">刷新</button>
       </div>
-    </div>
-    <div data-role="status"></div>
-    <div class="authority-panel__body">
-      <aside class="authority-sidebar">
-        <div class="authority-sidebar__header">
+    </header>
+    <div class="authority-alert-dock" data-role="status"></div>
+    <div class="authority-workbench__body">
+      <aside class="authority-extension-nav">
+        <div class="authority-extension-nav__header">
           <div>
             <div class="authority-eyebrow">扩展</div>
-            <h3>扩展列表</h3>
+            <h3>已接入扩展</h3>
           </div>
           <span class="authority-pill authority-pill--prompt" data-role="extension-count">0</span>
         </div>
         <input class="authority-search" type="search" data-role="extension-search" placeholder="搜索扩展" />
-        <div class="authority-sidebar__list" data-role="extension-list"></div>
+        <div class="authority-extension-nav__list" data-role="extension-list"></div>
       </aside>
-      <main class="authority-main">
-        <div class="authority-tabs">
-          <button type="button" class="authority-tab" data-tab="overview">总览</button>
-          <button type="button" class="authority-tab" data-tab="detail">扩展详情</button>
-          <button type="button" class="authority-tab" data-tab="databases">存储与数据库</button>
-          <button type="button" class="authority-tab" data-tab="activity">活动日志</button>
-          <button type="button" class="authority-tab" data-tab="policies">管理员策略</button>
-        </div>
+      <main class="authority-view-canvas">
         <section class="authority-section" data-section="overview">
           <div data-role="overview-view"></div>
         </section>

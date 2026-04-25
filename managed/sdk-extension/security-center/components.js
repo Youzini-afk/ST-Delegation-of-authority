@@ -9,12 +9,36 @@ export function renderKpiCard(label, value, meta) {
         </div>
     `;
 }
+export function renderMetricTile(label, value, meta, tone = 'neutral') {
+    return `
+        <div class="authority-metric-tile authority-metric-tile--${tone}">
+            <div class="authority-metric-tile__label">${escapeHtml(label)}</div>
+            <div class="authority-metric-tile__value">${escapeHtml(value)}</div>
+            <div class="authority-metric-tile__meta">${escapeHtml(meta)}</div>
+        </div>
+    `;
+}
 export function renderStorageCard(label, value, meta) {
     return `
         <div class="authority-storage-card">
             <div class="authority-storage-card__label">${escapeHtml(label)}</div>
             <div class="authority-storage-card__value">${escapeHtml(value)}</div>
             <div class="authority-storage-card__meta">${escapeHtml(meta)}</div>
+        </div>
+    `;
+}
+export function renderAlertStack(items) {
+    if (items.length === 0) {
+        return '';
+    }
+    return `
+        <div class="authority-alert-stack">
+            ${items.map(item => `
+                <div class="authority-alert authority-alert--${item.tone}">
+                    <strong>${escapeHtml(item.title)}</strong>
+                    <span>${escapeHtml(item.message)}</span>
+                </div>
+            `).join('')}
         </div>
     `;
 }
@@ -65,6 +89,31 @@ export function renderGrantList(extensionId, grants, emptyText) {
         </div>
     `;
 }
+export function renderSettingsRow(label, description, control, tone = 'neutral') {
+    return `
+        <div class="authority-settings-row authority-settings-row--${tone}">
+            <div>
+                <strong>${escapeHtml(label)}</strong>
+                <div class="authority-muted">${escapeHtml(description)}</div>
+            </div>
+            <div class="authority-settings-row__control">${control}</div>
+        </div>
+    `;
+}
+export function renderGrantSettingsRows(extensionId, grants, emptyText) {
+    if (grants.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-settings-list">
+            ${grants.map(grant => renderSettingsRow(getResourceLabel(grant.resource), grant.target, `
+                    <span class="authority-pill authority-pill--${getRiskLevel(grant.resource)}">${escapeHtml(getRiskLabel(getRiskLevel(grant.resource)))}</span>
+                    <span class="authority-pill authority-pill--${grant.status}">${escapeHtml(getStatusLabel(grant.status))}</span>
+                    <button type="button" class="menu_button" data-action="reset-grant" data-extension-id="${escapeHtml(extensionId)}" data-grant-key="${escapeHtml(grant.key)}">重置</button>
+                `, grant.status === 'granted' ? 'success' : grant.status === 'denied' || grant.status === 'blocked' ? 'error' : 'warning')).join('')}
+        </div>
+    `;
+}
 export function renderActivityList(items, emptyText) {
     if (items.length === 0) {
         return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
@@ -79,6 +128,24 @@ export function renderActivityList(items, emptyText) {
                         <span>${escapeHtml(formatDate(item.timestamp))}</span>
                     </div>
                     <div>${escapeHtml(getActivityMessageLabel(item.message))}</div>
+                    ${item.details ? `<pre class="authority-code-block">${escapeHtml(formatJson(item.details))}</pre>` : ''}
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+export function renderActivityLogRows(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-log-list">
+            ${items.map(item => `
+                <div class="authority-log-row authority-log-row--${item.kind}">
+                    <span class="authority-log-row__time">${escapeHtml(formatDate(item.timestamp))}</span>
+                    <span class="authority-log-row__kind">${escapeHtml(getActivityKindLabel(item.kind))}</span>
+                    <span class="authority-log-row__source">${escapeHtml(item.extensionId)}</span>
+                    <span class="authority-log-row__message">${escapeHtml(getActivityMessageLabel(item.message))}</span>
                     ${item.details ? `<pre class="authority-code-block">${escapeHtml(formatJson(item.details))}</pre>` : ''}
                 </div>
             `).join('')}
@@ -105,6 +172,36 @@ export function renderJobList(items, emptyText) {
         </div>
     `;
 }
+export function renderJobTable(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-table-wrap">
+            <table class="authority-data-table">
+                <thead>
+                    <tr>
+                        <th>任务</th>
+                        <th>状态</th>
+                        <th>更新时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${items.map(item => `
+                        <tr>
+                            <td>
+                                <strong>${escapeHtml(getJobTypeLabel(item.type))}</strong>
+                                <div class="authority-muted">${escapeHtml(item.summary ? getActivityMessageLabel(item.summary) : item.id)}</div>
+                            </td>
+                            <td><span class="authority-pill authority-pill--${item.status}">${escapeHtml(getJobStatusLabel(item.status))}</span></td>
+                            <td>${escapeHtml(formatDate(item.updatedAt))}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
 export function renderPolicyList(items, emptyText) {
     if (items.length === 0) {
         return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
@@ -123,6 +220,16 @@ export function renderPolicyList(items, emptyText) {
                     </div>
                 </div>
             `).join('')}
+        </div>
+    `;
+}
+export function renderPolicyRows(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-settings-list">
+            ${items.map(item => renderSettingsRow(getResourceLabel(item.resource), `${item.target} · ${formatDate(item.updatedAt)}`, `<span class="authority-pill authority-pill--${item.status}">${escapeHtml(getStatusLabel(item.status))}</span>`, item.status === 'granted' ? 'success' : item.status === 'denied' || item.status === 'blocked' ? 'error' : 'warning')).join('')}
         </div>
     `;
 }
@@ -147,6 +254,35 @@ export function renderDatabaseList(items, emptyText) {
         </div>
     `;
 }
+export function renderDatabaseTable(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-table-wrap">
+            <table class="authority-data-table">
+                <thead>
+                    <tr>
+                        <th>数据库</th>
+                        <th>文件</th>
+                        <th>体积</th>
+                        <th>更新时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${items.map(item => `
+                        <tr>
+                            <td><strong>${escapeHtml(item.name)}</strong></td>
+                            <td>${escapeHtml(item.fileName)}</td>
+                            <td>${escapeHtml(formatBytes(item.sizeBytes))}</td>
+                            <td>${escapeHtml(formatDate(item.updatedAt))}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
 export function renderDatabaseGroupList(items, emptyText) {
     if (items.length === 0) {
         return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
@@ -167,6 +303,30 @@ export function renderDatabaseGroupList(items, emptyText) {
                     </div>
                     ${renderDatabaseList(item.databases, '该扩展还没有私有数据库。')}
                 </div>
+            `).join('')}
+        </div>
+    `;
+}
+export function renderDatabaseGroupTable(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-stack">
+            ${items.map(item => `
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>${escapeHtml(item.extension.displayName)}</h3>
+                            <div class="authority-muted">${escapeHtml(item.extension.id)}</div>
+                        </div>
+                        <div class="authority-list-card__actions">
+                            <span class="authority-pill authority-pill--prompt">${item.databases.length} 个数据库</span>
+                            <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
+                        </div>
+                    </div>
+                    ${renderDatabaseTable(item.databases, '该扩展还没有私有数据库。')}
+                </section>
             `).join('')}
         </div>
     `;
