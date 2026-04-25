@@ -42,6 +42,8 @@ import {
 import type {
     CenterTab,
     ExtensionDetailResponse,
+    OverviewSectionKey,
+    OverviewSectionState,
     ExtensionSummary,
     PoliciesResponse,
     ProbeResponse,
@@ -56,6 +58,12 @@ import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center
 
 const TOAST_TITLE = '权限中心';
 const MISSING_TEXT = '未获取';
+const OVERVIEW_SECTION_STATE_STORAGE_KEY = 'authority.security-center.overview-section-state';
+const DEFAULT_OVERVIEW_SECTION_STATE: OverviewSectionState = {
+    governance: true,
+    capabilityMatrix: true,
+    recentActivity: true,
+};
 
 export function bootstrapSecurityCenter(): Promise<void> {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
@@ -86,6 +94,7 @@ class SecurityCenterView {
             details: new Map(),
             selectedExtensionId: focusExtensionId ?? null,
             selectedTab: focusExtensionId ? 'detail' : 'overview',
+            overviewSectionState: { ...DEFAULT_OVERVIEW_SECTION_STATE },
             extensionFilter: '',
             policies: null,
             policyEditorExtensionId: focusExtensionId ?? null,
@@ -101,6 +110,16 @@ class SecurityCenterView {
         this.root.addEventListener('click', event => {
             const target = event.target instanceof HTMLElement ? event.target : null;
             if (!target) {
+                return;
+            }
+
+            const overviewSummary = target.closest<HTMLElement>('summary.authority-section-heading--summary');
+            if (overviewSummary) {
+                const section = overviewSummary.closest<HTMLDetailsElement>('[data-overview-section]');
+                const key = section?.dataset.overviewSection as OverviewSectionKey | undefined;
+                if (section && key) {
+                    window.setTimeout(() => this.setOverviewSectionOpen(key, section.open), 0);
+                }
                 return;
             }
 
@@ -204,6 +223,7 @@ class SecurityCenterView {
             this.state.probe = probe;
             this.state.session = session;
             this.state.isAdmin = session.user.isAdmin;
+            this.state.overviewSectionState = this.loadOverviewSectionState(session.user.handle);
             this.state.extensions = extensions;
             this.state.details = new Map(detailEntries);
             this.state.selectedExtensionId = this.resolveSelectedExtensionId();
@@ -496,40 +516,34 @@ class SecurityCenterView {
                             </div>
                         </div>
                     </section>
-                    <section class="authority-section-block">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>权限治理</h3>
-                                <div class="authority-muted">授权、拒绝、策略覆盖与后台任务</div>
-                            </div>
-                        </div>
-                        <div class="authority-governance-grid">
+                    ${this.renderOverviewCollapsibleSection(
+            'governance',
+            'authority-section-block',
+            '权限治理',
+            '授权、拒绝、策略覆盖与后台任务',
+            `<div class="authority-governance-grid">
                             ${renderMetricTile('已接入扩展', String(this.state.extensions.length), '注册到权限中心', 'primary')}
                             ${renderMetricTile('已允许授权', String(grantedCount), '持久授权记录', 'success')}
                             ${renderMetricTile('拒绝 / 封锁', String(deniedCount), '用户拒绝或管理员封锁', deniedCount > 0 ? 'warning' : 'neutral')}
                             ${renderMetricTile('策略覆盖', String(overview.totalPolicyCount), '默认与扩展覆盖', 'neutral')}
                             ${renderMetricTile('活跃任务', String(overview.activeJobs.length), '排队中 / 执行中', overview.activeJobs.length > 0 ? 'runtime' : 'neutral')}
                             ${renderMetricTile('最近错误', String(overview.recentErrors.length), '需要排查的异常', overview.recentErrors.length > 0 ? 'error' : 'neutral')}
-                        </div>
-                    </section>
-                    <section class="authority-section-block">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>能力矩阵</h3>
-                                <div class="authority-muted">当前可由权限中心管理的系统能力</div>
-                            </div>
-                        </div>
-                        ${renderCapabilityMatrix(RESOURCE_OPTIONS)}
-                    </section>
-                    <section class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>近期活动日志</h3>
-                                <div class="authority-muted">权限请求、能力调用与异常记录</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(overview.recentActivity, '暂无活动记录。')}
-                    </section>
+                        </div>`,
+        )}
+                    ${this.renderOverviewCollapsibleSection(
+            'capabilityMatrix',
+            'authority-section-block',
+            '能力矩阵',
+            '当前可由权限中心管理的系统能力',
+            renderCapabilityMatrix(RESOURCE_OPTIONS),
+        )}
+                    ${this.renderOverviewCollapsibleSection(
+            'recentActivity',
+            'authority-log-panel',
+            '近期活动日志',
+            '权限请求、能力调用与异常记录',
+            renderActivityLogRows(overview.recentActivity, '暂无活动记录。'),
+        )}
                 </div>
                 <aside class="authority-inspector">
                     <section class="authority-card">
@@ -891,12 +905,89 @@ class SecurityCenterView {
         `;
     }
 
+    private renderOverviewCollapsibleSection(
+        key: OverviewSectionKey,
+        className: string,
+        title: string,
+        description: string,
+        content: string,
+    ): string {
+        const isOpen = this.state.overviewSectionState[key];
+        return `
+            <details class="${className} authority-collapsible-section" data-overview-section="${key}" ${isOpen ? 'open' : ''}>
+                <summary class="authority-section-heading authority-section-heading--summary">
+                    <div>
+                        <h3>${escapeHtml(title)}</h3>
+                        <div class="authority-muted">${escapeHtml(description)}</div>
+                    </div>
+                </summary>
+                <div class="authority-collapsible-section__body">
+                    ${content}
+                </div>
+            </details>
+        `;
+    }
+
     private toggleSections(): void {
         for (const section of this.root.querySelectorAll<HTMLElement>('[data-section]')) {
             const name = section.dataset.section as CenterTab;
             section.hidden = name !== this.state.selectedTab;
         }
     }
+
+    private loadOverviewSectionState(userHandle?: string): OverviewSectionState {
+        if (!userHandle) {
+            return { ...DEFAULT_OVERVIEW_SECTION_STATE };
+        }
+
+        try {
+            const raw = globalThis.localStorage?.getItem(this.getOverviewSectionStateStorageKey(userHandle));
+            if (!raw) {
+                return { ...DEFAULT_OVERVIEW_SECTION_STATE };
+            }
+
+            const parsed = JSON.parse(raw) as Partial<OverviewSectionState>;
+            return {
+                governance: parsed.governance ?? DEFAULT_OVERVIEW_SECTION_STATE.governance,
+                capabilityMatrix: parsed.capabilityMatrix ?? DEFAULT_OVERVIEW_SECTION_STATE.capabilityMatrix,
+                recentActivity: parsed.recentActivity ?? DEFAULT_OVERVIEW_SECTION_STATE.recentActivity,
+            };
+        } catch {
+            return { ...DEFAULT_OVERVIEW_SECTION_STATE };
+        }
+    }
+
+    private setOverviewSectionOpen(key: OverviewSectionKey, isOpen: boolean): void {
+        if (this.state.overviewSectionState[key] === isOpen) {
+            return;
+        }
+
+        this.state.overviewSectionState = {
+            ...this.state.overviewSectionState,
+            [key]: isOpen,
+        };
+        this.persistOverviewSectionState();
+    }
+
+    private persistOverviewSectionState(): void {
+        const userHandle = this.state.session?.user.handle;
+        if (!userHandle) {
+            return;
+        }
+
+        try {
+            globalThis.localStorage?.setItem(
+                this.getOverviewSectionStateStorageKey(userHandle),
+                JSON.stringify(this.state.overviewSectionState),
+            );
+        } catch {
+        }
+    }
+
+    private getOverviewSectionStateStorageKey(userHandle: string): string {
+        return `${OVERVIEW_SECTION_STATE_STORAGE_KEY}:${userHandle}`;
+    }
+
     private resolveSelectedExtensionId(): string | null {
         if (this.state.selectedExtensionId && this.state.extensions.some(item => item.id === this.state.selectedExtensionId)) {
             return this.state.selectedExtensionId;

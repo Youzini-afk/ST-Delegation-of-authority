@@ -8,6 +8,8 @@ import type { AuthorityGrant, AuthorityPolicyEntry, JobRecord, PermissionResourc
 
 export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
+export type OverviewSectionKey = 'governance' | 'capabilityMatrix' | 'recentActivity';
+export type OverviewSectionState = Record<OverviewSectionKey, boolean>;
 
 export interface ActivityRecord {
     timestamp: string;
@@ -112,6 +114,7 @@ export interface SecurityCenterState {
     details: Map<string, ExtensionDetailResponse>;
     selectedExtensionId: string | null;
     selectedTab: CenterTab;
+    overviewSectionState: OverviewSectionState;
     extensionFilter: string;
     policies: PoliciesResponse | null;
     policyEditorExtensionId: string | null;

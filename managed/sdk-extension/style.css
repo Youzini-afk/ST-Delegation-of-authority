@@ -1369,6 +1369,41 @@
   min-width: 0;
 }
 
+.authority-section-heading--summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.authority-section-heading--summary::-webkit-details-marker {
+  display: none;
+}
+
+.authority-collapsible-section {
+  padding: 0;
+}
+
+.authority-collapsible-section > summary {
+  padding: 12px;
+}
+
+.authority-collapsible-section > summary::before {
+  color: var(--authority-primary);
+  content: "▸";
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  margin-top: 2px;
+}
+
+.authority-collapsible-section[open] > summary::before {
+  content: "▾";
+}
+
+.authority-collapsible-section__body {
+  min-width: 0;
+  padding: 0 12px 12px;
+}
+
 .authority-section-heading h3,
 .authority-page-header h2,
 .authority-dossier-title h2 {
