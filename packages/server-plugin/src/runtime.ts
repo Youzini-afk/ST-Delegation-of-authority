@@ -25,17 +25,17 @@ export interface AuthorityRuntime {
 }
 
 export function createAuthorityRuntime(): AuthorityRuntime {
-    const events = new SseBroker();
     const core = new CoreService();
+    const events = new SseBroker(core);
     const audit = new AuditService(core);
     const extensions = new ExtensionService(core);
     const install = new InstallService();
     const policies = new PolicyService(core);
     const permissions = new PermissionService(policies, core);
     const sessions = new SessionService(core);
-    const storage = new StorageService();
-    const http = new HttpService();
-    const jobs = new JobService(events, core);
+    const storage = new StorageService(core);
+    const http = new HttpService(core);
+    const jobs = new JobService(core);
 
     return {
         events,

@@ -219,7 +219,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.kv');
             }
 
-            ok(res, { value: runtime.storage.getKv(user, session.extension.id, String(req.body?.key ?? '')) });
+            ok(res, { value: await runtime.storage.getKv(user, session.extension.id, String(req.body?.key ?? '')) });
         } catch (error) {
             fail(runtime, req, res, 'storage.kv', error);
         }
@@ -233,7 +233,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.kv');
             }
 
-            runtime.storage.setKv(user, session.extension.id, String(req.body?.key ?? ''), req.body?.value);
+            await runtime.storage.setKv(user, session.extension.id, String(req.body?.key ?? ''), req.body?.value);
             await runtime.audit.logUsage(user, session.extension.id, 'KV set', { key: req.body?.key });
             ok(res, { ok: true });
         } catch (error) {
@@ -249,7 +249,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.kv');
             }
 
-            runtime.storage.deleteKv(user, session.extension.id, String(req.body?.key ?? ''));
+            await runtime.storage.deleteKv(user, session.extension.id, String(req.body?.key ?? ''));
             ok(res, { ok: true });
         } catch (error) {
             fail(runtime, req, res, 'storage.kv', error);
@@ -264,7 +264,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.kv');
             }
 
-            ok(res, { entries: runtime.storage.listKv(user, session.extension.id) });
+            ok(res, { entries: await runtime.storage.listKv(user, session.extension.id) });
         } catch (error) {
             fail(runtime, req, res, 'storage.kv', error);
         }
@@ -278,7 +278,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.blob');
             }
 
-            const record = runtime.storage.putBlob(
+            const record = await runtime.storage.putBlob(
                 user,
                 session.extension.id,
                 String(req.body?.name ?? 'blob'),
@@ -301,7 +301,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.blob');
             }
 
-            ok(res, runtime.storage.getBlob(user, session.extension.id, String(req.body?.id ?? '')));
+            ok(res, await runtime.storage.getBlob(user, session.extension.id, String(req.body?.id ?? '')));
         } catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
         }
@@ -315,7 +315,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.blob');
             }
 
-            runtime.storage.deleteBlob(user, session.extension.id, String(req.body?.id ?? ''));
+            await runtime.storage.deleteBlob(user, session.extension.id, String(req.body?.id ?? ''));
             ok(res, { ok: true });
         } catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
@@ -330,7 +330,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: storage.blob');
             }
 
-            ok(res, { entries: runtime.storage.listBlobs(user, session.extension.id) });
+            ok(res, { entries: await runtime.storage.listBlobs(user, session.extension.id) });
         } catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
         }
@@ -565,7 +565,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             res.setHeader('Connection', 'keep-alive');
             res.write(': connected\n\n');
 
-            const cleanup = runtime.events.register(user.handle, session.extension.id, res);
+            const paths = getUserAuthorityPaths(user);
+            const cleanup = runtime.events.register(paths.controlDbFile, user.handle, channel, res);
             req.on?.('close', cleanup);
             req.on?.('end', cleanup);
         } catch (error) {

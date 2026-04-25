@@ -85,29 +85,64 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
 
 class SseBroker {
+    core;
+    constructor(core) {
+        this.core = core;
+    }
     clients = new Set();
-    register(userHandle, extensionId, response) {
-        const client = { userHandle, extensionId, response };
+    register(dbPath, userHandle, channel, response) {
+        const client = {
+            dbPath,
+            userHandle,
+            channel,
+            response,
+            cursor: null,
+            polling: false,
+            timer: null,
+        };
         this.clients.add(client);
         this.emitToClient(client, 'authority.connected', {
             timestamp: (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.nowIso)(),
-            extensionId,
+            ...(channel.startsWith('extension:') ? { extensionId: channel.slice('extension:'.length) } : { channel }),
         });
+        void this.pollClient(client);
+        client.timer = setInterval(() => {
+            void this.pollClient(client);
+        }, 500);
         return () => {
+            if (client.timer) {
+                clearInterval(client.timer);
+            }
             this.clients.delete(client);
         };
     }
-    emit(userHandle, extensionId, eventName, payload) {
-        for (const client of this.clients) {
-            if (client.userHandle !== userHandle || client.extensionId !== extensionId) {
-                continue;
+    async pollClient(client) {
+        if (client.polling || !this.clients.has(client)) {
+            return;
+        }
+        client.polling = true;
+        try {
+            const { events, cursor } = await this.core.pollControlEvents(client.dbPath, {
+                userHandle: client.userHandle,
+                channel: client.channel,
+                ...(client.cursor !== null ? { afterId: client.cursor } : {}),
+            });
+            client.cursor = cursor;
+            for (const event of events) {
+                this.emitToClient(client, event.name, event.payload);
+                client.cursor = event.id;
             }
-            this.emitToClient(client, eventName, payload);
+        }
+        catch {
+            return;
+        }
+        finally {
+            client.polling = false;
         }
     }
     emitToClient(client, eventName, payload) {
         client.response.write(`event: ${eventName}\n`);
-        client.response.write(`data: ${JSON.stringify(payload)}\n\n`);
+        client.response.write(`data: ${JSON.stringify(payload ?? null)}\n\n`);
     }
 }
 
@@ -316,7 +351,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
-            ok(res, { value: runtime.storage.getKv(user, session.extension.id, String(req.body?.key ?? '')) });
+            ok(res, { value: await runtime.storage.getKv(user, session.extension.id, String(req.body?.key ?? '')) });
         }
         catch (error) {
             fail(runtime, req, res, 'storage.kv', error);
@@ -329,7 +364,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
-            runtime.storage.setKv(user, session.extension.id, String(req.body?.key ?? ''), req.body?.value);
+            await runtime.storage.setKv(user, session.extension.id, String(req.body?.key ?? ''), req.body?.value);
             await runtime.audit.logUsage(user, session.extension.id, 'KV set', { key: req.body?.key });
             ok(res, { ok: true });
         }
@@ -344,7 +379,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
-            runtime.storage.deleteKv(user, session.extension.id, String(req.body?.key ?? ''));
+            await runtime.storage.deleteKv(user, session.extension.id, String(req.body?.key ?? ''));
             ok(res, { ok: true });
         }
         catch (error) {
@@ -358,7 +393,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
-            ok(res, { entries: runtime.storage.listKv(user, session.extension.id) });
+            ok(res, { entries: await runtime.storage.listKv(user, session.extension.id) });
         }
         catch (error) {
             fail(runtime, req, res, 'storage.kv', error);
@@ -371,7 +406,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
-            const record = runtime.storage.putBlob(user, session.extension.id, String(req.body?.name ?? 'blob'), String(req.body?.content ?? ''), req.body?.encoding, req.body?.contentType);
+            const record = await runtime.storage.putBlob(user, session.extension.id, String(req.body?.name ?? 'blob'), String(req.body?.content ?? ''), req.body?.encoding, req.body?.contentType);
             await runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id });
             ok(res, record);
         }
@@ -386,7 +421,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
-            ok(res, runtime.storage.getBlob(user, session.extension.id, String(req.body?.id ?? '')));
+            ok(res, await runtime.storage.getBlob(user, session.extension.id, String(req.body?.id ?? '')));
         }
         catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
@@ -399,7 +434,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
-            runtime.storage.deleteBlob(user, session.extension.id, String(req.body?.id ?? ''));
+            await runtime.storage.deleteBlob(user, session.extension.id, String(req.body?.id ?? ''));
             ok(res, { ok: true });
         }
         catch (error) {
@@ -413,7 +448,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
-            ok(res, { entries: runtime.storage.listBlobs(user, session.extension.id) });
+            ok(res, { entries: await runtime.storage.listBlobs(user, session.extension.id) });
         }
         catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
@@ -637,7 +672,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
             res.write(': connected\n\n');
-            const cleanup = runtime.events.register(user.handle, session.extension.id, res);
+            const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
+            const cleanup = runtime.events.register(paths.controlDbFile, user.handle, channel, res);
             req.on?.('close', cleanup);
             req.on?.('end', cleanup);
         }
@@ -707,17 +743,17 @@ __webpack_require__.r(__webpack_exports__);
 
 
 function createAuthorityRuntime() {
-    const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker();
     const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__.CoreService();
+    const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
     const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__.AuditService(core);
     const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_3__.ExtensionService(core);
     const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_5__.InstallService();
     const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__.PolicyService(core);
     const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__.PermissionService(policies, core);
     const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_9__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_10__.StorageService();
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__.HttpService();
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__.JobService(events, core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_10__.StorageService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__.JobService(core);
     return {
         events,
         audit,
@@ -1132,6 +1168,60 @@ class CoreService {
             ...request,
         });
     }
+    async getStorageKv(dbPath, request) {
+        const response = await this.request('/v1/storage/kv/get', {
+            dbPath,
+            ...request,
+        });
+        return response.value;
+    }
+    async setStorageKv(dbPath, request) {
+        await this.request('/v1/storage/kv/set', {
+            dbPath,
+            ...request,
+        });
+    }
+    async deleteStorageKv(dbPath, request) {
+        await this.request('/v1/storage/kv/delete', {
+            dbPath,
+            ...request,
+        });
+    }
+    async listStorageKv(dbPath, request = {}) {
+        const response = await this.request('/v1/storage/kv/list', {
+            dbPath,
+            ...request,
+        });
+        return response.entries;
+    }
+    async putStorageBlob(dbPath, request) {
+        return await this.request('/v1/storage/blob/put', {
+            dbPath,
+            ...request,
+        });
+    }
+    async getStorageBlob(dbPath, request) {
+        return await this.request('/v1/storage/blob/get', {
+            dbPath,
+            ...request,
+        });
+    }
+    async deleteStorageBlob(dbPath, request) {
+        await this.request('/v1/storage/blob/delete', {
+            dbPath,
+            ...request,
+        });
+    }
+    async listStorageBlobs(dbPath, request) {
+        const response = await this.request('/v1/storage/blob/list', {
+            dbPath,
+            ...request,
+        });
+        return response.entries;
+    }
+    async fetchHttp(request) {
+        return await this.request('/v1/http/fetch', request);
+    }
     async listControlJobs(dbPath, request) {
         const response = await this.request('/v1/control/jobs/list', {
             dbPath,
@@ -1146,6 +1236,26 @@ class CoreService {
         });
         return response.job;
     }
+    async createControlJob(dbPath, request) {
+        const response = await this.request('/v1/control/jobs/create', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job create returned no job');
+        }
+        return response.job;
+    }
+    async cancelControlJob(dbPath, request) {
+        const response = await this.request('/v1/control/jobs/cancel', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job cancel returned no job');
+        }
+        return response.job;
+    }
     async upsertControlJob(dbPath, request) {
         const response = await this.request('/v1/control/jobs/upsert', {
             dbPath,
@@ -1155,6 +1265,16 @@ class CoreService {
             throw new Error('Control job upsert returned no job');
         }
         return response.job;
+    }
+    async pollControlEvents(dbPath, request) {
+        const response = await this.request('/v1/control/events/poll', {
+            dbPath,
+            ...request,
+        });
+        return {
+            events: response.events,
+            cursor: response.cursor,
+        };
     }
     attachProcessListeners(child) {
         child.stdout?.on('data', chunk => {
@@ -1396,45 +1516,13 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   HttpService: () => (/* binding */ HttpService)
 /* harmony export */ });
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
-
 class HttpService {
+    core;
+    constructor(core) {
+        this.core = core;
+    }
     async fetch(_user, input) {
-        const bodySize = Buffer.byteLength(input.body ?? '');
-        if (bodySize > _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_BODY_BYTES) {
-            throw new Error(`HTTP request body exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_BODY_BYTES} bytes`);
-        }
-        const requestInit = {
-            method: input.method ?? 'GET',
-            headers: input.headers ?? {},
-            redirect: 'follow',
-        };
-        if (input.body !== undefined) {
-            requestInit.body = input.body;
-        }
-        const response = await fetch(input.url, requestInit);
-        const buffer = Buffer.from(await response.arrayBuffer());
-        if (buffer.byteLength > _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_RESPONSE_BYTES) {
-            throw new Error(`HTTP response exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_RESPONSE_BYTES} bytes`);
-        }
-        const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
-        const isTextual = /(json|text|xml|javascript|html)/i.test(contentType);
-        const headers = {};
-        response.headers.forEach((value, key) => {
-            headers[key] = value;
-        });
-        return {
-            url: input.url,
-            hostname: (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.normalizeHostname)(input.url),
-            status: response.status,
-            ok: response.ok,
-            headers,
-            body: isTextual ? buffer.toString('utf8') : buffer.toString('base64'),
-            bodyEncoding: isTextual ? 'utf8' : 'base64',
-            contentType,
-        };
+        return await this.core.fetchHttp(input);
     }
 }
 
@@ -1669,16 +1757,11 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
 /* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
 
 
 class JobService {
-    events;
     core;
-    inflight = new Map();
-    constructor(events, core) {
-        this.events = events;
+    constructor(core) {
         this.core = core;
     }
     async list(user, extensionId) {
@@ -1699,117 +1782,20 @@ class JobService {
         if (!_constants_js__WEBPACK_IMPORTED_MODULE_0__.BUILTIN_JOB_TYPES.includes(type)) {
             throw new Error(`Unsupported job type: ${type}`);
         }
-        const id = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.randomToken)();
-        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)();
-        const job = {
-            id,
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.createControlJob(paths.controlDbFile, {
+            userHandle: user.handle,
             extensionId,
             type,
-            status: 'queued',
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            progress: 0,
             payload,
-            channel: `extension:${extensionId}`,
-        };
-        await this.writeJob(user, job);
-        this.runDelayJob(user, job);
-        return job;
-    }
-    async cancel(user, extensionId, jobId) {
-        const job = await this.get(user, jobId);
-        if (!job || job.extensionId !== extensionId) {
-            throw new Error('Job not found');
-        }
-        const task = this.inflight.get(jobId);
-        if (task) {
-            clearInterval(task.timer);
-            this.inflight.delete(jobId);
-        }
-        const next = {
-            ...job,
-            status: 'cancelled',
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-            summary: 'Cancelled by user',
-        };
-        await this.writeJob(user, next);
-        this.events.emit(user.handle, extensionId, 'authority.job', next);
-        return next;
-    }
-    runDelayJob(user, job) {
-        const durationMs = Number(job.payload?.durationMs ?? 3000);
-        const startedAt = Date.now();
-        const timer = setInterval(() => {
-            void this.advanceDelayJob(user, job, durationMs, startedAt, timer).catch(() => {
-                clearInterval(timer);
-                this.inflight.delete(job.id);
-            });
-        }, 250);
-        this.inflight.set(job.id, { timer });
-        void this.promoteDelayJob(user, job, durationMs).catch(() => {
-            clearInterval(timer);
-            this.inflight.delete(job.id);
         });
     }
-    async promoteDelayJob(user, job, durationMs) {
-        const current = await this.get(user, job.id);
-        if (!current || current.status === 'cancelled') {
-            const task = this.inflight.get(job.id);
-            if (task) {
-                clearInterval(task.timer);
-                this.inflight.delete(job.id);
-            }
-            return;
-        }
-        const runningJob = {
-            ...current,
-            status: 'running',
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-            summary: `Running delay job for ${durationMs}ms`,
-        };
-        await this.writeJob(user, runningJob);
-        this.events.emit(user.handle, job.extensionId, 'authority.job', runningJob);
-    }
-    async advanceDelayJob(user, job, durationMs, startedAt, timer) {
-        const current = await this.get(user, job.id);
-        if (!current || current.status === 'cancelled') {
-            clearInterval(timer);
-            this.inflight.delete(job.id);
-            return;
-        }
-        const elapsed = Date.now() - startedAt;
-        const progress = Math.min(100, Math.round((elapsed / durationMs) * 100));
-        if (progress >= 100) {
-            clearInterval(timer);
-            this.inflight.delete(job.id);
-            const completed = {
-                ...current,
-                status: 'completed',
-                progress: 100,
-                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-                summary: String(job.payload?.message ?? 'Delay completed'),
-                result: {
-                    elapsedMs: durationMs,
-                    message: job.payload?.message ?? 'Delay completed',
-                },
-            };
-            await this.writeJob(user, completed);
-            this.events.emit(user.handle, job.extensionId, 'authority.job', completed);
-            return;
-        }
-        const update = {
-            ...current,
-            progress,
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-        };
-        await this.writeJob(user, update);
-        this.events.emit(user.handle, job.extensionId, 'authority.job', update);
-    }
-    async writeJob(user, job) {
+    async cancel(user, extensionId, jobId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        await this.core.upsertControlJob(paths.controlDbFile, {
+        return await this.core.cancelControlJob(paths.controlDbFile, {
             userHandle: user.handle,
-            job,
+            extensionId,
+            jobId,
         });
     }
 }
@@ -2129,101 +2115,74 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   StorageService: () => (/* binding */ StorageService)
 /* harmony export */ });
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
-
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
 
 
 
 class StorageService {
-    getKv(user, extensionId, key) {
-        return this.listKv(user, extensionId)[key];
+    core;
+    constructor(core) {
+        this.core = core;
     }
-    setKv(user, extensionId, key, value) {
-        const valueBytes = Buffer.byteLength(JSON.stringify(value));
-        if (valueBytes > _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_KV_VALUE_BYTES) {
-            throw new Error(`KV value exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_KV_VALUE_BYTES} bytes`);
-        }
-        const filePath = this.getKvFilePath(user, extensionId);
-        const data = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(filePath, {});
-        data[key] = value;
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, data);
+    async getKv(user, extensionId, key) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.getStorageKv(this.getKvDbPath(paths.kvDir, extensionId), { key });
     }
-    deleteKv(user, extensionId, key) {
-        const filePath = this.getKvFilePath(user, extensionId);
-        const data = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(filePath, {});
-        delete data[key];
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, data);
+    async setKv(user, extensionId, key, value) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        await this.core.setStorageKv(this.getKvDbPath(paths.kvDir, extensionId), { key, value });
     }
-    listKv(user, extensionId) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.getKvFilePath(user, extensionId), {});
+    async deleteKv(user, extensionId, key) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        await this.core.deleteStorageKv(this.getKvDbPath(paths.kvDir, extensionId), { key });
     }
-    putBlob(user, extensionId, name, content, encoding = 'utf8', contentType = 'application/octet-stream') {
-        const extensionDir = this.getBlobDir(user, extensionId);
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(extensionDir);
-        const blobId = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(name || 'blob');
-        const payload = encoding === 'base64' ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8');
-        if (payload.byteLength > _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_BLOB_BYTES) {
-            throw new Error(`Blob exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_BLOB_BYTES} bytes`);
-        }
-        const binPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, `${blobId}.bin`);
-        const metaPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, `${blobId}.json`);
-        node_fs__WEBPACK_IMPORTED_MODULE_0___default().writeFileSync(binPath, payload);
-        const record = {
-            id: blobId,
+    async listKv(user, extensionId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.listStorageKv(this.getKvDbPath(paths.kvDir, extensionId));
+    }
+    async putBlob(user, extensionId, name, content, encoding = 'utf8', contentType = 'application/octet-stream') {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.putStorageBlob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
             name,
+            content,
+            encoding,
             contentType,
-            size: payload.byteLength,
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
-        };
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(metaPath, record);
-        return record;
+        });
     }
-    getBlob(user, extensionId, blobId) {
-        const extensionDir = this.getBlobDir(user, extensionId);
-        const safeId = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(blobId);
-        const metaPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, `${safeId}.json`);
-        const binPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, `${safeId}.bin`);
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(metaPath) || !node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(binPath)) {
-            throw new Error('Blob not found');
-        }
-        const record = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(metaPath, {});
-        return {
-            record,
-            content: node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(binPath).toString('base64'),
-            encoding: 'base64',
-        };
+    async getBlob(user, extensionId, blobId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.getStorageBlob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
+            id: blobId,
+        });
     }
-    deleteBlob(user, extensionId, blobId) {
-        const extensionDir = this.getBlobDir(user, extensionId);
-        const safeId = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(blobId);
-        node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, `${safeId}.json`), { force: true });
-        node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, `${safeId}.bin`), { force: true });
+    async deleteBlob(user, extensionId, blobId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        await this.core.deleteStorageBlob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
+            id: blobId,
+        });
     }
-    listBlobs(user, extensionId) {
-        const extensionDir = this.getBlobDir(user, extensionId);
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(extensionDir)) {
-            return [];
-        }
-        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(extensionDir)
-            .filter(entry => entry.endsWith('.json'))
-            .map(entry => (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, entry), {}))
-            .filter(record => Boolean(record?.id));
+    async listBlobs(user, extensionId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.listStorageBlobs(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
+        });
     }
-    getKvFilePath(user, extensionId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(paths.kvDir);
-        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId)}.json`);
-    }
-    getBlobDir(user, extensionId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
-        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.blobDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId));
+    getKvDbPath(kvDir, extensionId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_0___default().join(kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(extensionId)}.sqlite`);
     }
 }
 
@@ -2249,28 +2208,13 @@ __webpack_require__.r(__webpack_exports__);
 function getUserAuthorityPaths(user) {
     const baseDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(user.rootDir, _constants_js__WEBPACK_IMPORTED_MODULE_1__.AUTHORITY_DATA_FOLDER);
     const stateDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'state');
-    const auditDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'audit');
     const storageDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'storage');
     const sqlDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'sql');
-    const jobsDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'jobs');
     return {
-        baseDir,
-        stateDir,
-        auditDir,
-        storageDir,
-        sqlDir,
         sqlPrivateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(sqlDir, 'private'),
         kvDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'kv'),
         blobDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'blobs'),
-        jobsDir,
-        extensionsFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'extensions.json'),
-        permissionsFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'permissions.json'),
-        policiesFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'policies.json'),
-        jobsFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(jobsDir, 'jobs.json'),
         controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
-        permissionsAuditFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(auditDir, 'permissions.jsonl'),
-        usageAuditFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(auditDir, 'usage.jsonl'),
-        errorsAuditFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(auditDir, 'errors.jsonl'),
     };
 }
 function getGlobalAuthorityPaths() {
@@ -2279,10 +2223,7 @@ function getGlobalAuthorityPaths() {
     const baseDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(dataRoot, '_authority-global', 'authority');
     const stateDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'state');
     return {
-        baseDir,
-        stateDir,
         controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
-        policiesFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'policies.json'),
     };
 }
 
@@ -2297,7 +2238,6 @@ function getGlobalAuthorityPaths() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   appendJsonl: () => (/* binding */ appendJsonl),
 /* harmony export */   asErrorMessage: () => (/* binding */ asErrorMessage),
 /* harmony export */   atomicWriteJson: () => (/* binding */ atomicWriteJson),
 /* harmony export */   buildPermissionDescriptor: () => (/* binding */ buildPermissionDescriptor),
@@ -2309,8 +2249,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   randomToken: () => (/* binding */ randomToken),
 /* harmony export */   readJsonFile: () => (/* binding */ readJsonFile),
 /* harmony export */   safeJsonParse: () => (/* binding */ safeJsonParse),
-/* harmony export */   sanitizeFileSegment: () => (/* binding */ sanitizeFileSegment),
-/* harmony export */   tailJsonl: () => (/* binding */ tailJsonl)
+/* harmony export */   sanitizeFileSegment: () => (/* binding */ sanitizeFileSegment)
 /* harmony export */ });
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
@@ -2351,20 +2290,6 @@ function readJsonFile(filePath, fallback) {
         return fallback;
     }
     return safeJsonParse(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), fallback);
-}
-function appendJsonl(filePath, value) {
-    ensureDir(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
-    node_fs__WEBPACK_IMPORTED_MODULE_1___default().appendFileSync(filePath, `${JSON.stringify(value)}\n`, 'utf8');
-}
-function tailJsonl(filePath, limit) {
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
-        return [];
-    }
-    const lines = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8')
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .slice(-limit);
-    return lines.map(line => safeJsonParse(line, null)).filter(Boolean);
 }
 function sanitizeFileSegment(input) {
     return input.replace(/[^a-zA-Z0-9._-]/g, '_');

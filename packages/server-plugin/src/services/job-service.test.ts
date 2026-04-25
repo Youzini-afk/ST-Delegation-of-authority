@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SseBroker } from '../events/sse-broker.js';
+import { afterEach, describe, expect, it } from 'vitest';
 import { JobService } from './job-service.js';
 import type { CoreService } from './core-service.js';
 import type { StoredJobRecord, UserContext } from '../types.js';
@@ -10,12 +9,7 @@ import type { StoredJobRecord, UserContext } from '../types.js';
 describe('JobService', () => {
     const dirs: string[] = [];
 
-    beforeEach(() => {
-        vi.useFakeTimers();
-    });
-
     afterEach(() => {
-        vi.useRealTimers();
         while (dirs.length > 0) {
             const dir = dirs.pop();
             if (dir) {
@@ -24,26 +18,19 @@ describe('JobService', () => {
         }
     });
 
-    it('creates and completes builtin delay jobs', async () => {
+    it('creates builtin delay jobs through core', async () => {
         const user = createUser(dirs);
-        const jobs = new JobService(new SseBroker(), createMockCore());
+        const jobs = new JobService(createMockCore());
 
         const job = await jobs.create(user, 'third-party/ext-a', 'delay', { durationMs: 500, message: 'done' });
         expect(job.status).toBe('queued');
-
-        await vi.advanceTimersByTimeAsync(250);
-        expect((await jobs.get(user, job.id))?.status).toBe('running');
-
-        await vi.advanceTimersByTimeAsync(500);
-        const completed = await jobs.get(user, job.id);
-        expect(completed?.status).toBe('completed');
-        expect(completed?.progress).toBe(100);
-        expect(completed?.summary).toBe('done');
+        expect(job.extensionId).toBe('third-party/ext-a');
+        expect(await jobs.get(user, job.id)).toEqual(job);
     });
 
-    it('cancels inflight jobs', async () => {
+    it('cancels jobs through core', async () => {
         const user = createUser(dirs);
-        const jobs = new JobService(new SseBroker(), createMockCore());
+        const jobs = new JobService(createMockCore());
 
         const job = await jobs.create(user, 'third-party/ext-a', 'delay', { durationMs: 2000 });
         const cancelled = await jobs.cancel(user, 'third-party/ext-a', job.id);
@@ -64,9 +51,35 @@ function createMockCore(): CoreService {
         async getControlJob(_dbPath: string, request: { jobId: string }) {
             return jobs.get(request.jobId) ?? null;
         },
-        async upsertControlJob(_dbPath: string, request: { job: StoredJobRecord }) {
-            jobs.set(request.job.id, request.job);
-            return request.job;
+        async createControlJob(_dbPath: string, request: { extensionId: string; type: string; payload?: Record<string, unknown> }) {
+            const timestamp = new Date().toISOString();
+            const job: StoredJobRecord = {
+                id: `job-${jobs.size + 1}`,
+                extensionId: request.extensionId,
+                type: request.type,
+                status: 'queued',
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                progress: 0,
+                channel: `extension:${request.extensionId}`,
+                ...(request.payload ? { payload: request.payload } : {}),
+            };
+            jobs.set(job.id, job);
+            return job;
+        },
+        async cancelControlJob(_dbPath: string, request: { extensionId: string; jobId: string }) {
+            const job = jobs.get(request.jobId);
+            if (!job || job.extensionId !== request.extensionId) {
+                throw new Error('Job not found');
+            }
+            const next: StoredJobRecord = {
+                ...job,
+                status: 'cancelled',
+                updatedAt: new Date().toISOString(),
+                summary: 'Cancelled by user',
+            };
+            jobs.set(job.id, next);
+            return next;
         },
     } as unknown as CoreService;
 }

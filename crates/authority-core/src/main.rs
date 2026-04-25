@@ -11,20 +11,35 @@ use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use url::Url;
 
 const HEADER_END: &[u8] = b"\r\n\r\n";
 const MAX_REQUEST_SIZE: usize = 1024 * 1024;
+const MAX_KV_VALUE_BYTES: usize = 128 * 1024;
+const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = 512 * 1024;
+const MAX_HTTP_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_EVENT_POLL_LIMIT: usize = 200;
+const JOB_PROGRESS_INTERVAL_MS: u64 = 250;
+
+struct RuntimeState {
+    job_controls: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
 
 struct Config {
     token: String,
     version: String,
     api_version: String,
     started_at: String,
+    runtime: Arc<RuntimeState>,
 }
 
 struct HttpRequest {
@@ -278,6 +293,115 @@ struct ControlJobUpsertRequest {
     job: ControlJobRecord,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlJobCreateRequest {
+    db_path: String,
+    user_handle: String,
+    extension_id: String,
+    #[serde(rename = "type")]
+    job_type: String,
+    payload: Option<JsonValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlJobCancelRequest {
+    db_path: String,
+    user_handle: String,
+    extension_id: String,
+    job_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageKvGetRequest {
+    db_path: String,
+    key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageKvSetRequest {
+    db_path: String,
+    key: String,
+    value: JsonValue,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageKvDeleteRequest {
+    db_path: String,
+    key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageKvListRequest {
+    db_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageBlobPutRequest {
+    db_path: String,
+    user_handle: String,
+    extension_id: String,
+    blob_dir: String,
+    name: String,
+    content: String,
+    encoding: Option<String>,
+    content_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageBlobGetRequest {
+    db_path: String,
+    user_handle: String,
+    extension_id: String,
+    blob_dir: String,
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageBlobDeleteRequest {
+    db_path: String,
+    user_handle: String,
+    extension_id: String,
+    blob_dir: String,
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageBlobListRequest {
+    db_path: String,
+    user_handle: String,
+    extension_id: String,
+    blob_dir: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlEventsPollRequest {
+    db_path: String,
+    user_handle: String,
+    channel: String,
+    after_id: Option<i64>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreHttpFetchRequest {
+    url: String,
+    method: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ControlGrantRecord {
@@ -313,7 +437,7 @@ struct ControlPoliciesDocument {
     updated_at: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ControlJobRecord {
     id: String,
@@ -329,6 +453,50 @@ struct ControlJobRecord {
     payload: Option<JsonValue>,
     result: Option<JsonValue>,
     channel: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlobRecord {
+    id: String,
+    name: String,
+    content_type: String,
+    size: i64,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlobGetResponse {
+    record: BlobRecord,
+    content: String,
+    encoding: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlEventRecord {
+    id: i64,
+    timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extension_id: Option<String>,
+    channel: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<JsonValue>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpFetchResponse {
+    url: String,
+    hostname: String,
+    status: u16,
+    ok: bool,
+    headers: HashMap<String, String>,
+    body: String,
+    body_encoding: String,
+    content_type: String,
 }
 
 #[derive(Serialize)]
@@ -389,11 +557,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .to_string();
+    let runtime = Arc::new(RuntimeState {
+        job_controls: Mutex::new(HashMap::new()),
+    });
     let config = Config {
         token,
         version,
         api_version,
         started_at,
+        runtime,
     };
 
     let listener = TcpListener::bind(format!("{host}:{port}"))?;
@@ -437,6 +609,15 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
             "pid": process::id(),
             "startedAt": config.started_at,
         })),
+        ("POST", "/v1/storage/kv/get") => parse_json_body::<StorageKvGetRequest>(&request).and_then(handle_storage_kv_get),
+        ("POST", "/v1/storage/kv/set") => parse_json_body::<StorageKvSetRequest>(&request).and_then(handle_storage_kv_set),
+        ("POST", "/v1/storage/kv/delete") => parse_json_body::<StorageKvDeleteRequest>(&request).and_then(handle_storage_kv_delete),
+        ("POST", "/v1/storage/kv/list") => parse_json_body::<StorageKvListRequest>(&request).and_then(handle_storage_kv_list),
+        ("POST", "/v1/storage/blob/put") => parse_json_body::<StorageBlobPutRequest>(&request).and_then(handle_storage_blob_put),
+        ("POST", "/v1/storage/blob/get") => parse_json_body::<StorageBlobGetRequest>(&request).and_then(handle_storage_blob_get),
+        ("POST", "/v1/storage/blob/delete") => parse_json_body::<StorageBlobDeleteRequest>(&request).and_then(handle_storage_blob_delete),
+        ("POST", "/v1/storage/blob/list") => parse_json_body::<StorageBlobListRequest>(&request).and_then(handle_storage_blob_list),
+        ("POST", "/v1/http/fetch") => parse_json_body::<CoreHttpFetchRequest>(&request).and_then(handle_http_fetch),
         ("POST", "/v1/sql/query") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_query),
         ("POST", "/v1/sql/exec") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_exec),
         ("POST", "/v1/sql/batch") => parse_json_body::<SqlBatchRequest>(&request).and_then(handle_sql_batch),
@@ -456,7 +637,10 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
         ("POST", "/v1/control/policies/save") => parse_json_body::<ControlPoliciesSaveRequest>(&request).and_then(handle_control_policies_save),
         ("POST", "/v1/control/jobs/list") => parse_json_body::<ControlJobsListRequest>(&request).and_then(handle_control_jobs_list),
         ("POST", "/v1/control/jobs/get") => parse_json_body::<ControlJobGetRequest>(&request).and_then(handle_control_job_get),
+        ("POST", "/v1/control/jobs/create") => parse_json_body::<ControlJobCreateRequest>(&request).and_then(|body| handle_control_job_create(body, &config.runtime)),
+        ("POST", "/v1/control/jobs/cancel") => parse_json_body::<ControlJobCancelRequest>(&request).and_then(|body| handle_control_job_cancel(body, &config.runtime)),
         ("POST", "/v1/control/jobs/upsert") => parse_json_body::<ControlJobUpsertRequest>(&request).and_then(handle_control_job_upsert),
+        ("POST", "/v1/control/events/poll") => parse_json_body::<ControlEventsPollRequest>(&request).and_then(handle_control_events_poll),
         _ => Err(ApiError {
             status_code: 404,
             message: String::from("not_found"),
@@ -915,6 +1099,349 @@ fn handle_control_job_upsert(request: ControlJobUpsertRequest) -> Result<JsonVal
     Ok(json!({ "job": request.job }))
 }
 
+fn handle_storage_kv_get(request: StorageKvGetRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("key", &request.key)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_kv_schema(&connection)?;
+    let value = fetch_kv_value(&connection, &request.key)?;
+    Ok(match value {
+        Some(value) => json!({ "value": value }),
+        None => json!({}),
+    })
+}
+
+fn handle_storage_kv_set(request: StorageKvSetRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("key", &request.key)?;
+    let serialized = serde_json::to_string(&request.value).map_err(to_json_error)?;
+    if serialized.len() > MAX_KV_VALUE_BYTES {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("KV value exceeds {} bytes", MAX_KV_VALUE_BYTES),
+        });
+    }
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_kv_schema(&connection)?;
+    connection.execute(
+        "INSERT INTO kv_entries (key, value, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at",
+        params![&request.key, &serialized, current_timestamp_iso()],
+    ).map_err(to_sql_error)?;
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_storage_kv_delete(request: StorageKvDeleteRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("key", &request.key)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_kv_schema(&connection)?;
+    connection
+        .execute("DELETE FROM kv_entries WHERE key = ?1", params![&request.key])
+        .map_err(to_sql_error)?;
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_storage_kv_list(request: StorageKvListRequest) -> Result<JsonValue, ApiError> {
+    let connection = open_connection(&request.db_path)?;
+    ensure_kv_schema(&connection)?;
+    let entries = fetch_kv_entries(&connection)?;
+    Ok(json!({ "entries": entries }))
+}
+
+fn handle_storage_blob_put(request: StorageBlobPutRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("blobDir", &request.blob_dir)?;
+
+    let name = if request.name.trim().is_empty() {
+        String::from("blob")
+    } else {
+        request.name.clone()
+    };
+    let blob_id = sanitize_file_segment(&name);
+    let payload = decode_blob_content(request.encoding.as_deref(), &request.content)?;
+    if payload.len() > MAX_BLOB_BYTES {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("Blob exceeds {} bytes", MAX_BLOB_BYTES),
+        });
+    }
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    let binary_path = blob_binary_path(&request.blob_dir, &request.extension_id, &blob_id);
+    if let Some(parent) = binary_path.parent() {
+        fs::create_dir_all(parent).map_err(to_internal_error)?;
+    }
+    fs::write(&binary_path, &payload).map_err(to_internal_error)?;
+
+    let record = BlobRecord {
+        id: blob_id,
+        name,
+        content_type: request.content_type.unwrap_or_else(|| String::from("application/octet-stream")),
+        size: payload.len() as i64,
+        updated_at: current_timestamp_iso(),
+    };
+    upsert_blob_record(&connection, &request.user_handle, &request.extension_id, &record)?;
+    Ok(serde_json::to_value(record).expect("blob record should serialize"))
+}
+
+fn handle_storage_blob_get(request: StorageBlobGetRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("blobDir", &request.blob_dir)?;
+    validate_non_empty("id", &request.id)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    let record = fetch_blob_record(&connection, &request.user_handle, &request.extension_id, &request.id)?
+        .ok_or_else(|| ApiError {
+            status_code: 400,
+            message: String::from("Blob not found"),
+        })?;
+    let binary_path = blob_binary_path(&request.blob_dir, &request.extension_id, &record.id);
+    if !binary_path.exists() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("Blob not found"),
+        });
+    }
+
+    let content = BASE64_STANDARD.encode(fs::read(binary_path).map_err(to_internal_error)?);
+    Ok(serde_json::to_value(BlobGetResponse {
+        record,
+        content,
+        encoding: "base64",
+    }).expect("blob get response should serialize"))
+}
+
+fn handle_storage_blob_delete(request: StorageBlobDeleteRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("blobDir", &request.blob_dir)?;
+    validate_non_empty("id", &request.id)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    delete_blob_record(&connection, &request.user_handle, &request.extension_id, &request.id)?;
+    let binary_path = blob_binary_path(&request.blob_dir, &request.extension_id, &request.id);
+    if let Err(error) = fs::remove_file(binary_path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(to_internal_error(error));
+        }
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_storage_blob_list(request: StorageBlobListRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("blobDir", &request.blob_dir)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    let entries = fetch_blob_records(&connection, &request.user_handle, &request.extension_id)?;
+    Ok(json!({ "entries": entries }))
+}
+
+fn handle_http_fetch(request: CoreHttpFetchRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("url", &request.url)?;
+    let body_size = request.body.as_ref().map(|value| value.len()).unwrap_or(0);
+    if body_size > MAX_HTTP_BODY_BYTES {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("HTTP request body exceeds {} bytes", MAX_HTTP_BODY_BYTES),
+        });
+    }
+
+    let hostname = normalize_hostname(&request.url)?;
+    let method = request.method.as_deref().unwrap_or("GET");
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .build();
+    let mut operation = agent.request(method, &request.url);
+    if let Some(headers) = &request.headers {
+        for (name, value) in headers {
+            operation = operation.set(name, value);
+        }
+    }
+
+    let response = match request.body.as_ref() {
+        Some(body) => operation.send_string(body),
+        None => operation.call(),
+    };
+    let response = match response {
+        Ok(response) => response,
+        Err(ureq::Error::Status(_, response)) => response,
+        Err(error) => {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("http_fetch_failed: {error}"),
+            });
+        }
+    };
+
+    let status = response.status();
+    let ok = (200..300).contains(&status);
+    let mut headers = HashMap::new();
+    for name in response.headers_names() {
+        if let Some(value) = response.header(&name) {
+            headers.insert(name.to_lowercase(), value.to_string());
+        }
+    }
+    let content_type = headers
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| String::from("application/octet-stream"));
+    let mut reader = response.into_reader().take((MAX_HTTP_RESPONSE_BYTES + 1) as u64);
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer).map_err(to_internal_error)?;
+    if buffer.len() > MAX_HTTP_RESPONSE_BYTES {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("HTTP response exceeds {} bytes", MAX_HTTP_RESPONSE_BYTES),
+        });
+    }
+
+    let body_encoding = if is_textual_content_type(&content_type) {
+        String::from("utf8")
+    } else {
+        String::from("base64")
+    };
+    let body = if body_encoding == "utf8" {
+        String::from_utf8_lossy(&buffer).into_owned()
+    } else {
+        BASE64_STANDARD.encode(&buffer)
+    };
+
+    Ok(serde_json::to_value(HttpFetchResponse {
+        url: request.url,
+        hostname,
+        status,
+        ok,
+        headers,
+        body,
+        body_encoding,
+        content_type,
+    }).expect("http fetch response should serialize"))
+}
+
+fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("type", &request.job_type)?;
+    validate_one_of("type", &request.job_type, &["delay"])?;
+    if let Some(payload) = &request.payload {
+        if !payload.is_object() {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("job payload must be an object"),
+            });
+        }
+    }
+
+    let timestamp = current_timestamp_iso();
+    let job = ControlJobRecord {
+        id: generate_job_id(),
+        extension_id: request.extension_id.clone(),
+        job_type: request.job_type.clone(),
+        status: String::from("queued"),
+        created_at: timestamp.clone(),
+        updated_at: timestamp,
+        progress: 0,
+        summary: None,
+        error: None,
+        payload: request.payload.clone(),
+        result: None,
+        channel: format!("extension:{}", request.extension_id),
+    };
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    save_control_job_record(&connection, &request.user_handle, &job)?;
+    publish_control_event(
+        &connection,
+        &request.user_handle,
+        Some(&request.extension_id),
+        &job.channel,
+        "authority.job",
+        Some(&serde_json::to_value(&job).map_err(to_json_error)?),
+    )?;
+    spawn_delay_job(request.db_path, request.user_handle, job.clone(), Arc::clone(runtime));
+    Ok(json!({ "job": job }))
+}
+
+fn handle_control_job_cancel(request: ControlJobCancelRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("jobId", &request.job_id)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    let job = fetch_control_job(&connection, &request.user_handle, &request.job_id)?
+        .ok_or_else(|| ApiError {
+            status_code: 400,
+            message: String::from("Job not found"),
+        })?;
+    if job.extension_id != request.extension_id {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("Job not found"),
+        });
+    }
+
+    if let Some(control) = runtime
+        .job_controls
+        .lock()
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("internal_error: job control lock poisoned"),
+        })?
+        .get(&job_control_key(&request.user_handle, &request.job_id))
+        .cloned()
+    {
+        control.store(true, Ordering::SeqCst);
+    }
+
+    let next = ControlJobRecord {
+        status: String::from("cancelled"),
+        updated_at: current_timestamp_iso(),
+        summary: Some(String::from("Cancelled by user")),
+        ..job
+    };
+    save_control_job_record(&connection, &request.user_handle, &next)?;
+    publish_control_event(
+        &connection,
+        &request.user_handle,
+        Some(&request.extension_id),
+        &next.channel,
+        "authority.job",
+        Some(&serde_json::to_value(&next).map_err(to_json_error)?),
+    )?;
+    Ok(json!({ "job": next }))
+}
+
+fn handle_control_events_poll(request: ControlEventsPollRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("channel", &request.channel)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    if let Some(after_id) = request.after_id {
+        let limit = request.limit.unwrap_or(50).min(MAX_EVENT_POLL_LIMIT);
+        let events = fetch_control_events(&connection, &request.user_handle, &request.channel, after_id, limit)?;
+        let cursor = events.last().map(|event| event.id).unwrap_or(after_id);
+        Ok(json!({ "events": events, "cursor": cursor }))
+    } else {
+        let cursor = fetch_latest_control_event_id(&connection, &request.user_handle, &request.channel)?;
+        Ok(json!({ "events": [], "cursor": cursor }))
+    }
+}
+
 fn execute_transactional_statements(db_path: &str, statements: &[SqlBatchStatement]) -> Result<Vec<JsonValue>, ApiError> {
     if statements.is_empty() {
         return Err(ApiError {
@@ -1109,6 +1636,38 @@ fn ensure_control_schema(connection: &Connection) -> Result<(), ApiError> {
             result TEXT,
             channel TEXT NOT NULL,
             PRIMARY KEY (user_handle, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_authority_jobs_extension ON authority_jobs(user_handle, extension_id, updated_at DESC, id DESC);
+        CREATE TABLE IF NOT EXISTS authority_blob_records (
+            user_handle TEXT NOT NULL,
+            extension_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_handle, extension_id, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_authority_blob_records_extension ON authority_blob_records(user_handle, extension_id, updated_at DESC, id DESC);
+        CREATE TABLE IF NOT EXISTS authority_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_handle TEXT NOT NULL,
+            extension_id TEXT,
+            channel TEXT NOT NULL,
+            name TEXT NOT NULL,
+            payload TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_authority_events_channel ON authority_events(user_handle, channel, id);",
+    ).map_err(to_sql_error)
+}
+
+fn ensure_kv_schema(connection: &Connection) -> Result<(), ApiError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS kv_entries (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );",
     ).map_err(to_sql_error)
 }
@@ -1348,6 +1907,421 @@ fn control_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlJobR
         result: result_text.and_then(|value| serde_json::from_str(&value).ok()),
         channel: row.get(11)?,
     })
+}
+
+fn fetch_kv_value(connection: &Connection, key: &str) -> Result<Option<JsonValue>, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT value FROM kv_entries WHERE key = ?1",
+    ).map_err(to_sql_error)?;
+    let payload = statement
+        .query_row(params![key], |row| row.get::<_, String>(0))
+        .optional()
+        .map_err(to_sql_error)?;
+    match payload {
+        Some(payload) => Ok(Some(serde_json::from_str(&payload).map_err(to_json_error)?)),
+        None => Ok(None),
+    }
+}
+
+fn fetch_kv_entries(connection: &Connection) -> Result<JsonMap<String, JsonValue>, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT key, value FROM kv_entries ORDER BY key ASC",
+    ).map_err(to_sql_error)?;
+    let mut rows = statement.query([]).map_err(to_sql_error)?;
+    let mut entries = JsonMap::new();
+    while let Some(row) = rows.next().map_err(to_sql_error)? {
+        let key = row.get::<_, String>(0).map_err(to_sql_error)?;
+        let payload = row.get::<_, String>(1).map_err(to_sql_error)?;
+        let value = serde_json::from_str(&payload).map_err(to_json_error)?;
+        entries.insert(key, value);
+    }
+    Ok(entries)
+}
+
+fn upsert_blob_record(connection: &Connection, user_handle: &str, extension_id: &str, record: &BlobRecord) -> Result<(), ApiError> {
+    connection.execute(
+        "INSERT INTO authority_blob_records (user_handle, extension_id, id, name, content_type, size, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(user_handle, extension_id, id) DO UPDATE SET
+            name = excluded.name,
+            content_type = excluded.content_type,
+            size = excluded.size,
+            updated_at = excluded.updated_at",
+        params![
+            user_handle,
+            extension_id,
+            &record.id,
+            &record.name,
+            &record.content_type,
+            record.size,
+            &record.updated_at,
+        ],
+    ).map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn fetch_blob_record(connection: &Connection, user_handle: &str, extension_id: &str, blob_id: &str) -> Result<Option<BlobRecord>, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT id, name, content_type, size, updated_at
+         FROM authority_blob_records
+         WHERE user_handle = ?1 AND extension_id = ?2 AND id = ?3",
+    ).map_err(to_sql_error)?;
+    statement
+        .query_row(params![user_handle, extension_id, blob_id], blob_record_from_row)
+        .optional()
+        .map_err(to_sql_error)
+}
+
+fn fetch_blob_records(connection: &Connection, user_handle: &str, extension_id: &str) -> Result<Vec<BlobRecord>, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT id, name, content_type, size, updated_at
+         FROM authority_blob_records
+         WHERE user_handle = ?1 AND extension_id = ?2
+         ORDER BY updated_at DESC, id DESC",
+    ).map_err(to_sql_error)?;
+    let rows = statement
+        .query_map(params![user_handle, extension_id], blob_record_from_row)
+        .map_err(to_sql_error)?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(to_sql_error)?);
+    }
+    Ok(records)
+}
+
+fn delete_blob_record(connection: &Connection, user_handle: &str, extension_id: &str, blob_id: &str) -> Result<(), ApiError> {
+    connection.execute(
+        "DELETE FROM authority_blob_records WHERE user_handle = ?1 AND extension_id = ?2 AND id = ?3",
+        params![user_handle, extension_id, blob_id],
+    ).map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn blob_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BlobRecord> {
+    Ok(BlobRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        content_type: row.get(2)?,
+        size: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
+fn publish_control_event(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: Option<&str>,
+    channel: &str,
+    name: &str,
+    payload: Option<&JsonValue>,
+) -> Result<(), ApiError> {
+    let payload_text = match payload {
+        Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
+        None => None,
+    };
+    connection.execute(
+        "INSERT INTO authority_events (user_handle, extension_id, channel, name, payload, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![user_handle, extension_id, channel, name, payload_text, current_timestamp_iso()],
+    ).map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn fetch_control_events(connection: &Connection, user_handle: &str, channel: &str, after_id: i64, limit: usize) -> Result<Vec<ControlEventRecord>, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT id, created_at, extension_id, channel, name, payload
+         FROM authority_events
+         WHERE user_handle = ?1 AND channel = ?2 AND id > ?3
+         ORDER BY id ASC
+         LIMIT ?4",
+    ).map_err(to_sql_error)?;
+    let rows = statement
+        .query_map(params![user_handle, channel, after_id, limit as i64], control_event_from_row)
+        .map_err(to_sql_error)?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(to_sql_error)?);
+    }
+    Ok(records)
+}
+
+fn fetch_latest_control_event_id(connection: &Connection, user_handle: &str, channel: &str) -> Result<i64, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT MAX(id) FROM authority_events WHERE user_handle = ?1 AND channel = ?2",
+    ).map_err(to_sql_error)?;
+    let latest = statement
+        .query_row(params![user_handle, channel], |row| row.get::<_, Option<i64>>(0))
+        .map_err(to_sql_error)?;
+    Ok(latest.unwrap_or(0))
+}
+
+fn control_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlEventRecord> {
+    let payload_text: Option<String> = row.get(5)?;
+    Ok(ControlEventRecord {
+        id: row.get(0)?,
+        timestamp: row.get(1)?,
+        extension_id: row.get(2)?,
+        channel: row.get(3)?,
+        name: row.get(4)?,
+        payload: payload_text.and_then(|value| serde_json::from_str(&value).ok()),
+    })
+}
+
+fn save_control_job_record(connection: &Connection, user_handle: &str, job: &ControlJobRecord) -> Result<(), ApiError> {
+    let payload = match &job.payload {
+        Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
+        None => None,
+    };
+    let result = match &job.result {
+        Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
+        None => None,
+    };
+    connection.execute(
+        "INSERT INTO authority_jobs (
+            user_handle, id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        ON CONFLICT(user_handle, id) DO UPDATE SET
+            extension_id = excluded.extension_id,
+            type = excluded.type,
+            status = excluded.status,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            progress = excluded.progress,
+            summary = excluded.summary,
+            error = excluded.error,
+            payload = excluded.payload,
+            result = excluded.result,
+            channel = excluded.channel",
+        params![
+            user_handle,
+            &job.id,
+            &job.extension_id,
+            &job.job_type,
+            &job.status,
+            &job.created_at,
+            &job.updated_at,
+            job.progress,
+            &job.summary,
+            &job.error,
+            &payload,
+            &result,
+            &job.channel,
+        ],
+    ).map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn spawn_delay_job(db_path: String, user_handle: String, job: ControlJobRecord, runtime: Arc<RuntimeState>) {
+    let control = Arc::new(AtomicBool::new(false));
+    let key = job_control_key(&user_handle, &job.id);
+    if let Ok(mut controls) = runtime.job_controls.lock() {
+        controls.insert(key.clone(), Arc::clone(&control));
+    }
+
+    thread::spawn(move || {
+        let run_result = run_delay_job(&db_path, &user_handle, &job, Arc::clone(&control));
+        if let Err(error) = run_result {
+            let _ = mark_job_failed(&db_path, &user_handle, &job, &error.message);
+        }
+        if let Ok(mut controls) = runtime.job_controls.lock() {
+            controls.remove(&key);
+        }
+    });
+}
+
+fn run_delay_job(db_path: &str, user_handle: &str, job: &ControlJobRecord, control: Arc<AtomicBool>) -> Result<(), ApiError> {
+    let connection = open_connection(db_path)?;
+    ensure_control_schema(&connection)?;
+    let duration_ms = job_duration_ms(job);
+    let started = Instant::now();
+    let mut running = fetch_control_job(&connection, user_handle, &job.id)?
+        .unwrap_or_else(|| job.clone());
+    if running.status == "cancelled" {
+        return Ok(());
+    }
+
+    running.status = String::from("running");
+    running.updated_at = current_timestamp_iso();
+    running.summary = Some(format!("Running delay job for {}ms", duration_ms));
+    save_control_job_record(&connection, user_handle, &running)?;
+    let running_payload = serde_json::to_value(&running).map_err(to_json_error)?;
+    publish_control_event(
+        &connection,
+        user_handle,
+        Some(&running.extension_id),
+        &running.channel,
+        "authority.job",
+        Some(&running_payload),
+    )?;
+
+    loop {
+        thread::sleep(Duration::from_millis(JOB_PROGRESS_INTERVAL_MS));
+        let current = match fetch_control_job(&connection, user_handle, &job.id)? {
+            Some(current) => current,
+            None => return Ok(()),
+        };
+        if current.status == "cancelled" || control.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let progress = if duration_ms == 0 {
+            100_i64
+        } else {
+            ((elapsed_ms.saturating_mul(100)) / duration_ms).min(100) as i64
+        };
+
+        if progress >= 100 {
+            let message = job_message(job);
+            let completed = ControlJobRecord {
+                status: String::from("completed"),
+                progress: 100,
+                updated_at: current_timestamp_iso(),
+                summary: Some(message.clone()),
+                result: Some(json!({
+                    "elapsedMs": duration_ms,
+                    "message": message,
+                })),
+                ..current
+            };
+            save_control_job_record(&connection, user_handle, &completed)?;
+            let payload = serde_json::to_value(&completed).map_err(to_json_error)?;
+            publish_control_event(
+                &connection,
+                user_handle,
+                Some(&completed.extension_id),
+                &completed.channel,
+                "authority.job",
+                Some(&payload),
+            )?;
+            return Ok(());
+        }
+
+        let update = ControlJobRecord {
+            progress,
+            updated_at: current_timestamp_iso(),
+            ..current
+        };
+        save_control_job_record(&connection, user_handle, &update)?;
+        let payload = serde_json::to_value(&update).map_err(to_json_error)?;
+        publish_control_event(
+            &connection,
+            user_handle,
+            Some(&update.extension_id),
+            &update.channel,
+            "authority.job",
+            Some(&payload),
+        )?;
+    }
+}
+
+fn mark_job_failed(db_path: &str, user_handle: &str, job: &ControlJobRecord, message: &str) -> Result<(), ApiError> {
+    let connection = open_connection(db_path)?;
+    ensure_control_schema(&connection)?;
+    let current = match fetch_control_job(&connection, user_handle, &job.id)? {
+        Some(current) if current.status != "cancelled" && current.status != "completed" => current,
+        _ => return Ok(()),
+    };
+    let failed = ControlJobRecord {
+        status: String::from("failed"),
+        updated_at: current_timestamp_iso(),
+        error: Some(message.to_string()),
+        ..current
+    };
+    save_control_job_record(&connection, user_handle, &failed)?;
+    let payload = serde_json::to_value(&failed).map_err(to_json_error)?;
+    publish_control_event(
+        &connection,
+        user_handle,
+        Some(&failed.extension_id),
+        &failed.channel,
+        "authority.job",
+        Some(&payload),
+    )?;
+    Ok(())
+}
+
+fn decode_blob_content(encoding: Option<&str>, content: &str) -> Result<Vec<u8>, ApiError> {
+    match encoding.unwrap_or("utf8") {
+        "utf8" => Ok(content.as_bytes().to_vec()),
+        "base64" => BASE64_STANDARD.decode(content).map_err(|error| ApiError {
+            status_code: 400,
+            message: format!("invalid_base64_blob: {error}"),
+        }),
+        value => Err(ApiError {
+            status_code: 400,
+            message: format!("blob encoding has unsupported value: {value}"),
+        }),
+    }
+}
+
+fn blob_binary_path(blob_dir: &str, extension_id: &str, blob_id: &str) -> PathBuf {
+    Path::new(blob_dir)
+        .join(sanitize_file_segment(extension_id))
+        .join(format!("{}.bin", sanitize_file_segment(blob_id)))
+}
+
+fn sanitize_file_segment(input: &str) -> String {
+    input
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '.' || character == '_' || character == '-' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+}
+
+fn normalize_hostname(value: &str) -> Result<String, ApiError> {
+    let url = Url::parse(value).map_err(|error| ApiError {
+        status_code: 400,
+        message: format!("invalid_url: {error}"),
+    })?;
+    let hostname = url.host_str().ok_or_else(|| ApiError {
+        status_code: 400,
+        message: String::from("invalid_url: missing hostname"),
+    })?;
+    Ok(hostname.to_lowercase())
+}
+
+fn is_textual_content_type(content_type: &str) -> bool {
+    let normalized = content_type.to_ascii_lowercase();
+    normalized.contains("json")
+        || normalized.contains("text")
+        || normalized.contains("xml")
+        || normalized.contains("javascript")
+        || normalized.contains("html")
+}
+
+fn generate_job_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("job-{:x}-{}", nanos, process::id())
+}
+
+fn job_control_key(user_handle: &str, job_id: &str) -> String {
+    format!("{}:{}", user_handle, job_id)
+}
+
+fn job_duration_ms(job: &ControlJobRecord) -> u64 {
+    job.payload
+        .as_ref()
+        .and_then(|payload| payload.get("durationMs"))
+        .and_then(|value| value.as_u64().or_else(|| value.as_i64().and_then(|signed| u64::try_from(signed).ok())))
+        .unwrap_or(3000)
+}
+
+fn job_message(job: &ControlJobRecord) -> String {
+    job.payload
+        .as_ref()
+        .and_then(|payload| payload.get("message"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("Delay completed")
+        .to_string()
 }
 
 fn fetch_applied_migration_ids(connection: &Connection, table_name: &str) -> Result<HashSet<String>, ApiError> {

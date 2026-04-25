@@ -232,6 +232,19 @@ export interface ControlJobGetRequest {
     jobId: string;
 }
 
+export interface ControlJobCreateRequest {
+    userHandle: string;
+    extensionId: string;
+    type: string;
+    payload?: Record<string, unknown>;
+}
+
+export interface ControlJobCancelRequest {
+    userHandle: string;
+    extensionId: string;
+    jobId: string;
+}
+
 export interface ControlJobUpsertRequest {
     userHandle: string;
     job: ControlJobRecord;
@@ -243,6 +256,72 @@ export interface ControlJobsListResponse {
 
 export interface ControlJobResponse {
     job: ControlJobRecord | null;
+}
+
+export interface ControlKvGetRequest {
+    key: string;
+}
+
+export interface ControlKvSetRequest {
+    key: string;
+    value: unknown;
+}
+
+export interface ControlKvDeleteRequest {
+    key: string;
+}
+
+export interface ControlKvListRequest {}
+
+export interface ControlKvResponse {
+    value?: unknown;
+}
+
+export interface ControlKvListResponse {
+    entries: Record<string, unknown>;
+}
+
+export interface ControlBlobScopeRequest {
+    userHandle: string;
+    extensionId: string;
+    blobDir: string;
+}
+
+export interface ControlBlobPutRequest extends ControlBlobScopeRequest, BlobPutRequest {}
+
+export interface ControlBlobGetRequest extends ControlBlobScopeRequest {
+    id: string;
+}
+
+export interface ControlBlobDeleteRequest extends ControlBlobScopeRequest {
+    id: string;
+}
+
+export interface ControlBlobListRequest extends ControlBlobScopeRequest {}
+
+export interface ControlBlobListResponse {
+    entries: BlobRecord[];
+}
+
+export interface ControlEventRecord {
+    id: number;
+    timestamp: string;
+    extensionId?: string;
+    channel: string;
+    name: string;
+    payload?: unknown;
+}
+
+export interface ControlEventsPollRequest {
+    userHandle: string;
+    channel: string;
+    afterId?: number;
+    limit?: number;
+}
+
+export interface ControlEventsPollResponse {
+    events: ControlEventRecord[];
+    cursor: number;
 }
 
 export interface PermissionEvaluateRequest {
@@ -278,6 +357,12 @@ export interface BlobRecord {
     contentType: string;
     size: number;
     updatedAt: string;
+}
+
+export interface BlobGetResponse {
+    record: BlobRecord;
+    content: string;
+    encoding: 'base64';
 }
 
 export interface JobRecord {
@@ -374,5 +459,23 @@ export interface SqlDatabaseRecord {
 
 export interface SqlListDatabasesResponse {
     databases: SqlDatabaseRecord[];
+}
+
+export interface HttpFetchRequest {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+}
+
+export interface HttpFetchResponse {
+    url: string;
+    hostname: string;
+    status: number;
+    ok: boolean;
+    headers: Record<string, string>;
+    body: string;
+    bodyEncoding: 'utf8' | 'base64';
+    contentType: string;
 }
 

@@ -5,9 +5,19 @@ import process from 'node:process';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type {
     AuthorityInitConfig,
+    BlobGetResponse,
+    BlobRecord,
+    ControlBlobDeleteRequest,
+    ControlBlobGetRequest,
+    ControlBlobListRequest,
+    ControlBlobListResponse,
+    ControlBlobPutRequest,
     ControlAuditLogRequest,
     ControlAuditRecentRequest,
     ControlAuditRecentResponse,
+    ControlEventRecord,
+    ControlEventsPollRequest,
+    ControlEventsPollResponse,
     ControlExtensionGetRequest,
     ControlExtensionRecord,
     ControlExtensionResponse,
@@ -19,17 +29,27 @@ import type {
     ControlGrantResetRequest,
     ControlGrantResponse,
     ControlGrantUpsertRequest,
+    ControlJobCancelRequest,
+    ControlJobCreateRequest,
     ControlJobGetRequest,
     ControlJobRecord,
     ControlJobResponse,
     ControlJobsListRequest,
     ControlJobsListResponse,
     ControlJobUpsertRequest,
+    ControlKvDeleteRequest,
+    ControlKvGetRequest,
+    ControlKvListRequest,
+    ControlKvListResponse,
+    ControlKvResponse,
+    ControlKvSetRequest,
     ControlPoliciesRequest,
     ControlPoliciesResponse,
     ControlPoliciesSaveRequest,
     ControlSessionResponse,
     ControlSessionSnapshot,
+    HttpFetchRequest,
+    HttpFetchResponse,
     SqlBatchRequest,
     SqlBatchResponse,
     SqlExecRequest,
@@ -409,6 +429,69 @@ export class CoreService {
         });
     }
 
+    async getStorageKv(dbPath: string, request: ControlKvGetRequest): Promise<unknown> {
+        const response = await this.request<ControlKvResponse>('/v1/storage/kv/get', {
+            dbPath,
+            ...request,
+        });
+        return response.value;
+    }
+
+    async setStorageKv(dbPath: string, request: ControlKvSetRequest): Promise<void> {
+        await this.request('/v1/storage/kv/set', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async deleteStorageKv(dbPath: string, request: ControlKvDeleteRequest): Promise<void> {
+        await this.request('/v1/storage/kv/delete', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async listStorageKv(dbPath: string, request: ControlKvListRequest = {}): Promise<Record<string, unknown>> {
+        const response = await this.request<ControlKvListResponse>('/v1/storage/kv/list', {
+            dbPath,
+            ...request,
+        });
+        return response.entries;
+    }
+
+    async putStorageBlob(dbPath: string, request: ControlBlobPutRequest): Promise<BlobRecord> {
+        return await this.request('/v1/storage/blob/put', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async getStorageBlob(dbPath: string, request: ControlBlobGetRequest): Promise<BlobGetResponse> {
+        return await this.request('/v1/storage/blob/get', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async deleteStorageBlob(dbPath: string, request: ControlBlobDeleteRequest): Promise<void> {
+        await this.request('/v1/storage/blob/delete', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async listStorageBlobs(dbPath: string, request: ControlBlobListRequest): Promise<BlobRecord[]> {
+        const response = await this.request<ControlBlobListResponse>('/v1/storage/blob/list', {
+            dbPath,
+            ...request,
+        });
+        return response.entries;
+    }
+
+    async fetchHttp(request: HttpFetchRequest): Promise<HttpFetchResponse> {
+        return await this.request('/v1/http/fetch', request);
+    }
+
     async listControlJobs(dbPath: string, request: ControlJobsListRequest): Promise<ControlJobRecord[]> {
         const response = await this.request<ControlJobsListResponse>('/v1/control/jobs/list', {
             dbPath,
@@ -425,6 +508,28 @@ export class CoreService {
         return response.job;
     }
 
+    async createControlJob(dbPath: string, request: ControlJobCreateRequest): Promise<ControlJobRecord> {
+        const response = await this.request<ControlJobResponse>('/v1/control/jobs/create', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job create returned no job');
+        }
+        return response.job;
+    }
+
+    async cancelControlJob(dbPath: string, request: ControlJobCancelRequest): Promise<ControlJobRecord> {
+        const response = await this.request<ControlJobResponse>('/v1/control/jobs/cancel', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job cancel returned no job');
+        }
+        return response.job;
+    }
+
     async upsertControlJob(dbPath: string, request: ControlJobUpsertRequest): Promise<ControlJobRecord> {
         const response = await this.request<ControlJobResponse>('/v1/control/jobs/upsert', {
             dbPath,
@@ -434,6 +539,17 @@ export class CoreService {
             throw new Error('Control job upsert returned no job');
         }
         return response.job;
+    }
+
+    async pollControlEvents(dbPath: string, request: ControlEventsPollRequest): Promise<{ events: ControlEventRecord[]; cursor: number }> {
+        const response = await this.request<ControlEventsPollResponse>('/v1/control/events/poll', {
+            dbPath,
+            ...request,
+        });
+        return {
+            events: response.events,
+            cursor: response.cursor,
+        };
     }
 
     private attachProcessListeners(child: ChildProcess): void {
