@@ -3,7 +3,18 @@ import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { SqlBatchRequest, SqlBatchResponse, SqlExecRequest, SqlExecResult, SqlQueryRequest, SqlQueryResult } from '@stdo/shared-types';
+import type {
+    SqlBatchRequest,
+    SqlBatchResponse,
+    SqlExecRequest,
+    SqlExecResult,
+    SqlMigrateRequest,
+    SqlMigrateResponse,
+    SqlQueryRequest,
+    SqlQueryResult,
+    SqlTransactionRequest,
+    SqlTransactionResponse,
+} from '@stdo/shared-types';
 import { AUTHORITY_MANAGED_CORE_DIR } from '../constants.js';
 import type { AuthorityCoreHealthSnapshot, AuthorityCoreManagedMetadata, AuthorityCoreStatus, CoreRuntimeState } from '../types.js';
 import { asErrorMessage, randomToken } from '../utils.js';
@@ -29,6 +40,12 @@ interface CoreSqlRequestPayload {
 interface CoreSqlBatchRequestPayload {
     dbPath: string;
     statements: SqlBatchRequest['statements'];
+}
+
+interface CoreSqlMigrateRequestPayload {
+    dbPath: string;
+    migrations: SqlMigrateRequest['migrations'];
+    tableName?: SqlMigrateRequest['tableName'];
 }
 
 const HEALTH_TIMEOUT_MS = 5000;
@@ -246,6 +263,21 @@ export class CoreService {
             dbPath,
             statements: request.statements,
         } satisfies CoreSqlBatchRequestPayload);
+    }
+
+    async transactionSql(dbPath: string, request: SqlTransactionRequest): Promise<SqlTransactionResponse> {
+        return await this.request('/v1/sql/transaction', {
+            dbPath,
+            statements: request.statements,
+        } satisfies CoreSqlBatchRequestPayload);
+    }
+
+    async migrateSql(dbPath: string, request: SqlMigrateRequest): Promise<SqlMigrateResponse> {
+        return await this.request('/v1/sql/migrate', {
+            dbPath,
+            migrations: request.migrations,
+            tableName: request.tableName,
+        } satisfies CoreSqlMigrateRequestPayload);
     }
 
     private attachProcessListeners(child: ChildProcess): void {

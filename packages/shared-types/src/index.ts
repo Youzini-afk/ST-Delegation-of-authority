@@ -180,3 +180,42 @@ export interface SqlBatchResponse {
     results: SqlStatementResult[];
 }
 
+export interface SqlTransactionRequest {
+    database?: string;
+    statements: SqlStatementInput[];
+}
+
+export interface SqlTransactionResponse {
+    committed: boolean;
+    results: SqlStatementResult[];
+}
+
+export interface SqlMigrationInput {
+    id: string;
+    statement: string;
+}
+
+export interface SqlMigrateRequest {
+    database?: string;
+    migrations: SqlMigrationInput[];
+    tableName?: string;
+}
+
+export interface SqlMigrateResponse {
+    tableName: string;
+    applied: string[];
+    skipped: string[];
+    latestId: string | null;
+}
+
+export interface SqlDatabaseRecord {
+    name: string;
+    fileName: string;
+    sizeBytes: number;
+    updatedAt: string;
+}
+
+export interface SqlListDatabasesResponse {
+    databases: SqlDatabaseRecord[];
+}
+

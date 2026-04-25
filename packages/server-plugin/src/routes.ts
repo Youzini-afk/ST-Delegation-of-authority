@@ -1,5 +1,16 @@
+import fs from 'node:fs';
 import path from 'node:path';
-import type { AuthorityInitConfig, PermissionEvaluateRequest, PermissionResolveRequest, SqlBatchRequest, SqlExecRequest, SqlQueryRequest } from '@stdo/shared-types';
+import type {
+    AuthorityInitConfig,
+    PermissionEvaluateRequest,
+    PermissionResolveRequest,
+    SqlBatchRequest,
+    SqlExecRequest,
+    SqlListDatabasesResponse,
+    SqlMigrateRequest,
+    SqlQueryRequest,
+    SqlTransactionRequest,
+} from '@stdo/shared-types';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AuthorityRequest, AuthorityResponse } from './types.js';
@@ -29,13 +40,39 @@ function getSqlDatabaseName(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 
-function resolvePrivateSqlDatabasePath(user: ReturnType<typeof getUserContext>, extensionId: string, databaseName: string): string {
+function resolvePrivateSqlDatabaseDir(user: ReturnType<typeof getUserContext>, extensionId: string): string {
     const paths = getUserAuthorityPaths(user);
+    return path.join(paths.sqlPrivateDir, sanitizeFileSegment(extensionId));
+}
+
+function resolvePrivateSqlDatabasePath(user: ReturnType<typeof getUserContext>, extensionId: string, databaseName: string): string {
     return path.join(
-        paths.sqlPrivateDir,
-        sanitizeFileSegment(extensionId),
+        resolvePrivateSqlDatabaseDir(user, extensionId),
         `${sanitizeFileSegment(databaseName)}.sqlite`,
     );
+}
+
+function listPrivateSqlDatabases(user: ReturnType<typeof getUserContext>, extensionId: string): SqlListDatabasesResponse {
+    const databaseDir = resolvePrivateSqlDatabaseDir(user, extensionId);
+    if (!fs.existsSync(databaseDir)) {
+        return { databases: [] };
+    }
+
+    const databases = fs.readdirSync(databaseDir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
+        .map(entry => {
+            const filePath = path.join(databaseDir, entry.name);
+            const stats = fs.statSync(filePath);
+            return {
+                name: entry.name.slice(0, -'.sqlite'.length),
+                fileName: entry.name,
+                sizeBytes: stats.size,
+                updatedAt: stats.mtime.toISOString(),
+            };
+        })
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+    return { databases };
 }
 
 function previewSqlStatement(statement: string): string {
@@ -368,6 +405,75 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             runtime.audit.logUsage(user, session.extension.id, 'SQL batch', {
                 database,
                 statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.post('/sql/transaction', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as SqlTransactionRequest;
+            const database = getSqlDatabaseName(payload.database);
+            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.transactionSql(dbPath, {
+                ...payload,
+                database,
+            });
+            runtime.audit.logUsage(user, session.extension.id, 'SQL transaction', {
+                database,
+                statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.post('/sql/migrate', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as SqlMigrateRequest;
+            const database = getSqlDatabaseName(payload.database);
+            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.migrateSql(dbPath, {
+                ...payload,
+                database,
+            });
+            runtime.audit.logUsage(user, session.extension.id, 'SQL migrate', {
+                database,
+                migrations: Array.isArray(payload.migrations) ? payload.migrations.length : 0,
+                tableName: payload.tableName ?? '_authority_migrations',
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.get('/sql/databases', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = runtime.sessions.assertSession(getSessionToken(req), user);
+            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private' }, false)) {
+                throw new Error('Permission not granted: sql.private');
+            }
+
+            const result = listPrivateSqlDatabases(user, session.extension.id);
+            runtime.audit.logUsage(user, session.extension.id, 'SQL list databases', {
+                count: result.databases.length,
             });
             ok(res, result);
         } catch (error) {

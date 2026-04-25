@@ -122,6 +122,43 @@ export class AuthorityClient {
                     },
                 });
             },
+            transaction: async (input) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `事务执行 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession('/sql/transaction', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            migrate: async (input) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `迁移 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession('/sql/migrate', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            listDatabases: async () => {
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    reason: '列出私有 SQL 数据库',
+                });
+                return await this.requestWithSession('/sql/databases');
+            },
         };
         this.http = {
             fetch: async (input) => {

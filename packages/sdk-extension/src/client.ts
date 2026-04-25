@@ -12,10 +12,15 @@ import type {
     SessionInitResponse,
     SqlBatchRequest,
     SqlBatchResponse,
+    SqlListDatabasesResponse,
+    SqlMigrateRequest,
+    SqlMigrateResponse,
     SqlExecRequest,
     SqlExecResult,
     SqlQueryRequest,
     SqlQueryResult,
+    SqlTransactionRequest,
+    SqlTransactionResponse,
 } from '@stdo/shared-types';
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt, type PermissionPromptContext } from './permission-prompt.js';
@@ -85,6 +90,9 @@ export class AuthorityClient {
         query: (input: SqlQueryRequest) => Promise<SqlQueryResult>;
         exec: (input: SqlExecRequest) => Promise<SqlExecResult>;
         batch: (input: SqlBatchRequest) => Promise<SqlBatchResponse>;
+        transaction: (input: SqlTransactionRequest) => Promise<SqlTransactionResponse>;
+        migrate: (input: SqlMigrateRequest) => Promise<SqlMigrateResponse>;
+        listDatabases: () => Promise<SqlListDatabasesResponse>;
     };
 
     readonly http: {
@@ -216,6 +224,43 @@ export class AuthorityClient {
                         database,
                     },
                 });
+            },
+            transaction: async input => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `事务执行 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession<SqlTransactionResponse>('/sql/transaction', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            migrate: async input => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `迁移 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession<SqlMigrateResponse>('/sql/migrate', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            listDatabases: async () => {
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    reason: '列出私有 SQL 数据库',
+                });
+                return await this.requestWithSession<SqlListDatabasesResponse>('/sql/databases');
             },
         };
 

@@ -6,6 +6,7 @@ use rusqlite::types::{Value as SqliteValue, ValueRef};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json};
+use std::collections::HashSet;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -70,6 +71,20 @@ struct SqlBatchRequest {
     statements: Vec<SqlBatchStatement>,
 }
 
+#[derive(Deserialize)]
+struct SqlMigrationInput {
+    id: String,
+    statement: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlMigrateRequest {
+    db_path: String,
+    migrations: Vec<SqlMigrationInput>,
+    table_name: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SqlQueryResult {
@@ -85,6 +100,22 @@ struct SqlExecResult {
     kind: &'static str,
     rows_affected: usize,
     last_insert_rowid: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlTransactionResponse {
+    committed: bool,
+    results: Vec<JsonValue>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlMigrateResponse {
+    table_name: String,
+    applied: Vec<String>,
+    skipped: Vec<String>,
+    latest_id: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -151,6 +182,8 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
         ("POST", "/v1/sql/query") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_query),
         ("POST", "/v1/sql/exec") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_exec),
         ("POST", "/v1/sql/batch") => parse_json_body::<SqlBatchRequest>(&request).and_then(handle_sql_batch),
+        ("POST", "/v1/sql/transaction") => parse_json_body::<SqlBatchRequest>(&request).and_then(handle_sql_transaction),
+        ("POST", "/v1/sql/migrate") => parse_json_body::<SqlMigrateRequest>(&request).and_then(handle_sql_migrate),
         _ => Err(ApiError {
             status_code: 404,
             message: String::from("not_found"),
@@ -179,18 +212,88 @@ fn handle_sql_exec(request: SqlRequest) -> Result<JsonValue, ApiError> {
 }
 
 fn handle_sql_batch(request: SqlBatchRequest) -> Result<JsonValue, ApiError> {
-    if request.statements.is_empty() {
+    let results = execute_transactional_statements(&request.db_path, &request.statements)?;
+    Ok(json!({ "results": results }))
+}
+
+fn handle_sql_transaction(request: SqlBatchRequest) -> Result<JsonValue, ApiError> {
+    let results = execute_transactional_statements(&request.db_path, &request.statements)?;
+    let response = SqlTransactionResponse {
+        committed: true,
+        results,
+    };
+    Ok(serde_json::to_value(response).expect("sql transaction response should serialize"))
+}
+
+fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError> {
+    let table_name = validate_sql_identifier(request.table_name.as_deref().unwrap_or("_authority_migrations"))?;
+    let mut connection = open_connection(&request.db_path)?;
+    let transaction = connection.transaction().map_err(to_sql_error)?;
+    ensure_migration_table(&transaction, &table_name)?;
+    let mut applied_ids = fetch_applied_migration_ids(&transaction, &table_name)?;
+    let mut applied = Vec::new();
+    let mut skipped = Vec::new();
+
+    for migration in &request.migrations {
+        let migration_id = migration.id.trim();
+        if migration_id.is_empty() {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("sql migration id must not be empty"),
+            });
+        }
+        if migration.statement.trim().is_empty() {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("sql migration statement must not be empty for {}", migration_id),
+            });
+        }
+
+        if applied_ids.contains(migration_id) {
+            skipped.push(migration_id.to_string());
+            continue;
+        }
+
+        transaction.execute_batch(&migration.statement).map_err(to_sql_error)?;
+        let insert_statement = format!("INSERT INTO {} (id, applied_at) VALUES (?1, ?2)", table_name);
+        transaction
+            .execute(&insert_statement, (migration_id, current_timestamp_millis()))
+            .map_err(to_sql_error)?;
+        applied_ids.insert(migration_id.to_string());
+        applied.push(migration_id.to_string());
+    }
+
+    transaction.commit().map_err(to_sql_error)?;
+    let latest_id = request
+        .migrations
+        .iter()
+        .rev()
+        .find_map(|migration| {
+            let migration_id = migration.id.trim();
+            applied_ids.contains(migration_id).then(|| migration_id.to_string())
+        });
+    let response = SqlMigrateResponse {
+        table_name,
+        applied,
+        skipped,
+        latest_id,
+    };
+    Ok(serde_json::to_value(response).expect("sql migrate response should serialize"))
+}
+
+fn execute_transactional_statements(db_path: &str, statements: &[SqlBatchStatement]) -> Result<Vec<JsonValue>, ApiError> {
+    if statements.is_empty() {
         return Err(ApiError {
             status_code: 400,
             message: String::from("sql batch requires at least one statement"),
         });
     }
 
-    let mut connection = open_connection(&request.db_path)?;
+    let mut connection = open_connection(db_path)?;
     let transaction = connection.transaction().map_err(to_sql_error)?;
-    let mut results = Vec::with_capacity(request.statements.len());
+    let mut results = Vec::with_capacity(statements.len());
 
-    for statement in &request.statements {
+    for statement in statements {
         let result = match statement.mode {
             SqlStatementMode::Query => {
                 let value = run_query(&transaction, &statement.statement, &statement.params)?;
@@ -205,7 +308,7 @@ fn handle_sql_batch(request: SqlBatchRequest) -> Result<JsonValue, ApiError> {
     }
 
     transaction.commit().map_err(to_sql_error)?;
-    Ok(json!({ "results": results }))
+    Ok(results)
 }
 
 fn run_query(connection: &Connection, statement_text: &str, params: &[JsonValue]) -> Result<SqlQueryResult, ApiError> {
@@ -289,6 +392,26 @@ fn open_connection(db_path: &str) -> Result<Connection, ApiError> {
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
         .map_err(to_sql_error)?;
     Ok(connection)
+}
+
+fn ensure_migration_table(connection: &Connection, table_name: &str) -> Result<(), ApiError> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
+        table_name,
+    );
+    connection.execute_batch(&statement).map_err(to_sql_error)
+}
+
+fn fetch_applied_migration_ids(connection: &Connection, table_name: &str) -> Result<HashSet<String>, ApiError> {
+    let statement = format!("SELECT id FROM {}", table_name);
+    let mut query = connection.prepare(&statement).map_err(to_sql_error)?;
+    let mut rows = query.query([]).map_err(to_sql_error)?;
+    let mut ids = HashSet::new();
+    while let Some(row) = rows.next().map_err(to_sql_error)? {
+        let id = row.get::<_, String>(0).map_err(to_sql_error)?;
+        ids.insert(id);
+    }
+    Ok(ids)
 }
 
 fn build_sqlite_params(params: &[JsonValue]) -> Result<Vec<SqliteValue>, ApiError> {
@@ -454,6 +577,31 @@ fn to_internal_error(error: std::io::Error) -> ApiError {
         status_code: 500,
         message: format!("internal_error: {error}"),
     }
+}
+
+fn validate_sql_identifier(value: &str) -> Result<String, ApiError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("sql identifier must not be empty"),
+        });
+    }
+    if !trimmed.chars().all(|character| character.is_ascii_alphanumeric() || character == '_') {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("sql identifier contains unsupported characters: {}", trimmed),
+        });
+    }
+    Ok(trimmed.to_string())
+}
+
+fn current_timestamp_millis() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string()
 }
 
 fn write_json(stream: &mut TcpStream, status_code: u16, body: &str) -> std::io::Result<()> {
