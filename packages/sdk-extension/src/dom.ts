@@ -33,7 +33,7 @@ export function clearChildren(element: HTMLElement): void {
 
 export function formatDate(value?: string): string {
     if (!value) {
-        return 'N/A';
+        return '未记录';
     }
 
     const date = new Date(value);

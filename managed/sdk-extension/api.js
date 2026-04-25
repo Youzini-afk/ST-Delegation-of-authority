@@ -2,7 +2,7 @@ import { getRequestHeaders } from '/script.js';
 export const AUTHORITY_API_BASE = '/api/plugins/authority';
 export const AUTHORITY_EXTENSION_NAME = 'third-party/st-authority-sdk';
 export const AUTHORITY_EXTENSION_ID = 'third-party/st-authority-sdk';
-export const AUTHORITY_EXTENSION_DISPLAY_NAME = 'Authority Security Center';
+export const AUTHORITY_EXTENSION_DISPLAY_NAME = '扩展权限中心';
 export const AUTHORITY_EXTENSION_VERSION = '0.1.0';
 export const SESSION_HEADER = 'x-authority-session-token';
 export class AuthorityApiError extends Error {
@@ -73,6 +73,6 @@ function getErrorMessage(payload, fallback) {
     if (payload && typeof payload === 'object' && 'error' in payload) {
         return String(payload.error);
     }
-    return fallback || 'Authority request failed';
+    return fallback || '权限中心请求失败';
 }
 //# sourceMappingURL=api.js.map

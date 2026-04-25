@@ -30,10 +30,12 @@ import {
     getDeclaredPermissionLabels,
     getExtensionRiskLevel,
     getInstallStatusLabel,
+    getInstallTypeLabel,
     getResourceLabel,
     getRiskLabel,
     getRiskLevel,
     getStatusLabel,
+    getSystemMessageLabel,
     sortByTimestampDesc,
 } from './security-center/formatters.js';
 import type {
@@ -50,6 +52,9 @@ import {
     openSecurityCenter as openSecurityCenterHost,
 } from './security-center/host.js';
 import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
+
+const TOAST_TITLE = '权限中心';
+const MISSING_TEXT = '未获取';
 
 export function bootstrapSecurityCenter(): Promise<void> {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
@@ -233,10 +238,10 @@ class SecurityCenterView {
                 method: 'POST',
                 body: { keys },
             });
-            toastr.success('授权已重置', 'Authority');
+            toastr.success('授权已重置', TOAST_TITLE);
             await this.refresh();
         } catch (error) {
-            toastr.error(error instanceof Error ? error.message : String(error), 'Authority');
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
         }
     }
 
@@ -264,10 +269,10 @@ class SecurityCenterView {
                     extensions: nextExtensions,
                 },
             });
-            toastr.success('管理员策略已保存', 'Authority');
+            toastr.success('管理员策略已保存', TOAST_TITLE);
             await this.refresh();
         } catch (error) {
-            toastr.error(error instanceof Error ? error.message : String(error), 'Authority');
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
         }
     }
 
@@ -340,20 +345,20 @@ class SecurityCenterView {
         if (badges) {
             const probe = this.state.probe;
             badges.innerHTML = `
-                <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">SDK ${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '同步中')}</span>
-                <span class="authority-pill authority-pill--${escapeHtml(probe?.core.state ?? 'starting')}">Core ${escapeHtml(getCoreStateLabel(probe?.core.state))}</span>
-                <span class="authority-pill authority-pill--medium">${escapeHtml(probe?.coreArtifactPlatform ?? 'platform')}</span>
-                <span class="authority-pill authority-pill--admin">${escapeHtml(this.state.isAdmin ? 'Admin Mode' : 'User Mode')}</span>
+                <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">接入状态 ${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '同步中')}</span>
+                <span class="authority-pill authority-pill--${escapeHtml(probe?.core.state ?? 'starting')}">后台服务 ${escapeHtml(getCoreStateLabel(probe?.core.state))}</span>
+                <span class="authority-pill authority-pill--medium">${escapeHtml(probe?.coreArtifactPlatform ?? '平台未识别')}</span>
+                <span class="authority-pill authority-pill--admin">${escapeHtml(this.state.isAdmin ? '管理员' : '普通用户')}</span>
             `;
         }
 
         if (this.state.loading) {
-            status.innerHTML = '<div class="authority-inline-note">正在同步 Authority 状态、扩展记录与策略数据...</div>';
+            status.innerHTML = '<div class="authority-inline-note">正在同步权限中心状态、扩展记录与策略数据...</div>';
             return;
         }
 
         if (this.state.error) {
-            status.innerHTML = `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(this.state.error)}</div>`;
+            status.innerHTML = `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(getSystemMessageLabel(this.state.error))}</div>`;
             return;
         }
 
@@ -367,17 +372,17 @@ class SecurityCenterView {
         const core = this.state.probe?.core;
         status.innerHTML = `
             <div class="authority-summary-strip">
-                ${renderKpiCard('当前用户', user?.handle ?? 'unknown', user?.isAdmin ? '管理员模式' : '普通用户模式')}
-                ${renderKpiCard('扩展数量', String(this.state.extensions.length), '已注册 Authority 扩展')}
-                ${renderKpiCard('数据库数量', String(databaseCount), '当前用户私有 SQL')}
-                ${renderKpiCard('活跃任务', String(activeJobCount), 'queued / running')}
-                ${renderKpiCard('Core 状态', getCoreStateLabel(core?.state), core?.port ? `127.0.0.1:${core.port}` : '端口未分配')}
+                ${renderKpiCard('当前用户', user?.handle ?? '未识别', user?.isAdmin ? '管理员模式' : '普通用户模式')}
+                ${renderKpiCard('扩展数量', String(this.state.extensions.length), '已接入的扩展')}
+                ${renderKpiCard('数据库数量', String(databaseCount), '当前用户的私有数据库')}
+                ${renderKpiCard('活跃任务', String(activeJobCount), '排队中 / 执行中')}
+                ${renderKpiCard('后台服务', getCoreStateLabel(core?.state), core?.port ? `127.0.0.1:${core.port}` : '端口未分配')}
                 ${renderKpiCard('错误记录', String(issueCount), '最近聚合错误')}
             </div>
-            ${this.state.probe ? `<div class="authority-inline-note">SDK ${escapeHtml(getInstallStatusLabel(this.state.probe.installStatus))} · 插件 ${escapeHtml(this.state.probe.pluginVersion)} · Core ${escapeHtml(this.state.probe.core.version ?? 'unknown')} · 平台 ${escapeHtml(this.state.probe.coreArtifactPlatforms?.join(', ') || 'unknown')}</div>` : ''}
-            ${this.state.probe?.installMessage ? `<div class="authority-inline-note">${escapeHtml(this.state.probe.installMessage)}</div>` : ''}
-            ${this.state.probe?.coreMessage ? `<div class="authority-inline-note authority-inline-note--warning">${escapeHtml(this.state.probe.coreMessage)}</div>` : ''}
-            ${this.state.probe?.core.lastError ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(this.state.probe.core.lastError)}</div>` : ''}
+            ${this.state.probe ? `<div class="authority-inline-note">接入状态 ${escapeHtml(getInstallStatusLabel(this.state.probe.installStatus))} · 插件版本 ${escapeHtml(this.state.probe.pluginVersion || MISSING_TEXT)} · 后台服务 ${escapeHtml(this.state.probe.core.version ?? MISSING_TEXT)} · 支持平台 ${escapeHtml(this.state.probe.coreArtifactPlatforms?.join('、') || MISSING_TEXT)}</div>` : ''}
+            ${this.state.probe?.installMessage ? `<div class="authority-inline-note">${escapeHtml(getSystemMessageLabel(this.state.probe.installMessage))}</div>` : ''}
+            ${this.state.probe?.coreMessage ? `<div class="authority-inline-note authority-inline-note--warning">${escapeHtml(getSystemMessageLabel(this.state.probe.coreMessage))}</div>` : ''}
+            ${this.state.probe?.core.lastError ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(getSystemMessageLabel(this.state.probe.core.lastError))}</div>` : ''}
         `;
     }
 
@@ -406,7 +411,7 @@ class SecurityCenterView {
         }
 
         if (extensions.length === 0) {
-            container.innerHTML = '<div class="authority-empty">还没有扩展通过 Authority 完成初始化。</div>';
+            container.innerHTML = '<div class="authority-empty">还没有扩展接入权限中心。</div>';
             return;
         }
 
@@ -451,7 +456,7 @@ class SecurityCenterView {
                 ${renderKpiCard('扩展数量', String(this.state.extensions.length), '已注册扩展')}
                 ${renderKpiCard('授权记录', String(overview.totalGrantCount), '允许与拒绝合计')}
                 ${renderKpiCard('策略覆盖', String(overview.totalPolicyCount), '默认与扩展覆盖')}
-                ${renderKpiCard('活跃任务', String(overview.activeJobs.length), 'queued / running')}
+                ${renderKpiCard('活跃任务', String(overview.activeJobs.length), '排队中 / 执行中')}
                 ${renderKpiCard('数据库体积', formatBytes(overview.totalDatabaseSize), `${overview.totalDatabaseCount} 个数据库`)}
                 ${renderKpiCard('最近错误', String(overview.recentErrors.length), '需要排查的异常')}
             </div>
@@ -460,42 +465,42 @@ class SecurityCenterView {
                     <div class="authority-card__header">
                         <div class="authority-card__title">
                             <h3>运行状态</h3>
-                            <div class="authority-muted">插件安装、core 运行时与内置平台</div>
+                            <div class="authority-muted">接入状态、后台服务与支持平台</div>
                         </div>
                         <span class="authority-pill authority-pill--${escapeHtml(core?.state ?? 'starting')}">${escapeHtml(getCoreStateLabel(core?.state))}</span>
                     </div>
                     <div class="authority-kv-grid">
-                        <div><strong>插件版本</strong><div>${escapeHtml(this.state.probe?.pluginVersion ?? 'unknown')}</div></div>
-                        <div><strong>SDK 部署</strong><div>${escapeHtml(this.state.probe ? getInstallStatusLabel(this.state.probe.installStatus) : 'unknown')}</div></div>
-                        <div><strong>Core 分发</strong><div>${escapeHtml(this.state.probe?.coreVerified ? '已校验' : '未校验')}</div></div>
-                        <div><strong>Core 目标平台</strong><div>${escapeHtml(this.state.probe?.coreArtifactPlatform ?? 'unknown')}</div></div>
-                        <div><strong>Core 内置平台</strong><div>${escapeHtml(this.state.probe?.coreArtifactPlatforms?.join(', ') || 'unknown')}</div></div>
-                        <div><strong>Core 运行态</strong><div>${escapeHtml(getCoreStateLabel(core?.state))}</div></div>
-                        <div><strong>Core PID</strong><div>${escapeHtml(core?.pid ? String(core.pid) : 'n/a')}</div></div>
-                        <div><strong>Core 端口</strong><div>${escapeHtml(core?.port ? String(core.port) : 'n/a')}</div></div>
-                        <div><strong>Core 启动时间</strong><div>${escapeHtml(core?.startedAt ? formatDate(core.startedAt) : 'n/a')}</div></div>
-                        <div><strong>Core 请求数</strong><div>${escapeHtml(core?.health ? String(core.health.requestCount) : 'n/a')}</div></div>
-                        <div><strong>Core 错误数</strong><div>${escapeHtml(core?.health ? String(core.health.errorCount) : 'n/a')}</div></div>
-                        <div><strong>Core 活跃任务</strong><div>${escapeHtml(core?.health ? String(core.health.activeJobCount) : 'n/a')}</div></div>
+                        <div><strong>插件版本</strong><div>${escapeHtml(this.state.probe?.pluginVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>接入状态</strong><div>${escapeHtml(this.state.probe ? getInstallStatusLabel(this.state.probe.installStatus) : MISSING_TEXT)}</div></div>
+                        <div><strong>后台服务校验</strong><div>${escapeHtml(this.state.probe?.coreVerified ? '已通过' : '未通过')}</div></div>
+                        <div><strong>当前平台</strong><div>${escapeHtml(this.state.probe?.coreArtifactPlatform ?? MISSING_TEXT)}</div></div>
+                        <div><strong>支持平台</strong><div>${escapeHtml(this.state.probe?.coreArtifactPlatforms?.join('、') || MISSING_TEXT)}</div></div>
+                        <div><strong>后台服务状态</strong><div>${escapeHtml(getCoreStateLabel(core?.state))}</div></div>
+                        <div><strong>进程号</strong><div>${escapeHtml(core?.pid !== null && core?.pid !== undefined ? String(core.pid) : MISSING_TEXT)}</div></div>
+                        <div><strong>监听端口</strong><div>${escapeHtml(core?.port !== null && core?.port !== undefined ? String(core.port) : MISSING_TEXT)}</div></div>
+                        <div><strong>启动时间</strong><div>${escapeHtml(core?.startedAt ? formatDate(core.startedAt) : MISSING_TEXT)}</div></div>
+                        <div><strong>处理请求数</strong><div>${escapeHtml(core?.health ? String(core.health.requestCount) : MISSING_TEXT)}</div></div>
+                        <div><strong>累计错误数</strong><div>${escapeHtml(core?.health ? String(core.health.errorCount) : MISSING_TEXT)}</div></div>
+                        <div><strong>运行中任务</strong><div>${escapeHtml(core?.health ? String(core.health.activeJobCount) : MISSING_TEXT)}</div></div>
                     </div>
                 </section>
                 <section class="authority-card">
                     <div class="authority-card__title">
                         <h3>能力矩阵</h3>
-                        <div class="authority-muted">当前 Authority 可治理的服务端能力</div>
+                        <div class="authority-muted">当前可由权限中心管理的系统能力</div>
                     </div>
                     ${renderCapabilityMatrix(RESOURCE_OPTIONS)}
                 </section>
                 <section class="authority-card">
                     <div class="authority-card__title">
                         <h3>存储汇总</h3>
-                        <div class="authority-muted">KV、Blob、SQL 与私有文件夹聚合</div>
+                        <div class="authority-muted">键值数据、文件、数据库与私有文件汇总</div>
                     </div>
                     <div class="authority-storage-grid">
-                        ${renderStorageCard('KV 条目', String(this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)), '扩展键值状态')}
-                        ${renderStorageCard('Blob 体积', formatBytes(overview.totalBlobBytes), '二进制对象存储')}
-                        ${renderStorageCard('SQL 体积', formatBytes(overview.totalDatabaseSize), `${overview.totalDatabaseCount} 个数据库`)}
-                        ${renderStorageCard('私有文件', formatBytes(overview.totalPrivateFileBytes), 'fs.private 作用域')}
+                        ${renderStorageCard('键值条目', String(this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)), '扩展保存的键值数据')}
+                        ${renderStorageCard('文件体积', formatBytes(overview.totalBlobBytes), '扩展保存的文件')}
+                        ${renderStorageCard('数据库体积', formatBytes(overview.totalDatabaseSize), `${overview.totalDatabaseCount} 个数据库`)}
+                        ${renderStorageCard('私有文件体积', formatBytes(overview.totalPrivateFileBytes), '仅统计私有文件区')}
                     </div>
                 </section>
                 <section class="authority-card">
@@ -506,8 +511,8 @@ class SecurityCenterView {
                     ${renderActivityList(overview.recentActivity, '暂无活动记录。')}
                 </section>
                 <section class="authority-card">
-                    <h3>SQL 数据库概览</h3>
-                    ${renderDatabaseGroupList(overview.databaseGroups.slice(0, 6), '当前没有发现扩展 SQL 数据库。')}
+                    <h3>私有数据库概览</h3>
+                    ${renderDatabaseGroupList(overview.databaseGroups.slice(0, 6), '当前没有发现扩展私有数据库。')}
                 </section>
                 <section class="authority-card">
                     <h3>活跃任务</h3>
@@ -552,12 +557,12 @@ class SecurityCenterView {
                 <section class="authority-card authority-card--wide authority-card--accent">
                     <div class="authority-hero">
                         <div>
-                            <div class="authority-eyebrow">Extension Detail</div>
+                            <div class="authority-eyebrow">扩展详情</div>
                             <div class="authority-hero__title">${escapeHtml(detail.extension.displayName)}</div>
                             <div class="authority-muted">${escapeHtml(detail.extension.id)}</div>
                             <div class="authority-chip-row">
                                 <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                                <span class="authority-pill authority-pill--medium">${escapeHtml(detail.extension.installType)}</span>
+                                <span class="authority-pill authority-pill--medium">${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</span>
                                 <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
                             </div>
                         </div>
@@ -575,7 +580,7 @@ class SecurityCenterView {
                 <section class="authority-card">
                     <div class="authority-card__title">
                         <h3>资源占用</h3>
-                        <div class="authority-muted">KV、Blob、SQL 与 fs.private</div>
+                        <div class="authority-muted">键值数据、文件、数据库与私有文件区</div>
                     </div>
                     ${renderStorageSummary(storage)}
                 </section>
@@ -584,7 +589,7 @@ class SecurityCenterView {
                         <h3>声明权限</h3>
                         <div class="authority-muted">扩展初始化时声明的能力范围</div>
                     </div>
-                    ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展尚未声明任何 Authority 权限。')}
+                    ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展还没有声明任何权限。')}
                 </section>
                 <section class="authority-card">
                     <div class="authority-card__title">
@@ -609,10 +614,10 @@ class SecurityCenterView {
                 </section>
                 <section class="authority-card">
                     <div class="authority-card__title">
-                        <h3>SQL 数据库</h3>
+                        <h3>私有数据库</h3>
                         <div class="authority-muted">该扩展创建的私有数据库</div>
                     </div>
-                    ${renderDatabaseList(databases, '该扩展还没有私有 SQL 数据库。')}
+                    ${renderDatabaseList(databases, '该扩展还没有私有数据库。')}
                 </section>
                 <section class="authority-card">
                     <div class="authority-card__title">
@@ -624,7 +629,7 @@ class SecurityCenterView {
                 <section class="authority-card">
                     <div class="authority-card__title">
                         <h3>最近能力调用</h3>
-                        <div class="authority-muted">SDK 到服务端能力的使用记录</div>
+                        <div class="authority-muted">扩展调用系统能力的最近记录</div>
                     </div>
                     ${renderActivityList(usage, '暂无能力调用记录。')}
                 </section>
@@ -660,15 +665,15 @@ class SecurityCenterView {
             <section class="authority-card">
                 <div class="authority-card__header">
                     <div>
-                        <h3>扩展 SQL 数据库</h3>
-                        <div class="authority-muted">按扩展汇总当前用户的 private SQL 数据库文件。</div>
+                        <h3>扩展私有数据库</h3>
+                        <div class="authority-muted">按扩展汇总当前用户的私有数据库文件。</div>
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>
                         <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(totalDatabaseSize))}</span>
                     </div>
                 </div>
-                ${renderDatabaseGroupList(databaseGroups, '当前没有发现任何扩展 SQL 数据库。')}
+                ${renderDatabaseGroupList(databaseGroups, '当前没有发现任何扩展私有数据库。')}
             </section>
         `;
     }
@@ -726,8 +731,8 @@ class SecurityCenterView {
             <div class="authority-policy-layout">
                 <section class="authority-card">
                     <div class="authority-card__title">
-                        <h3>全局默认权限矩阵</h3>
-                        <div class="authority-muted">设置每类 Authority 能力的默认决策</div>
+                        <h3>全局默认权限</h3>
+                        <div class="authority-muted">为每类能力设置默认处理方式</div>
                     </div>
                     <div class="authority-policy-defaults">
                         ${RESOURCE_OPTIONS.map(resource => `
@@ -747,8 +752,8 @@ class SecurityCenterView {
                 <section class="authority-card">
                     <div class="authority-card__header">
                         <div>
-                            <h3>扩展覆盖策略</h3>
-                            <div class="authority-muted">按扩展和目标维度覆盖默认策略</div>
+                            <h3>扩展单独规则</h3>
+                            <div class="authority-muted">按扩展和目标覆盖全局默认设置</div>
                         </div>
                         <button type="button" class="menu_button" data-action="save-policies">保存策略</button>
                     </div>
@@ -768,11 +773,11 @@ class SecurityCenterView {
                     <div class="authority-card authority-card--warning">
                         <div class="authority-card__title">
                             <h3>生效预览</h3>
-                            <div class="authority-muted">扩展覆盖优先于全局默认策略；blocked 会直接封锁请求。</div>
+                            <div class="authority-muted">扩展单独规则优先于全局默认设置；封锁会直接拒绝请求。</div>
                         </div>
                         <div class="authority-chip-row">
                             <span class="authority-pill authority-pill--prompt">默认询问</span>
-                            <span class="authority-pill authority-pill--granted">允许后持久化</span>
+                            <span class="authority-pill authority-pill--granted">允许并记住</span>
                             <span class="authority-pill authority-pill--blocked">管理员封锁</span>
                         </div>
                     </div>
@@ -787,7 +792,7 @@ class SecurityCenterView {
                 <select data-policy-field="resource">
                     ${RESOURCE_OPTIONS.map(resource => `<option value="${resource}" ${entry?.resource === resource ? 'selected' : ''}>${escapeHtml(getResourceLabel(resource))}</option>`).join('')}
                 </select>
-                <input data-policy-field="target" type="text" value="${escapeHtml(entry?.target ?? '*')}" placeholder="目标，如 hostname 或 channel" />
+                <input data-policy-field="target" type="text" value="${escapeHtml(entry?.target ?? '*')}" placeholder="目标，例如网站域名或频道名" />
                 <select data-policy-field="status">
                     ${STATUS_OPTIONS.map(status => `<option value="${status}" ${entry?.status === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
                 </select>

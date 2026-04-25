@@ -11,7 +11,7 @@ export const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
     version: AUTHORITY_EXTENSION_VERSION,
     installType: 'local',
     declaredPermissions: {},
-    uiLabel: 'Authority Security Center',
+    uiLabel: '扩展权限中心',
 };
 
 export const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];

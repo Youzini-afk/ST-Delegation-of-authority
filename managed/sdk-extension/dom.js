@@ -25,7 +25,7 @@ export function clearChildren(element) {
 }
 export function formatDate(value) {
     if (!value) {
-        return 'N/A';
+        return '未记录';
     }
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {

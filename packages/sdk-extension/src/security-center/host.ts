@@ -63,14 +63,14 @@ async function doBootstrapSecurityCenter(createView: SecurityCenterViewFactory):
             menu.appendChild(button);
         }
     } catch (error) {
-        console.warn('Authority Security Center menu bootstrap failed:', error);
+        console.warn('扩展权限中心菜单入口挂载失败：', error);
     }
 
     try {
         await waitForElement('#top-settings-holder');
         mountSecurityCenterTopBarButton(createView);
     } catch (error) {
-        console.warn('Authority Security Center top bar launcher bootstrap failed:', error);
+        console.warn('扩展权限中心顶部入口挂载失败：', error);
     }
 }
 
@@ -126,7 +126,7 @@ function mountSecurityCenterTopBarButton(createView: SecurityCenterViewFactory):
     const drawer = htmlToElement(`
         <div id="${TOP_BAR_DRAWER_ID}" class="drawer authority-top-drawer">
             <div class="drawer-toggle drawer-header authority-top-drawer__toggle">
-                <div id="${TOP_BAR_ICON_ID}" class="drawer-icon fa-solid fa-shield-halved fa-fw closedIcon" title="Authority Security Center" data-i18n="[title]Authority Security Center"></div>
+                <div id="${TOP_BAR_ICON_ID}" class="drawer-icon fa-solid fa-shield-halved fa-fw closedIcon" title="扩展权限中心" data-i18n="[title]扩展权限中心"></div>
             </div>
             <div id="${TOP_BAR_CONTENT_ID}" class="drawer-content closedDrawer authority-drawer-content">
                 <div class="authority-drawer-content__body" data-role="security-center-content"></div>

@@ -62,21 +62,21 @@ function setField(root: HTMLElement, name: string, value: string): void {
 function getResourceLabel(resource: PermissionResource): string {
     switch (resource) {
         case 'storage.kv':
-            return 'KV 存储';
+            return '键值数据';
         case 'storage.blob':
-            return 'Blob 存储';
+            return '文件存储';
         case 'fs.private':
-            return '私有文件夹';
+            return '私有文件';
         case 'sql.private':
-            return '私有 SQL 数据库';
+            return '私有数据库';
         case 'http.fetch':
-            return '外部 HTTP 访问';
+            return '网络访问';
         case 'jobs.background':
             return '后台任务';
         case 'events.stream':
-            return '事件流订阅';
+            return '消息通道';
         default:
-            return resource;
+            return '未分类能力';
     }
 }
 
@@ -84,7 +84,7 @@ function getTargetLabel(resource: PermissionResource, target: string): string {
     if (resource === 'fs.private' && (!target || target === '*')) {
         return '插件私有目录';
     }
-    return target || 'default';
+    return target || '默认';
 }
 
 function getDefaultReason(resource: PermissionResource): string {
@@ -103,6 +103,6 @@ function getRiskLabel(riskLevel: RiskLevel): string {
         case 'high':
             return '高风险';
         default:
-            return riskLevel;
+            return '风险未知';
     }
 }

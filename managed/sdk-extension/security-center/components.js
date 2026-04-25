@@ -1,5 +1,5 @@
 import { escapeHtml, formatDate, formatJson } from '../dom.js';
-import { formatBytes, getActivityKindLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, } from './formatters.js';
+import { formatBytes, getActivityKindLabel, getActivityMessageLabel, getJobStatusLabel, getJobTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, } from './formatters.js';
 export function renderKpiCard(label, value, meta) {
     return `
         <div class="authority-kpi-card">
@@ -25,10 +25,11 @@ export function renderCapabilityMatrix(resources) {
         const risk = getRiskLevel(resource);
         return `
                     <div class="authority-capability-chip">
-                        <strong>${escapeHtml(resource)}</strong>
+                        <strong>${escapeHtml(getResourceLabel(resource))}</strong>
+                        <div class="authority-muted">${escapeHtml(resource)}</div>
                         <div class="authority-chip-row">
                             <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                            <span class="authority-pill authority-pill--usage">${escapeHtml(getResourceLabel(resource))}</span>
+                            <span class="authority-pill authority-pill--usage">权限标识</span>
                         </div>
                     </div>
                 `;
@@ -77,7 +78,7 @@ export function renderActivityList(items, emptyText) {
                         <span>${escapeHtml(item.extensionId)}</span>
                         <span>${escapeHtml(formatDate(item.timestamp))}</span>
                     </div>
-                    <div>${escapeHtml(item.message)}</div>
+                    <div>${escapeHtml(getActivityMessageLabel(item.message))}</div>
                     ${item.details ? `<pre class="authority-code-block">${escapeHtml(formatJson(item.details))}</pre>` : ''}
                 </div>
             `).join('')}
@@ -93,12 +94,12 @@ export function renderJobList(items, emptyText) {
             ${items.map(item => `
                 <div class="authority-list-card authority-list-card--column">
                     <div class="authority-list-card__meta">
-                        <span class="authority-pill authority-pill--${item.status}">${escapeHtml(item.status)}</span>
-                        <span>${escapeHtml(item.type)}</span>
+                        <span class="authority-pill authority-pill--${item.status}">${escapeHtml(getJobStatusLabel(item.status))}</span>
+                        <span>${escapeHtml(getJobTypeLabel(item.type))}</span>
                         <span>${escapeHtml(formatDate(item.updatedAt))}</span>
                     </div>
-                    <div>${escapeHtml(item.summary ?? '无摘要')}</div>
-                    ${item.error ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(item.error)}</div>` : ''}
+                    <div>${escapeHtml(item.summary ? getActivityMessageLabel(item.summary) : '暂无说明')}</div>
+                    ${item.error ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(getSystemMessageLabel(item.error))}</div>` : ''}
                 </div>
             `).join('')}
         </div>
@@ -164,7 +165,7 @@ export function renderDatabaseGroupList(items, emptyText) {
                             <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
                         </div>
                     </div>
-                    ${renderDatabaseList(item.databases, '该扩展还没有私有 SQL 数据库。')}
+                    ${renderDatabaseList(item.databases, '该扩展还没有私有数据库。')}
                 </div>
             `).join('')}
         </div>
@@ -173,12 +174,12 @@ export function renderDatabaseGroupList(items, emptyText) {
 export function renderStorageSummary(storage) {
     return `
         <div class="authority-storage-grid">
-            ${renderStorageCard('KV 条目', String(storage.kvEntries), '键值状态')}
-            ${renderStorageCard('Blob 文件', String(storage.blobCount), formatBytes(storage.blobBytes))}
-            ${renderStorageCard('SQL 数据库', String(storage.databaseCount), formatBytes(storage.databaseBytes))}
+            ${renderStorageCard('键值条目', String(storage.kvEntries), '扩展保存的键值数据')}
+            ${renderStorageCard('文件数量', String(storage.blobCount), formatBytes(storage.blobBytes))}
+            ${renderStorageCard('数据库数量', String(storage.databaseCount), formatBytes(storage.databaseBytes))}
             ${renderStorageCard('私有文件', String(storage.files.fileCount), `${storage.files.directoryCount} 个目录`)}
-            ${renderStorageCard('文件体积', formatBytes(storage.files.totalSizeBytes), 'fs.private')}
-            ${renderStorageCard('最近文件更新', storage.files.latestUpdatedAt ? formatDate(storage.files.latestUpdatedAt) : 'n/a', '最后写入时间')}
+            ${renderStorageCard('私有文件体积', formatBytes(storage.files.totalSizeBytes), '仅统计私有文件区')}
+            ${renderStorageCard('最近文件更新', storage.files.latestUpdatedAt ? formatDate(storage.files.latestUpdatedAt) : '未记录', '最后一次写入时间')}
         </div>
     `;
 }
