@@ -127,6 +127,7 @@ interface SecurityCenterState {
     details: Map<string, ExtensionDetailResponse>;
     selectedExtensionId: string | null;
     selectedTab: CenterTab;
+    extensionFilter: string;
     policies: PoliciesResponse | null;
     policyEditorExtensionId: string | null;
 }
@@ -201,6 +202,7 @@ class SecurityCenterView {
             details: new Map(),
             selectedExtensionId: focusExtensionId ?? null,
             selectedTab: focusExtensionId ? 'detail' : 'overview',
+            extensionFilter: '',
             policies: null,
             policyEditorExtensionId: focusExtensionId ?? null,
         };
@@ -270,6 +272,18 @@ class SecurityCenterView {
             const savePoliciesButton = target.closest<HTMLElement>('[data-action="save-policies"]');
             if (savePoliciesButton) {
                 void this.savePolicies();
+            }
+        });
+
+        this.root.addEventListener('input', event => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)) {
+                return;
+            }
+
+            if (target.matches('[data-role="extension-search"]')) {
+                this.state.extensionFilter = target.value.trim().toLowerCase();
+                this.renderExtensionList();
             }
         });
 
@@ -440,12 +454,23 @@ class SecurityCenterView {
 
     private renderHeader(): void {
         const status = this.root.querySelector<HTMLElement>('[data-role="status"]');
+        const badges = this.root.querySelector<HTMLElement>('[data-role="health-badges"]');
         if (!status) {
             return;
         }
 
+        if (badges) {
+            const probe = this.state.probe;
+            badges.innerHTML = `
+                <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">SDK ${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '同步中')}</span>
+                <span class="authority-pill authority-pill--${escapeHtml(probe?.core.state ?? 'starting')}">Core ${escapeHtml(getCoreStateLabel(probe?.core.state))}</span>
+                <span class="authority-pill authority-pill--medium">${escapeHtml(probe?.coreArtifactPlatform ?? 'platform')}</span>
+                <span class="authority-pill authority-pill--admin">${escapeHtml(this.state.isAdmin ? 'Admin Mode' : 'User Mode')}</span>
+            `;
+        }
+
         if (this.state.loading) {
-            status.innerHTML = '<div class="authority-inline-note">正在同步 Authority 状态...</div>';
+            status.innerHTML = '<div class="authority-inline-note">正在同步 Authority 状态、扩展记录与策略数据...</div>';
             return;
         }
 
@@ -464,14 +489,14 @@ class SecurityCenterView {
         const core = this.state.probe?.core;
         status.innerHTML = `
             <div class="authority-summary-strip">
-                <div><strong>当前用户</strong><div>${escapeHtml(user?.handle ?? 'unknown')}</div></div>
-                <div><strong>工作模式</strong><div>${escapeHtml(user?.isAdmin ? '管理员模式' : '普通用户模式')}</div></div>
-                <div><strong>扩展数量</strong><div>${this.state.extensions.length}</div></div>
-                <div><strong>数据库数量</strong><div>${databaseCount}</div></div>
-                <div><strong>活跃任务</strong><div>${activeJobCount}</div></div>
-                <div><strong>Core 状态</strong><div>${escapeHtml(getCoreStateLabel(core?.state))}</div></div>
+                ${renderKpiCard('当前用户', user?.handle ?? 'unknown', user?.isAdmin ? '管理员模式' : '普通用户模式')}
+                ${renderKpiCard('扩展数量', String(this.state.extensions.length), '已注册 Authority 扩展')}
+                ${renderKpiCard('数据库数量', String(databaseCount), '当前用户私有 SQL')}
+                ${renderKpiCard('活跃任务', String(activeJobCount), 'queued / running')}
+                ${renderKpiCard('Core 状态', getCoreStateLabel(core?.state), core?.port ? `127.0.0.1:${core.port}` : '端口未分配')}
+                ${renderKpiCard('错误记录', String(issueCount), '最近聚合错误')}
             </div>
-            ${this.state.probe ? `<div class="authority-inline-note">SDK ${escapeHtml(getInstallStatusLabel(this.state.probe.installStatus))} · 插件 ${escapeHtml(this.state.probe.pluginVersion)} · Core ${escapeHtml(this.state.probe.core.version ?? 'unknown')} · 错误 ${issueCount}</div>` : ''}
+            ${this.state.probe ? `<div class="authority-inline-note">SDK ${escapeHtml(getInstallStatusLabel(this.state.probe.installStatus))} · 插件 ${escapeHtml(this.state.probe.pluginVersion)} · Core ${escapeHtml(this.state.probe.core.version ?? 'unknown')} · 平台 ${escapeHtml(this.state.probe.coreArtifactPlatforms?.join(', ') || 'unknown')}</div>` : ''}
             ${this.state.probe?.installMessage ? `<div class="authority-inline-note">${escapeHtml(this.state.probe.installMessage)}</div>` : ''}
             ${this.state.probe?.core.lastError ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(this.state.probe.core.lastError)}</div>` : ''}
         `;
@@ -487,25 +512,46 @@ class SecurityCenterView {
 
     private renderExtensionList(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="extension-list"]');
+        const count = this.root.querySelector<HTMLElement>('[data-role="extension-count"]');
         if (!container) {
             return;
         }
 
         clearChildren(container);
-        if (this.state.extensions.length === 0) {
+        const filter = this.state.extensionFilter;
+        const extensions = filter
+            ? this.state.extensions.filter(extension => `${extension.displayName} ${extension.id}`.toLowerCase().includes(filter))
+            : this.state.extensions;
+        if (count) {
+            count.textContent = String(extensions.length);
+        }
+
+        if (extensions.length === 0) {
             container.innerHTML = '<div class="authority-empty">还没有扩展通过 Authority 完成初始化。</div>';
             return;
         }
 
-        for (const extension of this.state.extensions) {
+        for (const extension of extensions) {
+            const detail = this.state.details.get(extension.id);
+            const declared = getDeclaredPermissionLabels(extension.declaredPermissions);
+            const risk = getExtensionRiskLevel(extension);
+            const errorCount = detail?.activity.errors.length ?? 0;
             const item = document.createElement('button');
             item.type = 'button';
             item.className = 'authority-extension-item';
             item.dataset.extensionId = extension.id;
             item.innerHTML = `
-                <span class="authority-extension-item__title">${escapeHtml(extension.displayName)}</span>
+                <span class="authority-extension-item__top">
+                    <span class="authority-extension-item__title">${escapeHtml(extension.displayName)}</span>
+                    <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
+                </span>
                 <span class="authority-extension-item__meta">${escapeHtml(extension.id)}</span>
-                <span class="authority-extension-item__stats">已授权 ${extension.grantedCount} / 已拒绝 ${extension.deniedCount}</span>
+                <span class="authority-extension-item__stats">
+                    <span class="authority-pill authority-pill--granted">允许 ${extension.grantedCount}</span>
+                    <span class="authority-pill authority-pill--denied">拒绝 ${extension.deniedCount}</span>
+                    <span class="authority-pill authority-pill--prompt">声明 ${declared.length}</span>
+                    ${errorCount > 0 ? `<span class="authority-pill authority-pill--error">错误 ${errorCount}</span>` : ''}
+                </span>
             `;
             item.classList.toggle('authority-extension-item--active', extension.id === this.state.selectedExtensionId);
             container.appendChild(item);
@@ -533,11 +579,31 @@ class SecurityCenterView {
         const totalGrantCount = [...this.state.details.values()].reduce((sum, detail) => sum + detail.grants.length, 0);
         const totalPolicyCount = [...this.state.details.values()].reduce((sum, detail) => sum + detail.policies.length, 0);
         const core = this.state.probe?.core;
+        const totalBlobBytes = this.state.extensions.reduce((sum, item) => sum + item.storage.blobBytes, 0);
+        const totalPrivateFileBytes = this.state.extensions.reduce((sum, item) => sum + item.storage.files.totalSizeBytes, 0);
+        const recentActivity = [...this.state.details.values()]
+            .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors])
+            .sort(sortByTimestampDesc)
+            .slice(0, 8);
 
         container.innerHTML = `
-            <div class="authority-card-grid">
-                <section class="authority-card">
-                    <h3>运行状态</h3>
+            <div class="authority-kpi-grid">
+                ${renderKpiCard('扩展数量', String(this.state.extensions.length), '已注册扩展')}
+                ${renderKpiCard('授权记录', String(totalGrantCount), '允许与拒绝合计')}
+                ${renderKpiCard('策略覆盖', String(totalPolicyCount), '默认与扩展覆盖')}
+                ${renderKpiCard('活跃任务', String(activeJobs.length), 'queued / running')}
+                ${renderKpiCard('数据库体积', formatBytes(totalDatabaseSize), `${totalDatabaseCount} 个数据库`)}
+                ${renderKpiCard('最近错误', String(recentErrors.length), '需要排查的异常')}
+            </div>
+            <div class="authority-dashboard-grid">
+                <section class="authority-card authority-runtime-card">
+                    <div class="authority-card__header">
+                        <div class="authority-card__title">
+                            <h3>运行状态</h3>
+                            <div class="authority-muted">插件安装、core 运行时与内置平台</div>
+                        </div>
+                        <span class="authority-pill authority-pill--${escapeHtml(core?.state ?? 'starting')}">${escapeHtml(getCoreStateLabel(core?.state))}</span>
+                    </div>
                     <div class="authority-kv-grid">
                         <div><strong>插件版本</strong><div>${escapeHtml(this.state.probe?.pluginVersion ?? 'unknown')}</div></div>
                         <div><strong>SDK 部署</strong><div>${escapeHtml(this.state.probe ? getInstallStatusLabel(this.state.probe.installStatus) : 'unknown')}</div></div>
@@ -554,15 +620,30 @@ class SecurityCenterView {
                     </div>
                 </section>
                 <section class="authority-card">
-                    <h3>控制面概览</h3>
-                    <div class="authority-summary-strip">
-                        <div><strong>扩展</strong><div>${this.state.extensions.length}</div></div>
-                        <div><strong>授权记录</strong><div>${totalGrantCount}</div></div>
-                        <div><strong>策略覆盖</strong><div>${totalPolicyCount}</div></div>
-                        <div><strong>数据库</strong><div>${totalDatabaseCount}</div></div>
-                        <div><strong>数据库体积</strong><div>${escapeHtml(formatBytes(totalDatabaseSize))}</div></div>
-                        <div><strong>最近错误</strong><div>${recentErrors.length}</div></div>
+                    <div class="authority-card__title">
+                        <h3>能力矩阵</h3>
+                        <div class="authority-muted">当前 Authority 可治理的服务端能力</div>
                     </div>
+                    ${renderCapabilityMatrix(RESOURCE_OPTIONS)}
+                </section>
+                <section class="authority-card">
+                    <div class="authority-card__title">
+                        <h3>存储汇总</h3>
+                        <div class="authority-muted">KV、Blob、SQL 与私有文件夹聚合</div>
+                    </div>
+                    <div class="authority-storage-grid">
+                        ${renderStorageCard('KV 条目', String(this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)), '扩展键值状态')}
+                        ${renderStorageCard('Blob 体积', formatBytes(totalBlobBytes), '二进制对象存储')}
+                        ${renderStorageCard('SQL 体积', formatBytes(totalDatabaseSize), `${totalDatabaseCount} 个数据库`)}
+                        ${renderStorageCard('私有文件', formatBytes(totalPrivateFileBytes), 'fs.private 作用域')}
+                    </div>
+                </section>
+                <section class="authority-card">
+                    <div class="authority-card__title">
+                        <h3>最近活动</h3>
+                        <div class="authority-muted">权限请求、能力调用与错误</div>
+                    </div>
+                    ${renderActivityList(recentActivity, '暂无活动记录。')}
                 </section>
                 <section class="authority-card">
                     <h3>SQL 数据库概览</h3>
@@ -604,62 +685,101 @@ class SecurityCenterView {
         const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
         const databases = [...detail.databases].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         const storage = detail.storage;
+        const risk = getExtensionRiskLevel(detail.extension);
 
         container.innerHTML = `
             <div class="authority-card-grid">
-                <section class="authority-card">
-                    <div class="authority-card__header">
+                <section class="authority-card authority-card--wide authority-card--accent">
+                    <div class="authority-hero">
                         <div>
-                            <h3>${escapeHtml(detail.extension.displayName)}</h3>
+                            <div class="authority-eyebrow">Extension Detail</div>
+                            <div class="authority-hero__title">${escapeHtml(detail.extension.displayName)}</div>
                             <div class="authority-muted">${escapeHtml(detail.extension.id)}</div>
+                            <div class="authority-chip-row">
+                                <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
+                                <span class="authority-pill authority-pill--medium">${escapeHtml(detail.extension.installType)}</span>
+                                <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
+                            </div>
                         </div>
-                        <button type="button" class="menu_button" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
+                        <button type="button" class="menu_button authority-primary-action" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
                     </div>
                     <div class="authority-kv-grid">
-                        <div><strong>版本</strong><div>${escapeHtml(detail.extension.version)}</div></div>
-                        <div><strong>安装类型</strong><div>${escapeHtml(detail.extension.installType)}</div></div>
                         <div><strong>首次见到</strong><div>${escapeHtml(formatDate(detail.extension.firstSeenAt))}</div></div>
                         <div><strong>最近活跃</strong><div>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</div></div>
+                        <div><strong>授权记录</strong><div>${detail.grants.length}</div></div>
+                        <div><strong>策略覆盖</strong><div>${detail.policies.length}</div></div>
+                        <div><strong>数据库</strong><div>${detail.databases.length}</div></div>
+                        <div><strong>后台任务</strong><div>${detail.jobs.length}</div></div>
                     </div>
                 </section>
                 <section class="authority-card">
-                    <h3>资源占用</h3>
+                    <div class="authority-card__title">
+                        <h3>资源占用</h3>
+                        <div class="authority-muted">KV、Blob、SQL 与 fs.private</div>
+                    </div>
                     ${renderStorageSummary(storage)}
                 </section>
                 <section class="authority-card">
-                    <h3>声明权限</h3>
+                    <div class="authority-card__title">
+                        <h3>声明权限</h3>
+                        <div class="authority-muted">扩展初始化时声明的能力范围</div>
+                    </div>
                     ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展尚未声明任何 Authority 权限。')}
                 </section>
                 <section class="authority-card">
-                    <h3>当前授权</h3>
+                    <div class="authority-card__title">
+                        <h3>当前授权</h3>
+                        <div class="authority-muted">用户已允许的持久授权</div>
+                    </div>
                     ${renderGrantList(detail.extension.id, granted, '当前没有已授予的持久化授权。')}
                 </section>
                 <section class="authority-card">
-                    <h3>被拒绝权限</h3>
+                    <div class="authority-card__title">
+                        <h3>被拒绝权限</h3>
+                        <div class="authority-muted">用户拒绝或管理员封锁的请求</div>
+                    </div>
                     ${renderGrantList(detail.extension.id, denied, '当前没有持久化拒绝记录。')}
                 </section>
                 <section class="authority-card">
-                    <h3>策略覆盖</h3>
+                    <div class="authority-card__title">
+                        <h3>策略覆盖</h3>
+                        <div class="authority-muted">管理员针对该扩展设置的覆盖规则</div>
+                    </div>
                     ${renderPolicyList(detail.policies, '当前没有针对该扩展的策略覆盖。')}
                 </section>
                 <section class="authority-card">
-                    <h3>SQL 数据库</h3>
+                    <div class="authority-card__title">
+                        <h3>SQL 数据库</h3>
+                        <div class="authority-muted">该扩展创建的私有数据库</div>
+                    </div>
                     ${renderDatabaseList(databases, '该扩展还没有私有 SQL 数据库。')}
                 </section>
                 <section class="authority-card">
-                    <h3>最近权限活动</h3>
+                    <div class="authority-card__title">
+                        <h3>最近权限活动</h3>
+                        <div class="authority-muted">权限请求与决策轨迹</div>
+                    </div>
                     ${renderActivityList(permissions, '暂无权限活动。')}
                 </section>
                 <section class="authority-card">
-                    <h3>最近能力调用</h3>
+                    <div class="authority-card__title">
+                        <h3>最近能力调用</h3>
+                        <div class="authority-muted">SDK 到服务端能力的使用记录</div>
+                    </div>
                     ${renderActivityList(usage, '暂无能力调用记录。')}
                 </section>
                 <section class="authority-card">
-                    <h3>最近任务</h3>
+                    <div class="authority-card__title">
+                        <h3>最近任务</h3>
+                        <div class="authority-muted">后台任务队列状态</div>
+                    </div>
                     ${renderJobList(jobs, '暂无后台任务。')}
                 </section>
                 <section class="authority-card">
-                    <h3>最近错误</h3>
+                    <div class="authority-card__title">
+                        <h3>最近错误</h3>
+                        <div class="authority-muted">需要排查的内部异常</div>
+                    </div>
                     ${renderActivityList(errors, '暂无内部错误记录。')}
                 </section>
             </div>
@@ -742,13 +862,21 @@ class SecurityCenterView {
         const extensionId = this.state.policyEditorExtensionId ?? this.state.selectedExtensionId ?? this.state.extensions[0]?.id ?? '';
         const overrides = extensionId ? Object.values(policies.extensions[extensionId] ?? {}) : [];
         container.innerHTML = `
-            <div class="authority-card-grid">
+            <div class="authority-inline-note authority-inline-note--warning">管理员策略会覆盖扩展请求与用户授权。请谨慎将高风险能力设置为默认允许。</div>
+            <div class="authority-policy-layout">
                 <section class="authority-card">
-                    <h3>全局默认策略</h3>
+                    <div class="authority-card__title">
+                        <h3>全局默认权限矩阵</h3>
+                        <div class="authority-muted">设置每类 Authority 能力的默认决策</div>
+                    </div>
                     <div class="authority-policy-defaults">
                         ${RESOURCE_OPTIONS.map(resource => `
-                            <label class="authority-policy-field">
-                                <span>${escapeHtml(getResourceLabel(resource))}</span>
+                            <label class="authority-policy-default-row">
+                                <span>
+                                    <strong>${escapeHtml(getResourceLabel(resource))}</strong>
+                                    <div class="authority-muted">${escapeHtml(resource)}</div>
+                                </span>
+                                <span class="authority-pill authority-pill--${getRiskLevel(resource)}">${escapeHtml(getRiskLabel(getRiskLevel(resource)))}</span>
                                 <select data-policy-default="${escapeHtml(resource)}">
                                     ${STATUS_OPTIONS.map(status => `<option value="${status}" ${policies.defaults[resource] === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
                                 </select>
@@ -776,6 +904,17 @@ class SecurityCenterView {
                     <div class="authority-policy-actions">
                         <button type="button" class="menu_button" data-action="add-policy-row">新增覆盖规则</button>
                         <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>
+                    </div>
+                    <div class="authority-card authority-card--warning">
+                        <div class="authority-card__title">
+                            <h3>生效预览</h3>
+                            <div class="authority-muted">扩展覆盖优先于全局默认策略；blocked 会直接封锁请求。</div>
+                        </div>
+                        <div class="authority-chip-row">
+                            <span class="authority-pill authority-pill--prompt">默认询问</span>
+                            <span class="authority-pill authority-pill--granted">允许后持久化</span>
+                            <span class="authority-pill authority-pill--blocked">管理员封锁</span>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -829,11 +968,50 @@ class SecurityCenterView {
     }
 }
 
+function renderKpiCard(label: string, value: string, meta: string): string {
+    return `
+        <div class="authority-kpi-card">
+            <div class="authority-kpi-card__label">${escapeHtml(label)}</div>
+            <div class="authority-kpi-card__value">${escapeHtml(value)}</div>
+            <div class="authority-kpi-card__meta">${escapeHtml(meta)}</div>
+        </div>
+    `;
+}
+
+function renderStorageCard(label: string, value: string, meta: string): string {
+    return `
+        <div class="authority-storage-card">
+            <div class="authority-storage-card__label">${escapeHtml(label)}</div>
+            <div class="authority-storage-card__value">${escapeHtml(value)}</div>
+            <div class="authority-storage-card__meta">${escapeHtml(meta)}</div>
+        </div>
+    `;
+}
+
+function renderCapabilityMatrix(resources: PermissionResource[]): string {
+    return `
+        <div class="authority-capability-grid">
+            ${resources.map(resource => {
+        const risk = getRiskLevel(resource);
+        return `
+                    <div class="authority-capability-chip">
+                        <strong>${escapeHtml(resource)}</strong>
+                        <div class="authority-chip-row">
+                            <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
+                            <span class="authority-pill authority-pill--usage">${escapeHtml(getResourceLabel(resource))}</span>
+                        </div>
+                    </div>
+                `;
+    }).join('')}
+        </div>
+    `;
+}
+
 function renderStringList(items: string[], emptyText: string): string {
     if (items.length === 0) {
         return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
     }
-    return `<ul class="authority-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+    return `<div class="authority-chip-row">${items.map(item => `<span class="authority-pill authority-pill--prompt">${escapeHtml(item)}</span>`).join('')}</div>`;
 }
 
 function renderGrantList(extensionId: string, grants: AuthorityGrant[], emptyText: string): string {
@@ -849,6 +1027,7 @@ function renderGrantList(extensionId: string, grants: AuthorityGrant[], emptyTex
                         <div class="authority-muted">${escapeHtml(grant.target)}</div>
                     </div>
                     <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--${getRiskLevel(grant.resource)}">${escapeHtml(getRiskLabel(getRiskLevel(grant.resource)))}</span>
                         <span class="authority-pill authority-pill--${grant.status}">${escapeHtml(getStatusLabel(grant.status))}</span>
                         <button type="button" class="menu_button" data-action="reset-grant" data-extension-id="${escapeHtml(extensionId)}" data-grant-key="${escapeHtml(grant.key)}">重置</button>
                     </div>
@@ -971,16 +1150,13 @@ function renderDatabaseGroupList(items: DatabaseGroupSummary[], emptyText: strin
 
 function renderStorageSummary(storage: ExtensionStorageSummary): string {
     return `
-        <div class="authority-kv-grid">
-            <div><strong>KV 条目</strong><div>${storage.kvEntries}</div></div>
-            <div><strong>Blob 文件</strong><div>${storage.blobCount}</div></div>
-            <div><strong>Blob 体积</strong><div>${escapeHtml(formatBytes(storage.blobBytes))}</div></div>
-            <div><strong>SQL 数据库</strong><div>${storage.databaseCount}</div></div>
-            <div><strong>SQL 体积</strong><div>${escapeHtml(formatBytes(storage.databaseBytes))}</div></div>
-            <div><strong>私有文件</strong><div>${storage.files.fileCount}</div></div>
-            <div><strong>私有目录</strong><div>${storage.files.directoryCount}</div></div>
-            <div><strong>文件体积</strong><div>${escapeHtml(formatBytes(storage.files.totalSizeBytes))}</div></div>
-            <div><strong>最近文件更新</strong><div>${escapeHtml(storage.files.latestUpdatedAt ? formatDate(storage.files.latestUpdatedAt) : 'n/a')}</div></div>
+        <div class="authority-storage-grid">
+            ${renderStorageCard('KV 条目', String(storage.kvEntries), '键值状态')}
+            ${renderStorageCard('Blob 文件', String(storage.blobCount), formatBytes(storage.blobBytes))}
+            ${renderStorageCard('SQL 数据库', String(storage.databaseCount), formatBytes(storage.databaseBytes))}
+            ${renderStorageCard('私有文件', String(storage.files.fileCount), `${storage.files.directoryCount} 个目录`)}
+            ${renderStorageCard('文件体积', formatBytes(storage.files.totalSizeBytes), 'fs.private')}
+            ${renderStorageCard('最近文件更新', storage.files.latestUpdatedAt ? formatDate(storage.files.latestUpdatedAt) : 'n/a', '最后写入时间')}
         </div>
     `;
 }
@@ -1095,6 +1271,23 @@ function getRiskLevel(resource: PermissionResource): 'low' | 'medium' | 'high' {
             return 'medium';
         default:
             return 'high';
+    }
+}
+
+function getExtensionRiskLevel(extension: ExtensionSummary | ControlExtensionRecord): 'low' | 'medium' | 'high' {
+    const declared = getDeclaredPermissionLabels(extension.declaredPermissions);
+    if (declared.some(item => item.includes('sql.private') || item.includes('http.fetch') || item.includes('jobs.background') || item.includes('fs.private'))) {
+        return 'medium';
+    }
+    return declared.length > 0 ? 'low' : 'low';
+}
+
+function getRiskLabel(risk: 'low' | 'medium' | 'high'): string {
+    switch (risk) {
+        case 'low': return '低风险';
+        case 'medium': return '中风险';
+        case 'high': return '高风险';
+        default: return risk;
     }
 }
 

@@ -1,40 +1,53 @@
 <div class="authority-panel authority-panel--security-center">
-  <div class="authority-panel__header">
-    <div>
-      <h2>Authority Security Center</h2>
-      <p>统一管理扩展、授权策略、SQL 数据库、后台作业与错误排障。</p>
-    </div>
-    <button type="button" class="menu_button" data-action="refresh">刷新</button>
-  </div>
-  <div data-role="status"></div>
-  <div class="authority-panel__body">
-    <aside class="authority-sidebar">
-      <h3>扩展列表</h3>
-      <div class="authority-sidebar__list" data-role="extension-list"></div>
-    </aside>
-    <main class="authority-main">
-      <div class="authority-tabs">
-        <button type="button" class="authority-tab" data-tab="overview">总览</button>
-        <button type="button" class="authority-tab" data-tab="detail">扩展详情</button>
-        <button type="button" class="authority-tab" data-tab="databases">SQL 数据库</button>
-        <button type="button" class="authority-tab" data-tab="activity">活动与排障</button>
-        <button type="button" class="authority-tab" data-tab="policies">管理员策略</button>
+  <div class="authority-console">
+    <div class="authority-panel__header">
+      <div class="authority-title-block">
+        <div class="authority-eyebrow">Authority Console</div>
+        <h2>Authority Security Center</h2>
+        <p>扩展权限、运行状态、存储与策略控制台</p>
       </div>
-      <section class="authority-section" data-section="overview">
-        <div data-role="overview-view"></div>
-      </section>
-      <section class="authority-section" data-section="detail">
-        <div data-role="detail-view"></div>
-      </section>
-      <section class="authority-section" data-section="databases">
-        <div data-role="databases-view"></div>
-      </section>
-      <section class="authority-section" data-section="activity">
-        <div data-role="activity-view"></div>
-      </section>
-      <section class="authority-section" data-section="policies">
-        <div data-role="policies-view"></div>
-      </section>
-    </main>
+      <div class="authority-header-actions">
+        <div class="authority-health-badges" data-role="health-badges"></div>
+        <button type="button" class="menu_button authority-primary-action" data-action="refresh">刷新</button>
+      </div>
+    </div>
+    <div data-role="status"></div>
+    <div class="authority-panel__body">
+      <aside class="authority-sidebar">
+        <div class="authority-sidebar__header">
+          <div>
+            <div class="authority-eyebrow">Extensions</div>
+            <h3>扩展列表</h3>
+          </div>
+          <span class="authority-pill authority-pill--prompt" data-role="extension-count">0</span>
+        </div>
+        <input class="authority-search" type="search" data-role="extension-search" placeholder="搜索扩展" />
+        <div class="authority-sidebar__list" data-role="extension-list"></div>
+      </aside>
+      <main class="authority-main">
+        <div class="authority-tabs">
+          <button type="button" class="authority-tab" data-tab="overview">总览</button>
+          <button type="button" class="authority-tab" data-tab="detail">扩展详情</button>
+          <button type="button" class="authority-tab" data-tab="databases">存储与 SQL</button>
+          <button type="button" class="authority-tab" data-tab="activity">活动日志</button>
+          <button type="button" class="authority-tab" data-tab="policies">管理员策略</button>
+        </div>
+        <section class="authority-section" data-section="overview">
+          <div data-role="overview-view"></div>
+        </section>
+        <section class="authority-section" data-section="detail">
+          <div data-role="detail-view"></div>
+        </section>
+        <section class="authority-section" data-section="databases">
+          <div data-role="databases-view"></div>
+        </section>
+        <section class="authority-section" data-section="activity">
+          <div data-role="activity-view"></div>
+        </section>
+        <section class="authority-section" data-section="policies">
+          <div data-role="policies-view"></div>
+        </section>
+      </main>
+    </div>
   </div>
 </div>
