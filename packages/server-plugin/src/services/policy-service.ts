@@ -1,13 +1,13 @@
 import { DEFAULT_POLICY_STATUS } from '../constants.js';
 import { getGlobalAuthorityPaths } from '../store/authority-paths.js';
-import type { PoliciesFile, StoredPolicyEntry, UserContext } from '../types.js';
+import type { PoliciesState, StoredPolicyEntry, UserContext } from '../types.js';
 import { nowIso } from '../utils.js';
 import { CoreService } from './core-service.js';
 
 export class PolicyService {
     constructor(private readonly core: CoreService) {}
 
-    async getPolicies(user: UserContext): Promise<PoliciesFile> {
+    async getPolicies(user: UserContext): Promise<PoliciesState> {
         const globalPaths = getGlobalAuthorityPaths();
         const globalFile = await this.core.getControlPolicies(globalPaths.controlDbFile, {
             userHandle: user.handle,
@@ -27,7 +27,7 @@ export class PolicyService {
         return Object.values((await this.getPolicies(user)).extensions[extensionId] ?? {});
     }
 
-    async saveGlobalPolicies(actor: UserContext, partial: Partial<PoliciesFile>): Promise<PoliciesFile> {
+    async saveGlobalPolicies(actor: UserContext, partial: Partial<PoliciesState>): Promise<PoliciesState> {
         if (!actor.isAdmin) {
             throw new Error('Forbidden');
         }

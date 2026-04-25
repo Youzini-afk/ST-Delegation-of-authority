@@ -40,24 +40,6 @@ export function readJsonFile<T>(filePath: string, fallback: T): T {
     return safeJsonParse(fs.readFileSync(filePath, 'utf8'), fallback);
 }
 
-export function appendJsonl(filePath: string, value: unknown): void {
-    ensureDir(path.dirname(filePath));
-    fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, 'utf8');
-}
-
-export function tailJsonl<T>(filePath: string, limit: number): T[] {
-    if (!fs.existsSync(filePath)) {
-        return [];
-    }
-
-    const lines = fs.readFileSync(filePath, 'utf8')
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .slice(-limit);
-
-    return lines.map(line => safeJsonParse<T | null>(line, null)).filter(Boolean) as T[];
-}
-
 export function sanitizeFileSegment(input: string): string {
     return input.replace(/[^a-zA-Z0-9._-]/g, '_');
 }

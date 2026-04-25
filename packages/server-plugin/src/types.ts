@@ -46,22 +46,10 @@ export interface ExtensionRegistryEntry extends SessionExtensionInfo {
     uiLabel?: string;
 }
 
-export interface PermissionsFile {
-    entries: Record<string, Record<string, StoredGrantEntry>>;
-}
-
-export interface PoliciesFile {
+export interface PoliciesState {
     defaults: Record<PermissionResource, PermissionStatus>;
     extensions: Record<string, Record<string, StoredPolicyEntry>>;
     updatedAt: string;
-}
-
-export interface ExtensionsFile {
-    entries: Record<string, ExtensionRegistryEntry>;
-}
-
-export interface JobsFile {
-    entries: Record<string, StoredJobRecord>;
 }
 
 export interface StoredGrantEntry extends AuthorityGrant {

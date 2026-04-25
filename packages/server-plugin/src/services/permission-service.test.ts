@@ -6,7 +6,7 @@ import { DEFAULT_POLICY_STATUS } from '../constants.js';
 import { PermissionService } from './permission-service.js';
 import { PolicyService } from './policy-service.js';
 import type { CoreService } from './core-service.js';
-import type { PoliciesFile, SessionRecord, StoredGrantEntry, UserContext } from '../types.js';
+import type { PoliciesState, SessionRecord, StoredGrantEntry, UserContext } from '../types.js';
 
 const globalState = globalThis as typeof globalThis & { DATA_ROOT?: string };
 const cleanupDirs: string[] = [];
@@ -90,7 +90,7 @@ describe('PermissionService', () => {
 
 function createMockCore(): CoreService {
     const grants = new Map<string, StoredGrantEntry>();
-    let policies: PoliciesFile = {
+    let policies: PoliciesState = {
         defaults: { ...DEFAULT_POLICY_STATUS },
         extensions: {},
         updatedAt: new Date().toISOString(),
@@ -118,7 +118,7 @@ function createMockCore(): CoreService {
         async getControlPolicies() {
             return policies;
         },
-        async saveControlPolicies(_dbPath: string, request: { partial: Partial<PoliciesFile> }) {
+        async saveControlPolicies(_dbPath: string, request: { partial: Partial<PoliciesState> }) {
             policies = {
                 defaults: {
                     ...policies.defaults,
