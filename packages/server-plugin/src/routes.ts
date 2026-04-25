@@ -187,6 +187,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 policies: await runtime.permissions.getPolicyEntries(user, extensionId),
                 activity: await runtime.audit.getRecentActivity(user, extensionId),
                 jobs: await runtime.jobs.list(user, extensionId),
+                databases: listPrivateSqlDatabases(user, extensionId).databases,
             });
         } catch (error) {
             fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);

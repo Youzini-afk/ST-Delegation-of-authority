@@ -59,11 +59,12 @@ class SecurityCenterView {
             loading: true,
             error: null,
             isAdmin: false,
+            probe: null,
             session: null,
             extensions: [],
             details: new Map(),
             selectedExtensionId: focusExtensionId ?? null,
-            selectedTab: focusExtensionId ? 'detail' : 'extensions',
+            selectedTab: focusExtensionId ? 'detail' : 'overview',
             policies: null,
             policyEditorExtensionId: focusExtensionId ?? null,
         };
@@ -141,7 +142,7 @@ class SecurityCenterView {
         this.state.error = null;
         void this.render();
         try {
-            await authorityRequest('/probe', { method: 'POST' });
+            const probe = await authorityRequest('/probe', { method: 'POST' });
             const session = await authorityRequest('/session/init', {
                 method: 'POST',
                 body: SECURITY_CENTER_CONFIG,
@@ -151,6 +152,7 @@ class SecurityCenterView {
                 const detail = await authorityRequest(`/extensions/${encodeURIComponent(extension.id)}`);
                 return [extension.id, detail];
             }));
+            this.state.probe = probe;
             this.state.session = session;
             this.state.isAdmin = session.user.isAdmin;
             this.state.extensions = extensions;
@@ -161,7 +163,7 @@ class SecurityCenterView {
                 ? await authorityRequest('/admin/policies')
                 : null;
             if (!this.state.isAdmin && this.state.selectedTab === 'policies') {
-                this.state.selectedTab = 'extensions';
+                this.state.selectedTab = 'overview';
             }
         }
         catch (error) {
@@ -270,7 +272,9 @@ class SecurityCenterView {
         this.renderHeader();
         this.renderTabs();
         this.renderExtensionList();
+        await this.renderOverviewSection();
         await this.renderDetailSection();
+        await this.renderDatabasesSection();
         await this.renderActivitySection();
         await this.renderPoliciesSection();
         this.toggleSections();
@@ -289,12 +293,25 @@ class SecurityCenterView {
             return;
         }
         const user = this.state.session?.user;
+        const databases = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
+        const databaseCount = databases.reduce((sum, item) => sum + item.databases.length, 0);
+        const issueCount = [...this.state.details.values()].flatMap(detail => detail.activity.errors).length;
+        const activeJobCount = [...this.state.details.values()]
+            .flatMap(detail => detail.jobs)
+            .filter(job => job.status === 'queued' || job.status === 'running').length;
+        const core = this.state.probe?.core;
         status.innerHTML = `
             <div class="authority-summary-strip">
                 <div><strong>当前用户</strong><div>${escapeHtml(user?.handle ?? 'unknown')}</div></div>
                 <div><strong>工作模式</strong><div>${escapeHtml(user?.isAdmin ? '管理员模式' : '普通用户模式')}</div></div>
                 <div><strong>扩展数量</strong><div>${this.state.extensions.length}</div></div>
+                <div><strong>数据库数量</strong><div>${databaseCount}</div></div>
+                <div><strong>活跃任务</strong><div>${activeJobCount}</div></div>
+                <div><strong>Core 状态</strong><div>${escapeHtml(getCoreStateLabel(core?.state))}</div></div>
             </div>
+            ${this.state.probe ? `<div class="authority-inline-note">SDK ${escapeHtml(getInstallStatusLabel(this.state.probe.installStatus))} · 插件 ${escapeHtml(this.state.probe.pluginVersion)} · Core ${escapeHtml(this.state.probe.core.version ?? 'unknown')} · 错误 ${issueCount}</div>` : ''}
+            ${this.state.probe?.installMessage ? `<div class="authority-inline-note">${escapeHtml(this.state.probe.installMessage)}</div>` : ''}
+            ${this.state.probe?.core.lastError ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(this.state.probe.core.lastError)}</div>` : ''}
         `;
     }
     renderTabs() {
@@ -328,6 +345,69 @@ class SecurityCenterView {
             container.appendChild(item);
         }
     }
+    async renderOverviewSection() {
+        const container = this.root.querySelector('[data-role="overview-view"]');
+        if (!container) {
+            return;
+        }
+        const databaseGroups = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
+        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+        const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
+        const allJobs = [...this.state.details.values()]
+            .flatMap(detail => detail.jobs)
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const activeJobs = allJobs.filter(item => item.status === 'queued' || item.status === 'running').slice(0, 8);
+        const failedJobs = allJobs.filter(item => item.status === 'failed' || item.status === 'cancelled').slice(0, 8);
+        const recentErrors = [...this.state.details.values()]
+            .flatMap(detail => detail.activity.errors)
+            .sort(sortByTimestampDesc)
+            .slice(0, 8);
+        const totalGrantCount = [...this.state.details.values()].reduce((sum, detail) => sum + detail.grants.length, 0);
+        const totalPolicyCount = [...this.state.details.values()].reduce((sum, detail) => sum + detail.policies.length, 0);
+        const core = this.state.probe?.core;
+        container.innerHTML = `
+            <div class="authority-card-grid">
+                <section class="authority-card">
+                    <h3>运行状态</h3>
+                    <div class="authority-kv-grid">
+                        <div><strong>插件版本</strong><div>${escapeHtml(this.state.probe?.pluginVersion ?? 'unknown')}</div></div>
+                        <div><strong>SDK 部署</strong><div>${escapeHtml(this.state.probe ? getInstallStatusLabel(this.state.probe.installStatus) : 'unknown')}</div></div>
+                        <div><strong>Core 运行态</strong><div>${escapeHtml(getCoreStateLabel(core?.state))}</div></div>
+                        <div><strong>Core PID</strong><div>${escapeHtml(core?.pid ? String(core.pid) : 'n/a')}</div></div>
+                        <div><strong>Core 端口</strong><div>${escapeHtml(core?.port ? String(core.port) : 'n/a')}</div></div>
+                        <div><strong>Core 启动时间</strong><div>${escapeHtml(core?.startedAt ? formatDate(core.startedAt) : 'n/a')}</div></div>
+                    </div>
+                </section>
+                <section class="authority-card">
+                    <h3>控制面概览</h3>
+                    <div class="authority-summary-strip">
+                        <div><strong>扩展</strong><div>${this.state.extensions.length}</div></div>
+                        <div><strong>授权记录</strong><div>${totalGrantCount}</div></div>
+                        <div><strong>策略覆盖</strong><div>${totalPolicyCount}</div></div>
+                        <div><strong>数据库</strong><div>${totalDatabaseCount}</div></div>
+                        <div><strong>数据库体积</strong><div>${escapeHtml(formatBytes(totalDatabaseSize))}</div></div>
+                        <div><strong>最近错误</strong><div>${recentErrors.length}</div></div>
+                    </div>
+                </section>
+                <section class="authority-card">
+                    <h3>SQL 数据库概览</h3>
+                    ${renderDatabaseGroupList(databaseGroups.slice(0, 6), '当前没有发现扩展 SQL 数据库。')}
+                </section>
+                <section class="authority-card">
+                    <h3>活跃任务</h3>
+                    ${renderJobList(activeJobs, '当前没有排队或运行中的任务。')}
+                </section>
+                <section class="authority-card">
+                    <h3>失败任务</h3>
+                    ${renderJobList(failedJobs, '当前没有失败或取消的任务。')}
+                </section>
+                <section class="authority-card">
+                    <h3>最近错误</h3>
+                    ${renderActivityList(recentErrors, '暂无错误记录。')}
+                </section>
+            </div>
+        `;
+    }
     async renderDetailSection() {
         const container = this.root.querySelector('[data-role="detail-view"]');
         if (!container) {
@@ -344,6 +424,7 @@ class SecurityCenterView {
         const usage = [...detail.activity.usage].sort(sortByTimestampDesc).slice(0, 10);
         const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
         const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
+        const databases = [...detail.databases].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         container.innerHTML = `
             <div class="authority-card-grid">
                 <section class="authority-card">
@@ -374,6 +455,14 @@ class SecurityCenterView {
                     ${renderGrantList(detail.extension.id, denied, '当前没有持久化拒绝记录。')}
                 </section>
                 <section class="authority-card">
+                    <h3>策略覆盖</h3>
+                    ${renderPolicyList(detail.policies, '当前没有针对该扩展的策略覆盖。')}
+                </section>
+                <section class="authority-card">
+                    <h3>SQL 数据库</h3>
+                    ${renderDatabaseList(databases, '该扩展还没有私有 SQL 数据库。')}
+                </section>
+                <section class="authority-card">
                     <h3>最近权限活动</h3>
                     ${renderActivityList(permissions, '暂无权限活动。')}
                 </section>
@@ -392,6 +481,30 @@ class SecurityCenterView {
             </div>
         `;
     }
+    async renderDatabasesSection() {
+        const container = this.root.querySelector('[data-role="databases-view"]');
+        if (!container) {
+            return;
+        }
+        const databaseGroups = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
+        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+        const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
+        container.innerHTML = `
+            <section class="authority-card">
+                <div class="authority-card__header">
+                    <div>
+                        <h3>扩展 SQL 数据库</h3>
+                        <div class="authority-muted">按扩展汇总当前用户的 private SQL 数据库文件。</div>
+                    </div>
+                    <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>
+                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(totalDatabaseSize))}</span>
+                    </div>
+                </div>
+                ${renderDatabaseGroupList(databaseGroups, '当前没有发现任何扩展 SQL 数据库。')}
+            </section>
+        `;
+    }
     async renderActivitySection() {
         const container = this.root.querySelector('[data-role="activity-view"]');
         if (!container) {
@@ -401,11 +514,21 @@ class SecurityCenterView {
             .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors])
             .sort(sortByTimestampDesc)
             .slice(0, 40);
+        const errors = [...this.state.details.values()]
+            .flatMap(detail => detail.activity.errors)
+            .sort(sortByTimestampDesc)
+            .slice(0, 20);
         container.innerHTML = `
-            <section class="authority-card">
-                <h3>最近授权活动</h3>
-                ${renderActivityList(items, '暂无活动记录。')}
-            </section>
+            <div class="authority-card-grid">
+                <section class="authority-card">
+                    <h3>最近活动</h3>
+                    ${renderActivityList(items, '暂无活动记录。')}
+                </section>
+                <section class="authority-card">
+                    <h3>错误排障</h3>
+                    ${renderActivityList(errors, '暂无错误记录。')}
+                </section>
+            </div>
         `;
     }
     async renderPoliciesSection() {
@@ -572,6 +695,121 @@ function renderJobList(items, emptyText) {
             `).join('')}
         </div>
     `;
+}
+function renderPolicyList(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-stack">
+            ${items.map(item => `
+                <div class="authority-list-card">
+                    <div>
+                        <strong>${escapeHtml(getResourceLabel(item.resource))}</strong>
+                        <div class="authority-muted">${escapeHtml(item.target)}</div>
+                    </div>
+                    <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--${item.status}">${escapeHtml(getStatusLabel(item.status))}</span>
+                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt))}</span>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+function renderDatabaseList(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-stack">
+            ${items.map(item => `
+                <div class="authority-list-card">
+                    <div>
+                        <strong>${escapeHtml(item.name)}</strong>
+                        <div class="authority-muted">${escapeHtml(item.fileName)}</div>
+                    </div>
+                    <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.sizeBytes))}</span>
+                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt))}</span>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+function renderDatabaseGroupList(items, emptyText) {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-stack">
+            ${items.map(item => `
+                <div class="authority-list-card authority-list-card--column">
+                    <div class="authority-card__header">
+                        <div>
+                            <strong>${escapeHtml(item.extension.displayName)}</strong>
+                            <div class="authority-muted">${escapeHtml(item.extension.id)}</div>
+                        </div>
+                        <div class="authority-list-card__actions">
+                            <span class="authority-pill authority-pill--prompt">${item.databases.length} 个库</span>
+                            <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
+                        </div>
+                    </div>
+                    ${renderDatabaseList(item.databases, '该扩展还没有私有 SQL 数据库。')}
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+function getDatabaseGroupSummaries(extensions, details) {
+    return extensions.map(extension => {
+        const databases = [...(details.get(extension.id)?.databases ?? [])]
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return {
+            extension,
+            databases,
+            totalSizeBytes: databases.reduce((sum, item) => sum + item.sizeBytes, 0),
+            latestUpdatedAt: databases[0]?.updatedAt ?? null,
+        };
+    })
+        .filter(item => item.databases.length > 0)
+        .sort((left, right) => (right.latestUpdatedAt ?? '').localeCompare(left.latestUpdatedAt ?? ''));
+}
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return '0 B';
+    }
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = bytes;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+function getCoreStateLabel(state) {
+    switch (state) {
+        case 'running': return '运行中';
+        case 'starting': return '启动中';
+        case 'stopping': return '停止中';
+        case 'stopped': return '已停止';
+        case 'disabled': return '已禁用';
+        case 'error': return '错误';
+        default: return '未知';
+    }
+}
+function getInstallStatusLabel(status) {
+    switch (status) {
+        case 'ready': return '就绪';
+        case 'installed': return '已安装';
+        case 'updated': return '已更新';
+        case 'missing': return '缺失';
+        case 'conflict': return '冲突';
+        case 'error': return '错误';
+        default: return status;
+    }
 }
 function getDeclaredPermissionLabels(declaredPermissions) {
     const labels = [];

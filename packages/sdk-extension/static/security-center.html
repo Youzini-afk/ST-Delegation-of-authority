@@ -2,7 +2,7 @@
   <div class="authority-panel__header">
     <div>
       <h2>Authority Security Center</h2>
-      <p>统一管理扩展声明权限、授权记录、活动审计与管理员策略。</p>
+      <p>统一管理扩展、授权策略、SQL 数据库、后台作业与错误排障。</p>
     </div>
     <button type="button" class="menu_button" data-action="refresh">刷新</button>
   </div>
@@ -14,19 +14,20 @@
     </aside>
     <main class="authority-main">
       <div class="authority-tabs">
-        <button type="button" class="authority-tab" data-tab="extensions">扩展列表</button>
+        <button type="button" class="authority-tab" data-tab="overview">总览</button>
         <button type="button" class="authority-tab" data-tab="detail">扩展详情</button>
-        <button type="button" class="authority-tab" data-tab="activity">授权活动</button>
+        <button type="button" class="authority-tab" data-tab="databases">SQL 数据库</button>
+        <button type="button" class="authority-tab" data-tab="activity">活动与排障</button>
         <button type="button" class="authority-tab" data-tab="policies">管理员策略</button>
       </div>
-      <section class="authority-section" data-section="extensions">
-        <div class="authority-card">
-          <h3>已注册扩展</h3>
-          <p class="authority-muted">左侧列表展示已经通过 Authority 初始化过的扩展，点击即可查看详情。</p>
-        </div>
+      <section class="authority-section" data-section="overview">
+        <div data-role="overview-view"></div>
       </section>
       <section class="authority-section" data-section="detail">
         <div data-role="detail-view"></div>
+      </section>
+      <section class="authority-section" data-section="databases">
+        <div data-role="databases-view"></div>
       </section>
       <section class="authority-section" data-section="activity">
         <div data-role="activity-view"></div>

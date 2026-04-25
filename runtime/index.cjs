@@ -319,6 +319,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 policies: await runtime.permissions.getPolicyEntries(user, extensionId),
                 activity: await runtime.audit.getRecentActivity(user, extensionId),
                 jobs: await runtime.jobs.list(user, extensionId),
+                databases: listPrivateSqlDatabases(user, extensionId).databases,
             });
         }
         catch (error) {
