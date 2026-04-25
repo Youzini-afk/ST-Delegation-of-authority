@@ -163,6 +163,18 @@ export interface AuthorityCoreHealthSnapshot {
     version: string;
     pid: number;
     startedAt: string;
+    uptimeMs: number;
+    requestCount: number;
+    errorCount: number;
+    activeJobCount: number;
+    limits: {
+        maxRequestBytes: number;
+        maxKvValueBytes: number;
+        maxBlobBytes: number;
+        maxHttpBodyBytes: number;
+        maxHttpResponseBytes: number;
+        maxEventPollLimit: number;
+    };
 }
 
 export interface AuthorityCoreStatus {

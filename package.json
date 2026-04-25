@@ -11,7 +11,7 @@
     "build": "npm run build --workspace @stdo/shared-types && npm run build:core && npm run build --workspace @stdo/server-plugin && npm run build --workspace @stdo/sdk-extension && npm run build --workspace @stdo/example-extension",
     "build:core": "node ./scripts/build-core.mjs",
     "typecheck": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run && cargo test --manifest-path crates/authority-core/Cargo.toml",
     "sync:installable": "npm run typecheck && npm run build && npm test && node ./scripts/installable.mjs sync",
     "check:installable": "node ./scripts/installable.mjs check",
     "dev:link": "npm run build && node ./scripts/link-dev.mjs",

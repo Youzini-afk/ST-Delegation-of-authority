@@ -83,6 +83,10 @@ SillyTavern/public/scripts/extensions/third-party/st-authority-sdk
 - `coreVerified`
 - `installStatus`
 - `installMessage`
+- `core.health.requestCount`
+- `core.health.errorCount`
+- `core.health.activeJobCount`
+- `core.health.limits`
 
 `installStatus` 的取值为：
 
@@ -172,7 +176,7 @@ npm run dev:unlink
 - `npm install`: 安装 workspace 依赖
 - `npm run typecheck`: 全仓类型检查
 - `npm run build`: 构建四个 package
-- `npm test`: 运行 Vitest 测试
+- `npm test`: 运行 Vitest 测试与 Rust core 稳定性测试
 - `npm run sync:installable`: 重新生成根目录可直装产物，包括 runtime、managed SDK、managed core 和 release 元数据
 - `npm run check:installable`: 校验根目录可直装产物是否与源码、managed core 元数据一致
 - `npm run dev:link`: 构建并把开发产物链接进本地 SillyTavern
@@ -276,6 +280,8 @@ const client = await window.STAuthority.AuthoritySDK.init({
 - 内建 delay 任务创建 / 完成 / 取消
 - Managed SDK 首装、幂等、升级、冲突保护、漂移修复
 - Managed core 平台匹配、版本一致性与哈希校验
+- SQL 事务回滚、迁移幂等、任务/事件一致性、事件分页上限
+- Core health 请求数、错误数、活跃任务数与限制值诊断
 - 根目录可直装产物一致性检查
 
 CI 当前会运行：

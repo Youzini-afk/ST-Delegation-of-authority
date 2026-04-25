@@ -69,6 +69,18 @@ interface ProbeResponse {
             version: string;
             pid: number;
             startedAt: string;
+            uptimeMs: number;
+            requestCount: number;
+            errorCount: number;
+            activeJobCount: number;
+            limits: {
+                maxRequestBytes: number;
+                maxKvValueBytes: number;
+                maxBlobBytes: number;
+                maxHttpBodyBytes: number;
+                maxHttpResponseBytes: number;
+                maxEventPollLimit: number;
+            };
         } | null;
     };
 }
@@ -529,6 +541,9 @@ class SecurityCenterView {
                         <div><strong>Core PID</strong><div>${escapeHtml(core?.pid ? String(core.pid) : 'n/a')}</div></div>
                         <div><strong>Core 端口</strong><div>${escapeHtml(core?.port ? String(core.port) : 'n/a')}</div></div>
                         <div><strong>Core 启动时间</strong><div>${escapeHtml(core?.startedAt ? formatDate(core.startedAt) : 'n/a')}</div></div>
+                        <div><strong>Core 请求数</strong><div>${escapeHtml(core?.health ? String(core.health.requestCount) : 'n/a')}</div></div>
+                        <div><strong>Core 错误数</strong><div>${escapeHtml(core?.health ? String(core.health.errorCount) : 'n/a')}</div></div>
+                        <div><strong>Core 活跃任务</strong><div>${escapeHtml(core?.health ? String(core.health.activeJobCount) : 'n/a')}</div></div>
                     </div>
                 </section>
                 <section class="authority-card">

@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -32,6 +32,8 @@ const JOB_PROGRESS_INTERVAL_MS: u64 = 250;
 
 struct RuntimeState {
     job_controls: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    request_count: AtomicU64,
+    error_count: AtomicU64,
 }
 
 struct Config {
@@ -49,6 +51,7 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
+#[derive(Debug)]
 struct ApiError {
     status_code: u16,
     message: String,
@@ -87,7 +90,7 @@ struct SqlBatchRequest {
     statements: Vec<SqlBatchStatement>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct SqlMigrationInput {
     id: String,
     statement: String,
@@ -559,6 +562,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .to_string();
     let runtime = Arc::new(RuntimeState {
         job_controls: Mutex::new(HashMap::new()),
+        request_count: AtomicU64::new(0),
+        error_count: AtomicU64::new(0),
     });
     let config = Config {
         token,
@@ -596,8 +601,10 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
             return write_json(stream, 400, &body);
         }
     };
+    config.runtime.request_count.fetch_add(1, Ordering::SeqCst);
 
     if !is_authorized(&request.headers, &config.token) {
+        config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
         return write_json(stream, 401, r#"{"error":"unauthorized"}"#);
     }
 
@@ -608,6 +615,18 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
             "version": config.version,
             "pid": process::id(),
             "startedAt": config.started_at,
+            "uptimeMs": runtime_uptime_ms(&config.started_at),
+            "requestCount": config.runtime.request_count.load(Ordering::SeqCst),
+            "errorCount": config.runtime.error_count.load(Ordering::SeqCst),
+            "activeJobCount": active_job_count(&config.runtime),
+            "limits": {
+                "maxRequestBytes": MAX_REQUEST_SIZE,
+                "maxKvValueBytes": MAX_KV_VALUE_BYTES,
+                "maxBlobBytes": MAX_BLOB_BYTES,
+                "maxHttpBodyBytes": MAX_HTTP_BODY_BYTES,
+                "maxHttpResponseBytes": MAX_HTTP_RESPONSE_BYTES,
+                "maxEventPollLimit": MAX_EVENT_POLL_LIMIT,
+            },
         })),
         ("POST", "/v1/storage/kv/get") => parse_json_body::<StorageKvGetRequest>(&request).and_then(handle_storage_kv_get),
         ("POST", "/v1/storage/kv/set") => parse_json_body::<StorageKvSetRequest>(&request).and_then(handle_storage_kv_set),
@@ -650,6 +669,7 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
     match response {
         Ok(body) => write_json(stream, 200, &body.to_string()),
         Err(error) => {
+            config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
             let body = json!({ "error": error.message }).to_string();
             write_json(stream, error.status_code, &body)
         }
@@ -2627,11 +2647,28 @@ fn validate_sql_identifier(value: &str) -> Result<String, ApiError> {
 }
 
 fn current_timestamp_millis() -> String {
-    SystemTime::now()
+    current_unix_millis().to_string()
+}
+
+fn current_unix_millis() -> u64 {
+    let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis()
-        .to_string()
+        .as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
+}
+
+fn runtime_uptime_ms(started_at: &str) -> u64 {
+    let started_at = started_at.parse::<u64>().unwrap_or_else(|_| current_unix_millis());
+    current_unix_millis().saturating_sub(started_at)
+}
+
+fn active_job_count(runtime: &RuntimeState) -> usize {
+    runtime
+        .job_controls
+        .lock()
+        .map(|controls| controls.len())
+        .unwrap_or(0)
 }
 
 fn current_timestamp_iso() -> String {
@@ -2658,4 +2695,196 @@ fn write_json(stream: &mut TcpStream, status_code: u16, body: &str) -> std::io::
     );
     stream.write_all(response.as_bytes())?;
     stream.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sql_transaction_rolls_back_on_error() {
+        let db_path = test_db_path("sql-rollback");
+        let create = SqlBatchStatement {
+            mode: SqlStatementMode::Exec,
+            statement: String::from("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)"),
+            params: Vec::new(),
+        };
+        let insert_first = SqlBatchStatement {
+            mode: SqlStatementMode::Exec,
+            statement: String::from("INSERT INTO items (name) VALUES (?)"),
+            params: vec![json!("alpha")],
+        };
+        execute_transactional_statements(&db_path, &[create, insert_first]).expect("initial transaction should commit");
+
+        let insert_second = SqlBatchStatement {
+            mode: SqlStatementMode::Exec,
+            statement: String::from("INSERT INTO items (name) VALUES (?)"),
+            params: vec![json!("beta")],
+        };
+        let duplicate_first = SqlBatchStatement {
+            mode: SqlStatementMode::Exec,
+            statement: String::from("INSERT INTO items (name) VALUES (?)"),
+            params: vec![json!("alpha")],
+        };
+        let failed = execute_transactional_statements(&db_path, &[insert_second, duplicate_first]);
+        assert!(failed.is_err());
+
+        let connection = open_connection(&db_path).expect("database should open");
+        let result = run_query(&connection, "SELECT name FROM items ORDER BY name", &[]).expect("query should succeed");
+        assert_eq!(result.row_count, 1);
+        assert_eq!(result.rows[0].get("name"), Some(&json!("alpha")));
+    }
+
+    #[test]
+    fn sql_migrations_are_idempotent() {
+        let db_path = test_db_path("sql-migrations");
+        let migrations = vec![
+            SqlMigrationInput {
+                id: String::from("001_create"),
+                statement: String::from("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+            },
+            SqlMigrationInput {
+                id: String::from("002_insert"),
+                statement: String::from("INSERT INTO records (value) VALUES ('stable')"),
+            },
+        ];
+
+        let first = handle_sql_migrate(SqlMigrateRequest {
+            db_path: db_path.clone(),
+            migrations: migrations.clone(),
+            table_name: None,
+        }).expect("first migration should succeed");
+        assert_eq!(first["applied"].as_array().expect("applied should be an array").len(), 2);
+
+        let second = handle_sql_migrate(SqlMigrateRequest {
+            db_path,
+            migrations,
+            table_name: None,
+        }).expect("second migration should succeed");
+        assert_eq!(second["applied"].as_array().expect("applied should be an array").len(), 0);
+        assert_eq!(second["skipped"].as_array().expect("skipped should be an array").len(), 2);
+    }
+
+    #[test]
+    fn jobs_and_events_remain_consistent() {
+        let db_path = test_db_path("jobs-events");
+        let runtime = Arc::new(RuntimeState {
+            job_controls: Mutex::new(HashMap::new()),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+        });
+        let created = handle_control_job_create(ControlJobCreateRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            job_type: String::from("delay"),
+            payload: Some(json!({
+                "durationMs": 0,
+                "message": "done",
+            })),
+        }, &runtime).expect("job create should succeed");
+        let job_id = created["job"]["id"].as_str().expect("job id should exist").to_string();
+
+        let completed = wait_for_job_status(&db_path, &job_id, "completed");
+        assert_eq!(completed.progress, 100);
+        assert_eq!(completed.result.as_ref().and_then(|value| value.get("message")), Some(&json!("done")));
+
+        wait_for_job_event_status(&db_path, "completed");
+        wait_for_active_job_count(&runtime, 0);
+    }
+
+    #[test]
+    fn event_poll_limit_is_capped() {
+        let db_path = test_db_path("event-limit");
+        let connection = open_connection(&db_path).expect("database should open");
+        ensure_control_schema(&connection).expect("schema should initialize");
+        for index in 0..250 {
+            publish_control_event(
+                &connection,
+                "alice",
+                Some("third-party/example"),
+                "extension:third-party/example",
+                "authority.test",
+                Some(&json!({ "index": index })),
+            ).expect("event should publish");
+        }
+
+        let response = handle_control_events_poll(ControlEventsPollRequest {
+            db_path,
+            user_handle: String::from("alice"),
+            channel: String::from("extension:third-party/example"),
+            after_id: Some(0),
+            limit: Some(1000),
+        }).expect("events poll should succeed");
+        assert_eq!(response["events"].as_array().expect("events should be an array").len(), MAX_EVENT_POLL_LIMIT);
+    }
+
+    #[test]
+    fn runtime_diagnostics_are_monotonic() {
+        let started_at = current_unix_millis().saturating_sub(50).to_string();
+        assert!(runtime_uptime_ms(&started_at) >= 50);
+        let runtime = RuntimeState {
+            job_controls: Mutex::new(HashMap::new()),
+            request_count: AtomicU64::new(7),
+            error_count: AtomicU64::new(2),
+        };
+        assert_eq!(active_job_count(&runtime), 0);
+        assert_eq!(runtime.request_count.load(Ordering::SeqCst), 7);
+        assert_eq!(runtime.error_count.load(Ordering::SeqCst), 2);
+    }
+
+    fn wait_for_job_status(db_path: &str, job_id: &str, expected_status: &str) -> ControlJobRecord {
+        let started = Instant::now();
+        loop {
+            let connection = open_connection(db_path).expect("database should open");
+            ensure_control_schema(&connection).expect("schema should initialize");
+            if let Some(job) = fetch_control_job(&connection, "alice", job_id).expect("job lookup should succeed") {
+                if job.status == expected_status {
+                    return job;
+                }
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "job did not reach expected status");
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn wait_for_job_event_status(db_path: &str, expected_status: &str) {
+        let started = Instant::now();
+        loop {
+            let events = handle_control_events_poll(ControlEventsPollRequest {
+                db_path: db_path.to_string(),
+                user_handle: String::from("alice"),
+                channel: String::from("extension:third-party/example"),
+                after_id: Some(0),
+                limit: Some(50),
+            }).expect("events poll should succeed");
+            if events["events"]
+                .as_array()
+                .expect("events should be an array")
+                .iter()
+                .any(|event| event["payload"]["status"] == json!(expected_status))
+            {
+                return;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "job event did not reach expected status");
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn wait_for_active_job_count(runtime: &RuntimeState, expected_count: usize) {
+        let started = Instant::now();
+        loop {
+            if active_job_count(runtime) == expected_count {
+                return;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "active job count did not reach expected value");
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn test_db_path(name: &str) -> String {
+        let path = env::temp_dir()
+            .join(format!("authority-core-test-{}-{}-{}.sqlite", name, process::id(), current_unix_millis()));
+        path.to_string_lossy().into_owned()
+    }
 }
