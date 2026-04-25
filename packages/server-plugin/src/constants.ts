@@ -6,6 +6,7 @@ export const AUTHORITY_SDK_EXTENSION_ID = 'third-party/st-authority-sdk';
 export const AUTHORITY_MANAGED_FILE = '.authority-managed.json';
 export const AUTHORITY_RELEASE_FILE = '.authority-release.json';
 export const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
+export const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
 
 export const SESSION_HEADER = 'x-authority-session-token';
 export const SESSION_QUERY = 'authoritySessionToken';

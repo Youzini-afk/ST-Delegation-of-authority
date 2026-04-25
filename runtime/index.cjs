@@ -11,6 +11,7 @@
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   AUTHORITY_DATA_FOLDER: () => (/* binding */ AUTHORITY_DATA_FOLDER),
+/* harmony export */   AUTHORITY_MANAGED_CORE_DIR: () => (/* binding */ AUTHORITY_MANAGED_CORE_DIR),
 /* harmony export */   AUTHORITY_MANAGED_FILE: () => (/* binding */ AUTHORITY_MANAGED_FILE),
 /* harmony export */   AUTHORITY_MANAGED_SDK_DIR: () => (/* binding */ AUTHORITY_MANAGED_SDK_DIR),
 /* harmony export */   AUTHORITY_PLUGIN_ID: () => (/* binding */ AUTHORITY_PLUGIN_ID),
@@ -34,6 +35,7 @@ const AUTHORITY_SDK_EXTENSION_ID = 'third-party/st-authority-sdk';
 const AUTHORITY_MANAGED_FILE = '.authority-managed.json';
 const AUTHORITY_RELEASE_FILE = '.authority-release.json';
 const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
+const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
 const SESSION_HEADER = 'x-authority-session-token';
 const SESSION_QUERY = 'authoritySessionToken';
 const MAX_KV_VALUE_BYTES = 128 * 1024;
@@ -137,10 +139,11 @@ function fail(runtime, req, res, extensionId, error) {
     }
     res.status(400).json({ error: message });
 }
-function registerRoutes(router) {
-    const runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_0__.createAuthorityRuntime)();
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_0__.createAuthorityRuntime)()) {
     router.post('/probe', async (_req, res) => {
+        await runtime.core.refreshHealth();
         const install = runtime.install.getStatus();
+        const core = runtime.core.getStatus();
         ok(res, {
             id: 'authority',
             online: true,
@@ -150,6 +153,7 @@ function registerRoutes(router) {
             sdkDeployedVersion: install.sdkDeployedVersion,
             installStatus: install.installStatus,
             installMessage: install.installMessage,
+            core,
         });
     });
     router.post('/session/init', async (req, res) => {
@@ -500,14 +504,16 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
 /* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+
 
 
 
@@ -521,17 +527,19 @@ __webpack_require__.r(__webpack_exports__);
 function createAuthorityRuntime() {
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker();
     const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__.AuditService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_2__.ExtensionService();
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_4__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_7__.PolicyService();
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_6__.PermissionService(policies);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_8__.SessionService();
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_9__.StorageService();
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_3__.HttpService();
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_5__.JobService(events);
+    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__.CoreService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_3__.ExtensionService();
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_5__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__.PolicyService();
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__.PermissionService(policies);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_9__.SessionService();
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_10__.StorageService();
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__.HttpService();
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__.JobService(events);
     return {
         events,
         audit,
+        core,
         extensions,
         install,
         policies,
@@ -610,6 +618,371 @@ class AuditService {
             errors: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.tailJsonl)(paths.errorsAuditFile, _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_AUDIT_LINES).filter(item => item.extensionId === extensionId),
         };
     }
+}
+
+
+/***/ },
+
+/***/ "./src/services/core-service.ts"
+/*!**************************************!*\
+  !*** ./src/services/core-service.ts ***!
+  \**************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   CoreService: () => (/* binding */ CoreService)
+/* harmony export */ });
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:net */ "node:net");
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_net__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:process */ "node:process");
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_process__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_4__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+
+
+const HEALTH_TIMEOUT_MS = 5000;
+const HEALTH_POLL_INTERVAL_MS = 150;
+const CORE_API_VERSION = 'authority-core/v1';
+class CoreService {
+    runtimeDir;
+    cwd;
+    env;
+    logger;
+    child = null;
+    token = null;
+    stopping = false;
+    status;
+    constructor(options = {}) {
+        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(options.runtimeDir ?? __dirname);
+        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(options.cwd ?? node_process__WEBPACK_IMPORTED_MODULE_3___default().cwd());
+        this.env = options.env ?? (node_process__WEBPACK_IMPORTED_MODULE_3___default().env);
+        this.logger = options.logger ?? console;
+        this.status = {
+            enabled: true,
+            state: 'stopped',
+            platform: (node_process__WEBPACK_IMPORTED_MODULE_3___default().platform),
+            arch: (node_process__WEBPACK_IMPORTED_MODULE_3___default().arch),
+            binaryPath: null,
+            port: null,
+            pid: null,
+            version: null,
+            startedAt: null,
+            lastError: null,
+            health: null,
+        };
+    }
+    getStatus() {
+        return {
+            ...this.status,
+            health: this.status.health ? { ...this.status.health } : null,
+        };
+    }
+    async start() {
+        if (this.status.state === 'running') {
+            await this.refreshHealth();
+            return this.getStatus();
+        }
+        if (this.status.state === 'starting') {
+            return this.waitUntilReady();
+        }
+        const artifact = this.resolveArtifact();
+        if (!artifact) {
+            this.setStatus('missing', {
+                binaryPath: null,
+                version: null,
+                lastError: `Authority core binary not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR}`,
+                port: null,
+                pid: null,
+                startedAt: null,
+                health: null,
+            });
+            return this.getStatus();
+        }
+        const port = await getAvailablePort();
+        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.randomToken)();
+        const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_4__.spawn)(artifact.binaryPath, [], {
+            cwd: node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(artifact.binaryPath),
+            env: {
+                ...this.env,
+                AUTHORITY_CORE_HOST: '127.0.0.1',
+                AUTHORITY_CORE_PORT: String(port),
+                AUTHORITY_CORE_TOKEN: token,
+                AUTHORITY_CORE_VERSION: artifact.metadata.version,
+                AUTHORITY_CORE_API_VERSION: CORE_API_VERSION,
+            },
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+        });
+        this.child = child;
+        this.token = token;
+        this.stopping = false;
+        this.attachProcessListeners(child);
+        this.setStatus('starting', {
+            binaryPath: artifact.binaryPath,
+            version: artifact.metadata.version,
+            port,
+            pid: child.pid ?? null,
+            startedAt: null,
+            lastError: null,
+            health: null,
+        });
+        try {
+            const health = await this.waitForHealth(port, token);
+            this.setStatus('running', {
+                binaryPath: artifact.binaryPath,
+                version: artifact.metadata.version,
+                port,
+                pid: child.pid ?? null,
+                startedAt: health.startedAt,
+                lastError: null,
+                health,
+            });
+            return this.getStatus();
+        }
+        catch (error) {
+            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.asErrorMessage)(error);
+            this.logger.error(`[authority] Failed to start authority-core: ${message}`);
+            await this.stop();
+            this.setStatus('error', {
+                binaryPath: artifact.binaryPath,
+                version: artifact.metadata.version,
+                port,
+                pid: null,
+                startedAt: null,
+                lastError: message,
+                health: null,
+            });
+            return this.getStatus();
+        }
+    }
+    async stop() {
+        const child = this.child;
+        if (!child) {
+            if (this.status.state !== 'missing') {
+                this.setStatus('stopped', {
+                    pid: null,
+                    port: null,
+                    startedAt: null,
+                    health: null,
+                    lastError: this.status.lastError,
+                });
+            }
+            return;
+        }
+        this.stopping = true;
+        const closePromise = onceChildExit(child);
+        child.kill();
+        await Promise.race([
+            closePromise,
+            delay(1000),
+        ]);
+        if (child.exitCode === null && !child.killed) {
+            child.kill('SIGKILL');
+            await Promise.race([
+                closePromise,
+                delay(1000),
+            ]);
+        }
+        this.child = null;
+        this.token = null;
+        this.setStatus('stopped', {
+            pid: null,
+            port: null,
+            startedAt: null,
+            health: null,
+        });
+    }
+    async refreshHealth() {
+        if (!this.token || !this.status.port) {
+            return null;
+        }
+        try {
+            const health = await fetchHealth(this.status.port, this.token);
+            this.status = {
+                ...this.status,
+                state: 'running',
+                startedAt: health.startedAt,
+                health,
+                lastError: null,
+            };
+            return health;
+        }
+        catch (error) {
+            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.asErrorMessage)(error);
+            this.status = {
+                ...this.status,
+                state: 'error',
+                health: null,
+                lastError: message,
+            };
+            return null;
+        }
+    }
+    attachProcessListeners(child) {
+        child.stdout?.on('data', chunk => {
+            const text = String(chunk).trim();
+            if (text) {
+                this.logger.info(`[authority-core] ${text}`);
+            }
+        });
+        child.stderr?.on('data', chunk => {
+            const text = String(chunk).trim();
+            if (text) {
+                this.logger.warn(`[authority-core] ${text}`);
+            }
+        });
+        child.on('exit', (code, signal) => {
+            const currentPid = this.child?.pid;
+            if (currentPid !== child.pid) {
+                return;
+            }
+            this.child = null;
+            this.token = null;
+            const state = this.stopping ? 'stopped' : 'error';
+            const lastError = this.stopping ? this.status.lastError : `authority-core exited with code ${code ?? 'null'} and signal ${signal ?? 'null'}`;
+            this.setStatus(state, {
+                pid: null,
+                port: null,
+                startedAt: null,
+                health: null,
+                lastError,
+            });
+            this.stopping = false;
+        });
+    }
+    async waitUntilReady() {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < HEALTH_TIMEOUT_MS) {
+            if (this.status.state !== 'starting') {
+                return this.getStatus();
+            }
+            await delay(HEALTH_POLL_INTERVAL_MS);
+        }
+        return this.getStatus();
+    }
+    async waitForHealth(port, token) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < HEALTH_TIMEOUT_MS) {
+            const child = this.child;
+            if (!child) {
+                throw new Error('authority-core process disappeared before becoming healthy');
+            }
+            if (child.exitCode !== null) {
+                throw new Error(`authority-core exited before becoming healthy with code ${child.exitCode}`);
+            }
+            try {
+                return await fetchHealth(port, token);
+            }
+            catch {
+                await delay(HEALTH_POLL_INTERVAL_MS);
+            }
+        }
+        throw new Error(`authority-core did not become healthy within ${HEALTH_TIMEOUT_MS}ms`);
+    }
+    resolveArtifact() {
+        for (const root of this.resolveManagedCoreRoots()) {
+            const artifact = readArtifact(root);
+            if (artifact) {
+                return artifact;
+            }
+        }
+        return null;
+    }
+    resolveManagedCoreRoots() {
+        const explicitRoot = this.env.AUTHORITY_CORE_ROOT?.trim();
+        const candidates = new Set();
+        if (explicitRoot) {
+            candidates.add(node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(explicitRoot));
+        }
+        for (const origin of [this.runtimeDir, this.cwd]) {
+            let current = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(origin);
+            while (true) {
+                candidates.add(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR));
+                const parent = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(current);
+                if (parent === current) {
+                    break;
+                }
+                current = parent;
+            }
+        }
+        return [...candidates];
+    }
+    setStatus(state, patch) {
+        this.status = {
+            ...this.status,
+            ...patch,
+            state,
+        };
+    }
+}
+function readArtifact(root) {
+    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(root, `${(node_process__WEBPACK_IMPORTED_MODULE_3___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_3___default().arch)}`);
+    const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, 'authority-core.json');
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(metadataPath)) {
+        return null;
+    }
+    const metadata = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(metadataPath, 'utf8'));
+    const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, metadata.binaryName);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(binaryPath)) {
+        return null;
+    }
+    return {
+        binaryPath,
+        metadata,
+    };
+}
+async function fetchHealth(port, token) {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: {
+            'x-authority-core-token': token,
+        },
+    });
+    if (!response.ok) {
+        throw new Error(`authority-core health check failed with ${response.status}`);
+    }
+    return await response.json();
+}
+async function getAvailablePort() {
+    return await new Promise((resolve, reject) => {
+        const server = node_net__WEBPACK_IMPORTED_MODULE_1___default().createServer();
+        server.unref();
+        server.on('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            const address = server.address();
+            if (!address || typeof address === 'string') {
+                server.close(() => reject(new Error('Unable to resolve an ephemeral authority-core port')));
+                return;
+            }
+            const { port } = address;
+            server.close(error => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve(port);
+            });
+        });
+    });
+}
+function onceChildExit(child) {
+    return new Promise(resolve => {
+        child.once('exit', () => resolve());
+    });
+}
+function delay(durationMs) {
+    return new Promise(resolve => setTimeout(resolve, durationMs));
 }
 
 
@@ -1659,6 +2032,16 @@ function asErrorMessage(error) {
 
 /***/ },
 
+/***/ "node:child_process"
+/*!*************************************!*\
+  !*** external "node:child_process" ***!
+  \*************************************/
+(module) {
+
+module.exports = require("node:child_process");
+
+/***/ },
+
 /***/ "node:crypto"
 /*!******************************!*\
   !*** external "node:crypto" ***!
@@ -1679,6 +2062,16 @@ module.exports = require("node:fs");
 
 /***/ },
 
+/***/ "node:net"
+/*!***************************!*\
+  !*** external "node:net" ***!
+  \***************************/
+(module) {
+
+module.exports = require("node:net");
+
+/***/ },
+
 /***/ "node:path"
 /*!****************************!*\
   !*** external "node:path" ***!
@@ -1686,6 +2079,16 @@ module.exports = require("node:fs");
 (module) {
 
 module.exports = require("node:path");
+
+/***/ },
+
+/***/ "node:process"
+/*!*******************************!*\
+  !*** external "node:process" ***!
+  \*******************************/
+(module) {
+
+module.exports = require("node:process");
 
 /***/ }
 
@@ -1771,11 +2174,14 @@ var __webpack_exports__ = {};
   \**********************/
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   exit: () => (/* binding */ exit),
 /* harmony export */   info: () => (/* binding */ info),
 /* harmony export */   init: () => (/* binding */ init)
 /* harmony export */ });
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
-/* harmony import */ var _routes_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./routes.js */ "./src/routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _routes_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./routes.js */ "./src/routes.ts");
+
 
 
 const info = {
@@ -1783,9 +2189,19 @@ const info = {
     name: 'ST Authority',
     description: 'Authority security center and delegation platform for SillyTavern extensions.',
 };
+let runtime = null;
 async function init(router) {
-    const runtime = (0,_routes_js__WEBPACK_IMPORTED_MODULE_1__.registerRoutes)(router);
+    runtime ??= (0,_runtime_js__WEBPACK_IMPORTED_MODULE_1__.createAuthorityRuntime)();
+    (0,_routes_js__WEBPACK_IMPORTED_MODULE_2__.registerRoutes)(router, runtime);
     void runtime.install.bootstrap();
+    void runtime.core.start();
+}
+async function exit() {
+    if (!runtime) {
+        return;
+    }
+    await runtime.core.stop();
+    runtime = null;
 }
 
 })();

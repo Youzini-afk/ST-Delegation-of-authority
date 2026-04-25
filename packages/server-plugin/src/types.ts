@@ -122,6 +122,7 @@ export interface SessionInitInput {
 }
 
 export type InstallStatusCode = 'ready' | 'installed' | 'updated' | 'conflict' | 'error' | 'missing';
+export type CoreRuntimeState = 'stopped' | 'starting' | 'running' | 'missing' | 'error';
 
 export interface AuthorityReleaseMetadata {
     pluginId: string;
@@ -129,6 +130,9 @@ export interface AuthorityReleaseMetadata {
     sdkExtensionId: string;
     sdkVersion: string;
     assetHash: string;
+    coreVersion?: string;
+    coreArtifactHash?: string;
+    coreArtifactPlatform?: string;
     buildTime: string;
 }
 
@@ -141,10 +145,42 @@ export interface AuthorityManagedMetadata {
     targetPath: string;
 }
 
+export interface AuthorityCoreManagedMetadata {
+    managedBy: string;
+    version: string;
+    platform: string;
+    arch: string;
+    binaryName: string;
+    binarySha256: string;
+    builtAt: string;
+}
+
 export interface InstallStatusSnapshot {
     installStatus: InstallStatusCode;
     installMessage: string;
     pluginVersion: string;
     sdkBundledVersion: string;
     sdkDeployedVersion: string | null;
+}
+
+export interface AuthorityCoreHealthSnapshot {
+    name: string;
+    apiVersion: string;
+    version: string;
+    pid: number;
+    startedAt: string;
+}
+
+export interface AuthorityCoreStatus {
+    enabled: boolean;
+    state: CoreRuntimeState;
+    platform: string;
+    arch: string;
+    binaryPath: string | null;
+    port: number | null;
+    pid: number | null;
+    version: string | null;
+    startedAt: string | null;
+    lastError: string | null;
+    health: AuthorityCoreHealthSnapshot | null;
 }

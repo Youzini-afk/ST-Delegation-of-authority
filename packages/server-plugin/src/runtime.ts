@@ -1,5 +1,6 @@
 import { SseBroker } from './events/sse-broker.js';
 import { AuditService } from './services/audit-service.js';
+import { CoreService } from './services/core-service.js';
 import { ExtensionService } from './services/extension-service.js';
 import { HttpService } from './services/http-service.js';
 import { InstallService } from './services/install-service.js';
@@ -12,6 +13,7 @@ import { StorageService } from './services/storage-service.js';
 export interface AuthorityRuntime {
     events: SseBroker;
     audit: AuditService;
+    core: CoreService;
     extensions: ExtensionService;
     install: InstallService;
     policies: PolicyService;
@@ -25,6 +27,7 @@ export interface AuthorityRuntime {
 export function createAuthorityRuntime(): AuthorityRuntime {
     const events = new SseBroker();
     const audit = new AuditService();
+    const core = new CoreService();
     const extensions = new ExtensionService();
     const install = new InstallService();
     const policies = new PolicyService();
@@ -37,6 +40,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     return {
         events,
         audit,
+        core,
         extensions,
         install,
         policies,

@@ -23,11 +23,12 @@ function fail(runtime: AuthorityRuntime, req: AuthorityRequest, res: AuthorityRe
     res.status(400).json({ error: message });
 }
 
-export function registerRoutes(router: RouterLike): AuthorityRuntime {
-    const runtime = createAuthorityRuntime();
+export function registerRoutes(router: RouterLike, runtime = createAuthorityRuntime()): AuthorityRuntime {
 
     router.post('/probe', async (_req, res) => {
+        await runtime.core.refreshHealth();
         const install = runtime.install.getStatus();
+        const core = runtime.core.getStatus();
         ok(res, {
             id: 'authority',
             online: true,
@@ -37,6 +38,7 @@ export function registerRoutes(router: RouterLike): AuthorityRuntime {
             sdkDeployedVersion: install.sdkDeployedVersion,
             installStatus: install.installStatus,
             installMessage: install.installMessage,
+            core,
         });
     });
 

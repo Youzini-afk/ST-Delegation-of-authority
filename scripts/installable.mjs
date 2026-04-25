@@ -11,6 +11,14 @@ if (mode !== 'sync' && mode !== 'check') {
     process.exit(1);
 }
 
+function readCoreArtifactPlatform(managedCoreDir) {
+    const entries = fs.readdirSync(managedCoreDir, { withFileTypes: true }).filter(entry => entry.isDirectory());
+    if (entries.length === 0) {
+        throw new Error('No managed authority-core artifact directory found.');
+    }
+    return entries[0].name;
+}
+
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const rootPackage = readJson(path.join(repoRoot, 'package.json'));
 const pluginVersion = String(rootPackage.version ?? '0.0.0-dev');
@@ -33,25 +41,32 @@ try {
 function stageInstallable() {
     const serverDist = path.join(repoRoot, 'packages', 'server-plugin', 'dist', 'authority');
     const sdkDist = path.join(repoRoot, 'packages', 'sdk-extension', 'dist', 'extension');
+    const coreDist = path.join(repoRoot, 'managed', 'core');
 
     assertExists(path.join(serverDist, 'index.cjs'), 'Run `npm run build` before staging installable outputs.');
     assertExists(path.join(sdkDist, 'manifest.json'), 'Run `npm run build` before staging installable outputs.');
+    assertExists(coreDist, 'Run `npm run build:core` before staging installable outputs.');
 
     const runtimeDir = path.join(stageDir, 'runtime');
     const managedSdkDir = path.join(stageDir, 'managed', 'sdk-extension');
+    const managedCoreDir = path.join(stageDir, 'managed', 'core');
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.mkdirSync(managedSdkDir, { recursive: true });
+    fs.mkdirSync(managedCoreDir, { recursive: true });
 
     copyFile(path.join(serverDist, 'index.cjs'), path.join(runtimeDir, 'index.cjs'));
     copyOptionalFile(path.join(serverDist, 'index.cjs.map'), path.join(runtimeDir, 'index.cjs.map'));
 
     copySdkRuntime(sdkDist, managedSdkDir);
     patchSdkManifest(path.join(managedSdkDir, 'manifest.json'));
+    fs.cpSync(coreDist, managedCoreDir, { recursive: true, force: true });
 
-    validateRuntimeArtifacts(runtimeDir, managedSdkDir);
+    validateRuntimeArtifacts(runtimeDir, managedSdkDir, managedCoreDir);
 
     const assetHash = hashDirectory(managedSdkDir);
-    const buildTime = resolveBuildTime(pluginVersion, assetHash);
+    const coreArtifactHash = hashDirectory(managedCoreDir);
+    const buildTime = resolveBuildTime(pluginVersion, assetHash, coreArtifactHash);
+    const coreArtifactPlatform = readCoreArtifactPlatform(managedCoreDir);
 
     const release = {
         pluginId: 'authority',
@@ -59,6 +74,9 @@ function stageInstallable() {
         sdkExtensionId: 'third-party/st-authority-sdk',
         sdkVersion: pluginVersion,
         assetHash,
+        coreVersion: pluginVersion,
+        coreArtifactHash,
+        coreArtifactPlatform,
         buildTime,
     };
 
@@ -68,6 +86,7 @@ function stageInstallable() {
     return {
         runtimeDir,
         managedSdkDir,
+        managedCoreDir,
         releasePath,
     };
 }
@@ -75,14 +94,17 @@ function stageInstallable() {
 function syncInstallable(staged) {
     const runtimeTarget = path.join(repoRoot, 'runtime');
     const managedTarget = path.join(repoRoot, 'managed', 'sdk-extension');
+    const managedCoreTarget = path.join(repoRoot, 'managed', 'core');
     const releaseTarget = path.join(repoRoot, '.authority-release.json');
 
     fs.rmSync(runtimeTarget, { recursive: true, force: true });
     fs.rmSync(managedTarget, { recursive: true, force: true });
+    fs.rmSync(managedCoreTarget, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(managedTarget), { recursive: true });
 
     fs.cpSync(staged.runtimeDir, runtimeTarget, { recursive: true, force: true });
     fs.cpSync(staged.managedSdkDir, managedTarget, { recursive: true, force: true });
+    fs.cpSync(staged.managedCoreDir, managedCoreTarget, { recursive: true, force: true });
     copyFile(staged.releasePath, releaseTarget);
 }
 
@@ -90,6 +112,7 @@ function checkInstallable(staged) {
     const expected = [
         { staged: staged.runtimeDir, actual: path.join(repoRoot, 'runtime') },
         { staged: staged.managedSdkDir, actual: path.join(repoRoot, 'managed', 'sdk-extension') },
+        { staged: staged.managedCoreDir, actual: path.join(repoRoot, 'managed', 'core') },
     ];
 
     for (const pair of expected) {
@@ -120,7 +143,7 @@ function patchSdkManifest(manifestPath) {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 }
 
-function validateRuntimeArtifacts(runtimeDir, managedSdkDir) {
+function validateRuntimeArtifacts(runtimeDir, managedSdkDir, managedCoreDir) {
     const invalidTokens = [
         '@stdo/',
         `${path.sep}node_modules${path.sep}`,
@@ -131,6 +154,7 @@ function validateRuntimeArtifacts(runtimeDir, managedSdkDir) {
     const jsFiles = [
         ...listFiles(runtimeDir).filter(filePath => filePath.endsWith('.cjs') || filePath.endsWith('.js')),
         ...listFiles(managedSdkDir).filter(filePath => filePath.endsWith('.js')),
+        ...listFiles(managedCoreDir).filter(filePath => filePath.endsWith('.json')),
     ];
 
     for (const filePath of jsFiles) {
@@ -167,11 +191,16 @@ function compareFiles(actualPath, stagedPath) {
     }
 }
 
-function resolveBuildTime(nextPluginVersion, nextAssetHash) {
+function resolveBuildTime(nextPluginVersion, nextAssetHash, nextCoreArtifactHash) {
     const releasePath = path.join(repoRoot, '.authority-release.json');
     if (fs.existsSync(releasePath)) {
         const currentRelease = readJson(releasePath);
-        if (currentRelease.pluginVersion === nextPluginVersion && currentRelease.assetHash === nextAssetHash && typeof currentRelease.buildTime === 'string') {
+        if (
+            currentRelease.pluginVersion === nextPluginVersion
+            && currentRelease.assetHash === nextAssetHash
+            && currentRelease.coreArtifactHash === nextCoreArtifactHash
+            && typeof currentRelease.buildTime === 'string'
+        ) {
             return currentRelease.buildTime;
         }
     }
