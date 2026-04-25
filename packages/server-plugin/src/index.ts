@@ -13,7 +13,7 @@ let runtime: AuthorityRuntime | null = null;
 export async function init(router: any): Promise<void> {
     runtime ??= createAuthorityRuntime();
     registerRoutes(router, runtime);
-    void runtime.install.bootstrap();
+    await runtime.install.bootstrap();
     void runtime.core.start();
 }
 

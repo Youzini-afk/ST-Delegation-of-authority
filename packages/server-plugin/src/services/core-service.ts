@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
@@ -693,9 +694,24 @@ function readArtifact(root: string): CoreArtifact | null {
         return null;
     }
 
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8')) as AuthorityCoreManagedMetadata;
+    let metadata: AuthorityCoreManagedMetadata;
+    try {
+        metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8')) as AuthorityCoreManagedMetadata;
+    } catch {
+        return null;
+    }
+
+    if (metadata.managedBy !== 'authority' || metadata.platform !== process.platform || metadata.arch !== process.arch) {
+        return null;
+    }
+
     const binaryPath = path.join(platformDir, metadata.binaryName);
     if (!fs.existsSync(binaryPath)) {
+        return null;
+    }
+
+    const binarySha256 = crypto.createHash('sha256').update(fs.readFileSync(binaryPath)).digest('hex');
+    if (metadata.binarySha256 !== binarySha256) {
         return null;
     }
 

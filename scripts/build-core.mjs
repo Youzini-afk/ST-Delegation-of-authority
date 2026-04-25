@@ -35,11 +35,23 @@ if (!fs.existsSync(builtBinaryPath)) {
     throw new Error(`Built core binary not found at ${builtBinaryPath}`);
 }
 
+const existingMetadata = fs.existsSync(metadataPath)
+    ? JSON.parse(fs.readFileSync(metadataPath, 'utf8'))
+    : null;
 fs.rmSync(managedRoot, { recursive: true, force: true });
 fs.mkdirSync(managedRoot, { recursive: true });
 fs.copyFileSync(builtBinaryPath, targetBinaryPath);
 
 const binarySha256 = crypto.createHash('sha256').update(fs.readFileSync(targetBinaryPath)).digest('hex');
+const builtAt = existingMetadata
+    && existingMetadata.version === version
+    && existingMetadata.platform === process.platform
+    && existingMetadata.arch === process.arch
+    && existingMetadata.binaryName === binaryName
+    && existingMetadata.binarySha256 === binarySha256
+    && typeof existingMetadata.builtAt === 'string'
+    ? existingMetadata.builtAt
+    : new Date().toISOString();
 const metadata = {
     managedBy: 'authority',
     version,
@@ -47,7 +59,7 @@ const metadata = {
     arch: process.arch,
     binaryName,
     binarySha256,
-    builtAt: new Date().toISOString(),
+    builtAt,
 };
 
 fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');

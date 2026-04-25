@@ -67,6 +67,7 @@ function stageInstallable() {
     const coreArtifactHash = hashDirectory(managedCoreDir);
     const buildTime = resolveBuildTime(pluginVersion, assetHash, coreArtifactHash);
     const coreArtifactPlatform = readCoreArtifactPlatform(managedCoreDir);
+    const coreMetadata = readJson(path.join(managedCoreDir, coreArtifactPlatform, 'authority-core.json'));
 
     const release = {
         pluginId: 'authority',
@@ -77,6 +78,7 @@ function stageInstallable() {
         coreVersion: pluginVersion,
         coreArtifactHash,
         coreArtifactPlatform,
+        coreBinarySha256: coreMetadata.binarySha256,
         buildTime,
     };
 

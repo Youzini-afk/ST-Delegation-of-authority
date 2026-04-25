@@ -2,8 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+    AUTHORITY_MANAGED_CORE_DIR,
     AUTHORITY_MANAGED_FILE,
     AUTHORITY_PLUGIN_ID,
     AUTHORITY_RELEASE_FILE,
@@ -16,6 +17,7 @@ const cleanupDirs: string[] = [];
 
 describe('InstallService', () => {
     afterEach(() => {
+        vi.restoreAllMocks();
         while (cleanupDirs.length > 0) {
             const dir = cleanupDirs.pop();
             if (dir) {
@@ -34,6 +36,7 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('installed');
         expect(status.sdkDeployedVersion).toBe('0.1.0');
+        expect(status.coreVerified).toBe(true);
         expect(fs.existsSync(path.join(targetDir, 'index.js'))).toBe(true);
         expect(managed.managedBy).toBe(AUTHORITY_PLUGIN_ID);
         expect(managed.sdkVersion).toBe('0.1.0');
@@ -48,6 +51,7 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('ready');
         expect(status.sdkDeployedVersion).toBe('0.1.0');
+        expect(status.coreVerified).toBe(true);
     });
 
     it('updates the deployed SDK when the bundled version changes', async () => {
@@ -62,6 +66,7 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('updated');
         expect(status.sdkDeployedVersion).toBe('0.2.0');
+        expect(status.coreVerified).toBe(true);
         expect(deployedScript).toContain('0.2.0');
     });
 
@@ -75,6 +80,7 @@ describe('InstallService', () => {
         const status = await service.bootstrap();
 
         expect(status.installStatus).toBe('conflict');
+        expect(status.coreVerified).toBe(true);
         expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain('LegacyAuthority');
         expect(fs.existsSync(path.join(targetDir, AUTHORITY_MANAGED_FILE))).toBe(false);
     });
@@ -90,7 +96,39 @@ describe('InstallService', () => {
         const status = await service.bootstrap();
 
         expect(status.installStatus).toBe('updated');
+        expect(status.coreVerified).toBe(true);
         expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain('0.1.0');
+    });
+
+    it('restores the previous managed SDK when an update copy fails', async () => {
+        const setup = createInstallFixture({ sdkVersion: '0.1.0', sdkScript: 'window.STAuthority={version:"0.1.0"};\n' });
+        const service = createService(setup);
+        await service.bootstrap();
+        const targetDir = getTargetDir(setup.sillyTavernRoot);
+
+        writeBundledSdk(setup.pluginRoot, '0.2.0', 'window.STAuthority={version:"0.2.0"};\n');
+        vi.spyOn(fs, 'cpSync').mockImplementationOnce(() => {
+            throw new Error('simulated copy failure');
+        });
+        const failedService = createService(setup);
+        const status = await failedService.bootstrap();
+
+        expect(status.installStatus).toBe('error');
+        expect(status.coreVerified).toBe(false);
+        expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain('0.1.0');
+        expect(readJson<AuthorityManagedMetadata>(path.join(targetDir, AUTHORITY_MANAGED_FILE)).sdkVersion).toBe('0.1.0');
+    });
+
+    it('reports missing when the bundled core artifact is absent', async () => {
+        const setup = createInstallFixture();
+        fs.rmSync(path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR), { recursive: true, force: true });
+        const service = createService(setup);
+
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('missing');
+        expect(status.coreVerified).toBe(false);
+        expect(status.installMessage).toContain('Managed authority-core metadata is missing');
     });
 });
 
@@ -150,16 +188,47 @@ function writeBundledSdk(pluginRoot: string, sdkVersion: string, sdkScript: stri
         version: sdkVersion,
     }, null, 2), 'utf8');
 
+    const core = writeBundledCore(pluginRoot, sdkVersion);
     const release: AuthorityReleaseMetadata = {
         pluginId: AUTHORITY_PLUGIN_ID,
         pluginVersion: sdkVersion,
         sdkExtensionId: AUTHORITY_SDK_EXTENSION_ID,
         sdkVersion,
         assetHash: hashDirectory(bundledDir),
+        coreVersion: sdkVersion,
+        coreArtifactHash: core.artifactHash,
+        coreArtifactPlatform: core.artifactPlatform,
+        coreBinarySha256: core.binarySha256,
         buildTime: new Date().toISOString(),
     };
 
     fs.writeFileSync(path.join(pluginRoot, AUTHORITY_RELEASE_FILE), JSON.stringify(release, null, 2), 'utf8');
+}
+
+function writeBundledCore(pluginRoot: string, version: string): { artifactHash: string; artifactPlatform: string; binarySha256: string } {
+    const artifactPlatform = `${process.platform}-${process.arch}`;
+    const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
+    const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
+    const platformDir = path.join(coreRoot, artifactPlatform);
+    const binaryPath = path.join(platformDir, binaryName);
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.mkdirSync(platformDir, { recursive: true });
+    fs.writeFileSync(binaryPath, `authority-core ${version}\n`, 'utf8');
+    const binarySha256 = hashFile(binaryPath);
+    fs.writeFileSync(path.join(platformDir, 'authority-core.json'), JSON.stringify({
+        managedBy: AUTHORITY_PLUGIN_ID,
+        version,
+        platform: process.platform,
+        arch: process.arch,
+        binaryName,
+        binarySha256,
+        builtAt: new Date().toISOString(),
+    }, null, 2), 'utf8');
+    return {
+        artifactHash: hashDirectory(coreRoot),
+        artifactPlatform,
+        binarySha256,
+    };
 }
 
 function getTargetDir(sillyTavernRoot: string): string {
@@ -180,6 +249,10 @@ function hashDirectory(rootDir: string): string {
         hash.update('\0');
     }
     return hash.digest('hex');
+}
+
+function hashFile(filePath: string): string {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
 function listFiles(rootDir: string): string[] {

@@ -231,6 +231,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             pluginVersion: install.pluginVersion,
             sdkBundledVersion: install.sdkBundledVersion,
             sdkDeployedVersion: install.sdkDeployedVersion,
+            coreBundledVersion: install.coreBundledVersion,
+            coreArtifactPlatform: install.coreArtifactPlatform,
+            coreArtifactHash: install.coreArtifactHash,
+            coreBinarySha256: install.coreBinarySha256,
+            coreVerified: install.coreVerified,
             installStatus: install.installStatus,
             installMessage: install.installMessage,
             core,
@@ -853,16 +858,19 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:net */ "node:net");
-/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_net__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
-/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:process */ "node:process");
-/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_process__WEBPACK_IMPORTED_MODULE_3__);
-/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! node:child_process */ "node:child_process");
-/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_4__);
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:net */ "node:net");
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_net__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! node:process */ "node:process");
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(node_process__WEBPACK_IMPORTED_MODULE_4__);
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_5___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_5__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 
@@ -883,15 +891,15 @@ class CoreService {
     stopping = false;
     status;
     constructor(options = {}) {
-        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(options.runtimeDir ?? __dirname);
-        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(options.cwd ?? node_process__WEBPACK_IMPORTED_MODULE_3___default().cwd());
-        this.env = options.env ?? (node_process__WEBPACK_IMPORTED_MODULE_3___default().env);
+        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.runtimeDir ?? __dirname);
+        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.cwd ?? node_process__WEBPACK_IMPORTED_MODULE_4___default().cwd());
+        this.env = options.env ?? (node_process__WEBPACK_IMPORTED_MODULE_4___default().env);
         this.logger = options.logger ?? console;
         this.status = {
             enabled: true,
             state: 'stopped',
-            platform: (node_process__WEBPACK_IMPORTED_MODULE_3___default().platform),
-            arch: (node_process__WEBPACK_IMPORTED_MODULE_3___default().arch),
+            platform: (node_process__WEBPACK_IMPORTED_MODULE_4___default().platform),
+            arch: (node_process__WEBPACK_IMPORTED_MODULE_4___default().arch),
             binaryPath: null,
             port: null,
             pid: null,
@@ -923,7 +931,7 @@ class CoreService {
             this.setStatus('missing', {
                 binaryPath: null,
                 version: null,
-                lastError: `Authority core binary not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR}`,
+                lastError: `Authority core binary not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR}`,
                 port: null,
                 pid: null,
                 startedAt: null,
@@ -932,9 +940,9 @@ class CoreService {
             return this.getStatus();
         }
         const port = await getAvailablePort();
-        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.randomToken)();
-        const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_4__.spawn)(artifact.binaryPath, [], {
-            cwd: node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(artifact.binaryPath),
+        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.randomToken)();
+        const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_5__.spawn)(artifact.binaryPath, [], {
+            cwd: node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(artifact.binaryPath),
             env: {
                 ...this.env,
                 AUTHORITY_CORE_HOST: '127.0.0.1',
@@ -973,7 +981,7 @@ class CoreService {
             return this.getStatus();
         }
         catch (error) {
-            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.asErrorMessage)(error);
+            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.asErrorMessage)(error);
             this.logger.error(`[authority] Failed to start authority-core: ${message}`);
             await this.stop();
             this.setStatus('error', {
@@ -1041,7 +1049,7 @@ class CoreService {
             return health;
         }
         catch (error) {
-            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.asErrorMessage)(error);
+            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.asErrorMessage)(error);
             this.status = {
                 ...this.status,
                 state: 'error',
@@ -1351,13 +1359,13 @@ class CoreService {
         const explicitRoot = this.env.AUTHORITY_CORE_ROOT?.trim();
         const candidates = new Set();
         if (explicitRoot) {
-            candidates.add(node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(explicitRoot));
+            candidates.add(node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(explicitRoot));
         }
         for (const origin of [this.runtimeDir, this.cwd]) {
-            let current = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(origin);
+            let current = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(origin);
             while (true) {
-                candidates.add(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR));
-                const parent = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(current);
+                candidates.add(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR));
+                const parent = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(current);
                 if (parent === current) {
                     break;
                 }
@@ -1397,14 +1405,27 @@ class CoreService {
     }
 }
 function readArtifact(root) {
-    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(root, `${(node_process__WEBPACK_IMPORTED_MODULE_3___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_3___default().arch)}`);
-    const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, 'authority-core.json');
+    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(root, `${(node_process__WEBPACK_IMPORTED_MODULE_4___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)}`);
+    const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, 'authority-core.json');
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(metadataPath)) {
         return null;
     }
-    const metadata = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(metadataPath, 'utf8'));
-    const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, metadata.binaryName);
+    let metadata;
+    try {
+        metadata = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(metadataPath, 'utf8'));
+    }
+    catch {
+        return null;
+    }
+    if (metadata.managedBy !== 'authority' || metadata.platform !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) || metadata.arch !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)) {
+        return null;
+    }
+    const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, metadata.binaryName);
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(binaryPath)) {
+        return null;
+    }
+    const binarySha256 = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(binaryPath)).digest('hex');
+    if (metadata.binarySha256 !== binarySha256) {
         return null;
     }
     return {
@@ -1425,7 +1446,7 @@ async function fetchHealth(port, token) {
 }
 async function getAvailablePort() {
     return await new Promise((resolve, reject) => {
-        const server = node_net__WEBPACK_IMPORTED_MODULE_1___default().createServer();
+        const server = node_net__WEBPACK_IMPORTED_MODULE_2___default().createServer();
         server.unref();
         server.on('error', reject);
         server.listen(0, '127.0.0.1', () => {
@@ -1577,6 +1598,11 @@ class InstallService {
             pluginVersion,
             sdkBundledVersion,
             sdkDeployedVersion: null,
+            coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
+            coreArtifactPlatform: this.releaseMetadata?.coreArtifactPlatform ?? null,
+            coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
+            coreBinarySha256: this.releaseMetadata?.coreBinarySha256 ?? null,
+            coreVerified: false,
         };
     }
     getStatus() {
@@ -1586,21 +1612,40 @@ class InstallService {
         const bundledDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_SDK_DIR);
         try {
             if (!this.releaseMetadata || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(bundledDir)) {
-                return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.');
+                return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.', {
+                    sdkDeployedVersion: null,
+                    coreVerified: false,
+                });
+            }
+            const coreCheck = this.verifyBundledCore();
+            if (!coreCheck.ok) {
+                return this.setStatus('missing', coreCheck.message, {
+                    sdkDeployedVersion: null,
+                    coreVerified: false,
+                });
             }
             const sillyTavernRoot = this.resolveSillyTavernRoot();
             if (!sillyTavernRoot) {
-                return this.setStatus('missing', 'Unable to resolve the SillyTavern root for managed SDK deployment.');
+                return this.setStatus('missing', 'Unable to resolve the SillyTavern root for managed SDK deployment.', {
+                    sdkDeployedVersion: null,
+                    coreVerified: true,
+                });
             }
             const targetDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-authority-sdk');
             const managedFile = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE);
             const existingManaged = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(managedFile, null);
             if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetDir)) {
                 this.deployBundledSdk(bundledDir, targetDir);
-                return this.setStatus('installed', `Authority SDK deployed to ${targetDir}.`, this.releaseMetadata.sdkVersion);
+                return this.setStatus('installed', `Authority SDK deployed to ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                    sdkDeployedVersion: this.releaseMetadata.sdkVersion,
+                    coreVerified: true,
+                });
             }
             if (!existingManaged || existingManaged.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID) {
-                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID}.`, null);
+                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID}. Core artifact verified for ${coreCheck.platform}.`, {
+                    sdkDeployedVersion: null,
+                    coreVerified: true,
+                });
             }
             const currentHash = hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE]));
             const needsUpdate = existingManaged.sdkVersion !== this.releaseMetadata.sdkVersion
@@ -1608,14 +1653,23 @@ class InstallService {
                 || currentHash !== this.releaseMetadata.assetHash;
             if (needsUpdate) {
                 this.deployBundledSdk(bundledDir, targetDir);
-                return this.setStatus('updated', `Authority SDK refreshed at ${targetDir}.`, this.releaseMetadata.sdkVersion);
+                return this.setStatus('updated', `Authority SDK refreshed at ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                    sdkDeployedVersion: this.releaseMetadata.sdkVersion,
+                    coreVerified: true,
+                });
             }
-            return this.setStatus('ready', `Authority SDK is already available at ${targetDir}.`, existingManaged.sdkVersion);
+            return this.setStatus('ready', `Authority SDK is already available at ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                sdkDeployedVersion: existingManaged.sdkVersion,
+                coreVerified: true,
+            });
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             this.logger.error(`[authority] Managed SDK deployment failed: ${message}`);
-            return this.setStatus('error', message);
+            return this.setStatus('error', message, {
+                sdkDeployedVersion: null,
+                coreVerified: false,
+            });
         }
     }
     resolveSillyTavernRoot() {
@@ -1635,25 +1689,112 @@ class InstallService {
     deployBundledSdk(bundledDir, targetDir) {
         const parentDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetDir);
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(parentDir, { recursive: true });
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(targetDir, { recursive: true, force: true });
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().cpSync(bundledDir, targetDir, { recursive: true, force: true });
-        const metadata = {
-            managedBy: _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID,
-            pluginVersion: this.releaseMetadata?.pluginVersion ?? this.status.pluginVersion,
-            sdkVersion: this.releaseMetadata?.sdkVersion ?? this.status.sdkBundledVersion,
-            assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE])),
-            installedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
-            targetPath: targetDir,
-        };
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE), metadata);
-        this.logger.info(`[authority] Managed SDK deployed to ${targetDir}`);
+        const backupDir = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetDir)
+            ? node_path__WEBPACK_IMPORTED_MODULE_2___default().join(parentDir, `${node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(targetDir)}.authority-backup-${Date.now()}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`)
+            : null;
+        if (backupDir) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(targetDir, backupDir);
+        }
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().cpSync(bundledDir, targetDir, { recursive: true, force: true });
+            const metadata = {
+                managedBy: _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID,
+                pluginVersion: this.releaseMetadata?.pluginVersion ?? this.status.pluginVersion,
+                sdkVersion: this.releaseMetadata?.sdkVersion ?? this.status.sdkBundledVersion,
+                assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE])),
+                installedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
+                targetPath: targetDir,
+            };
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE), metadata);
+            if (backupDir) {
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(backupDir, { recursive: true, force: true });
+            }
+            this.logger.info(`[authority] Managed SDK deployed to ${targetDir}`);
+        }
+        catch (error) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(targetDir, { recursive: true, force: true });
+            if (backupDir && node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(backupDir)) {
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(backupDir, targetDir);
+            }
+            throw error;
+        }
     }
-    setStatus(installStatus, installMessage, sdkDeployedVersion = null) {
+    verifyBundledCore() {
+        const release = this.releaseMetadata;
+        if (!release) {
+            return { ok: false, message: 'Authority release metadata is missing.' };
+        }
+        const expectedPlatform = `${process.platform}-${process.arch}`;
+        if (release.coreArtifactPlatform && release.coreArtifactPlatform !== expectedPlatform) {
+            return {
+                ok: false,
+                message: `Managed authority-core artifact targets ${release.coreArtifactPlatform}, but this runtime needs ${expectedPlatform}.`,
+            };
+        }
+        const platformDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
+        const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, 'authority-core.json');
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(metadataPath)) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata is missing for ${expectedPlatform}.`,
+            };
+        }
+        const metadata = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(metadataPath, null);
+        if (!metadata || metadata.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata for ${expectedPlatform} is invalid.`,
+            };
+        }
+        if (metadata.platform !== process.platform || metadata.arch !== process.arch) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata platform mismatch: ${metadata.platform}-${metadata.arch}.`,
+            };
+        }
+        if (release.coreVersion && metadata.version !== release.coreVersion) {
+            return {
+                ok: false,
+                message: `Managed authority-core version mismatch: expected ${release.coreVersion}, found ${metadata.version}.`,
+            };
+        }
+        const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, metadata.binaryName);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(binaryPath)) {
+            return {
+                ok: false,
+                message: `Managed authority-core binary is missing: ${binaryPath}.`,
+            };
+        }
+        const binarySha256 = hashFile(binaryPath);
+        if (metadata.binarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match its metadata.',
+            };
+        }
+        if (release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match release metadata.',
+            };
+        }
+        if (release.coreArtifactHash) {
+            const artifactHash = hashDirectory(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_CORE_DIR));
+            if (artifactHash !== release.coreArtifactHash) {
+                return {
+                    ok: false,
+                    message: 'Managed authority-core artifact hash does not match release metadata.',
+                };
+            }
+        }
+        return { ok: true, platform: expectedPlatform };
+    }
+    setStatus(installStatus, installMessage, patch = {}) {
         this.status = {
             ...this.status,
+            ...patch,
             installStatus,
             installMessage,
-            sdkDeployedVersion,
         };
         const prefix = `[authority] ${installStatus.toUpperCase()}`;
         if (installStatus === 'error') {
@@ -1719,6 +1860,9 @@ function hashDirectory(rootDir, ignoreNames = new Set()) {
         hash.update('\0');
     }
     return hash.digest('hex');
+}
+function hashFile(filePath) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath)).digest('hex');
 }
 function listFiles(rootDir, ignoreNames) {
     const files = [];
@@ -2503,7 +2647,7 @@ let runtime = null;
 async function init(router) {
     runtime ??= (0,_runtime_js__WEBPACK_IMPORTED_MODULE_1__.createAuthorityRuntime)();
     (0,_routes_js__WEBPACK_IMPORTED_MODULE_2__.registerRoutes)(router, runtime);
-    void runtime.install.bootstrap();
+    await runtime.install.bootstrap();
     void runtime.core.start();
 }
 async function exit() {

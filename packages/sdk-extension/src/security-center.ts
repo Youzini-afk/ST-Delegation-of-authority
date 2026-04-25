@@ -48,6 +48,11 @@ interface ProbeResponse {
     pluginVersion: string;
     sdkBundledVersion: string;
     sdkDeployedVersion: string | null;
+    coreBundledVersion: string | null;
+    coreArtifactPlatform: string | null;
+    coreArtifactHash: string | null;
+    coreBinarySha256: string | null;
+    coreVerified: boolean;
     installStatus: string;
     installMessage: string;
     core: {
@@ -518,6 +523,8 @@ class SecurityCenterView {
                     <div class="authority-kv-grid">
                         <div><strong>插件版本</strong><div>${escapeHtml(this.state.probe?.pluginVersion ?? 'unknown')}</div></div>
                         <div><strong>SDK 部署</strong><div>${escapeHtml(this.state.probe ? getInstallStatusLabel(this.state.probe.installStatus) : 'unknown')}</div></div>
+                        <div><strong>Core 分发</strong><div>${escapeHtml(this.state.probe?.coreVerified ? '已校验' : '未校验')}</div></div>
+                        <div><strong>Core 目标平台</strong><div>${escapeHtml(this.state.probe?.coreArtifactPlatform ?? 'unknown')}</div></div>
                         <div><strong>Core 运行态</strong><div>${escapeHtml(getCoreStateLabel(core?.state))}</div></div>
                         <div><strong>Core PID</strong><div>${escapeHtml(core?.pid ? String(core.pid) : 'n/a')}</div></div>
                         <div><strong>Core 端口</strong><div>${escapeHtml(core?.port ? String(core.port) : 'n/a')}</div></div>

@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
     AUTHORITY_MANAGED_FILE,
+    AUTHORITY_MANAGED_CORE_DIR,
     AUTHORITY_MANAGED_SDK_DIR,
     AUTHORITY_PLUGIN_ID,
     AUTHORITY_RELEASE_FILE,
     AUTHORITY_SDK_EXTENSION_ID,
 } from '../constants.js';
 import type {
+    AuthorityCoreManagedMetadata,
     AuthorityManagedMetadata,
     AuthorityReleaseMetadata,
     InstallStatusSnapshot,
@@ -50,6 +52,11 @@ export class InstallService {
             pluginVersion,
             sdkBundledVersion,
             sdkDeployedVersion: null,
+            coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
+            coreArtifactPlatform: this.releaseMetadata?.coreArtifactPlatform ?? null,
+            coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
+            coreBinarySha256: this.releaseMetadata?.coreBinarySha256 ?? null,
+            coreVerified: false,
         };
     }
 
@@ -61,12 +68,26 @@ export class InstallService {
         const bundledDir = path.join(this.pluginRoot, AUTHORITY_MANAGED_SDK_DIR);
         try {
             if (!this.releaseMetadata || !fs.existsSync(bundledDir)) {
-                return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.');
+                return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.', {
+                    sdkDeployedVersion: null,
+                    coreVerified: false,
+                });
+            }
+
+            const coreCheck = this.verifyBundledCore();
+            if (!coreCheck.ok) {
+                return this.setStatus('missing', coreCheck.message, {
+                    sdkDeployedVersion: null,
+                    coreVerified: false,
+                });
             }
 
             const sillyTavernRoot = this.resolveSillyTavernRoot();
             if (!sillyTavernRoot) {
-                return this.setStatus('missing', 'Unable to resolve the SillyTavern root for managed SDK deployment.');
+                return this.setStatus('missing', 'Unable to resolve the SillyTavern root for managed SDK deployment.', {
+                    sdkDeployedVersion: null,
+                    coreVerified: true,
+                });
             }
 
             const targetDir = path.join(
@@ -82,11 +103,17 @@ export class InstallService {
 
             if (!fs.existsSync(targetDir)) {
                 this.deployBundledSdk(bundledDir, targetDir);
-                return this.setStatus('installed', `Authority SDK deployed to ${targetDir}.`, this.releaseMetadata.sdkVersion);
+                return this.setStatus('installed', `Authority SDK deployed to ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                    sdkDeployedVersion: this.releaseMetadata.sdkVersion,
+                    coreVerified: true,
+                });
             }
 
             if (!existingManaged || existingManaged.managedBy !== AUTHORITY_PLUGIN_ID) {
-                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${AUTHORITY_PLUGIN_ID}.`, null);
+                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${AUTHORITY_PLUGIN_ID}. Core artifact verified for ${coreCheck.platform}.`, {
+                    sdkDeployedVersion: null,
+                    coreVerified: true,
+                });
             }
 
             const currentHash = hashDirectory(targetDir, new Set([AUTHORITY_MANAGED_FILE]));
@@ -96,14 +123,23 @@ export class InstallService {
 
             if (needsUpdate) {
                 this.deployBundledSdk(bundledDir, targetDir);
-                return this.setStatus('updated', `Authority SDK refreshed at ${targetDir}.`, this.releaseMetadata.sdkVersion);
+                return this.setStatus('updated', `Authority SDK refreshed at ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                    sdkDeployedVersion: this.releaseMetadata.sdkVersion,
+                    coreVerified: true,
+                });
             }
 
-            return this.setStatus('ready', `Authority SDK is already available at ${targetDir}.`, existingManaged.sdkVersion);
+            return this.setStatus('ready', `Authority SDK is already available at ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                sdkDeployedVersion: existingManaged.sdkVersion,
+                coreVerified: true,
+            });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             this.logger.error(`[authority] Managed SDK deployment failed: ${message}`);
-            return this.setStatus('error', message);
+            return this.setStatus('error', message, {
+                sdkDeployedVersion: null,
+                coreVerified: false,
+            });
         }
     }
 
@@ -127,32 +163,130 @@ export class InstallService {
     private deployBundledSdk(bundledDir: string, targetDir: string): void {
         const parentDir = path.dirname(targetDir);
         fs.mkdirSync(parentDir, { recursive: true });
-        fs.rmSync(targetDir, { recursive: true, force: true });
-        fs.cpSync(bundledDir, targetDir, { recursive: true, force: true });
+        const backupDir = fs.existsSync(targetDir)
+            ? path.join(parentDir, `${path.basename(targetDir)}.authority-backup-${Date.now()}-${crypto.randomUUID()}`)
+            : null;
+        if (backupDir) {
+            fs.renameSync(targetDir, backupDir);
+        }
 
-        const metadata: AuthorityManagedMetadata = {
-            managedBy: AUTHORITY_PLUGIN_ID,
-            pluginVersion: this.releaseMetadata?.pluginVersion ?? this.status.pluginVersion,
-            sdkVersion: this.releaseMetadata?.sdkVersion ?? this.status.sdkBundledVersion,
-            assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([AUTHORITY_MANAGED_FILE])),
-            installedAt: nowIso(),
-            targetPath: targetDir,
-        };
+        try {
+            fs.cpSync(bundledDir, targetDir, { recursive: true, force: true });
 
-        atomicWriteJson(path.join(targetDir, AUTHORITY_MANAGED_FILE), metadata);
-        this.logger.info(`[authority] Managed SDK deployed to ${targetDir}`);
+            const metadata: AuthorityManagedMetadata = {
+                managedBy: AUTHORITY_PLUGIN_ID,
+                pluginVersion: this.releaseMetadata?.pluginVersion ?? this.status.pluginVersion,
+                sdkVersion: this.releaseMetadata?.sdkVersion ?? this.status.sdkBundledVersion,
+                assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([AUTHORITY_MANAGED_FILE])),
+                installedAt: nowIso(),
+                targetPath: targetDir,
+            };
+
+            atomicWriteJson(path.join(targetDir, AUTHORITY_MANAGED_FILE), metadata);
+            if (backupDir) {
+                fs.rmSync(backupDir, { recursive: true, force: true });
+            }
+            this.logger.info(`[authority] Managed SDK deployed to ${targetDir}`);
+        } catch (error) {
+            fs.rmSync(targetDir, { recursive: true, force: true });
+            if (backupDir && fs.existsSync(backupDir)) {
+                fs.renameSync(backupDir, targetDir);
+            }
+            throw error;
+        }
+    }
+
+    private verifyBundledCore(): { ok: true; platform: string } | { ok: false; message: string } {
+        const release = this.releaseMetadata;
+        if (!release) {
+            return { ok: false, message: 'Authority release metadata is missing.' };
+        }
+
+        const expectedPlatform = `${process.platform}-${process.arch}`;
+        if (release.coreArtifactPlatform && release.coreArtifactPlatform !== expectedPlatform) {
+            return {
+                ok: false,
+                message: `Managed authority-core artifact targets ${release.coreArtifactPlatform}, but this runtime needs ${expectedPlatform}.`,
+            };
+        }
+
+        const platformDir = path.join(this.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
+        const metadataPath = path.join(platformDir, 'authority-core.json');
+        if (!fs.existsSync(metadataPath)) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata is missing for ${expectedPlatform}.`,
+            };
+        }
+
+        const metadata = readJsonFile<AuthorityCoreManagedMetadata | null>(metadataPath, null);
+        if (!metadata || metadata.managedBy !== AUTHORITY_PLUGIN_ID) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata for ${expectedPlatform} is invalid.`,
+            };
+        }
+
+        if (metadata.platform !== process.platform || metadata.arch !== process.arch) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata platform mismatch: ${metadata.platform}-${metadata.arch}.`,
+            };
+        }
+
+        if (release.coreVersion && metadata.version !== release.coreVersion) {
+            return {
+                ok: false,
+                message: `Managed authority-core version mismatch: expected ${release.coreVersion}, found ${metadata.version}.`,
+            };
+        }
+
+        const binaryPath = path.join(platformDir, metadata.binaryName);
+        if (!fs.existsSync(binaryPath)) {
+            return {
+                ok: false,
+                message: `Managed authority-core binary is missing: ${binaryPath}.`,
+            };
+        }
+
+        const binarySha256 = hashFile(binaryPath);
+        if (metadata.binarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match its metadata.',
+            };
+        }
+
+        if (release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match release metadata.',
+            };
+        }
+
+        if (release.coreArtifactHash) {
+            const artifactHash = hashDirectory(path.join(this.pluginRoot, AUTHORITY_MANAGED_CORE_DIR));
+            if (artifactHash !== release.coreArtifactHash) {
+                return {
+                    ok: false,
+                    message: 'Managed authority-core artifact hash does not match release metadata.',
+                };
+            }
+        }
+
+        return { ok: true, platform: expectedPlatform };
     }
 
     private setStatus(
         installStatus: InstallStatusSnapshot['installStatus'],
         installMessage: string,
-        sdkDeployedVersion: string | null = null,
+        patch: Partial<Pick<InstallStatusSnapshot, 'sdkDeployedVersion' | 'coreVerified'>> = {},
     ): InstallStatusSnapshot {
         this.status = {
             ...this.status,
+            ...patch,
             installStatus,
             installMessage,
-            sdkDeployedVersion,
         };
 
         const prefix = `[authority] ${installStatus.toUpperCase()}`;
@@ -229,6 +363,10 @@ function hashDirectory(rootDir: string, ignoreNames = new Set<string>()): string
         hash.update('\0');
     }
     return hash.digest('hex');
+}
+
+function hashFile(filePath: string): string {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
 function listFiles(rootDir: string, ignoreNames: Set<string>): string[] {
