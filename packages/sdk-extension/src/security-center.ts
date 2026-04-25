@@ -58,6 +58,7 @@ interface ProbeResponse {
     coreArtifactHash: string | null;
     coreBinarySha256: string | null;
     coreVerified: boolean;
+    coreMessage: string | null;
     installStatus: string;
     installMessage: string;
     core: {
@@ -498,6 +499,7 @@ class SecurityCenterView {
             </div>
             ${this.state.probe ? `<div class="authority-inline-note">SDK ${escapeHtml(getInstallStatusLabel(this.state.probe.installStatus))} · 插件 ${escapeHtml(this.state.probe.pluginVersion)} · Core ${escapeHtml(this.state.probe.core.version ?? 'unknown')} · 平台 ${escapeHtml(this.state.probe.coreArtifactPlatforms?.join(', ') || 'unknown')}</div>` : ''}
             ${this.state.probe?.installMessage ? `<div class="authority-inline-note">${escapeHtml(this.state.probe.installMessage)}</div>` : ''}
+            ${this.state.probe?.coreMessage ? `<div class="authority-inline-note authority-inline-note--warning">${escapeHtml(this.state.probe.coreMessage)}</div>` : ''}
             ${this.state.probe?.core.lastError ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(this.state.probe.core.lastError)}</div>` : ''}
         `;
     }

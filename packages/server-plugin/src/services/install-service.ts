@@ -78,6 +78,7 @@ export class InstallService {
                 ?? this.releaseMetadata?.coreBinarySha256
                 ?? null,
             coreVerified: false,
+            coreMessage: null,
         };
     }
 
@@ -95,22 +96,20 @@ export class InstallService {
                 return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.', {
                     sdkDeployedVersion: null,
                     coreVerified: false,
+                    coreMessage: 'Managed Authority SDK bundle is not embedded in this plugin build.',
                 });
             }
 
             const coreCheck = this.verifyBundledCore();
-            if (!coreCheck.ok) {
-                return this.setStatus('missing', coreCheck.message, {
-                    sdkDeployedVersion: null,
-                    coreVerified: false,
-                });
-            }
+            const coreVerified = coreCheck.ok;
+            const coreMessage = coreCheck.ok ? coreCheck.message : coreCheck.message;
 
             const sillyTavernRoot = this.resolveSillyTavernRoot();
             if (!sillyTavernRoot) {
                 return this.setStatus('missing', 'Unable to resolve the SillyTavern root for managed SDK deployment.', {
                     sdkDeployedVersion: null,
-                    coreVerified: true,
+                    coreVerified,
+                    coreMessage,
                 });
             }
 
@@ -127,16 +126,18 @@ export class InstallService {
 
             if (!fs.existsSync(targetDir)) {
                 this.deployBundledSdk(bundledDir, targetDir);
-                return this.setStatus('installed', `Authority SDK deployed to ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                return this.setStatus('installed', buildInstallMessage('deployed', targetDir, coreCheck), {
                     sdkDeployedVersion: this.releaseMetadata.sdkVersion,
-                    coreVerified: true,
+                    coreVerified,
+                    coreMessage,
                 });
             }
 
             if (!existingManaged || existingManaged.managedBy !== AUTHORITY_PLUGIN_ID) {
-                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${AUTHORITY_PLUGIN_ID}. Core artifact verified for ${coreCheck.platform}.`, {
+                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${AUTHORITY_PLUGIN_ID}.`, {
                     sdkDeployedVersion: null,
-                    coreVerified: true,
+                    coreVerified,
+                    coreMessage,
                 });
             }
 
@@ -147,15 +148,17 @@ export class InstallService {
 
             if (needsUpdate) {
                 this.deployBundledSdk(bundledDir, targetDir);
-                return this.setStatus('updated', `Authority SDK refreshed at ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+                return this.setStatus('updated', buildInstallMessage('updated', targetDir, coreCheck), {
                     sdkDeployedVersion: this.releaseMetadata.sdkVersion,
-                    coreVerified: true,
+                    coreVerified,
+                    coreMessage,
                 });
             }
 
-            return this.setStatus('ready', `Authority SDK is already available at ${targetDir}. Core artifact verified for ${coreCheck.platform}.`, {
+            return this.setStatus('ready', buildInstallMessage('ready', targetDir, coreCheck), {
                 sdkDeployedVersion: existingManaged.sdkVersion,
-                coreVerified: true,
+                coreVerified,
+                coreMessage,
             });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -163,6 +166,7 @@ export class InstallService {
             return this.setStatus('error', message, {
                 sdkDeployedVersion: null,
                 coreVerified: false,
+                coreMessage: message,
             });
         }
     }
@@ -220,7 +224,7 @@ export class InstallService {
         }
     }
 
-    private verifyBundledCore(): { ok: true; platform: string } | { ok: false; message: string } {
+    private verifyBundledCore(): { ok: true; platform: string; message: string | null } | { ok: false; message: string } {
         const release = this.releaseMetadata;
         if (!release) {
             return { ok: false, message: 'Authority release metadata is missing.' };
@@ -297,33 +301,32 @@ export class InstallService {
             };
         }
 
+        const warnings: string[] = [];
         if (releaseArtifact) {
             const platformArtifactHash = hashDirectory(platformDir);
             if (releaseArtifact.artifactHash !== platformArtifactHash) {
-                return {
-                    ok: false,
-                    message: 'Managed authority-core platform artifact hash does not match release metadata.',
-                };
+                warnings.push('Managed authority-core platform artifact hash drift detected. SDK deployment remains enabled because the core binary itself is verified.');
             }
         }
 
         if (release.coreArtifactHash) {
             const artifactHash = hashDirectory(path.join(this.pluginRoot, AUTHORITY_MANAGED_CORE_DIR));
             if (artifactHash !== release.coreArtifactHash) {
-                return {
-                    ok: false,
-                    message: 'Managed authority-core artifact hash does not match release metadata.',
-                };
+                warnings.push('Managed authority-core artifact directory hash drift detected. SDK deployment remains enabled because the current platform binary is verified.');
             }
         }
 
-        return { ok: true, platform: expectedPlatform };
+        return {
+            ok: true,
+            platform: expectedPlatform,
+            message: warnings.length > 0 ? warnings.join(' ') : null,
+        };
     }
 
     private setStatus(
         installStatus: InstallStatusSnapshot['installStatus'],
         installMessage: string,
-        patch: Partial<Pick<InstallStatusSnapshot, 'sdkDeployedVersion' | 'coreVerified'>> = {},
+        patch: Partial<Pick<InstallStatusSnapshot, 'sdkDeployedVersion' | 'coreVerified' | 'coreMessage'>> = {},
     ): InstallStatusSnapshot {
         this.status = {
             ...this.status,
@@ -343,6 +346,28 @@ export class InstallService {
 
         return this.getStatus();
     }
+}
+
+function buildInstallMessage(
+    kind: 'deployed' | 'updated' | 'ready',
+    targetDir: string,
+    coreCheck: { ok: true; platform: string; message: string | null } | { ok: false; message: string },
+): string {
+    const prefix = kind === 'deployed'
+        ? `Authority SDK deployed to ${targetDir}.`
+        : kind === 'updated'
+            ? `Authority SDK refreshed at ${targetDir}.`
+            : `Authority SDK is already available at ${targetDir}.`;
+
+    if (!coreCheck.ok) {
+        return `${prefix} Core verification warning: ${coreCheck.message}`;
+    }
+
+    if (coreCheck.message) {
+        return `${prefix} Core verified for ${coreCheck.platform} with warnings: ${coreCheck.message}`;
+    }
+
+    return `${prefix} Core artifact verified for ${coreCheck.platform}.`;
 }
 
 function resolvePluginRoot(runtimeDir: string): string {

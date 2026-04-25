@@ -133,16 +133,18 @@ describe('InstallService', () => {
         expect(readJson<AuthorityManagedMetadata>(path.join(targetDir, AUTHORITY_MANAGED_FILE)).sdkVersion).toBe('0.1.0');
     });
 
-    it('reports missing when the bundled core artifact is absent', async () => {
+    it('deploys the SDK but reports a core warning when the bundled core artifact is absent', async () => {
         const setup = createInstallFixture();
         fs.rmSync(path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR), { recursive: true, force: true });
         const service = createService(setup);
 
         const status = await service.bootstrap();
 
-        expect(status.installStatus).toBe('missing');
+        expect(status.installStatus).toBe('installed');
         expect(status.coreVerified).toBe(false);
-        expect(status.installMessage).toContain('Managed authority-core metadata is missing');
+        expect(status.installMessage).toContain('Core verification warning');
+        expect(status.coreMessage).toContain('Managed authority-core metadata is missing');
+        expect(fs.existsSync(path.join(getTargetDir(setup.sillyTavernRoot), 'index.js'))).toBe(true);
     });
 
     it('verifies the current platform from multi-platform core metadata', async () => {
@@ -171,6 +173,44 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('installed');
         expect(status.coreVerified).toBe(true);
+    });
+
+    it('keeps SDK deployment enabled when core platform artifact hash drifts but binary verification still passes', async () => {
+        const setup = createInstallFixture();
+        const platformDir = path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, `${process.platform}-${process.arch}`);
+        const metadataPath = path.join(platformDir, 'authority-core.json');
+        const metadata = readJson<Record<string, unknown>>(metadataPath);
+        fs.writeFileSync(metadataPath, JSON.stringify({
+            ...metadata,
+            builtAt: '2030-01-01T00:00:00.000Z',
+        }, null, 2), 'utf8');
+
+        const service = createService(setup);
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.coreVerified).toBe(true);
+        expect(status.coreMessage).toContain('platform artifact hash drift detected');
+        expect(fs.existsSync(path.join(getTargetDir(setup.sillyTavernRoot), 'index.js'))).toBe(true);
+    });
+
+    it('keeps SDK deployment enabled when managed core root artifact hash drifts because of another platform directory', async () => {
+        const setup = createInstallFixture();
+        const originalRelease = readJson<AuthorityReleaseMetadata>(path.join(setup.pluginRoot, AUTHORITY_RELEASE_FILE));
+        const originalRootArtifactHash = originalRelease.coreArtifactHash ?? '';
+        addExtraCoreArtifact(setup.pluginRoot, 'android', 'arm64');
+
+        const releasePath = path.join(setup.pluginRoot, AUTHORITY_RELEASE_FILE);
+        const release = readJson<AuthorityReleaseMetadata>(releasePath);
+        release.coreArtifactHash = originalRootArtifactHash;
+        fs.writeFileSync(releasePath, JSON.stringify(release, null, 2), 'utf8');
+
+        const service = createService(setup);
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.coreVerified).toBe(true);
+        expect(status.coreMessage).toContain('artifact directory hash drift detected');
     });
 });
 

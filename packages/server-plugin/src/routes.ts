@@ -152,6 +152,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             coreArtifactHash: install.coreArtifactHash,
             coreBinarySha256: install.coreBinarySha256,
             coreVerified: install.coreVerified,
+            coreMessage: install.coreMessage,
             installStatus: install.installStatus,
             installMessage: install.installMessage,
             core,

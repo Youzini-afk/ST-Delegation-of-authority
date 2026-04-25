@@ -164,6 +164,7 @@ export interface InstallStatusSnapshot {
     coreArtifactHash: string | null;
     coreBinarySha256: string | null;
     coreVerified: boolean;
+    coreMessage: string | null;
 }
 
 export interface AuthorityCoreHealthSnapshot {
