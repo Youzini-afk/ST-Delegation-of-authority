@@ -46,6 +46,7 @@ const MAX_AUDIT_LINES = 200;
 const SUPPORTED_RESOURCES = [
     'storage.kv',
     'storage.blob',
+    'fs.private',
     'sql.private',
     'http.fetch',
     'jobs.background',
@@ -54,6 +55,7 @@ const SUPPORTED_RESOURCES = [
 const RESOURCE_RISK = {
     'storage.kv': 'low',
     'storage.blob': 'low',
+    'fs.private': 'medium',
     'sql.private': 'medium',
     'http.fetch': 'medium',
     'jobs.background': 'medium',
@@ -62,6 +64,7 @@ const RESOURCE_RISK = {
 const DEFAULT_POLICY_STATUS = {
     'storage.kv': 'prompt',
     'storage.blob': 'prompt',
+    'fs.private': 'prompt',
     'sql.private': 'prompt',
     'http.fetch': 'prompt',
     'jobs.background': 'prompt',
@@ -219,6 +222,35 @@ function previewSqlStatement(statement) {
     const normalized = statement.replace(/\s+/g, ' ').trim();
     return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
 }
+function summarizeBlobRecords(records) {
+    return {
+        count: records.length,
+        totalSizeBytes: records.reduce((sum, record) => sum + record.size, 0),
+    };
+}
+function summarizeDatabases(databases) {
+    return {
+        count: databases.length,
+        totalSizeBytes: databases.reduce((sum, record) => sum + record.sizeBytes, 0),
+    };
+}
+async function buildExtensionStorageSummary(runtime, user, extensionId, databases = listPrivateSqlDatabases(user, extensionId).databases) {
+    const [kvEntries, blobs, files] = await Promise.all([
+        runtime.storage.listKv(user, extensionId),
+        runtime.storage.listBlobs(user, extensionId),
+        runtime.files.getUsageSummary(user, extensionId),
+    ]);
+    const blobSummary = summarizeBlobRecords(blobs);
+    const databaseSummary = summarizeDatabases(databases);
+    return {
+        kvEntries: Object.keys(kvEntries).length,
+        blobCount: blobSummary.count,
+        blobBytes: blobSummary.totalSizeBytes,
+        databaseCount: databaseSummary.count,
+        databaseBytes: databaseSummary.totalSizeBytes,
+        files,
+    };
+}
 function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_2__.createAuthorityRuntime)()) {
     router.post('/probe', async (_req, res) => {
         await runtime.core.refreshHealth();
@@ -299,10 +331,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
+                const databases = listPrivateSqlDatabases(user, extension.id).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
                     deniedCount: grants.filter(grant => grant.status === 'denied').length,
+                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, databases),
                 };
             }));
             ok(res, list);
@@ -319,13 +353,15 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!extension) {
                 throw new Error('Extension not found');
             }
+            const databases = listPrivateSqlDatabases(user, extensionId).databases;
             ok(res, {
                 extension,
                 grants: await runtime.permissions.listPersistentGrants(user, extensionId),
                 policies: await runtime.permissions.getPolicyEntries(user, extensionId),
                 activity: await runtime.audit.getRecentActivity(user, extensionId),
                 jobs: await runtime.jobs.list(user, extensionId),
-                databases: listPrivateSqlDatabases(user, extensionId).databases,
+                databases,
+                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases),
             });
         }
         catch (error) {
@@ -459,6 +495,102 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         }
         catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
+        }
+    });
+    router.post('/fs/private/mkdir', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            const entry = await runtime.files.mkdir(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file mkdir', { path: payload.path });
+            ok(res, { entry });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+    router.post('/fs/private/read-dir', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            const entries = await runtime.files.readDir(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read dir', { path: payload.path });
+            ok(res, { entries });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+    router.post('/fs/private/write-file', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            const entry = await runtime.files.writeFile(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file write', { path: payload.path });
+            ok(res, { entry });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+    router.post('/fs/private/read-file', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            const result = await runtime.files.readFile(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+    router.post('/fs/private/delete', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            await runtime.files.delete(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file delete', { path: payload.path });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+    router.post('/fs/private/stat', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            const entry = await runtime.files.stat(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file stat', { path: payload.path });
+            ok(res, { entry });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
         }
     });
     router.post('/sql/query', async (req, res) => {
@@ -736,8 +868,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
 /* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
 /* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+
 
 
 
@@ -757,8 +891,9 @@ function createAuthorityRuntime() {
     const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_5__.InstallService();
     const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__.PolicyService(core);
     const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_9__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_10__.StorageService(core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_10__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_11__.StorageService(core);
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_9__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__.HttpService(core);
     const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__.JobService(core);
     return {
@@ -771,6 +906,7 @@ function createAuthorityRuntime() {
         permissions,
         sessions,
         storage,
+        files,
         http,
         jobs,
     };
@@ -1228,6 +1364,31 @@ class CoreService {
             ...request,
         });
         return response.entries;
+    }
+    async mkdirPrivateFile(request) {
+        const response = await this.request('/v1/fs/private/mkdir', request);
+        return response.entry;
+    }
+    async readPrivateDir(request) {
+        const response = await this.request('/v1/fs/private/read-dir', request);
+        return response.entries;
+    }
+    async writePrivateFile(request) {
+        const response = await this.request('/v1/fs/private/write-file', request);
+        return response.entry;
+    }
+    async readPrivateFile(request) {
+        return await this.request('/v1/fs/private/read-file', request);
+    }
+    async deletePrivateFile(request) {
+        const response = await this.request('/v1/fs/private/delete', request);
+        if (!response.ok) {
+            throw new Error('Private file delete returned unsuccessful response');
+        }
+    }
+    async statPrivateFile(request) {
+        const response = await this.request('/v1/fs/private/stat', request);
+        return response.entry;
     }
     async fetchHttp(request) {
         return await this.request('/v1/http/fetch', request);
@@ -2206,6 +2367,151 @@ class PolicyService {
 
 /***/ },
 
+/***/ "./src/services/private-fs-service.ts"
+/*!********************************************!*\
+  !*** ./src/services/private-fs-service.ts ***!
+  \********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   PrivateFsService: () => (/* binding */ PrivateFsService)
+/* harmony export */ });
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+class PrivateFsService {
+    core;
+    constructor(core) {
+        this.core = core;
+    }
+    async mkdir(user, extensionId, request) {
+        return await this.core.mkdirPrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            ...request,
+        });
+    }
+    async readDir(user, extensionId, request) {
+        const rootDir = this.getRootDir(user, extensionId);
+        if (isRootPath(request.path) && !node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(rootDir)) {
+            return [];
+        }
+        return await this.core.readPrivateDir({
+            rootDir,
+            ...request,
+        });
+    }
+    async writeFile(user, extensionId, request) {
+        return await this.core.writePrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            ...request,
+        });
+    }
+    async readFile(user, extensionId, request) {
+        return await this.core.readPrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            ...request,
+        });
+    }
+    async delete(user, extensionId, request) {
+        await this.core.deletePrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            ...request,
+        });
+    }
+    async stat(user, extensionId, request) {
+        return await this.core.statPrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            ...request,
+        });
+    }
+    async getUsageSummary(user, extensionId) {
+        const rootDir = this.getRootDir(user, extensionId);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(rootDir)) {
+            return emptyUsageSummary();
+        }
+        try {
+            const rootStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().lstatSync(rootDir);
+            if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+                return emptyUsageSummary();
+            }
+        }
+        catch {
+            return emptyUsageSummary();
+        }
+        let fileCount = 0;
+        let directoryCount = 0;
+        let totalSizeBytes = 0;
+        let latestUpdatedAtMs = 0;
+        const stack = [rootDir];
+        while (stack.length > 0) {
+            const currentDir = stack.pop();
+            let entries;
+            try {
+                entries = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(currentDir, { withFileTypes: true });
+            }
+            catch {
+                continue;
+            }
+            for (const entry of entries) {
+                const fullPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(currentDir, entry.name);
+                let stats;
+                try {
+                    stats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().lstatSync(fullPath);
+                }
+                catch {
+                    continue;
+                }
+                if (stats.isSymbolicLink()) {
+                    continue;
+                }
+                latestUpdatedAtMs = Math.max(latestUpdatedAtMs, stats.mtimeMs);
+                if (entry.isDirectory()) {
+                    directoryCount += 1;
+                    stack.push(fullPath);
+                    continue;
+                }
+                if (entry.isFile()) {
+                    fileCount += 1;
+                    totalSizeBytes += stats.size;
+                }
+            }
+        }
+        return {
+            fileCount,
+            directoryCount,
+            totalSizeBytes,
+            latestUpdatedAt: latestUpdatedAtMs > 0 ? new Date(latestUpdatedAtMs).toISOString() : null,
+        };
+    }
+    getRootDir(user, extensionId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.getUserAuthorityPaths)(user);
+        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
+    }
+}
+function isRootPath(value) {
+    const trimmed = value.trim();
+    return trimmed === '' || trimmed === '/' || trimmed === '.';
+}
+function emptyUsageSummary() {
+    return {
+        fileCount: 0,
+        directoryCount: 0,
+        totalSizeBytes: 0,
+        latestUpdatedAt: null,
+    };
+}
+
+
+/***/ },
+
 /***/ "./src/services/session-service.ts"
 /*!*****************************************!*\
   !*** ./src/services/session-service.ts ***!
@@ -2402,6 +2708,7 @@ function getUserAuthorityPaths(user) {
         sqlPrivateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(sqlDir, 'private'),
         kvDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'kv'),
         blobDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'blobs'),
+        filesDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'files'),
         controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
     };
 }

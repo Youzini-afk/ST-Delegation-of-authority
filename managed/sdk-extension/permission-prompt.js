@@ -19,9 +19,9 @@ export async function showPermissionPrompt(context) {
     setField(root, 'extension-name', context.extensionDisplayName);
     setField(root, 'extension-id', context.extensionId);
     setField(root, 'resource', getResourceLabel(context.resource));
-    setField(root, 'target', context.target || 'default');
+    setField(root, 'target', getTargetLabel(context.resource, context.target));
     setField(root, 'risk', getRiskLabel(context.riskLevel));
-    setField(root, 'reason', context.reason || '该扩展请求使用一项受治理的服务端能力。');
+    setField(root, 'reason', context.reason || getDefaultReason(context.resource));
     const popup = new Popup(root, POPUP_TEXT_TYPE, '', {
         okButton: false,
         cancelButton: '取消',
@@ -47,6 +47,8 @@ function getResourceLabel(resource) {
             return 'KV 存储';
         case 'storage.blob':
             return 'Blob 存储';
+        case 'fs.private':
+            return '私有文件夹';
         case 'sql.private':
             return '私有 SQL 数据库';
         case 'http.fetch':
@@ -58,6 +60,18 @@ function getResourceLabel(resource) {
         default:
             return resource;
     }
+}
+function getTargetLabel(resource, target) {
+    if (resource === 'fs.private' && (!target || target === '*')) {
+        return '插件私有目录';
+    }
+    return target || 'default';
+}
+function getDefaultReason(resource) {
+    if (resource === 'fs.private') {
+        return '该扩展请求在它自己的服务端私有目录中创建、读取、修改或删除文件。';
+    }
+    return '该扩展请求使用一项受治理的服务端能力。';
 }
 function getRiskLabel(riskLevel) {
     switch (riskLevel) {

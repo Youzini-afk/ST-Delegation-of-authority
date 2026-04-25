@@ -4,6 +4,7 @@ import { openSecurityCenter } from './security-center.js';
 export class AuthorityClient {
     config;
     storage;
+    fs;
     sql;
     http;
     jobs;
@@ -74,6 +75,71 @@ export class AuthorityClient {
                     });
                     return response.entries;
                 },
+            },
+        };
+        this.fs = {
+            mkdir: async (path, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `在私有文件夹中创建目录 ${path}` });
+                const response = await this.requestWithSession('/fs/private/mkdir', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        recursive: options.recursive,
+                    },
+                });
+                return response.entry;
+            },
+            readDir: async (path = '/', options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `列出私有目录 ${path}` });
+                const response = await this.requestWithSession('/fs/private/read-dir', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        limit: options.limit,
+                    },
+                });
+                return response.entries;
+            },
+            writeFile: async (path, content, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `写入私有文件 ${path}` });
+                const response = await this.requestWithSession('/fs/private/write-file', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        content,
+                        encoding: options.encoding,
+                        createParents: options.createParents,
+                    },
+                });
+                return response.entry;
+            },
+            readFile: async (path, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `读取私有文件 ${path}` });
+                return await this.requestWithSession('/fs/private/read-file', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        encoding: options.encoding,
+                    },
+                });
+            },
+            delete: async (path, options = {}) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `删除私有路径 ${path}` });
+                await this.requestWithSession('/fs/private/delete', {
+                    method: 'POST',
+                    body: {
+                        path,
+                        recursive: options.recursive,
+                    },
+                });
+            },
+            stat: async (path) => {
+                await this.ensurePermission({ resource: 'fs.private', reason: `查看私有路径 ${path}` });
+                const response = await this.requestWithSession('/fs/private/stat', {
+                    method: 'POST',
+                    body: { path },
+                });
+                return response.entry;
             },
         };
         this.sql = {
@@ -427,6 +493,7 @@ function groupByResource(items) {
     const result = {
         'storage.kv': [],
         'storage.blob': [],
+        'fs.private': [],
         'sql.private': [],
         'http.fetch': [],
         'jobs.background': [],
@@ -446,7 +513,8 @@ function safeParse(value) {
     }
 }
 function getPermissionFailureMessage(displayName, resource, target, decision) {
-    const resourceLabel = target && target !== '*' ? `${resource} (${target})` : resource;
+    const resourceName = getPermissionResourceLabel(resource);
+    const resourceLabel = target && target !== '*' ? `${resourceName} (${target})` : resourceName;
     if (decision === 'denied') {
         return `${displayName} 对 ${resourceLabel} 的请求已被拒绝，请在安全中心手动重置。`;
     }
@@ -454,6 +522,26 @@ function getPermissionFailureMessage(displayName, resource, target, decision) {
         return `${displayName} 对 ${resourceLabel} 的请求被管理员策略封锁。`;
     }
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
+}
+function getPermissionResourceLabel(resource) {
+    switch (resource) {
+        case 'storage.kv':
+            return 'KV 存储';
+        case 'storage.blob':
+            return 'Blob 存储';
+        case 'fs.private':
+            return '私有文件夹';
+        case 'sql.private':
+            return '私有 SQL 数据库';
+        case 'http.fetch':
+            return 'HTTP 访问';
+        case 'jobs.background':
+            return '后台任务';
+        case 'events.stream':
+            return '事件流';
+        default:
+            return resource;
+    }
 }
 function getSqlDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
