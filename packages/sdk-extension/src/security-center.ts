@@ -1,387 +1,66 @@
 import type {
-    AuthorityGrant,
-    AuthorityInitConfig,
     AuthorityPolicyEntry,
-    ControlExtensionRecord,
-    DeclaredPermissions,
-    JobRecord,
-    PrivateFileUsageSummary,
     PermissionResource,
     PermissionStatus,
     SessionInitResponse,
-    SqlDatabaseRecord,
 } from '@stdo/shared-types';
-import { Popup, POPUP_TYPE } from '/scripts/popup.js';
-import { renderExtensionTemplateAsync } from '/scripts/extensions.js';
+import { authorityRequest } from './api.js';
+import { clearChildren, escapeHtml, formatDate } from './dom.js';
 import {
-    AUTHORITY_EXTENSION_DISPLAY_NAME,
-    AUTHORITY_EXTENSION_ID,
-    AUTHORITY_EXTENSION_NAME,
-    AUTHORITY_EXTENSION_VERSION,
-    authorityRequest,
-} from './api.js';
-import { clearChildren, escapeHtml, formatDate, formatJson, htmlToElement, waitForElement } from './dom.js';
-
-type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies';
-
-interface ActivityRecord {
-    timestamp: string;
-    kind: 'permission' | 'usage' | 'error';
-    extensionId: string;
-    message: string;
-    details?: Record<string, unknown>;
-}
-
-interface ExtensionSummary extends ControlExtensionRecord {
-    grantedCount: number;
-    deniedCount: number;
-    storage: ExtensionStorageSummary;
-}
-
-interface ExtensionStorageSummary {
-    kvEntries: number;
-    blobCount: number;
-    blobBytes: number;
-    databaseCount: number;
-    databaseBytes: number;
-    files: PrivateFileUsageSummary;
-}
-
-interface ProbeResponse {
-    pluginVersion: string;
-    sdkBundledVersion: string;
-    sdkDeployedVersion: string | null;
-    coreBundledVersion: string | null;
-    coreArtifactPlatform: string | null;
-    coreArtifactPlatforms: string[];
-    coreArtifactHash: string | null;
-    coreBinarySha256: string | null;
-    coreVerified: boolean;
-    coreMessage: string | null;
-    installStatus: string;
-    installMessage: string;
-    core: {
-        enabled: boolean;
-        state: string;
-        port: number | null;
-        pid: number | null;
-        version: string | null;
-        startedAt: string | null;
-        lastError: string | null;
-        health: {
-            name: string;
-            apiVersion: string;
-            version: string;
-            pid: number;
-            startedAt: string;
-            uptimeMs: number;
-            requestCount: number;
-            errorCount: number;
-            activeJobCount: number;
-            limits: {
-                maxRequestBytes: number;
-                maxKvValueBytes: number;
-                maxBlobBytes: number;
-                maxHttpBodyBytes: number;
-                maxHttpResponseBytes: number;
-                maxEventPollLimit: number;
-            };
-        } | null;
-    };
-}
-
-interface ExtensionDetailResponse {
-    extension: ControlExtensionRecord;
-    grants: AuthorityGrant[];
-    policies: AuthorityPolicyEntry[];
-    activity: {
-        permissions: ActivityRecord[];
-        usage: ActivityRecord[];
-        errors: ActivityRecord[];
-    };
-    jobs: JobRecord[];
-    databases: SqlDatabaseRecord[];
-    storage: ExtensionStorageSummary;
-}
-
-interface DatabaseGroupSummary {
-    extension: ExtensionSummary;
-    databases: SqlDatabaseRecord[];
-    totalSizeBytes: number;
-    latestUpdatedAt: string | null;
-}
-
-interface PoliciesResponse {
-    defaults: Record<PermissionResource, PermissionStatus>;
-    extensions: Record<string, Record<string, AuthorityPolicyEntry>>;
-    updatedAt: string;
-}
-
-interface SecurityCenterState {
-    loading: boolean;
-    error: string | null;
-    isAdmin: boolean;
-    probe: ProbeResponse | null;
-    session: SessionInitResponse | null;
-    extensions: ExtensionSummary[];
-    details: Map<string, ExtensionDetailResponse>;
-    selectedExtensionId: string | null;
-    selectedTab: CenterTab;
-    extensionFilter: string;
-    policies: PoliciesResponse | null;
-    policyEditorExtensionId: string | null;
-}
-
-interface SecurityCenterOpenOptions {
-    focusExtensionId?: string;
-}
-
-const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
-    extensionId: AUTHORITY_EXTENSION_ID,
-    displayName: AUTHORITY_EXTENSION_DISPLAY_NAME,
-    version: AUTHORITY_EXTENSION_VERSION,
-    installType: 'local',
-    declaredPermissions: {},
-    uiLabel: 'Authority Security Center',
-};
-
-const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];
-const STATUS_OPTIONS: PermissionStatus[] = ['prompt', 'granted', 'denied', 'blocked'];
-const POPUP_TEXT_TYPE = POPUP_TYPE.TEXT ?? 0;
-const TOP_BAR_DRAWER_ID = 'authority-security-center-drawer';
-const TOP_BAR_ICON_ID = 'authority-security-center-drawer-icon';
-const TOP_BAR_CONTENT_ID = 'authority-security-center-drawer-content';
-
-let bootPromise: Promise<void> | null = null;
-let workspaceRenderToken = 0;
+    renderActivityList,
+    renderCapabilityMatrix,
+    renderDatabaseGroupList,
+    renderDatabaseList,
+    renderGrantList,
+    renderJobList,
+    renderKpiCard,
+    renderPolicyList,
+    renderStorageCard,
+    renderStorageSummary,
+    renderStringList,
+} from './security-center/components.js';
+import {
+    RESOURCE_OPTIONS,
+    SECURITY_CENTER_CONFIG,
+    STATUS_OPTIONS,
+} from './security-center/constants.js';
+import {
+    formatBytes,
+    getCoreStateLabel,
+    getDeclaredPermissionLabels,
+    getExtensionRiskLevel,
+    getInstallStatusLabel,
+    getResourceLabel,
+    getRiskLabel,
+    getRiskLevel,
+    getStatusLabel,
+    sortByTimestampDesc,
+} from './security-center/formatters.js';
+import type {
+    CenterTab,
+    ExtensionDetailResponse,
+    ExtensionSummary,
+    PoliciesResponse,
+    ProbeResponse,
+    SecurityCenterOpenOptions,
+    SecurityCenterState,
+} from './security-center/types.js';
+import {
+    bootstrapSecurityCenter as bootstrapSecurityCenterHost,
+    openSecurityCenter as openSecurityCenterHost,
+} from './security-center/host.js';
+import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
 
 export function bootstrapSecurityCenter(): Promise<void> {
-    if (!bootPromise) {
-        bootPromise = doBootstrapSecurityCenter();
-    }
-    return bootPromise;
+    return bootstrapSecurityCenterHost(createSecurityCenterView);
 }
 
 export async function openSecurityCenter(options: SecurityCenterOpenOptions = {}): Promise<void> {
-    const openedInDrawer = await openSecurityCenterDrawer(options);
-    if (openedInDrawer) {
-        return;
-    }
-
-    await openSecurityCenterPopup(options);
+    await openSecurityCenterHost(createSecurityCenterView, options);
 }
 
-async function openSecurityCenterPopup(options: SecurityCenterOpenOptions): Promise<void> {
-    const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'security-center', {}, false, false);
-    const root = htmlToElement(html);
-    root.classList.add('authority-panel--popup');
-    const view = new SecurityCenterView(root, options.focusExtensionId);
-
-    const popup = new Popup(root, POPUP_TEXT_TYPE, '', {
-        okButton: '关闭',
-        wide: true,
-        large: true,
-        allowVerticalScrolling: true,
-        onOpen: () => view.initialize(),
-    });
-
-    await popup.show();
-}
-
-async function doBootstrapSecurityCenter(): Promise<void> {
-    try {
-        const menu = await waitForElement('#extensionsMenu');
-        if (!menu.querySelector('#authority-security-center-button')) {
-            const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'menu-button', {}, false, false);
-            const button = htmlToElement(html);
-            button.addEventListener('click', () => void openSecurityCenter());
-            menu.appendChild(button);
-        }
-    } catch (error) {
-        console.warn('Authority Security Center menu bootstrap failed:', error);
-    }
-
-    try {
-        await waitForElement('#top-settings-holder');
-        mountSecurityCenterTopBarButton();
-    } catch (error) {
-        console.warn('Authority Security Center top bar launcher bootstrap failed:', error);
-    }
-}
-
-async function openSecurityCenterDrawer(options: SecurityCenterOpenOptions): Promise<boolean> {
-    mountSecurityCenterTopBarButton();
-
-    const content = ensureSecurityCenterDrawerContent();
-    if (!(content instanceof HTMLElement)) {
-        return false;
-    }
-
-    if (content.childElementCount > 0 && !options.focusExtensionId) {
-        openSecurityCenterDrawerPanel();
-        return true;
-    }
-
-    const renderToken = ++workspaceRenderToken;
-    const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'security-center', {}, false, false);
-    if (renderToken !== workspaceRenderToken) {
-        return true;
-    }
-
-    const root = htmlToElement(html);
-    root.classList.add('authority-panel--drawer');
-    clearChildren(content);
-    content.appendChild(root);
-    openSecurityCenterDrawerPanel();
-
-    const view = new SecurityCenterView(root, options.focusExtensionId);
-    await view.initialize();
-    return true;
-}
-
-function ensureSecurityCenterDrawerContent(): HTMLElement | null {
-    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
-    if (!(drawer instanceof HTMLElement)) {
-        return null;
-    }
-
-    return drawer.querySelector<HTMLElement>('[data-role="security-center-content"]');
-}
-
-function mountSecurityCenterTopBarButton(): void {
-    const holder = document.querySelector<HTMLElement>('#top-settings-holder');
-    if (!holder) {
-        return;
-    }
-
-    if (holder.querySelector(`#${TOP_BAR_DRAWER_ID}`)) {
-        return;
-    }
-
-    const drawer = htmlToElement(`
-        <div id="${TOP_BAR_DRAWER_ID}" class="drawer authority-top-drawer">
-            <div class="drawer-toggle drawer-header authority-top-drawer__toggle">
-                <div id="${TOP_BAR_ICON_ID}" class="drawer-icon fa-solid fa-shield-halved fa-fw closedIcon" title="Authority Security Center" data-i18n="[title]Authority Security Center"></div>
-            </div>
-            <div id="${TOP_BAR_CONTENT_ID}" class="drawer-content closedDrawer authority-drawer-content">
-                <div class="authority-drawer-content__body" data-role="security-center-content"></div>
-            </div>
-        </div>
-    `);
-
-    const toggle = drawer.querySelector<HTMLElement>('.authority-top-drawer__toggle');
-    const icon = drawer.querySelector<HTMLElement>(`#${TOP_BAR_ICON_ID}`);
-    if (toggle) {
-        toggle.tabIndex = 0;
-        const stopPointerPropagation = (event: Event) => {
-            event.stopPropagation();
-        };
-        toggle.addEventListener('mousedown', stopPointerPropagation);
-        toggle.addEventListener('touchstart', stopPointerPropagation, { passive: true });
-        toggle.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-
-            if (isSecurityCenterDrawerOpen()) {
-                closeSecurityCenterDrawer();
-                return;
-            }
-
-            void openSecurityCenter();
-        });
-
-        toggle.addEventListener('keydown', event => {
-            if (!(event instanceof KeyboardEvent)) {
-                return;
-            }
-
-            if (event.key !== 'Enter' && event.key !== ' ') {
-                return;
-            }
-
-            event.preventDefault();
-
-            if (isSecurityCenterDrawerOpen()) {
-                closeSecurityCenterDrawer();
-                return;
-            }
-
-            void openSecurityCenter();
-        });
-    }
-
-    if (icon) {
-        icon.tabIndex = 0;
-    }
-
-    const anchor = holder.querySelector('#extensions-settings-button') ?? holder.querySelector('#WI-SP-button');
-    if (anchor) {
-        holder.insertBefore(drawer, anchor);
-        return;
-    }
-
-    holder.appendChild(drawer);
-}
-
-function isSecurityCenterDrawerOpen(): boolean {
-    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
-    return drawer instanceof HTMLElement && drawer.classList.contains('openDrawer');
-}
-
-function openSecurityCenterDrawerPanel(): void {
-    closeNonPinnedDrawers();
-
-    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
-    if (drawer instanceof HTMLElement) {
-        drawer.classList.remove('closedDrawer');
-        drawer.classList.add('openDrawer');
-    }
-
-    setSecurityCenterIconOpenState(true);
-}
-
-function closeSecurityCenterDrawer(): void {
-    workspaceRenderToken += 1;
-
-    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
-    if (drawer instanceof HTMLElement) {
-        drawer.classList.remove('openDrawer');
-        drawer.classList.add('closedDrawer');
-    }
-
-    setSecurityCenterIconOpenState(false);
-}
-
-function closeNonPinnedDrawers(): void {
-    const openIcons = Array.from(document.querySelectorAll<HTMLElement>('.openIcon:not(.drawerPinnedOpen)'));
-    for (const icon of openIcons) {
-        if (icon.id === TOP_BAR_ICON_ID) {
-            continue;
-        }
-
-        icon.classList.remove('openIcon');
-        icon.classList.add('closedIcon');
-    }
-
-    const openDrawers = Array.from(document.querySelectorAll<HTMLElement>('.openDrawer:not(.pinnedOpen)'));
-    for (const drawer of openDrawers) {
-        if (drawer.id === TOP_BAR_CONTENT_ID) {
-            continue;
-        }
-
-        drawer.classList.remove('openDrawer');
-        drawer.classList.add('closedDrawer');
-    }
-}
-
-function setSecurityCenterIconOpenState(isOpen: boolean): void {
-    const icon = document.getElementById(TOP_BAR_ICON_ID);
-    if (!(icon instanceof HTMLElement)) {
-        return;
-    }
-
-    icon.classList.toggle('openIcon', isOpen);
-    icon.classList.toggle('closedIcon', !isOpen);
+function createSecurityCenterView(root: HTMLElement, focusExtensionId?: string): SecurityCenterView {
+    return new SecurityCenterView(root, focusExtensionId);
 }
 
 class SecurityCenterView {
@@ -764,36 +443,17 @@ class SecurityCenterView {
             return;
         }
 
-        const databaseGroups = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
-        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
-        const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
-        const allJobs = [...this.state.details.values()]
-            .flatMap(detail => detail.jobs)
-            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        const activeJobs = allJobs.filter(item => item.status === 'queued' || item.status === 'running').slice(0, 8);
-        const failedJobs = allJobs.filter(item => item.status === 'failed' || item.status === 'cancelled').slice(0, 8);
-        const recentErrors = [...this.state.details.values()]
-            .flatMap(detail => detail.activity.errors)
-            .sort(sortByTimestampDesc)
-            .slice(0, 8);
-        const totalGrantCount = [...this.state.details.values()].reduce((sum, detail) => sum + detail.grants.length, 0);
-        const totalPolicyCount = [...this.state.details.values()].reduce((sum, detail) => sum + detail.policies.length, 0);
+        const overview = buildOverviewModel(this.state);
         const core = this.state.probe?.core;
-        const totalBlobBytes = this.state.extensions.reduce((sum, item) => sum + item.storage.blobBytes, 0);
-        const totalPrivateFileBytes = this.state.extensions.reduce((sum, item) => sum + item.storage.files.totalSizeBytes, 0);
-        const recentActivity = [...this.state.details.values()]
-            .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors])
-            .sort(sortByTimestampDesc)
-            .slice(0, 8);
 
         container.innerHTML = `
             <div class="authority-kpi-grid">
                 ${renderKpiCard('扩展数量', String(this.state.extensions.length), '已注册扩展')}
-                ${renderKpiCard('授权记录', String(totalGrantCount), '允许与拒绝合计')}
-                ${renderKpiCard('策略覆盖', String(totalPolicyCount), '默认与扩展覆盖')}
-                ${renderKpiCard('活跃任务', String(activeJobs.length), 'queued / running')}
-                ${renderKpiCard('数据库体积', formatBytes(totalDatabaseSize), `${totalDatabaseCount} 个数据库`)}
-                ${renderKpiCard('最近错误', String(recentErrors.length), '需要排查的异常')}
+                ${renderKpiCard('授权记录', String(overview.totalGrantCount), '允许与拒绝合计')}
+                ${renderKpiCard('策略覆盖', String(overview.totalPolicyCount), '默认与扩展覆盖')}
+                ${renderKpiCard('活跃任务', String(overview.activeJobs.length), 'queued / running')}
+                ${renderKpiCard('数据库体积', formatBytes(overview.totalDatabaseSize), `${overview.totalDatabaseCount} 个数据库`)}
+                ${renderKpiCard('最近错误', String(overview.recentErrors.length), '需要排查的异常')}
             </div>
             <div class="authority-dashboard-grid">
                 <section class="authority-card authority-runtime-card">
@@ -833,9 +493,9 @@ class SecurityCenterView {
                     </div>
                     <div class="authority-storage-grid">
                         ${renderStorageCard('KV 条目', String(this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)), '扩展键值状态')}
-                        ${renderStorageCard('Blob 体积', formatBytes(totalBlobBytes), '二进制对象存储')}
-                        ${renderStorageCard('SQL 体积', formatBytes(totalDatabaseSize), `${totalDatabaseCount} 个数据库`)}
-                        ${renderStorageCard('私有文件', formatBytes(totalPrivateFileBytes), 'fs.private 作用域')}
+                        ${renderStorageCard('Blob 体积', formatBytes(overview.totalBlobBytes), '二进制对象存储')}
+                        ${renderStorageCard('SQL 体积', formatBytes(overview.totalDatabaseSize), `${overview.totalDatabaseCount} 个数据库`)}
+                        ${renderStorageCard('私有文件', formatBytes(overview.totalPrivateFileBytes), 'fs.private 作用域')}
                     </div>
                 </section>
                 <section class="authority-card">
@@ -843,23 +503,23 @@ class SecurityCenterView {
                         <h3>最近活动</h3>
                         <div class="authority-muted">权限请求、能力调用与错误</div>
                     </div>
-                    ${renderActivityList(recentActivity, '暂无活动记录。')}
+                    ${renderActivityList(overview.recentActivity, '暂无活动记录。')}
                 </section>
                 <section class="authority-card">
                     <h3>SQL 数据库概览</h3>
-                    ${renderDatabaseGroupList(databaseGroups.slice(0, 6), '当前没有发现扩展 SQL 数据库。')}
+                    ${renderDatabaseGroupList(overview.databaseGroups.slice(0, 6), '当前没有发现扩展 SQL 数据库。')}
                 </section>
                 <section class="authority-card">
                     <h3>活跃任务</h3>
-                    ${renderJobList(activeJobs, '当前没有排队或运行中的任务。')}
+                    ${renderJobList(overview.activeJobs, '当前没有排队或运行中的任务。')}
                 </section>
                 <section class="authority-card">
                     <h3>失败任务</h3>
-                    ${renderJobList(failedJobs, '当前没有失败或取消的任务。')}
+                    ${renderJobList(overview.failedJobs, '当前没有失败或取消的任务。')}
                 </section>
                 <section class="authority-card">
                     <h3>最近错误</h3>
-                    ${renderActivityList(recentErrors, '暂无错误记录。')}
+                    ${renderActivityList(overview.recentErrors, '暂无错误记录。')}
                 </section>
             </div>
         `;
@@ -1166,331 +826,4 @@ class SecurityCenterView {
         }
         return this.state.details.get(this.state.selectedExtensionId) ?? null;
     }
-}
-
-function renderKpiCard(label: string, value: string, meta: string): string {
-    return `
-        <div class="authority-kpi-card">
-            <div class="authority-kpi-card__label">${escapeHtml(label)}</div>
-            <div class="authority-kpi-card__value">${escapeHtml(value)}</div>
-            <div class="authority-kpi-card__meta">${escapeHtml(meta)}</div>
-        </div>
-    `;
-}
-
-function renderStorageCard(label: string, value: string, meta: string): string {
-    return `
-        <div class="authority-storage-card">
-            <div class="authority-storage-card__label">${escapeHtml(label)}</div>
-            <div class="authority-storage-card__value">${escapeHtml(value)}</div>
-            <div class="authority-storage-card__meta">${escapeHtml(meta)}</div>
-        </div>
-    `;
-}
-
-function renderCapabilityMatrix(resources: PermissionResource[]): string {
-    return `
-        <div class="authority-capability-grid">
-            ${resources.map(resource => {
-        const risk = getRiskLevel(resource);
-        return `
-                    <div class="authority-capability-chip">
-                        <strong>${escapeHtml(resource)}</strong>
-                        <div class="authority-chip-row">
-                            <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                            <span class="authority-pill authority-pill--usage">${escapeHtml(getResourceLabel(resource))}</span>
-                        </div>
-                    </div>
-                `;
-    }).join('')}
-        </div>
-    `;
-}
-
-function renderStringList(items: string[], emptyText: string): string {
-    if (items.length === 0) {
-        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
-    }
-    return `<div class="authority-chip-row">${items.map(item => `<span class="authority-pill authority-pill--prompt">${escapeHtml(item)}</span>`).join('')}</div>`;
-}
-
-function renderGrantList(extensionId: string, grants: AuthorityGrant[], emptyText: string): string {
-    if (grants.length === 0) {
-        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
-    }
-    return `
-        <div class="authority-stack">
-            ${grants.map(grant => `
-                <div class="authority-list-card">
-                    <div>
-                        <strong>${escapeHtml(getResourceLabel(grant.resource))}</strong>
-                        <div class="authority-muted">${escapeHtml(grant.target)}</div>
-                    </div>
-                    <div class="authority-list-card__actions">
-                        <span class="authority-pill authority-pill--${getRiskLevel(grant.resource)}">${escapeHtml(getRiskLabel(getRiskLevel(grant.resource)))}</span>
-                        <span class="authority-pill authority-pill--${grant.status}">${escapeHtml(getStatusLabel(grant.status))}</span>
-                        <button type="button" class="menu_button" data-action="reset-grant" data-extension-id="${escapeHtml(extensionId)}" data-grant-key="${escapeHtml(grant.key)}">重置</button>
-                    </div>
-                </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function renderActivityList(items: ActivityRecord[], emptyText: string): string {
-    if (items.length === 0) {
-        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
-    }
-    return `
-        <div class="authority-stack">
-            ${items.map(item => `
-                <div class="authority-list-card authority-list-card--column">
-                    <div class="authority-list-card__meta">
-                        <span class="authority-pill authority-pill--${item.kind}">${escapeHtml(getActivityKindLabel(item.kind))}</span>
-                        <span>${escapeHtml(item.extensionId)}</span>
-                        <span>${escapeHtml(formatDate(item.timestamp))}</span>
-                    </div>
-                    <div>${escapeHtml(item.message)}</div>
-                    ${item.details ? `<pre class="authority-code-block">${escapeHtml(formatJson(item.details))}</pre>` : ''}
-                </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function renderJobList(items: JobRecord[], emptyText: string): string {
-    if (items.length === 0) {
-        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
-    }
-    return `
-        <div class="authority-stack">
-            ${items.map(item => `
-                <div class="authority-list-card authority-list-card--column">
-                    <div class="authority-list-card__meta">
-                        <span class="authority-pill authority-pill--${item.status}">${escapeHtml(item.status)}</span>
-                        <span>${escapeHtml(item.type)}</span>
-                        <span>${escapeHtml(formatDate(item.updatedAt))}</span>
-                    </div>
-                    <div>${escapeHtml(item.summary ?? '无摘要')}</div>
-                    ${item.error ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(item.error)}</div>` : ''}
-                </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function renderPolicyList(items: AuthorityPolicyEntry[], emptyText: string): string {
-    if (items.length === 0) {
-        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
-    }
-    return `
-        <div class="authority-stack">
-            ${items.map(item => `
-                <div class="authority-list-card">
-                    <div>
-                        <strong>${escapeHtml(getResourceLabel(item.resource))}</strong>
-                        <div class="authority-muted">${escapeHtml(item.target)}</div>
-                    </div>
-                    <div class="authority-list-card__actions">
-                        <span class="authority-pill authority-pill--${item.status}">${escapeHtml(getStatusLabel(item.status))}</span>
-                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt))}</span>
-                    </div>
-                </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function renderDatabaseList(items: SqlDatabaseRecord[], emptyText: string): string {
-    if (items.length === 0) {
-        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
-    }
-    return `
-        <div class="authority-stack">
-            ${items.map(item => `
-                <div class="authority-list-card">
-                    <div>
-                        <strong>${escapeHtml(item.name)}</strong>
-                        <div class="authority-muted">${escapeHtml(item.fileName)}</div>
-                    </div>
-                    <div class="authority-list-card__actions">
-                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.sizeBytes))}</span>
-                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt))}</span>
-                    </div>
-                </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function renderDatabaseGroupList(items: DatabaseGroupSummary[], emptyText: string): string {
-    if (items.length === 0) {
-        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
-    }
-    return `
-        <div class="authority-stack">
-            ${items.map(item => `
-                <div class="authority-list-card authority-list-card--column">
-                    <div class="authority-card__header">
-                        <div>
-                            <strong>${escapeHtml(item.extension.displayName)}</strong>
-                            <div class="authority-muted">${escapeHtml(item.extension.id)}</div>
-                        </div>
-                        <div class="authority-list-card__actions">
-                            <span class="authority-pill authority-pill--prompt">${item.databases.length} 个库</span>
-                            <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
-                        </div>
-                    </div>
-                    ${renderDatabaseList(item.databases, '该扩展还没有私有 SQL 数据库。')}
-                </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function renderStorageSummary(storage: ExtensionStorageSummary): string {
-    return `
-        <div class="authority-storage-grid">
-            ${renderStorageCard('KV 条目', String(storage.kvEntries), '键值状态')}
-            ${renderStorageCard('Blob 文件', String(storage.blobCount), formatBytes(storage.blobBytes))}
-            ${renderStorageCard('SQL 数据库', String(storage.databaseCount), formatBytes(storage.databaseBytes))}
-            ${renderStorageCard('私有文件', String(storage.files.fileCount), `${storage.files.directoryCount} 个目录`)}
-            ${renderStorageCard('文件体积', formatBytes(storage.files.totalSizeBytes), 'fs.private')}
-            ${renderStorageCard('最近文件更新', storage.files.latestUpdatedAt ? formatDate(storage.files.latestUpdatedAt) : 'n/a', '最后写入时间')}
-        </div>
-    `;
-}
-
-function getDatabaseGroupSummaries(extensions: ExtensionSummary[], details: Map<string, ExtensionDetailResponse>): DatabaseGroupSummary[] {
-    return extensions.map(extension => {
-        const databases = [...(details.get(extension.id)?.databases ?? [])]
-            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        return {
-            extension,
-            databases,
-            totalSizeBytes: databases.reduce((sum, item) => sum + item.sizeBytes, 0),
-            latestUpdatedAt: databases[0]?.updatedAt ?? null,
-        };
-    })
-        .filter(item => item.databases.length > 0)
-        .sort((left, right) => (right.latestUpdatedAt ?? '').localeCompare(left.latestUpdatedAt ?? ''));
-}
-
-function formatBytes(bytes: number): string {
-    if (!Number.isFinite(bytes) || bytes <= 0) {
-        return '0 B';
-    }
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let value = bytes;
-    let unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-        value /= 1024;
-        unitIndex += 1;
-    }
-    return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function getCoreStateLabel(state?: string): string {
-    switch (state) {
-        case 'running': return '运行中';
-        case 'starting': return '启动中';
-        case 'stopping': return '停止中';
-        case 'stopped': return '已停止';
-        case 'disabled': return '已禁用';
-        case 'error': return '错误';
-        default: return '未知';
-    }
-}
-
-function getInstallStatusLabel(status: string): string {
-    switch (status) {
-        case 'ready': return '就绪';
-        case 'installed': return '已安装';
-        case 'updated': return '已更新';
-        case 'missing': return '缺失';
-        case 'conflict': return '冲突';
-        case 'error': return '错误';
-        default: return status;
-    }
-}
-
-function getDeclaredPermissionLabels(declaredPermissions: DeclaredPermissions): string[] {
-    const labels: string[] = [];
-    if (declaredPermissions.storage?.kv) labels.push('storage.kv');
-    if (declaredPermissions.storage?.blob) labels.push('storage.blob');
-    if (declaredPermissions.fs?.private) labels.push('fs.private');
-    if (declaredPermissions.sql?.private) labels.push(Array.isArray(declaredPermissions.sql.private) ? `sql.private -> ${declaredPermissions.sql.private.join(', ')}` : 'sql.private');
-    if (declaredPermissions.http?.allow?.length) labels.push(`http.fetch -> ${declaredPermissions.http.allow.join(', ')}`);
-    if (declaredPermissions.jobs?.background) labels.push(Array.isArray(declaredPermissions.jobs.background) ? `jobs.background -> ${declaredPermissions.jobs.background.join(', ')}` : 'jobs.background');
-    if (declaredPermissions.events?.channels) labels.push(Array.isArray(declaredPermissions.events.channels) ? `events.stream -> ${declaredPermissions.events.channels.join(', ')}` : 'events.stream');
-    return labels;
-}
-
-function getResourceLabel(resource: PermissionResource): string {
-    switch (resource) {
-        case 'storage.kv': return 'KV 存储';
-        case 'storage.blob': return 'Blob 存储';
-        case 'fs.private': return '私有文件夹';
-        case 'sql.private': return '私有 SQL 数据库';
-        case 'http.fetch': return 'HTTP 访问';
-        case 'jobs.background': return '后台任务';
-        case 'events.stream': return '事件流';
-        default: return resource;
-    }
-}
-
-function getStatusLabel(status: PermissionStatus): string {
-    switch (status) {
-        case 'prompt': return '询问';
-        case 'granted': return '允许';
-        case 'denied': return '拒绝';
-        case 'blocked': return '封锁';
-        default: return status;
-    }
-}
-
-function getActivityKindLabel(kind: ActivityRecord['kind']): string {
-    switch (kind) {
-        case 'permission': return '权限';
-        case 'usage': return '调用';
-        case 'error': return '错误';
-        default: return kind;
-    }
-}
-
-function getRiskLevel(resource: PermissionResource): 'low' | 'medium' | 'high' {
-    switch (resource) {
-        case 'storage.kv':
-        case 'storage.blob':
-        case 'events.stream':
-            return 'low';
-        case 'fs.private':
-        case 'sql.private':
-        case 'http.fetch':
-        case 'jobs.background':
-            return 'medium';
-        default:
-            return 'high';
-    }
-}
-
-function getExtensionRiskLevel(extension: ExtensionSummary | ControlExtensionRecord): 'low' | 'medium' | 'high' {
-    const declared = getDeclaredPermissionLabels(extension.declaredPermissions);
-    if (declared.some(item => item.includes('sql.private') || item.includes('http.fetch') || item.includes('jobs.background') || item.includes('fs.private'))) {
-        return 'medium';
-    }
-    return declared.length > 0 ? 'low' : 'low';
-}
-
-function getRiskLabel(risk: 'low' | 'medium' | 'high'): string {
-    switch (risk) {
-        case 'low': return '低风险';
-        case 'medium': return '中风险';
-        case 'high': return '高风险';
-        default: return risk;
-    }
-}
-
-function sortByTimestampDesc(left: ActivityRecord, right: ActivityRecord): number {
-    return right.timestamp.localeCompare(left.timestamp);
 }

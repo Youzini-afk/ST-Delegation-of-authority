@@ -1,0 +1,48 @@
+import { sortByTimestampDesc } from './formatters.js';
+export function buildOverviewModel(state) {
+    const databaseGroups = getDatabaseGroupSummaries(state.extensions, state.details);
+    const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+    const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
+    const allDetails = [...state.details.values()];
+    const allJobs = allDetails
+        .flatMap(detail => detail.jobs)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const activeJobs = allJobs.filter(item => item.status === 'queued' || item.status === 'running').slice(0, 8);
+    const failedJobs = allJobs.filter(item => item.status === 'failed' || item.status === 'cancelled').slice(0, 8);
+    const recentErrors = allDetails
+        .flatMap(detail => detail.activity.errors)
+        .sort(sortByTimestampDesc)
+        .slice(0, 8);
+    const recentActivity = allDetails
+        .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors])
+        .sort(sortByTimestampDesc)
+        .slice(0, 8);
+    return {
+        databaseGroups,
+        totalDatabaseCount,
+        totalDatabaseSize,
+        totalBlobBytes: state.extensions.reduce((sum, item) => sum + item.storage.blobBytes, 0),
+        totalPrivateFileBytes: state.extensions.reduce((sum, item) => sum + item.storage.files.totalSizeBytes, 0),
+        totalGrantCount: allDetails.reduce((sum, detail) => sum + detail.grants.length, 0),
+        totalPolicyCount: allDetails.reduce((sum, detail) => sum + detail.policies.length, 0),
+        activeJobs,
+        failedJobs,
+        recentErrors,
+        recentActivity,
+    };
+}
+export function getDatabaseGroupSummaries(extensions, details) {
+    return extensions.map(extension => {
+        const databases = [...(details.get(extension.id)?.databases ?? [])]
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return {
+            extension,
+            databases,
+            totalSizeBytes: databases.reduce((sum, item) => sum + item.sizeBytes, 0),
+            latestUpdatedAt: databases[0]?.updatedAt ?? null,
+        };
+    })
+        .filter(item => item.databases.length > 0)
+        .sort((left, right) => (right.latestUpdatedAt ?? '').localeCompare(left.latestUpdatedAt ?? ''));
+}
+//# sourceMappingURL=view-models.js.map

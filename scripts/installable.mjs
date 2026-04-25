@@ -177,15 +177,18 @@ function checkInstallable(staged) {
 function copySdkRuntime(sourceDir, targetDir) {
     const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
     for (const entry of entries) {
-        if (entry.isDirectory()) {
-            continue;
-        }
-
         if (entry.name.endsWith('.d.ts')) {
             continue;
         }
 
-        copyFile(path.join(sourceDir, entry.name), path.join(targetDir, entry.name));
+        const sourcePath = path.join(sourceDir, entry.name);
+        const targetPath = path.join(targetDir, entry.name);
+        if (entry.isDirectory()) {
+            copySdkRuntime(sourcePath, targetPath);
+            continue;
+        }
+
+        copyFile(sourcePath, targetPath);
     }
 }
 
