@@ -13,9 +13,9 @@ const SECURITY_CENTER_CONFIG = {
 const RESOURCE_OPTIONS = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];
 const STATUS_OPTIONS = ['prompt', 'granted', 'denied', 'blocked'];
 const POPUP_TEXT_TYPE = POPUP_TYPE.TEXT ?? 0;
-const WORKSPACE_HOST_ID = 'authority-security-center-workspace';
 const TOP_BAR_DRAWER_ID = 'authority-security-center-drawer';
 const TOP_BAR_ICON_ID = 'authority-security-center-drawer-icon';
+const TOP_BAR_CONTENT_ID = 'authority-security-center-drawer-content';
 let bootPromise = null;
 let workspaceRenderToken = 0;
 export function bootstrapSecurityCenter() {
@@ -25,8 +25,8 @@ export function bootstrapSecurityCenter() {
     return bootPromise;
 }
 export async function openSecurityCenter(options = {}) {
-    const openedInWorkspace = await openSecurityCenterWorkspace(options);
-    if (openedInWorkspace) {
+    const openedInDrawer = await openSecurityCenterDrawer(options);
+    if (openedInDrawer) {
         return;
     }
     await openSecurityCenterPopup(options);
@@ -66,15 +66,15 @@ async function doBootstrapSecurityCenter() {
         console.warn('Authority Security Center top bar launcher bootstrap failed:', error);
     }
 }
-async function openSecurityCenterWorkspace(options) {
+async function openSecurityCenterDrawer(options) {
     mountSecurityCenterTopBarButton();
-    const content = ensureSecurityCenterWorkspace();
-    if (!content) {
+    const content = ensureSecurityCenterDrawerContent();
+    if (!(content instanceof HTMLElement)) {
         return false;
     }
-    const host = document.getElementById(WORKSPACE_HOST_ID);
-    if (!(host instanceof HTMLElement)) {
-        return false;
+    if (content.childElementCount > 0 && !options.focusExtensionId) {
+        openSecurityCenterDrawerPanel();
+        return true;
     }
     const renderToken = ++workspaceRenderToken;
     const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'security-center', {}, false, false);
@@ -82,60 +82,20 @@ async function openSecurityCenterWorkspace(options) {
         return true;
     }
     const root = htmlToElement(html);
-    root.classList.add('authority-panel--workspace');
+    root.classList.add('authority-panel--drawer');
     clearChildren(content);
     content.appendChild(root);
-    host.hidden = false;
-    document.body.classList.add('authority-workspace-open');
-    syncSecurityCenterLauncherState(true);
+    openSecurityCenterDrawerPanel();
     const view = new SecurityCenterView(root, options.focusExtensionId);
     await view.initialize();
     return true;
 }
-function ensureSecurityCenterWorkspace() {
-    let host = document.getElementById(WORKSPACE_HOST_ID);
-    if (!(host instanceof HTMLElement)) {
-        if (!document.body) {
-            return null;
-        }
-        host = htmlToElement(`
-            <div id="${WORKSPACE_HOST_ID}" class="authority-workspace" hidden>
-                <div class="authority-workspace__backdrop" data-action="close-security-center"></div>
-                <div class="authority-workspace__shell">
-                    <div class="authority-workspace__toolbar">
-                        <div class="authority-workspace__tabs">
-                            <button type="button" class="authority-workspace__tab authority-workspace__tab--active">
-                                <i class="fa-solid fa-shield-halved"></i>
-                                <span>Authority Security Center</span>
-                            </button>
-                        </div>
-                        <div class="authority-workspace__actions">
-                            <button type="button" class="menu_button authority-workspace__close" data-action="close-security-center">返回酒馆</button>
-                        </div>
-                    </div>
-                    <div class="authority-workspace__content" data-role="workspace-content"></div>
-                </div>
-            </div>
-        `);
-        const workspaceHost = host;
-        workspaceHost.addEventListener('click', event => {
-            const target = event.target instanceof HTMLElement ? event.target : null;
-            if (!target) {
-                return;
-            }
-            if (target.closest('[data-action="close-security-center"]')) {
-                closeSecurityCenterWorkspace();
-            }
-        });
-        document.addEventListener('keydown', event => {
-            if (event.key === 'Escape' && !workspaceHost.hidden) {
-                closeSecurityCenterWorkspace();
-            }
-        });
-        document.body.appendChild(workspaceHost);
-        host = workspaceHost;
+function ensureSecurityCenterDrawerContent() {
+    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
+    if (!(drawer instanceof HTMLElement)) {
+        return null;
     }
-    return host.querySelector('[data-role="workspace-content"]');
+    return drawer.querySelector('[data-role="security-center-content"]');
 }
 function mountSecurityCenterTopBarButton() {
     const holder = document.querySelector('#top-settings-holder');
@@ -150,73 +110,101 @@ function mountSecurityCenterTopBarButton() {
             <div class="drawer-toggle drawer-header authority-top-drawer__toggle">
                 <div id="${TOP_BAR_ICON_ID}" class="drawer-icon fa-solid fa-shield-halved fa-fw closedIcon" title="Authority Security Center" data-i18n="[title]Authority Security Center"></div>
             </div>
+            <div id="${TOP_BAR_CONTENT_ID}" class="drawer-content closedDrawer authority-drawer-content">
+                <div class="authority-drawer-content__body" data-role="security-center-content"></div>
+            </div>
         </div>
     `);
     const toggle = drawer.querySelector('.authority-top-drawer__toggle');
     const icon = drawer.querySelector(`#${TOP_BAR_ICON_ID}`);
     if (toggle) {
         toggle.tabIndex = 0;
+        const stopPointerPropagation = (event) => {
+            event.stopPropagation();
+        };
+        toggle.addEventListener('mousedown', stopPointerPropagation);
+        toggle.addEventListener('touchstart', stopPointerPropagation, { passive: true });
+        toggle.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (isSecurityCenterDrawerOpen()) {
+                closeSecurityCenterDrawer();
+                return;
+            }
+            void openSecurityCenter();
+        });
+        toggle.addEventListener('keydown', event => {
+            if (!(event instanceof KeyboardEvent)) {
+                return;
+            }
+            if (event.key !== 'Enter' && event.key !== ' ') {
+                return;
+            }
+            event.preventDefault();
+            if (isSecurityCenterDrawerOpen()) {
+                closeSecurityCenterDrawer();
+                return;
+            }
+            void openSecurityCenter();
+        });
     }
     if (icon) {
         icon.tabIndex = 0;
     }
-    const handleToggle = (event) => {
-        event?.preventDefault();
-        if (document.body.classList.contains('authority-workspace-open')) {
-            closeSecurityCenterWorkspace();
-            return;
-        }
-        void openSecurityCenter();
-    };
-    drawer.addEventListener('click', event => {
-        const target = event.target instanceof HTMLElement ? event.target : null;
-        if (!target?.closest(`#${TOP_BAR_DRAWER_ID}`)) {
-            return;
-        }
-        handleToggle(event);
-    });
-    drawer.addEventListener('keydown', event => {
-        if (!(event instanceof KeyboardEvent)) {
-            return;
-        }
-        if (event.key !== 'Enter' && event.key !== ' ') {
-            return;
-        }
-        handleToggle(event);
-    });
-    const anchor = holder.querySelector('#WI-SP-button');
+    const anchor = holder.querySelector('#extensions-settings-button') ?? holder.querySelector('#WI-SP-button');
     if (anchor) {
         holder.insertBefore(drawer, anchor);
         return;
     }
     holder.appendChild(drawer);
 }
-function closeSecurityCenterWorkspace() {
+function isSecurityCenterDrawerOpen() {
+    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
+    return drawer instanceof HTMLElement && drawer.classList.contains('openDrawer');
+}
+function openSecurityCenterDrawerPanel() {
+    closeNonPinnedDrawers();
+    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
+    if (drawer instanceof HTMLElement) {
+        drawer.classList.remove('closedDrawer');
+        drawer.classList.add('openDrawer');
+    }
+    setSecurityCenterIconOpenState(true);
+}
+function closeSecurityCenterDrawer() {
     workspaceRenderToken += 1;
-    const host = document.getElementById(WORKSPACE_HOST_ID);
-    if (!(host instanceof HTMLElement)) {
-        syncSecurityCenterLauncherState(false);
-        document.body.classList.remove('authority-workspace-open');
+    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
+    if (drawer instanceof HTMLElement) {
+        drawer.classList.remove('openDrawer');
+        drawer.classList.add('closedDrawer');
+    }
+    setSecurityCenterIconOpenState(false);
+}
+function closeNonPinnedDrawers() {
+    const openIcons = Array.from(document.querySelectorAll('.openIcon:not(.drawerPinnedOpen)'));
+    for (const icon of openIcons) {
+        if (icon.id === TOP_BAR_ICON_ID) {
+            continue;
+        }
+        icon.classList.remove('openIcon');
+        icon.classList.add('closedIcon');
+    }
+    const openDrawers = Array.from(document.querySelectorAll('.openDrawer:not(.pinnedOpen)'));
+    for (const drawer of openDrawers) {
+        if (drawer.id === TOP_BAR_CONTENT_ID) {
+            continue;
+        }
+        drawer.classList.remove('openDrawer');
+        drawer.classList.add('closedDrawer');
+    }
+}
+function setSecurityCenterIconOpenState(isOpen) {
+    const icon = document.getElementById(TOP_BAR_ICON_ID);
+    if (!(icon instanceof HTMLElement)) {
         return;
     }
-    const content = host.querySelector('[data-role="workspace-content"]');
-    if (content) {
-        clearChildren(content);
-    }
-    host.hidden = true;
-    document.body.classList.remove('authority-workspace-open');
-    syncSecurityCenterLauncherState(false);
-}
-function syncSecurityCenterLauncherState(isOpen) {
-    const drawer = document.getElementById(TOP_BAR_DRAWER_ID);
-    const icon = document.getElementById(TOP_BAR_ICON_ID);
-    if (drawer instanceof HTMLElement) {
-        drawer.classList.toggle('authority-top-drawer--active', isOpen);
-    }
-    if (icon instanceof HTMLElement) {
-        icon.classList.toggle('openIcon', isOpen);
-        icon.classList.toggle('closedIcon', !isOpen);
-    }
+    icon.classList.toggle('openIcon', isOpen);
+    icon.classList.toggle('closedIcon', !isOpen);
 }
 class SecurityCenterView {
     root;
