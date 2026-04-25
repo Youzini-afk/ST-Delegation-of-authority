@@ -23,7 +23,6 @@ import {
 import { clearChildren, escapeHtml, formatDate, formatJson, htmlToElement, waitForElement } from './dom.js';
 
 type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies';
-const POPUP_TEXT_TYPE = POPUP_TYPE.TEXT ?? 0;
 
 interface ActivityRecord {
     timestamp: string;
@@ -133,6 +132,10 @@ interface SecurityCenterState {
     policyEditorExtensionId: string | null;
 }
 
+interface SecurityCenterOpenOptions {
+    focusExtensionId?: string;
+}
+
 const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
     extensionId: AUTHORITY_EXTENSION_ID,
     displayName: AUTHORITY_EXTENSION_DISPLAY_NAME,
@@ -144,8 +147,13 @@ const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
 
 const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];
 const STATUS_OPTIONS: PermissionStatus[] = ['prompt', 'granted', 'denied', 'blocked'];
+const POPUP_TEXT_TYPE = POPUP_TYPE.TEXT ?? 0;
+const WORKSPACE_HOST_ID = 'authority-security-center-workspace';
+const WORKSPACE_STRIP_ID = 'authority-security-center-strip';
+const WORKSPACE_TAB_ID = 'authority-security-center-tab';
 
 let bootPromise: Promise<void> | null = null;
+let workspaceRenderToken = 0;
 
 export function bootstrapSecurityCenter(): Promise<void> {
     if (!bootPromise) {
@@ -154,9 +162,19 @@ export function bootstrapSecurityCenter(): Promise<void> {
     return bootPromise;
 }
 
-export async function openSecurityCenter(options: { focusExtensionId?: string } = {}): Promise<void> {
+export async function openSecurityCenter(options: SecurityCenterOpenOptions = {}): Promise<void> {
+    const openedInWorkspace = await openSecurityCenterWorkspace(options);
+    if (openedInWorkspace) {
+        return;
+    }
+
+    await openSecurityCenterPopup(options);
+}
+
+async function openSecurityCenterPopup(options: SecurityCenterOpenOptions): Promise<void> {
     const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'security-center', {}, false, false);
     const root = htmlToElement(html);
+    root.classList.add('authority-panel--popup');
     const view = new SecurityCenterView(root, options.focusExtensionId);
 
     const popup = new Popup(root, POPUP_TEXT_TYPE, '', {
@@ -173,16 +191,169 @@ export async function openSecurityCenter(options: { focusExtensionId?: string } 
 async function doBootstrapSecurityCenter(): Promise<void> {
     try {
         const menu = await waitForElement('#extensionsMenu');
-        if (menu.querySelector('#authority-security-center-button')) {
+        if (!menu.querySelector('#authority-security-center-button')) {
+            const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'menu-button', {}, false, false);
+            const button = htmlToElement(html);
+            button.addEventListener('click', () => void openSecurityCenter());
+            menu.appendChild(button);
+        }
+    } catch (error) {
+        console.warn('Authority Security Center menu bootstrap failed:', error);
+    }
+
+    try {
+        await Promise.all([waitForElement('#sheld'), waitForElement('#chat')]);
+        mountSecurityCenterStrip();
+    } catch (error) {
+        console.warn('Authority Security Center page launcher bootstrap failed:', error);
+    }
+}
+
+async function openSecurityCenterWorkspace(options: SecurityCenterOpenOptions): Promise<boolean> {
+    mountSecurityCenterStrip();
+
+    const content = ensureSecurityCenterWorkspace();
+    if (!content) {
+        return false;
+    }
+
+    const host = document.getElementById(WORKSPACE_HOST_ID);
+    if (!(host instanceof HTMLElement)) {
+        return false;
+    }
+
+    const renderToken = ++workspaceRenderToken;
+    const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'security-center', {}, false, false);
+    if (renderToken !== workspaceRenderToken) {
+        return true;
+    }
+
+    const root = htmlToElement(html);
+    root.classList.add('authority-panel--workspace');
+    clearChildren(content);
+    content.appendChild(root);
+    host.hidden = false;
+    document.body.classList.add('authority-workspace-open');
+    syncSecurityCenterLauncherState(true);
+
+    const view = new SecurityCenterView(root, options.focusExtensionId);
+    await view.initialize();
+    return true;
+}
+
+function ensureSecurityCenterWorkspace(): HTMLElement | null {
+    let host = document.getElementById(WORKSPACE_HOST_ID);
+    if (!(host instanceof HTMLElement)) {
+        if (!document.body) {
+            return null;
+        }
+
+        host = htmlToElement(`
+            <div id="${WORKSPACE_HOST_ID}" class="authority-workspace" hidden>
+                <div class="authority-workspace__backdrop" data-action="close-security-center"></div>
+                <div class="authority-workspace__shell">
+                    <div class="authority-workspace__toolbar">
+                        <div class="authority-workspace__tabs">
+                            <button type="button" class="authority-workspace__tab authority-workspace__tab--active">
+                                <i class="fa-solid fa-shield-halved"></i>
+                                <span>Authority Security Center</span>
+                            </button>
+                        </div>
+                        <div class="authority-workspace__actions">
+                            <button type="button" class="menu_button authority-workspace__close" data-action="close-security-center">返回酒馆</button>
+                        </div>
+                    </div>
+                    <div class="authority-workspace__content" data-role="workspace-content"></div>
+                </div>
+            </div>
+        `);
+
+        const workspaceHost = host;
+        workspaceHost.addEventListener('click', event => {
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            if (!target) {
+                return;
+            }
+
+            if (target.closest('[data-action="close-security-center"]')) {
+                closeSecurityCenterWorkspace();
+            }
+        });
+
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && !workspaceHost.hidden) {
+                closeSecurityCenterWorkspace();
+            }
+        });
+
+        document.body.appendChild(workspaceHost);
+        host = workspaceHost;
+    }
+
+    return host.querySelector<HTMLElement>('[data-role="workspace-content"]');
+}
+
+function mountSecurityCenterStrip(): void {
+    const sheld = document.getElementById('sheld');
+    const chat = document.getElementById('chat');
+    if (!(sheld instanceof HTMLElement) || !(chat instanceof HTMLElement)) {
+        return;
+    }
+
+    if (sheld.querySelector(`#${WORKSPACE_STRIP_ID}`)) {
+        return;
+    }
+
+    const strip = htmlToElement(`
+        <div id="${WORKSPACE_STRIP_ID}" class="authority-workspace-strip">
+            <button type="button" id="${WORKSPACE_TAB_ID}" class="authority-workspace-strip__tab">
+                <i class="fa-solid fa-shield-halved"></i>
+                <span>Authority</span>
+            </button>
+        </div>
+    `);
+
+    strip.addEventListener('click', event => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (!target?.closest(`#${WORKSPACE_TAB_ID}`)) {
             return;
         }
 
-        const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'menu-button', {}, false, false);
-        const button = htmlToElement(html);
-        button.addEventListener('click', () => void openSecurityCenter());
-        menu.appendChild(button);
-    } catch (error) {
-        console.warn('Authority Security Center menu bootstrap failed:', error);
+        if (document.body.classList.contains('authority-workspace-open')) {
+            closeSecurityCenterWorkspace();
+            return;
+        }
+
+        void openSecurityCenter();
+    });
+
+    sheld.insertBefore(strip, chat);
+}
+
+function closeSecurityCenterWorkspace(): void {
+    workspaceRenderToken += 1;
+
+    const host = document.getElementById(WORKSPACE_HOST_ID);
+    if (!(host instanceof HTMLElement)) {
+        syncSecurityCenterLauncherState(false);
+        document.body.classList.remove('authority-workspace-open');
+        return;
+    }
+
+    const content = host.querySelector<HTMLElement>('[data-role="workspace-content"]');
+    if (content) {
+        clearChildren(content);
+    }
+
+    host.hidden = true;
+    document.body.classList.remove('authority-workspace-open');
+    syncSecurityCenterLauncherState(false);
+}
+
+function syncSecurityCenterLauncherState(isOpen: boolean): void {
+    const tab = document.getElementById(WORKSPACE_TAB_ID);
+    if (tab instanceof HTMLButtonElement) {
+        tab.classList.toggle('authority-workspace-strip__tab--active', isOpen);
     }
 }
 
