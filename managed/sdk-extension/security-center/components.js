@@ -31,15 +31,25 @@ export function renderAlertStack(items) {
     if (items.length === 0) {
         return '';
     }
+    const warningCount = items.filter(item => item.tone !== 'info').length;
+    const summary = warningCount > 0
+        ? `${items.length} 条提醒 · ${warningCount} 条需要注意`
+        : `${items.length} 条状态信息`;
     return `
-        <div class="authority-alert-stack">
-            ${items.map(item => `
-                <div class="authority-alert authority-alert--${item.tone}">
-                    <strong>${escapeHtml(item.title)}</strong>
-                    <span>${escapeHtml(item.message)}</span>
-                </div>
-            `).join('')}
-        </div>
+        <details class="authority-alert-drawer">
+            <summary>
+                <span class="authority-alert-drawer__title">组件状态与后台服务提醒</span>
+                <span class="authority-alert-drawer__meta">${escapeHtml(summary)}</span>
+            </summary>
+            <div class="authority-alert-stack">
+                ${items.map(item => `
+                    <div class="authority-alert authority-alert--${item.tone}">
+                        <strong>${escapeHtml(item.title)}</strong>
+                        <span>${escapeHtml(item.message)}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </details>
     `;
 }
 export function renderCapabilityMatrix(resources) {
