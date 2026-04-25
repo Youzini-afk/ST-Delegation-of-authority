@@ -1,8 +1,9 @@
 import { BUILTIN_JOB_TYPES } from '../constants.js';
 import { SseBroker } from '../events/sse-broker.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
-import type { JobsFile, StoredJobRecord, UserContext } from '../types.js';
-import { atomicWriteJson, nowIso, randomToken, readJsonFile } from '../utils.js';
+import type { StoredJobRecord, UserContext } from '../types.js';
+import { nowIso, randomToken } from '../utils.js';
+import { CoreService } from './core-service.js';
 
 interface InflightTask {
     timer: NodeJS.Timeout;
@@ -11,21 +12,28 @@ interface InflightTask {
 export class JobService {
     private readonly inflight = new Map<string, InflightTask>();
 
-    constructor(private readonly events: SseBroker) {}
+    constructor(
+        private readonly events: SseBroker,
+        private readonly core: CoreService,
+    ) {}
 
-    list(user: UserContext, extensionId?: string): StoredJobRecord[] {
+    async list(user: UserContext, extensionId?: string): Promise<StoredJobRecord[]> {
         const paths = getUserAuthorityPaths(user);
-        const file = readJsonFile<JobsFile>(paths.jobsFile, { entries: {} });
-        return Object.values(file.entries)
-            .filter(job => !extensionId || job.extensionId === extensionId)
-            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return await this.core.listControlJobs(paths.controlDbFile, {
+            userHandle: user.handle,
+            ...(extensionId ? { extensionId } : {}),
+        });
     }
 
-    get(user: UserContext, jobId: string): StoredJobRecord | null {
-        return this.list(user).find(job => job.id === jobId) ?? null;
+    async get(user: UserContext, jobId: string): Promise<StoredJobRecord | null> {
+        const paths = getUserAuthorityPaths(user);
+        return await this.core.getControlJob(paths.controlDbFile, {
+            userHandle: user.handle,
+            jobId,
+        });
     }
 
-    create(user: UserContext, extensionId: string, type: string, payload: Record<string, unknown>): StoredJobRecord {
+    async create(user: UserContext, extensionId: string, type: string, payload: Record<string, unknown>): Promise<StoredJobRecord> {
         if (!BUILTIN_JOB_TYPES.includes(type as typeof BUILTIN_JOB_TYPES[number])) {
             throw new Error(`Unsupported job type: ${type}`);
         }
@@ -44,13 +52,13 @@ export class JobService {
             channel: `extension:${extensionId}`,
         };
 
-        this.writeJob(user, job);
+        await this.writeJob(user, job);
         this.runDelayJob(user, job);
         return job;
     }
 
-    cancel(user: UserContext, extensionId: string, jobId: string): StoredJobRecord {
-        const job = this.get(user, jobId);
+    async cancel(user: UserContext, extensionId: string, jobId: string): Promise<StoredJobRecord> {
+        const job = await this.get(user, jobId);
         if (!job || job.extensionId !== extensionId) {
             throw new Error('Job not found');
         }
@@ -67,7 +75,7 @@ export class JobService {
             updatedAt: nowIso(),
             summary: 'Cancelled by user',
         };
-        this.writeJob(user, next);
+        await this.writeJob(user, next);
         this.events.emit(user.handle, extensionId, 'authority.job', next);
         return next;
     }
@@ -75,63 +83,93 @@ export class JobService {
     private runDelayJob(user: UserContext, job: StoredJobRecord): void {
         const durationMs = Number(job.payload?.durationMs ?? 3000);
         const startedAt = Date.now();
+        const timer = setInterval(() => {
+            void this.advanceDelayJob(user, job, durationMs, startedAt, timer).catch(() => {
+                clearInterval(timer);
+                this.inflight.delete(job.id);
+            });
+        }, 250);
+
+        this.inflight.set(job.id, { timer });
+
+        void this.promoteDelayJob(user, job, durationMs).catch(() => {
+            clearInterval(timer);
+            this.inflight.delete(job.id);
+        });
+    }
+
+    private async promoteDelayJob(user: UserContext, job: StoredJobRecord, durationMs: number): Promise<void> {
+        const current = await this.get(user, job.id);
+        if (!current || current.status === 'cancelled') {
+            const task = this.inflight.get(job.id);
+            if (task) {
+                clearInterval(task.timer);
+                this.inflight.delete(job.id);
+            }
+            return;
+        }
 
         const runningJob: StoredJobRecord = {
-            ...job,
+            ...current,
             status: 'running',
             updatedAt: nowIso(),
             summary: `Running delay job for ${durationMs}ms`,
         };
-        this.writeJob(user, runningJob);
+        await this.writeJob(user, runningJob);
         this.events.emit(user.handle, job.extensionId, 'authority.job', runningJob);
-
-        const timer = setInterval(() => {
-            const current = this.get(user, job.id);
-            if (!current || current.status === 'cancelled') {
-                clearInterval(timer);
-                this.inflight.delete(job.id);
-                return;
-            }
-
-            const elapsed = Date.now() - startedAt;
-            const progress = Math.min(100, Math.round((elapsed / durationMs) * 100));
-
-            if (progress >= 100) {
-                clearInterval(timer);
-                this.inflight.delete(job.id);
-                const completed: StoredJobRecord = {
-                    ...current,
-                    status: 'completed',
-                    progress: 100,
-                    updatedAt: nowIso(),
-                    summary: String(job.payload?.message ?? 'Delay completed'),
-                    result: {
-                        elapsedMs: durationMs,
-                        message: job.payload?.message ?? 'Delay completed',
-                    },
-                };
-                this.writeJob(user, completed);
-                this.events.emit(user.handle, job.extensionId, 'authority.job', completed);
-                return;
-            }
-
-            const update: StoredJobRecord = {
-                ...current,
-                progress,
-                updatedAt: nowIso(),
-            };
-            this.writeJob(user, update);
-            this.events.emit(user.handle, job.extensionId, 'authority.job', update);
-        }, 250);
-
-        this.inflight.set(job.id, { timer });
     }
 
-    private writeJob(user: UserContext, job: StoredJobRecord): void {
+    private async advanceDelayJob(
+        user: UserContext,
+        job: StoredJobRecord,
+        durationMs: number,
+        startedAt: number,
+        timer: NodeJS.Timeout,
+    ): Promise<void> {
+        const current = await this.get(user, job.id);
+        if (!current || current.status === 'cancelled') {
+            clearInterval(timer);
+            this.inflight.delete(job.id);
+            return;
+        }
+
+        const elapsed = Date.now() - startedAt;
+        const progress = Math.min(100, Math.round((elapsed / durationMs) * 100));
+
+        if (progress >= 100) {
+            clearInterval(timer);
+            this.inflight.delete(job.id);
+            const completed: StoredJobRecord = {
+                ...current,
+                status: 'completed',
+                progress: 100,
+                updatedAt: nowIso(),
+                summary: String(job.payload?.message ?? 'Delay completed'),
+                result: {
+                    elapsedMs: durationMs,
+                    message: job.payload?.message ?? 'Delay completed',
+                },
+            };
+            await this.writeJob(user, completed);
+            this.events.emit(user.handle, job.extensionId, 'authority.job', completed);
+            return;
+        }
+
+        const update: StoredJobRecord = {
+            ...current,
+            progress,
+            updatedAt: nowIso(),
+        };
+        await this.writeJob(user, update);
+        this.events.emit(user.handle, job.extensionId, 'authority.job', update);
+    }
+
+    private async writeJob(user: UserContext, job: StoredJobRecord): Promise<void> {
         const paths = getUserAuthorityPaths(user);
-        const file = readJsonFile<JobsFile>(paths.jobsFile, { entries: {} });
-        file.entries[job.id] = job;
-        atomicWriteJson(paths.jobsFile, file);
+        await this.core.upsertControlJob(paths.controlDbFile, {
+            userHandle: user.handle,
+            job,
+        });
     }
 }
 

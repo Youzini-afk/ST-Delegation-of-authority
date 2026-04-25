@@ -8,32 +8,37 @@ import type {
 import { DEFAULT_POLICY_STATUS } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type {
-    PermissionsFile,
     SessionGrantState,
     SessionRecord,
     StoredGrantEntry,
     StoredPolicyEntry,
     UserContext,
 } from '../types.js';
-import { atomicWriteJson, buildPermissionDescriptor, nowIso, readJsonFile } from '../utils.js';
+import { buildPermissionDescriptor, nowIso } from '../utils.js';
+import { CoreService } from './core-service.js';
 import { PolicyService } from './policy-service.js';
 
 export class PermissionService {
-    constructor(private readonly policyService: PolicyService) {}
+    constructor(
+        private readonly policyService: PolicyService,
+        private readonly core: CoreService,
+    ) {}
 
-    listPersistentGrants(user: UserContext, extensionId: string): StoredGrantEntry[] {
+    async listPersistentGrants(user: UserContext, extensionId: string): Promise<StoredGrantEntry[]> {
         const paths = getUserAuthorityPaths(user);
-        const file = readJsonFile<PermissionsFile>(paths.permissionsFile, { entries: {} });
-        return Object.values(file.entries[extensionId] ?? {});
+        return await this.core.listControlGrants(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+        });
     }
 
-    getPolicyEntries(user: UserContext, extensionId: string): StoredPolicyEntry[] {
-        return this.policyService.getExtensionPolicies(user, extensionId);
+    async getPolicyEntries(user: UserContext, extensionId: string): Promise<StoredPolicyEntry[]> {
+        return await this.policyService.getExtensionPolicies(user, extensionId);
     }
 
-    evaluate(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest): PermissionEvaluateResponse {
+    async evaluate(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest): Promise<PermissionEvaluateResponse> {
         const descriptor = buildPermissionDescriptor(request.resource, request.target);
-        const policy = this.getPolicyGrant(user, session.extension.id, descriptor.key);
+        const policy = await this.getPolicyGrant(user, session.extension.id, descriptor.key);
         if (policy) {
             return {
                 decision: policy.status,
@@ -45,7 +50,7 @@ export class PermissionService {
             };
         }
 
-        const persistentGrant = this.getPersistentGrant(user, session.extension.id, descriptor.key);
+        const persistentGrant = await this.getPersistentGrant(user, session.extension.id, descriptor.key);
         if (persistentGrant) {
             return {
                 decision: persistentGrant.status,
@@ -78,8 +83,8 @@ export class PermissionService {
         };
     }
 
-    authorize(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest, consume = true): AuthorityGrant | AuthorityPolicyEntry | null {
-        const evaluation = this.evaluate(user, session, request);
+    async authorize(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest, consume = true): Promise<AuthorityGrant | AuthorityPolicyEntry | null> {
+        const evaluation = await this.evaluate(user, session, request);
         if (evaluation.decision !== 'granted') {
             return null;
         }
@@ -98,7 +103,7 @@ export class PermissionService {
         return evaluation.grant ?? null;
     }
 
-    resolve(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest, choice: PermissionDecision): AuthorityGrant {
+    async resolve(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest, choice: PermissionDecision): Promise<AuthorityGrant> {
         const descriptor = buildPermissionDescriptor(request.resource, request.target);
         const timestamp = nowIso();
         const grant: AuthorityGrant = {
@@ -113,7 +118,7 @@ export class PermissionService {
         };
 
         if (choice === 'allow-always' || choice === 'deny') {
-            this.writePersistentGrant(user, session.extension.id, {
+            await this.writePersistentGrant(user, session.extension.id, {
                 ...grant,
                 choice,
             });
@@ -128,41 +133,37 @@ export class PermissionService {
         return grant;
     }
 
-    resetPersistentGrants(user: UserContext, extensionId: string, keys?: string[]): void {
+    async resetPersistentGrants(user: UserContext, extensionId: string, keys?: string[]): Promise<void> {
         const paths = getUserAuthorityPaths(user);
-        const file = readJsonFile<PermissionsFile>(paths.permissionsFile, { entries: {} });
-        const current = file.entries[extensionId] ?? {};
-
-        if (!keys || keys.length === 0) {
-            delete file.entries[extensionId];
-        } else {
-            for (const key of keys) {
-                delete current[key];
-            }
-            file.entries[extensionId] = current;
-        }
-
-        atomicWriteJson(paths.permissionsFile, file);
+        const request = {
+            userHandle: user.handle,
+            extensionId,
+            ...(keys ? { keys } : {}),
+        };
+        await this.core.resetControlGrants(paths.controlDbFile, request);
     }
 
-    private getPolicyGrant(user: UserContext, extensionId: string, key: string): StoredPolicyEntry | null {
-        const file = this.policyService.getPolicies(user);
+    private async getPolicyGrant(user: UserContext, extensionId: string, key: string): Promise<StoredPolicyEntry | null> {
+        const file = await this.policyService.getPolicies(user);
         return file.extensions[extensionId]?.[key] ?? null;
     }
 
-    private getPersistentGrant(user: UserContext, extensionId: string, key: string): StoredGrantEntry | null {
+    private async getPersistentGrant(user: UserContext, extensionId: string, key: string): Promise<StoredGrantEntry | null> {
         const paths = getUserAuthorityPaths(user);
-        const file = readJsonFile<PermissionsFile>(paths.permissionsFile, { entries: {} });
-        return file.entries[extensionId]?.[key] ?? null;
+        return await this.core.getControlGrant(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            key,
+        });
     }
 
-    private writePersistentGrant(user: UserContext, extensionId: string, grant: StoredGrantEntry): void {
+    private async writePersistentGrant(user: UserContext, extensionId: string, grant: StoredGrantEntry): Promise<void> {
         const paths = getUserAuthorityPaths(user);
-        const file = readJsonFile<PermissionsFile>(paths.permissionsFile, { entries: {} });
-        const current = file.entries[extensionId] ?? {};
-        current[grant.key] = grant;
-        file.entries[extensionId] = current;
-        atomicWriteJson(paths.permissionsFile, file);
+        await this.core.upsertControlGrant(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            grant,
+        });
     }
 }
 

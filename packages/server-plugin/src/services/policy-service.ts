@@ -1,66 +1,48 @@
 import { DEFAULT_POLICY_STATUS } from '../constants.js';
-import { getGlobalAuthorityPaths, getUserAuthorityPaths } from '../store/authority-paths.js';
+import { getGlobalAuthorityPaths } from '../store/authority-paths.js';
 import type { PoliciesFile, StoredPolicyEntry, UserContext } from '../types.js';
-import { atomicWriteJson, nowIso, readJsonFile } from '../utils.js';
+import { nowIso } from '../utils.js';
+import { CoreService } from './core-service.js';
 
 export class PolicyService {
-    getPolicies(user: UserContext): PoliciesFile {
+    constructor(private readonly core: CoreService) {}
+
+    async getPolicies(user: UserContext): Promise<PoliciesFile> {
         const globalPaths = getGlobalAuthorityPaths();
-        const userPaths = getUserAuthorityPaths(user);
-        const globalFile = readJsonFile<PoliciesFile>(globalPaths.policiesFile, {
-            defaults: { ...DEFAULT_POLICY_STATUS },
-            extensions: {},
-            updatedAt: nowIso(),
-        });
-        const userFile = readJsonFile<PoliciesFile>(userPaths.policiesFile, {
-            defaults: { ...DEFAULT_POLICY_STATUS },
-            extensions: {},
-            updatedAt: nowIso(),
+        const globalFile = await this.core.getControlPolicies(globalPaths.controlDbFile, {
+            userHandle: user.handle,
         });
 
         return {
+            ...globalFile,
             defaults: {
+                ...DEFAULT_POLICY_STATUS,
                 ...globalFile.defaults,
-                ...userFile.defaults,
             },
-            extensions: {
-                ...globalFile.extensions,
-                ...userFile.extensions,
-            },
-            updatedAt: userFile.updatedAt || globalFile.updatedAt,
+            updatedAt: globalFile.updatedAt || nowIso(),
         };
     }
 
-    getExtensionPolicies(user: UserContext, extensionId: string): StoredPolicyEntry[] {
-        return Object.values(this.getPolicies(user).extensions[extensionId] ?? {});
+    async getExtensionPolicies(user: UserContext, extensionId: string): Promise<StoredPolicyEntry[]> {
+        return Object.values((await this.getPolicies(user)).extensions[extensionId] ?? {});
     }
 
-    saveGlobalPolicies(actor: UserContext, partial: Partial<PoliciesFile>): PoliciesFile {
+    async saveGlobalPolicies(actor: UserContext, partial: Partial<PoliciesFile>): Promise<PoliciesFile> {
         if (!actor.isAdmin) {
             throw new Error('Forbidden');
         }
 
         const paths = getGlobalAuthorityPaths();
-        const current = readJsonFile<PoliciesFile>(paths.policiesFile, {
-            defaults: { ...DEFAULT_POLICY_STATUS },
-            extensions: {},
-            updatedAt: nowIso(),
+        return await this.core.saveControlPolicies(paths.controlDbFile, {
+            actor: {
+                handle: actor.handle,
+                isAdmin: actor.isAdmin,
+            },
+            partial: {
+                ...(partial.defaults ? { defaults: partial.defaults } : {}),
+                ...(partial.extensions ? { extensions: partial.extensions } : {}),
+            },
         });
-
-        const next: PoliciesFile = {
-            defaults: {
-                ...current.defaults,
-                ...(partial.defaults ?? {}),
-            },
-            extensions: {
-                ...current.extensions,
-                ...(partial.extensions ?? {}),
-            },
-            updatedAt: nowIso(),
-        };
-
-        atomicWriteJson(paths.policiesFile, next);
-        return next;
     }
 }
 

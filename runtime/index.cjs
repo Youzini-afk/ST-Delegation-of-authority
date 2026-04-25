@@ -143,7 +143,7 @@ function fail(runtime, req, res, extensionId, error) {
     const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error);
     try {
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-        runtime.audit.logError(user, extensionId, message);
+        void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
     }
     catch {
         // ignore errors raised before auth is available
@@ -205,11 +205,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
             const config = req.body;
-            const extension = runtime.extensions.upsertExtension(user, config);
-            const session = runtime.sessions.createSession(user, config, extension.firstSeenAt);
-            const grants = runtime.permissions.listPersistentGrants(user, extension.id);
-            const policies = runtime.permissions.getPolicyEntries(user, extension.id);
-            runtime.audit.logUsage(user, extension.id, 'Session initialized');
+            const session = await runtime.sessions.createSession(user, config);
+            const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
+            const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
+            await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
             ok(res, runtime.sessions.buildSessionResponse(session, grants, policies));
         }
         catch (error) {
@@ -219,8 +218,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/session/current', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            ok(res, runtime.sessions.buildSessionResponse(session, runtime.permissions.listPersistentGrants(user, session.extension.id), runtime.permissions.getPolicyEntries(user, session.extension.id)));
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id)));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -229,8 +228,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/permissions/evaluate', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            ok(res, runtime.permissions.evaluate(user, session, req.body));
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            ok(res, await runtime.permissions.evaluate(user, session, req.body));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -239,10 +238,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/permissions/resolve', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const payload = req.body;
-            const grant = runtime.permissions.resolve(user, session, payload, payload.choice);
-            runtime.audit.logPermission(user, session.extension.id, 'Permission resolved', {
+            const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
+            await runtime.audit.logPermission(user, session.extension.id, 'Permission resolved', {
                 key: grant.key,
                 status: grant.status,
                 scope: grant.scope,
@@ -257,14 +256,14 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/extensions', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const list = runtime.extensions.listExtensions(user).map(extension => {
-                const grants = runtime.permissions.listPersistentGrants(user, extension.id);
+            const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
+                const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
                     deniedCount: grants.filter(grant => grant.status === 'denied').length,
                 };
-            });
+            }));
             ok(res, list);
         }
         catch (error) {
@@ -275,16 +274,16 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
-            const extension = runtime.extensions.getExtension(user, extensionId);
+            const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
                 throw new Error('Extension not found');
             }
             ok(res, {
                 extension,
-                grants: runtime.permissions.listPersistentGrants(user, extensionId),
-                policies: runtime.permissions.getPolicyEntries(user, extensionId),
-                activity: runtime.audit.getRecentActivity(user, extensionId),
-                jobs: runtime.jobs.list(user, extensionId),
+                grants: await runtime.permissions.listPersistentGrants(user, extensionId),
+                policies: await runtime.permissions.getPolicyEntries(user, extensionId),
+                activity: await runtime.audit.getRecentActivity(user, extensionId),
+                jobs: await runtime.jobs.list(user, extensionId),
             });
         }
         catch (error) {
@@ -295,8 +294,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
-            runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
-            runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
+            await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
+            await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
                 keys: req.body?.keys ?? null,
             });
             if (typeof res.sendStatus === 'function') {
@@ -313,8 +312,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/kv/get', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
             ok(res, { value: runtime.storage.getKv(user, session.extension.id, String(req.body?.key ?? '')) });
@@ -326,12 +325,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/kv/set', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
             runtime.storage.setKv(user, session.extension.id, String(req.body?.key ?? ''), req.body?.value);
-            runtime.audit.logUsage(user, session.extension.id, 'KV set', { key: req.body?.key });
+            await runtime.audit.logUsage(user, session.extension.id, 'KV set', { key: req.body?.key });
             ok(res, { ok: true });
         }
         catch (error) {
@@ -341,8 +340,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/kv/delete', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
             runtime.storage.deleteKv(user, session.extension.id, String(req.body?.key ?? ''));
@@ -355,8 +354,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/kv/list', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
             ok(res, { entries: runtime.storage.listKv(user, session.extension.id) });
@@ -368,12 +367,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/blob/put', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
             const record = runtime.storage.putBlob(user, session.extension.id, String(req.body?.name ?? 'blob'), String(req.body?.content ?? ''), req.body?.encoding, req.body?.contentType);
-            runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id });
+            await runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id });
             ok(res, record);
         }
         catch (error) {
@@ -383,8 +382,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/blob/get', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
             ok(res, runtime.storage.getBlob(user, session.extension.id, String(req.body?.id ?? '')));
@@ -396,8 +395,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/blob/delete', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
             runtime.storage.deleteBlob(user, session.extension.id, String(req.body?.id ?? ''));
@@ -410,8 +409,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/storage/blob/list', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
             ok(res, { entries: runtime.storage.listBlobs(user, session.extension.id) });
@@ -423,10 +422,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/sql/query', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
-            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
@@ -434,7 +433,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 ...payload,
                 database,
             });
-            runtime.audit.logUsage(user, session.extension.id, 'SQL query', {
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL query', {
                 database,
                 statement: previewSqlStatement(payload.statement ?? ''),
             });
@@ -447,10 +446,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/sql/exec', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
-            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
@@ -458,7 +457,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 ...payload,
                 database,
             });
-            runtime.audit.logUsage(user, session.extension.id, 'SQL exec', {
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL exec', {
                 database,
                 statement: previewSqlStatement(payload.statement ?? ''),
             });
@@ -471,10 +470,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/sql/batch', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
-            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
@@ -482,7 +481,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 ...payload,
                 database,
             });
-            runtime.audit.logUsage(user, session.extension.id, 'SQL batch', {
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL batch', {
                 database,
                 statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
             });
@@ -495,10 +494,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/sql/transaction', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
-            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
@@ -506,7 +505,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 ...payload,
                 database,
             });
-            runtime.audit.logUsage(user, session.extension.id, 'SQL transaction', {
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL transaction', {
                 database,
                 statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
             });
@@ -519,10 +518,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/sql/migrate', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
-            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
@@ -530,7 +529,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 ...payload,
                 database,
             });
-            runtime.audit.logUsage(user, session.extension.id, 'SQL migrate', {
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL migrate', {
                 database,
                 migrations: Array.isArray(payload.migrations) ? payload.migrations.length : 0,
                 tableName: payload.tableName ?? '_authority_migrations',
@@ -544,12 +543,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/sql/databases', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private' }, false)) {
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private' }, false)) {
                 throw new Error('Permission not granted: sql.private');
             }
             const result = listPrivateSqlDatabases(user, session.extension.id);
-            runtime.audit.logUsage(user, session.extension.id, 'SQL list databases', {
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL list databases', {
                 count: result.databases.length,
             });
             ok(res, result);
@@ -561,13 +560,13 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/http/fetch', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.normalizeHostname)(String(req.body?.url ?? ''));
-            if (!runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
                 throw new Error(`Permission not granted: http.fetch for ${hostname}`);
             }
             const result = await runtime.http.fetch(user, req.body);
-            runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', { hostname });
+            await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', { hostname });
             ok(res, result);
         }
         catch (error) {
@@ -577,13 +576,13 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/jobs/create', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const jobType = String(req.body?.type ?? '');
-            if (!runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: jobType })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: jobType })) {
                 throw new Error(`Permission not granted: jobs.background for ${jobType}`);
             }
-            const job = runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {});
-            runtime.audit.logUsage(user, session.extension.id, 'Job created', { jobId: job.id, jobType });
+            const job = await runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {});
+            await runtime.audit.logUsage(user, session.extension.id, 'Job created', { jobId: job.id, jobType });
             ok(res, job);
         }
         catch (error) {
@@ -593,8 +592,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/jobs', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            ok(res, runtime.jobs.list(user, session.extension.id));
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            ok(res, await runtime.jobs.list(user, session.extension.id));
         }
         catch (error) {
             fail(runtime, req, res, 'jobs.background', error);
@@ -603,8 +602,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/jobs/:id', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            const job = runtime.jobs.get(user, String(req.params?.id ?? ''));
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const job = await runtime.jobs.get(user, String(req.params?.id ?? ''));
             if (!job || job.extensionId !== session.extension.id) {
                 throw new Error('Job not found');
             }
@@ -617,9 +616,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/jobs/:id/cancel', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            const job = runtime.jobs.cancel(user, session.extension.id, String(req.params?.id ?? ''));
-            runtime.audit.logUsage(user, session.extension.id, 'Job cancelled', { jobId: job.id });
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const job = await runtime.jobs.cancel(user, session.extension.id, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, session.extension.id, 'Job cancelled', { jobId: job.id });
             ok(res, job);
         }
         catch (error) {
@@ -629,9 +628,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/events/stream', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
             const channel = String(req.query?.channel ?? `extension:${session.extension.id}`);
-            if (!runtime.permissions.authorize(user, session, { resource: 'events.stream', target: channel })) {
+            if (!await runtime.permissions.authorize(user, session, { resource: 'events.stream', target: channel })) {
                 throw new Error(`Permission not granted: events.stream for ${channel}`);
             }
             res.setHeader('Content-Type', 'text/event-stream');
@@ -652,7 +651,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
-            ok(res, runtime.policies.getPolicies(user));
+            ok(res, await runtime.policies.getPolicies(user));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -661,8 +660,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/admin/policies', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const result = runtime.policies.saveGlobalPolicies(user, req.body ?? {});
-            runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
+            const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
+            await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
         }
         catch (error) {
@@ -709,16 +708,16 @@ __webpack_require__.r(__webpack_exports__);
 
 function createAuthorityRuntime() {
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker();
-    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__.AuditService();
     const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__.CoreService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_3__.ExtensionService();
+    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__.AuditService(core);
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_3__.ExtensionService(core);
     const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_5__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__.PolicyService();
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__.PermissionService(policies);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_9__.SessionService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_9__.SessionService(core);
     const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_10__.StorageService();
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__.HttpService();
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__.JobService(events);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__.JobService(events, core);
     return {
         events,
         audit,
@@ -754,52 +753,51 @@ __webpack_require__.r(__webpack_exports__);
 
 
 class AuditService {
-    logPermission(user, extensionId, message, details) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const record = {
+    core;
+    constructor(core) {
+        this.core = core;
+    }
+    async logPermission(user, extensionId, message, details) {
+        await this.log(user, {
             timestamp: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
             kind: 'permission',
             extensionId,
             message,
-        };
-        if (details) {
-            record.details = details;
-        }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.appendJsonl)(paths.permissionsAuditFile, record);
+            ...(details ? { details } : {}),
+        });
     }
-    logUsage(user, extensionId, message, details) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const record = {
+    async logUsage(user, extensionId, message, details) {
+        await this.log(user, {
             timestamp: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
             kind: 'usage',
             extensionId,
             message,
-        };
-        if (details) {
-            record.details = details;
-        }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.appendJsonl)(paths.usageAuditFile, record);
+            ...(details ? { details } : {}),
+        });
     }
-    logError(user, extensionId, message, details) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const record = {
+    async logError(user, extensionId, message, details) {
+        await this.log(user, {
             timestamp: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
             kind: 'error',
             extensionId,
             message,
-        };
-        if (details) {
-            record.details = details;
-        }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.appendJsonl)(paths.errorsAuditFile, record);
+            ...(details ? { details } : {}),
+        });
     }
-    getRecentActivity(user, extensionId) {
+    async getRecentActivity(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        return {
-            permissions: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.tailJsonl)(paths.permissionsAuditFile, _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_AUDIT_LINES).filter(item => item.extensionId === extensionId),
-            usage: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.tailJsonl)(paths.usageAuditFile, _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_AUDIT_LINES).filter(item => item.extensionId === extensionId),
-            errors: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.tailJsonl)(paths.errorsAuditFile, _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_AUDIT_LINES).filter(item => item.extensionId === extensionId),
-        };
+        return await this.core.getRecentControlAudit(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            limit: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_AUDIT_LINES,
+        });
+    }
+    async log(user, record) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        await this.core.logControlAudit(paths.controlDbFile, {
+            userHandle: user.handle,
+            record,
+        });
     }
 }
 
@@ -1049,6 +1047,115 @@ class CoreService {
             tableName: request.tableName,
         });
     }
+    async initializeControlSession(dbPath, sessionToken, timestamp, user, config) {
+        return await this.request('/v1/control/session/init', {
+            dbPath,
+            sessionToken,
+            timestamp,
+            user,
+            config,
+        });
+    }
+    async getControlSession(dbPath, userHandle, sessionToken) {
+        const response = await this.request('/v1/control/session/get', {
+            dbPath,
+            userHandle,
+            sessionToken,
+        });
+        return response.session;
+    }
+    async listControlExtensions(dbPath, userHandle) {
+        const response = await this.request('/v1/control/extensions/list', {
+            dbPath,
+            userHandle,
+        });
+        return response.extensions;
+    }
+    async getControlExtension(dbPath, request) {
+        const response = await this.request('/v1/control/extensions/get', {
+            dbPath,
+            ...request,
+        });
+        return response.extension;
+    }
+    async logControlAudit(dbPath, request) {
+        await this.request('/v1/control/audit/log', {
+            dbPath,
+            ...request,
+        });
+    }
+    async getRecentControlAudit(dbPath, request) {
+        return await this.request('/v1/control/audit/recent', {
+            dbPath,
+            ...request,
+        });
+    }
+    async listControlGrants(dbPath, request) {
+        const response = await this.request('/v1/control/grants/list', {
+            dbPath,
+            ...request,
+        });
+        return response.grants;
+    }
+    async getControlGrant(dbPath, request) {
+        const response = await this.request('/v1/control/grants/get', {
+            dbPath,
+            ...request,
+        });
+        return response.grant;
+    }
+    async upsertControlGrant(dbPath, request) {
+        const response = await this.request('/v1/control/grants/upsert', {
+            dbPath,
+            ...request,
+        });
+        if (!response.grant) {
+            throw new Error('Control grant upsert returned no grant');
+        }
+        return response.grant;
+    }
+    async resetControlGrants(dbPath, request) {
+        await this.request('/v1/control/grants/reset', {
+            dbPath,
+            ...request,
+        });
+    }
+    async getControlPolicies(dbPath, request) {
+        return await this.request('/v1/control/policies/get', {
+            dbPath,
+            ...request,
+        });
+    }
+    async saveControlPolicies(dbPath, request) {
+        return await this.request('/v1/control/policies/save', {
+            dbPath,
+            ...request,
+        });
+    }
+    async listControlJobs(dbPath, request) {
+        const response = await this.request('/v1/control/jobs/list', {
+            dbPath,
+            ...request,
+        });
+        return response.jobs;
+    }
+    async getControlJob(dbPath, request) {
+        const response = await this.request('/v1/control/jobs/get', {
+            dbPath,
+            ...request,
+        });
+        return response.job;
+    }
+    async upsertControlJob(dbPath, request) {
+        const response = await this.request('/v1/control/jobs/upsert', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job upsert returned no job');
+        }
+        return response.job;
+    }
     attachProcessListeners(child) {
         child.stdout?.on('data', chunk => {
             const text = String(chunk).trim();
@@ -1257,38 +1364,22 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   ExtensionService: () => (/* binding */ ExtensionService)
 /* harmony export */ });
 /* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
 
 class ExtensionService {
-    upsertExtension(user, config) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.readJsonFile)(paths.extensionsFile, { entries: {} });
-        const current = file.entries[config.extensionId];
-        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.nowIso)();
-        const next = {
-            id: config.extensionId,
-            installType: config.installType,
-            displayName: config.displayName,
-            version: config.version,
-            firstSeenAt: current?.firstSeenAt ?? timestamp,
-            lastSeenAt: timestamp,
-            declaredPermissions: config.declaredPermissions,
-        };
-        if (config.uiLabel) {
-            next.uiLabel = config.uiLabel;
-        }
-        file.entries[config.extensionId] = next;
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.atomicWriteJson)(paths.extensionsFile, file);
-        return next;
+    core;
+    constructor(core) {
+        this.core = core;
     }
-    listExtensions(user) {
+    async listExtensions(user) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.readJsonFile)(paths.extensionsFile, { entries: {} });
-        return Object.values(file.entries).sort((left, right) => left.displayName.localeCompare(right.displayName));
+        return await this.core.listControlExtensions(paths.controlDbFile, user.handle);
     }
-    getExtension(user, extensionId) {
-        return this.listExtensions(user).find(entry => entry.id === extensionId) ?? null;
+    async getExtension(user, extensionId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
+        return await this.core.getControlExtension(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+        });
     }
 }
 
@@ -1584,21 +1675,27 @@ __webpack_require__.r(__webpack_exports__);
 
 class JobService {
     events;
+    core;
     inflight = new Map();
-    constructor(events) {
+    constructor(events, core) {
         this.events = events;
+        this.core = core;
     }
-    list(user, extensionId) {
+    async list(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(paths.jobsFile, { entries: {} });
-        return Object.values(file.entries)
-            .filter(job => !extensionId || job.extensionId === extensionId)
-            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return await this.core.listControlJobs(paths.controlDbFile, {
+            userHandle: user.handle,
+            ...(extensionId ? { extensionId } : {}),
+        });
     }
-    get(user, jobId) {
-        return this.list(user).find(job => job.id === jobId) ?? null;
+    async get(user, jobId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.getControlJob(paths.controlDbFile, {
+            userHandle: user.handle,
+            jobId,
+        });
     }
-    create(user, extensionId, type, payload) {
+    async create(user, extensionId, type, payload) {
         if (!_constants_js__WEBPACK_IMPORTED_MODULE_0__.BUILTIN_JOB_TYPES.includes(type)) {
             throw new Error(`Unsupported job type: ${type}`);
         }
@@ -1615,12 +1712,12 @@ class JobService {
             payload,
             channel: `extension:${extensionId}`,
         };
-        this.writeJob(user, job);
+        await this.writeJob(user, job);
         this.runDelayJob(user, job);
         return job;
     }
-    cancel(user, extensionId, jobId) {
-        const job = this.get(user, jobId);
+    async cancel(user, extensionId, jobId) {
+        const job = await this.get(user, jobId);
         if (!job || job.extensionId !== extensionId) {
             throw new Error('Job not found');
         }
@@ -1635,63 +1732,85 @@ class JobService {
             updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
             summary: 'Cancelled by user',
         };
-        this.writeJob(user, next);
+        await this.writeJob(user, next);
         this.events.emit(user.handle, extensionId, 'authority.job', next);
         return next;
     }
     runDelayJob(user, job) {
         const durationMs = Number(job.payload?.durationMs ?? 3000);
         const startedAt = Date.now();
+        const timer = setInterval(() => {
+            void this.advanceDelayJob(user, job, durationMs, startedAt, timer).catch(() => {
+                clearInterval(timer);
+                this.inflight.delete(job.id);
+            });
+        }, 250);
+        this.inflight.set(job.id, { timer });
+        void this.promoteDelayJob(user, job, durationMs).catch(() => {
+            clearInterval(timer);
+            this.inflight.delete(job.id);
+        });
+    }
+    async promoteDelayJob(user, job, durationMs) {
+        const current = await this.get(user, job.id);
+        if (!current || current.status === 'cancelled') {
+            const task = this.inflight.get(job.id);
+            if (task) {
+                clearInterval(task.timer);
+                this.inflight.delete(job.id);
+            }
+            return;
+        }
         const runningJob = {
-            ...job,
+            ...current,
             status: 'running',
             updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
             summary: `Running delay job for ${durationMs}ms`,
         };
-        this.writeJob(user, runningJob);
+        await this.writeJob(user, runningJob);
         this.events.emit(user.handle, job.extensionId, 'authority.job', runningJob);
-        const timer = setInterval(() => {
-            const current = this.get(user, job.id);
-            if (!current || current.status === 'cancelled') {
-                clearInterval(timer);
-                this.inflight.delete(job.id);
-                return;
-            }
-            const elapsed = Date.now() - startedAt;
-            const progress = Math.min(100, Math.round((elapsed / durationMs) * 100));
-            if (progress >= 100) {
-                clearInterval(timer);
-                this.inflight.delete(job.id);
-                const completed = {
-                    ...current,
-                    status: 'completed',
-                    progress: 100,
-                    updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-                    summary: String(job.payload?.message ?? 'Delay completed'),
-                    result: {
-                        elapsedMs: durationMs,
-                        message: job.payload?.message ?? 'Delay completed',
-                    },
-                };
-                this.writeJob(user, completed);
-                this.events.emit(user.handle, job.extensionId, 'authority.job', completed);
-                return;
-            }
-            const update = {
-                ...current,
-                progress,
-                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-            };
-            this.writeJob(user, update);
-            this.events.emit(user.handle, job.extensionId, 'authority.job', update);
-        }, 250);
-        this.inflight.set(job.id, { timer });
     }
-    writeJob(user, job) {
+    async advanceDelayJob(user, job, durationMs, startedAt, timer) {
+        const current = await this.get(user, job.id);
+        if (!current || current.status === 'cancelled') {
+            clearInterval(timer);
+            this.inflight.delete(job.id);
+            return;
+        }
+        const elapsed = Date.now() - startedAt;
+        const progress = Math.min(100, Math.round((elapsed / durationMs) * 100));
+        if (progress >= 100) {
+            clearInterval(timer);
+            this.inflight.delete(job.id);
+            const completed = {
+                ...current,
+                status: 'completed',
+                progress: 100,
+                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+                summary: String(job.payload?.message ?? 'Delay completed'),
+                result: {
+                    elapsedMs: durationMs,
+                    message: job.payload?.message ?? 'Delay completed',
+                },
+            };
+            await this.writeJob(user, completed);
+            this.events.emit(user.handle, job.extensionId, 'authority.job', completed);
+            return;
+        }
+        const update = {
+            ...current,
+            progress,
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+        };
+        await this.writeJob(user, update);
+        this.events.emit(user.handle, job.extensionId, 'authority.job', update);
+    }
+    async writeJob(user, job) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(paths.jobsFile, { entries: {} });
-        file.entries[job.id] = job;
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.atomicWriteJson)(paths.jobsFile, file);
+        await this.core.upsertControlJob(paths.controlDbFile, {
+            userHandle: user.handle,
+            job,
+        });
     }
 }
 
@@ -1716,20 +1835,24 @@ __webpack_require__.r(__webpack_exports__);
 
 class PermissionService {
     policyService;
-    constructor(policyService) {
+    core;
+    constructor(policyService, core) {
         this.policyService = policyService;
+        this.core = core;
     }
-    listPersistentGrants(user, extensionId) {
+    async listPersistentGrants(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(paths.permissionsFile, { entries: {} });
-        return Object.values(file.entries[extensionId] ?? {});
+        return await this.core.listControlGrants(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+        });
     }
-    getPolicyEntries(user, extensionId) {
-        return this.policyService.getExtensionPolicies(user, extensionId);
+    async getPolicyEntries(user, extensionId) {
+        return await this.policyService.getExtensionPolicies(user, extensionId);
     }
-    evaluate(user, session, request) {
+    async evaluate(user, session, request) {
         const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.buildPermissionDescriptor)(request.resource, request.target);
-        const policy = this.getPolicyGrant(user, session.extension.id, descriptor.key);
+        const policy = await this.getPolicyGrant(user, session.extension.id, descriptor.key);
         if (policy) {
             return {
                 decision: policy.status,
@@ -1740,7 +1863,7 @@ class PermissionService {
                 grant: policy,
             };
         }
-        const persistentGrant = this.getPersistentGrant(user, session.extension.id, descriptor.key);
+        const persistentGrant = await this.getPersistentGrant(user, session.extension.id, descriptor.key);
         if (persistentGrant) {
             return {
                 decision: persistentGrant.status,
@@ -1770,8 +1893,8 @@ class PermissionService {
             resource: descriptor.resource,
         };
     }
-    authorize(user, session, request, consume = true) {
-        const evaluation = this.evaluate(user, session, request);
+    async authorize(user, session, request, consume = true) {
+        const evaluation = await this.evaluate(user, session, request);
         if (evaluation.decision !== 'granted') {
             return null;
         }
@@ -1788,7 +1911,7 @@ class PermissionService {
         }
         return evaluation.grant ?? null;
     }
-    resolve(user, session, request, choice) {
+    async resolve(user, session, request, choice) {
         const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.buildPermissionDescriptor)(request.resource, request.target);
         const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)();
         const grant = {
@@ -1802,7 +1925,7 @@ class PermissionService {
             source: user.isAdmin ? 'admin' : 'user',
         };
         if (choice === 'allow-always' || choice === 'deny') {
-            this.writePersistentGrant(user, session.extension.id, {
+            await this.writePersistentGrant(user, session.extension.id, {
                 ...grant,
                 choice,
             });
@@ -1816,37 +1939,34 @@ class PermissionService {
         }
         return grant;
     }
-    resetPersistentGrants(user, extensionId, keys) {
+    async resetPersistentGrants(user, extensionId, keys) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(paths.permissionsFile, { entries: {} });
-        const current = file.entries[extensionId] ?? {};
-        if (!keys || keys.length === 0) {
-            delete file.entries[extensionId];
-        }
-        else {
-            for (const key of keys) {
-                delete current[key];
-            }
-            file.entries[extensionId] = current;
-        }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.atomicWriteJson)(paths.permissionsFile, file);
+        const request = {
+            userHandle: user.handle,
+            extensionId,
+            ...(keys ? { keys } : {}),
+        };
+        await this.core.resetControlGrants(paths.controlDbFile, request);
     }
-    getPolicyGrant(user, extensionId, key) {
-        const file = this.policyService.getPolicies(user);
+    async getPolicyGrant(user, extensionId, key) {
+        const file = await this.policyService.getPolicies(user);
         return file.extensions[extensionId]?.[key] ?? null;
     }
-    getPersistentGrant(user, extensionId, key) {
+    async getPersistentGrant(user, extensionId, key) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(paths.permissionsFile, { entries: {} });
-        return file.entries[extensionId]?.[key] ?? null;
+        return await this.core.getControlGrant(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            key,
+        });
     }
-    writePersistentGrant(user, extensionId, grant) {
+    async writePersistentGrant(user, extensionId, grant) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const file = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(paths.permissionsFile, { entries: {} });
-        const current = file.entries[extensionId] ?? {};
-        current[grant.key] = grant;
-        file.entries[extensionId] = current;
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.atomicWriteJson)(paths.permissionsFile, file);
+        await this.core.upsertControlGrant(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            grant,
+        });
     }
 }
 
@@ -1870,57 +1990,42 @@ __webpack_require__.r(__webpack_exports__);
 
 
 class PolicyService {
-    getPolicies(user) {
+    core;
+    constructor(core) {
+        this.core = core;
+    }
+    async getPolicies(user) {
         const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getGlobalAuthorityPaths)();
-        const userPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        const globalFile = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(globalPaths.policiesFile, {
-            defaults: { ..._constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS },
-            extensions: {},
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-        });
-        const userFile = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(userPaths.policiesFile, {
-            defaults: { ..._constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS },
-            extensions: {},
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+        const globalFile = await this.core.getControlPolicies(globalPaths.controlDbFile, {
+            userHandle: user.handle,
         });
         return {
+            ...globalFile,
             defaults: {
+                ..._constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS,
                 ...globalFile.defaults,
-                ...userFile.defaults,
             },
-            extensions: {
-                ...globalFile.extensions,
-                ...userFile.extensions,
-            },
-            updatedAt: userFile.updatedAt || globalFile.updatedAt,
+            updatedAt: globalFile.updatedAt || (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
         };
     }
-    getExtensionPolicies(user, extensionId) {
-        return Object.values(this.getPolicies(user).extensions[extensionId] ?? {});
+    async getExtensionPolicies(user, extensionId) {
+        return Object.values((await this.getPolicies(user)).extensions[extensionId] ?? {});
     }
-    saveGlobalPolicies(actor, partial) {
+    async saveGlobalPolicies(actor, partial) {
         if (!actor.isAdmin) {
             throw new Error('Forbidden');
         }
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getGlobalAuthorityPaths)();
-        const current = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.readJsonFile)(paths.policiesFile, {
-            defaults: { ..._constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS },
-            extensions: {},
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+        return await this.core.saveControlPolicies(paths.controlDbFile, {
+            actor: {
+                handle: actor.handle,
+                isAdmin: actor.isAdmin,
+            },
+            partial: {
+                ...(partial.defaults ? { defaults: partial.defaults } : {}),
+                ...(partial.extensions ? { extensions: partial.extensions } : {}),
+            },
         });
-        const next = {
-            defaults: {
-                ...current.defaults,
-                ...(partial.defaults ?? {}),
-            },
-            extensions: {
-                ...current.extensions,
-                ...(partial.extensions ?? {}),
-            },
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
-        };
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.atomicWriteJson)(paths.policiesFile, next);
-        return next;
     }
 }
 
@@ -1937,38 +2042,43 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   SessionService: () => (/* binding */ SessionService)
 /* harmony export */ });
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 class SessionService {
+    core;
     sessions = new Map();
-    createSession(user, config, firstSeenAt) {
-        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.randomToken)();
-        const session = {
-            token,
-            createdAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.nowIso)(),
-            userHandle: user.handle,
-            isAdmin: user.isAdmin,
-            extension: {
-                id: config.extensionId,
-                installType: config.installType,
-                displayName: config.displayName,
-                version: config.version,
-                firstSeenAt,
-            },
-            declaredPermissions: config.declaredPermissions,
-            sessionGrants: new Map(),
-        };
+    constructor(core) {
+        this.core = core;
+    }
+    async createSession(user, config) {
+        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.randomToken)();
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
+        const snapshot = await this.core.initializeControlSession(paths.controlDbFile, token, (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.nowIso)(), { handle: user.handle, isAdmin: user.isAdmin }, config);
+        const session = this.sessionFromSnapshot(snapshot);
         this.sessions.set(token, session);
         return session;
     }
-    getSession(token) {
+    async getSession(token, user) {
         if (!token) {
             return null;
         }
-        return this.sessions.get(token) ?? null;
+        const cached = this.sessions.get(token);
+        if (cached) {
+            return cached;
+        }
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
+        const snapshot = await this.core.getControlSession(paths.controlDbFile, user.handle, token);
+        if (!snapshot) {
+            return null;
+        }
+        const session = this.sessionFromSnapshot(snapshot);
+        this.sessions.set(token, session);
+        return session;
     }
-    assertSession(token, user) {
-        const session = this.getSession(token);
+    async assertSession(token, user) {
+        const session = await this.getSession(token, user);
         if (!session) {
             throw new Error('Invalid authority session');
         }
@@ -1991,6 +2101,17 @@ class SessionService {
                 securityCenter: true,
                 admin: session.isAdmin,
             },
+        };
+    }
+    sessionFromSnapshot(snapshot) {
+        return {
+            token: snapshot.sessionToken,
+            createdAt: snapshot.createdAt,
+            userHandle: snapshot.user.handle,
+            isAdmin: snapshot.user.isAdmin,
+            extension: snapshot.extension,
+            declaredPermissions: snapshot.declaredPermissions,
+            sessionGrants: new Map(),
         };
     }
 }
@@ -2146,6 +2267,7 @@ function getUserAuthorityPaths(user) {
         permissionsFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'permissions.json'),
         policiesFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'policies.json'),
         jobsFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(jobsDir, 'jobs.json'),
+        controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
         permissionsAuditFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(auditDir, 'permissions.jsonl'),
         usageAuditFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(auditDir, 'usage.jsonl'),
         errorsAuditFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(auditDir, 'errors.jsonl'),
@@ -2159,6 +2281,7 @@ function getGlobalAuthorityPaths() {
     return {
         baseDir,
         stateDir,
+        controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
         policiesFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'policies.json'),
     };
 }

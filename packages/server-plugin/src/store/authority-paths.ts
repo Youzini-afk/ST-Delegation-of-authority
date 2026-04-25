@@ -16,6 +16,7 @@ export interface UserAuthorityPaths {
     permissionsFile: string;
     policiesFile: string;
     jobsFile: string;
+    controlDbFile: string;
     permissionsAuditFile: string;
     usageAuditFile: string;
     errorsAuditFile: string;
@@ -24,6 +25,7 @@ export interface UserAuthorityPaths {
 export interface GlobalAuthorityPaths {
     baseDir: string;
     stateDir: string;
+    controlDbFile: string;
     policiesFile: string;
 }
 
@@ -49,6 +51,7 @@ export function getUserAuthorityPaths(user: UserContext): UserAuthorityPaths {
         permissionsFile: path.join(stateDir, 'permissions.json'),
         policiesFile: path.join(stateDir, 'policies.json'),
         jobsFile: path.join(jobsDir, 'jobs.json'),
+        controlDbFile: path.join(stateDir, 'control.sqlite'),
         permissionsAuditFile: path.join(auditDir, 'permissions.jsonl'),
         usageAuditFile: path.join(auditDir, 'usage.jsonl'),
         errorsAuditFile: path.join(auditDir, 'errors.jsonl'),
@@ -63,6 +66,7 @@ export function getGlobalAuthorityPaths(): GlobalAuthorityPaths {
     return {
         baseDir,
         stateDir,
+        controlDbFile: path.join(stateDir, 'control.sqlite'),
         policiesFile: path.join(stateDir, 'policies.json'),
     };
 }

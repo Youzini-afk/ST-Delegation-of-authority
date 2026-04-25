@@ -1,42 +1,52 @@
-import type { AuthorityInitConfig, SessionInitResponse } from '@stdo/shared-types';
+import type { AuthorityInitConfig, ControlSessionSnapshot, SessionInitResponse } from '@stdo/shared-types';
+import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { SessionRecord, UserContext } from '../types.js';
 import { nowIso, randomToken } from '../utils.js';
+import { CoreService } from './core-service.js';
 
 export class SessionService {
     private readonly sessions = new Map<string, SessionRecord>();
 
-    createSession(user: UserContext, config: AuthorityInitConfig, firstSeenAt: string): SessionRecord {
-        const token = randomToken();
-        const session: SessionRecord = {
-            token,
-            createdAt: nowIso(),
-            userHandle: user.handle,
-            isAdmin: user.isAdmin,
-            extension: {
-                id: config.extensionId,
-                installType: config.installType,
-                displayName: config.displayName,
-                version: config.version,
-                firstSeenAt,
-            },
-            declaredPermissions: config.declaredPermissions,
-            sessionGrants: new Map(),
-        };
+    constructor(private readonly core: CoreService) {}
 
+    async createSession(user: UserContext, config: AuthorityInitConfig): Promise<SessionRecord> {
+        const token = randomToken();
+        const paths = getUserAuthorityPaths(user);
+        const snapshot = await this.core.initializeControlSession(
+            paths.controlDbFile,
+            token,
+            nowIso(),
+            { handle: user.handle, isAdmin: user.isAdmin },
+            config,
+        );
+        const session = this.sessionFromSnapshot(snapshot);
         this.sessions.set(token, session);
         return session;
     }
 
-    getSession(token: string | null): SessionRecord | null {
+    async getSession(token: string | null, user: UserContext): Promise<SessionRecord | null> {
         if (!token) {
             return null;
         }
 
-        return this.sessions.get(token) ?? null;
+        const cached = this.sessions.get(token);
+        if (cached) {
+            return cached;
+        }
+
+        const paths = getUserAuthorityPaths(user);
+        const snapshot = await this.core.getControlSession(paths.controlDbFile, user.handle, token);
+        if (!snapshot) {
+            return null;
+        }
+
+        const session = this.sessionFromSnapshot(snapshot);
+        this.sessions.set(token, session);
+        return session;
     }
 
-    assertSession(token: string | null, user: UserContext): SessionRecord {
-        const session = this.getSession(token);
+    async assertSession(token: string | null, user: UserContext): Promise<SessionRecord> {
+        const session = await this.getSession(token, user);
         if (!session) {
             throw new Error('Invalid authority session');
         }
@@ -62,6 +72,18 @@ export class SessionService {
                 securityCenter: true,
                 admin: session.isAdmin,
             },
+        };
+    }
+
+    private sessionFromSnapshot(snapshot: ControlSessionSnapshot): SessionRecord {
+        return {
+            token: snapshot.sessionToken,
+            createdAt: snapshot.createdAt,
+            userHandle: snapshot.user.handle,
+            isAdmin: snapshot.user.isAdmin,
+            extension: snapshot.extension,
+            declaredPermissions: snapshot.declaredPermissions,
+            sessionGrants: new Map(),
         };
     }
 }

@@ -4,6 +4,32 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type {
+    AuthorityInitConfig,
+    ControlAuditLogRequest,
+    ControlAuditRecentRequest,
+    ControlAuditRecentResponse,
+    ControlExtensionGetRequest,
+    ControlExtensionRecord,
+    ControlExtensionResponse,
+    ControlExtensionsListResponse,
+    ControlGrantGetRequest,
+    ControlGrantListRequest,
+    ControlGrantListResponse,
+    ControlGrantRecord,
+    ControlGrantResetRequest,
+    ControlGrantResponse,
+    ControlGrantUpsertRequest,
+    ControlJobGetRequest,
+    ControlJobRecord,
+    ControlJobResponse,
+    ControlJobsListRequest,
+    ControlJobsListResponse,
+    ControlJobUpsertRequest,
+    ControlPoliciesRequest,
+    ControlPoliciesResponse,
+    ControlPoliciesSaveRequest,
+    ControlSessionResponse,
+    ControlSessionSnapshot,
     SqlBatchRequest,
     SqlBatchResponse,
     SqlExecRequest,
@@ -278,6 +304,136 @@ export class CoreService {
             migrations: request.migrations,
             tableName: request.tableName,
         } satisfies CoreSqlMigrateRequestPayload);
+    }
+
+    async initializeControlSession(
+        dbPath: string,
+        sessionToken: string,
+        timestamp: string,
+        user: { handle: string; isAdmin: boolean },
+        config: AuthorityInitConfig,
+    ): Promise<ControlSessionSnapshot> {
+        return await this.request('/v1/control/session/init', {
+            dbPath,
+            sessionToken,
+            timestamp,
+            user,
+            config,
+        });
+    }
+
+    async getControlSession(dbPath: string, userHandle: string, sessionToken: string): Promise<ControlSessionSnapshot | null> {
+        const response = await this.request<ControlSessionResponse>('/v1/control/session/get', {
+            dbPath,
+            userHandle,
+            sessionToken,
+        });
+        return response.session;
+    }
+
+    async listControlExtensions(dbPath: string, userHandle: string): Promise<ControlExtensionRecord[]> {
+        const response = await this.request<ControlExtensionsListResponse>('/v1/control/extensions/list', {
+            dbPath,
+            userHandle,
+        });
+        return response.extensions;
+    }
+
+    async getControlExtension(dbPath: string, request: ControlExtensionGetRequest): Promise<ControlExtensionRecord | null> {
+        const response = await this.request<ControlExtensionResponse>('/v1/control/extensions/get', {
+            dbPath,
+            ...request,
+        });
+        return response.extension;
+    }
+
+    async logControlAudit(dbPath: string, request: ControlAuditLogRequest): Promise<void> {
+        await this.request('/v1/control/audit/log', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async getRecentControlAudit(dbPath: string, request: ControlAuditRecentRequest): Promise<ControlAuditRecentResponse> {
+        return await this.request('/v1/control/audit/recent', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async listControlGrants(dbPath: string, request: ControlGrantListRequest): Promise<ControlGrantRecord[]> {
+        const response = await this.request<ControlGrantListResponse>('/v1/control/grants/list', {
+            dbPath,
+            ...request,
+        });
+        return response.grants;
+    }
+
+    async getControlGrant(dbPath: string, request: ControlGrantGetRequest): Promise<ControlGrantRecord | null> {
+        const response = await this.request<ControlGrantResponse>('/v1/control/grants/get', {
+            dbPath,
+            ...request,
+        });
+        return response.grant;
+    }
+
+    async upsertControlGrant(dbPath: string, request: ControlGrantUpsertRequest): Promise<ControlGrantRecord> {
+        const response = await this.request<ControlGrantResponse>('/v1/control/grants/upsert', {
+            dbPath,
+            ...request,
+        });
+        if (!response.grant) {
+            throw new Error('Control grant upsert returned no grant');
+        }
+        return response.grant;
+    }
+
+    async resetControlGrants(dbPath: string, request: ControlGrantResetRequest): Promise<void> {
+        await this.request('/v1/control/grants/reset', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async getControlPolicies(dbPath: string, request: ControlPoliciesRequest): Promise<ControlPoliciesResponse> {
+        return await this.request('/v1/control/policies/get', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async saveControlPolicies(dbPath: string, request: ControlPoliciesSaveRequest): Promise<ControlPoliciesResponse> {
+        return await this.request('/v1/control/policies/save', {
+            dbPath,
+            ...request,
+        });
+    }
+
+    async listControlJobs(dbPath: string, request: ControlJobsListRequest): Promise<ControlJobRecord[]> {
+        const response = await this.request<ControlJobsListResponse>('/v1/control/jobs/list', {
+            dbPath,
+            ...request,
+        });
+        return response.jobs;
+    }
+
+    async getControlJob(dbPath: string, request: ControlJobGetRequest): Promise<ControlJobRecord | null> {
+        const response = await this.request<ControlJobResponse>('/v1/control/jobs/get', {
+            dbPath,
+            ...request,
+        });
+        return response.job;
+    }
+
+    async upsertControlJob(dbPath: string, request: ControlJobUpsertRequest): Promise<ControlJobRecord> {
+        const response = await this.request<ControlJobResponse>('/v1/control/jobs/upsert', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job upsert returned no job');
+        }
+        return response.job;
     }
 
     private attachProcessListeners(child: ChildProcess): void {

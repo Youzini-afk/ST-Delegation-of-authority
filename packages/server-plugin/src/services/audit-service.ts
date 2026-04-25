@@ -1,64 +1,56 @@
 import { MAX_AUDIT_LINES } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { ActivityRecord, UserContext } from '../types.js';
-import { appendJsonl, nowIso, tailJsonl } from '../utils.js';
+import { nowIso } from '../utils.js';
+import { CoreService } from './core-service.js';
 
 export class AuditService {
-    logPermission(user: UserContext, extensionId: string, message: string, details?: Record<string, unknown>): void {
-        const paths = getUserAuthorityPaths(user);
-        const record: ActivityRecord = {
+    constructor(private readonly core: CoreService) {}
+
+    async logPermission(user: UserContext, extensionId: string, message: string, details?: Record<string, unknown>): Promise<void> {
+        await this.log(user, {
             timestamp: nowIso(),
             kind: 'permission',
             extensionId,
             message,
-        };
-
-        if (details) {
-            record.details = details;
-        }
-
-        appendJsonl(paths.permissionsAuditFile, record);
+            ...(details ? { details } : {}),
+        });
     }
 
-    logUsage(user: UserContext, extensionId: string, message: string, details?: Record<string, unknown>): void {
-        const paths = getUserAuthorityPaths(user);
-        const record: ActivityRecord = {
+    async logUsage(user: UserContext, extensionId: string, message: string, details?: Record<string, unknown>): Promise<void> {
+        await this.log(user, {
             timestamp: nowIso(),
             kind: 'usage',
             extensionId,
             message,
-        };
-
-        if (details) {
-            record.details = details;
-        }
-
-        appendJsonl(paths.usageAuditFile, record);
+            ...(details ? { details } : {}),
+        });
     }
 
-    logError(user: UserContext, extensionId: string, message: string, details?: Record<string, unknown>): void {
-        const paths = getUserAuthorityPaths(user);
-        const record: ActivityRecord = {
+    async logError(user: UserContext, extensionId: string, message: string, details?: Record<string, unknown>): Promise<void> {
+        await this.log(user, {
             timestamp: nowIso(),
             kind: 'error',
             extensionId,
             message,
-        };
-
-        if (details) {
-            record.details = details;
-        }
-
-        appendJsonl(paths.errorsAuditFile, record);
+            ...(details ? { details } : {}),
+        });
     }
 
-    getRecentActivity(user: UserContext, extensionId: string): { permissions: ActivityRecord[]; usage: ActivityRecord[]; errors: ActivityRecord[] } {
+    async getRecentActivity(user: UserContext, extensionId: string): Promise<{ permissions: ActivityRecord[]; usage: ActivityRecord[]; errors: ActivityRecord[] }> {
         const paths = getUserAuthorityPaths(user);
+        return await this.core.getRecentControlAudit(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            limit: MAX_AUDIT_LINES,
+        });
+    }
 
-        return {
-            permissions: tailJsonl<ActivityRecord>(paths.permissionsAuditFile, MAX_AUDIT_LINES).filter(item => item.extensionId === extensionId),
-            usage: tailJsonl<ActivityRecord>(paths.usageAuditFile, MAX_AUDIT_LINES).filter(item => item.extensionId === extensionId),
-            errors: tailJsonl<ActivityRecord>(paths.errorsAuditFile, MAX_AUDIT_LINES).filter(item => item.extensionId === extensionId),
-        };
+    private async log(user: UserContext, record: ActivityRecord): Promise<void> {
+        const paths = getUserAuthorityPaths(user);
+        await this.core.logControlAudit(paths.controlDbFile, {
+            userHandle: user.handle,
+            record,
+        });
     }
 }
