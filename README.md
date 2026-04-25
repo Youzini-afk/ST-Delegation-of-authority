@@ -1,40 +1,62 @@
 # ST-Delegation-of-authority
 
-ST-Delegation-of-authority 是一个面向 SillyTavern 的基石型权限治理项目。
+ST-Delegation-of-authority 是一个面向 SillyTavern 的基础型服务端能力与权限治理项目。
 
-它提供一个可被 SillyTavern 原生加载的服务端插件 `authority`，并在启动时自动部署前端扩展 `third-party/st-authority-sdk`，让后续第三方扩展在不重复安装复杂服务端能力的前提下，也能获得受治理的服务端权限、能力和审计能力。
+它提供一个可被 SillyTavern 原生加载的服务端插件 `authority`，并在启动时自动部署前端 SDK 扩展 `third-party/st-authority-sdk`。第三方扩展可以通过这个 SDK 使用受治理的服务端能力，例如 SQL、KV、Blob、HTTP fetch、后台任务、事件流、审计和管理员策略，而不需要每个扩展都重复实现自己的后端。
+
+当前仓库已经进入 V2 架构的 Beta 稳定性基线阶段：
+
+- **Rust `authority-core`**：权威执行层，负责 SQLite 数据面、控制面持久化、任务执行、事件落库和 HTTP fetch。
+- **Node server plugin**：SillyTavern adapter，负责插件生命周期、路由、会话、权限组合、SDK 安装和 SSE 桥接。
+- **SDK extension**：前端接入层，暴露 `window.STAuthority`，并提供 Security Center 控制面 UI。
+
+## 当前状态
+
+- **版本**：`0.1.0`
+- **插件 ID**：`authority`
+- **SDK 扩展 ID**：`third-party/st-authority-sdk`
+- **示例扩展 ID**：`third-party/st-authority-example`
+- **当前免编译安装平台**：Windows x64
+- **当前核心能力**：`sql.private`、`storage.kv`、`storage.blob`、`http.fetch`、`jobs.background`、`events.stream`
+- **当前阶段**：Phase 8 Beta stability baseline
+
+最终用户安装当前 Windows x64 产物时不需要执行 `npm install`、`npm run build` 或本地 Rust 编译。其他平台需要后续补充对应平台的 managed core 二进制后，才能作为免编译安装目标。
 
 ## 快速安装
 
-最终用户安装不需要执行 `npm install` 或 `npm run build`。
-
-当前可直装产物内置 Windows x64 版 `authority-core` 预编译二进制。其他平台需要后续补充对应平台产物后再作为免编译安装目标。
-
-### 方式一：直接克隆到服务端插件目录
+### 方式一：克隆到 SillyTavern 服务端插件目录
 
 ```bash
 git clone https://github.com/Youzini-afk/ST-Delegation-of-authority.git SillyTavern/plugins/authority
 ```
 
-### 方式二：用 SillyTavern 自带安装命令
+### 方式二：使用 SillyTavern 插件安装命令
 
 ```bash
 cd SillyTavern
 node plugins.js install https://github.com/Youzini-afk/ST-Delegation-of-authority.git
 ```
 
-说明：
+安装说明：
 
-- 目录名不必等于插件 ID，`authority` 会按模块自身的 `info.id` 被加载。
-- 两种方式都不会自动修改你的 SillyTavern 配置文件。
+- **不需要手动复制 SDK**：首次启动时 `authority` 会自动部署 `st-authority-sdk`。
+- **不需要手动启动 core**：插件会自动启动内置的 `authority-core`。
+- **不自动修改 SillyTavern 配置**：仍需你自行启用 server plugins。
+- **目录名不强制等于插件 ID**：SillyTavern 加载后会按模块导出的 `info.id = authority` 识别插件。
 
 ## 启用步骤
 
-1. 打开 SillyTavern 配置文件，确认 `enableServerPlugins: true`。
-2. 建议把 `enableServerPluginsAutoUpdate` 也一起确认好。
-3. 启动 SillyTavern。
-4. 首次启动后，`authority` 会自动把 `st-authority-sdk` 部署到 `public/scripts/extensions/third-party/st-authority-sdk`。
-5. 打开扩展菜单，确认能看到 `Authority Security Center`。
+1. 打开 SillyTavern 配置文件。
+2. 确认 `enableServerPlugins: true`。
+3. 根据你的更新策略确认 `enableServerPluginsAutoUpdate`。
+4. 启动 SillyTavern。
+5. 首次启动后，`authority` 会自动部署 SDK 到：
+
+```text
+SillyTavern/public/scripts/extensions/third-party/st-authority-sdk
+```
+
+6. 打开 SillyTavern 扩展菜单，确认能看到 `Authority Security Center`。
 
 ## 升级
 
@@ -45,33 +67,387 @@ cd SillyTavern/plugins/authority
 git pull
 ```
 
-如果你开启了 `enableServerPluginsAutoUpdate: true`，SillyTavern 启动时也会尝试拉取插件更新。
+如果启用了 `enableServerPluginsAutoUpdate: true`，SillyTavern 启动时也会尝试拉取插件更新。
 
-更新完成后，`authority` 会在下次启动时自动检查内置的 SDK 与 `authority-core` 产物，完成 SDK 同步、core 平台匹配、版本一致性与哈希校验。
+更新后，`authority` 会在下次启动时自动完成：
+
+- **SDK 同步**：部署或刷新 `st-authority-sdk`。
+- **Core 平台匹配**：确认 managed core 适配当前 `process.platform-process.arch`。
+- **版本一致性校验**：确认 release metadata、SDK 和 core 版本一致。
+- **Hash 校验**：校验 SDK artifact、core artifact 和 core binary SHA-256。
+- **更新失败回滚**：受管 SDK 更新失败时恢复旧目录。
 
 ## 卸载
 
-删除服务端插件目录 `SillyTavern/plugins/authority`。
+删除服务端插件目录：
 
-如果你希望连同自动部署的前端 SDK 一起移除，再删除：
+```text
+SillyTavern/plugins/authority
+```
+
+如果希望同时移除自动部署的 SDK，再删除：
 
 ```text
 SillyTavern/public/scripts/extensions/third-party/st-authority-sdk
 ```
 
-`authority` 只会管理它自己部署的 `st-authority-sdk`，不会接管其他扩展目录。
+`authority` 只管理它自己部署的 `st-authority-sdk`。如果目标目录不是 `authority` 管理的目录，插件会进入 `conflict` 状态并拒绝覆盖。
 
 ## 冲突处理
 
-如果 `public/scripts/extensions/third-party/st-authority-sdk` 已经存在，但不是 `authority` 管理的目录，插件会进入 `conflict` 状态并拒绝覆盖。
+如果 `public/scripts/extensions/third-party/st-authority-sdk` 已存在但不是 `authority` 管理目录：
 
-这时请按下面的方式处理：
-
-1. 备份现有 `st-authority-sdk` 目录。
+1. 备份旧目录。
 2. 删除或改名旧目录。
-3. 重启 SillyTavern，让 `authority` 重新自动部署。
+3. 重启 SillyTavern。
+4. 让 `authority` 重新部署 SDK。
 
-你也可以调用 `POST /api/plugins/authority/probe` 查看安装状态：
+可以通过 `POST /api/plugins/authority/probe` 查看安装状态。
+
+`installStatus` 可能为：
+
+- `ready`
+- `installed`
+- `updated`
+- `conflict`
+- `error`
+- `missing`
+
+## 架构概览
+
+```text
+SillyTavern Frontend Extension
+  -> window.STAuthority / AuthoritySDK
+  -> /api/plugins/authority/*
+  -> Node server plugin adapter
+  -> localhost internal HTTP bridge
+  -> Rust authority-core
+  -> SQLite databases + Blob files
+```
+
+职责边界：
+
+- **SDK extension**
+  - 提供 `AuthoritySDK.init()`
+  - 管理前端权限弹窗
+  - 提供 Security Center
+  - 封装 KV、Blob、SQL、HTTP、Jobs、Events API
+
+- **Node server plugin**
+  - 适配 SillyTavern server plugin 生命周期
+  - 管理 SDK 安装状态
+  - 启动、探活和关闭 Rust core
+  - 做会话校验、权限评估和审计组合
+  - 提供 SSE 事件流桥接
+
+- **Rust authority-core**
+  - 作为数据面和控制面的权威执行层
+  - 管理 SQLite-backed KV、SQL、控制面状态、Job metadata、Event queue
+  - 管理 Blob metadata 和 Blob 文件落盘
+  - 执行 HTTP fetch
+  - 执行内建 delay job
+  - 暴露 `/health` 诊断信息
+
+## 可安装产物结构
+
+仓库根目录本身就是可安装的 SillyTavern 服务端插件。
+
+```text
+ST-Delegation-of-authority/
+├─ index.js
+├─ package.json
+├─ .authority-release.json
+├─ runtime/
+│  └─ index.cjs
+├─ managed/
+│  ├─ sdk-extension/
+│  │  ├─ index.js
+│  │  ├─ manifest.json
+│  │  ├─ security-center.html
+│  │  └─ ...
+│  └─ core/
+│     └─ win32-x64/
+│        ├─ authority-core.exe
+│        └─ authority-core.json
+├─ packages/
+│  ├─ server-plugin/
+│  ├─ sdk-extension/
+│  ├─ example-extension/
+│  └─ shared-types/
+├─ crates/
+│  └─ authority-core/
+└─ scripts/
+```
+
+`.authority-release.json` 记录当前 installable 产物元数据：
+
+- `pluginId`
+- `pluginVersion`
+- `sdkExtensionId`
+- `sdkVersion`
+- `assetHash`
+- `coreVersion`
+- `coreArtifactHash`
+- `coreArtifactPlatform`
+- `coreBinarySha256`
+- `buildTime`
+
+## 能力矩阵
+
+| 权限资源 | SDK 能力 | Core 执行层 | 当前状态 |
+| --- | --- | --- | --- |
+| `storage.kv` | `client.storage.kv.*` | SQLite KV | 已实现 |
+| `storage.blob` | `client.storage.blob.*` | SQLite metadata + 文件落盘 | 已实现 |
+| `sql.private` | `client.sql.*` | SQLite private DB | 已实现 |
+| `http.fetch` | `client.http.fetch()` | Rust HTTP fetch | 已实现 |
+| `jobs.background` | `client.jobs.*` | Rust delay job + metadata | 已实现 |
+| `events.stream` | `client.events.subscribe()` | Rust event queue + Node SSE | 已实现 |
+
+当前 SQL scope 以 `sql.private` 为主。数据库路径由服务端按用户和扩展映射，扩展不会直接传宿主文件路径。
+
+## 安全与治理模型
+
+Authority 当前采用轻量但明确的安全边界：
+
+- **扩展声明权限**：扩展在 `AuthoritySDK.init()` 时声明所需能力。
+- **按资源授权**：资源粒度包括 KV、Blob、SQL、HTTP、Jobs、Events。
+- **按 target 授权**：例如 HTTP hostname、SQL database、job type、event channel。
+- **用户选择**：支持 `allow-once`、`allow-session`、`allow-always`、`deny`。
+- **管理员策略**：支持默认策略和按扩展覆盖策略。
+- **审计记录**：记录 permission、usage、error 三类活动。
+- **host/path escape 防护**：SQL 数据库路径和 Blob 路径由服务端映射。
+- **资源限制**：core health 暴露当前请求、KV、Blob、HTTP、事件分页上限。
+
+明确不提供：
+
+- 任意 shell 执行
+- 任意 VM 执行
+- 任意服务端代码托管
+- 任意文件系统访问
+- 将 REST 直连接口作为 third-party 扩展的 first-class 接入方式
+
+## Security Center
+
+`Authority Security Center` 是当前控制面 UI。
+
+当前视图包括：
+
+- **总览**
+  - 插件版本
+  - SDK 安装状态
+  - Core 运行状态
+  - Core 分发校验
+  - Core 请求数、错误数、活跃任务数
+  - 扩展、授权、策略、数据库、任务和错误概览
+
+- **扩展详情**
+  - 扩展声明权限
+  - 授权记录
+  - 管理员策略覆盖
+  - 扩展私有 SQL 数据库
+  - 后台任务
+  - 活动与错误审计
+
+- **SQL 数据库**
+  - 按扩展聚合私有 SQL 数据库
+  - 展示数据库路径、大小和更新时间
+
+- **活动与排障**
+  - permission / usage / error 审计
+  - jobs 状态
+  - recent errors
+
+- **管理员策略**
+  - 全局默认策略
+  - 扩展级策略覆盖
+  - grant reset
+
+前端入口：
+
+- `window.STAuthority`
+- `window.STAuthority.AuthoritySDK`
+- `window.STAuthority.openSecurityCenter()`
+
+## SDK 接入示例
+
+第三方扩展建议在 `manifest.json` 中声明依赖：
+
+```json
+{
+  "dependencies": [
+    "third-party/st-authority-sdk"
+  ]
+}
+```
+
+初始化：
+
+```js
+const client = await window.STAuthority.AuthoritySDK.init({
+  extensionId: 'third-party/your-extension',
+  displayName: 'Your Extension',
+  version: '0.1.0',
+  installType: 'local',
+  declaredPermissions: {
+    storage: {
+      kv: true,
+      blob: true
+    },
+    sql: {
+      private: true
+    },
+    http: {
+      allow: ['api.example.com']
+    },
+    jobs: {
+      background: ['delay']
+    },
+    events: {
+      channels: true
+    }
+  }
+});
+```
+
+KV：
+
+```js
+await client.storage.kv.set('settings', { theme: 'dark' });
+const settings = await client.storage.kv.get('settings');
+const allEntries = await client.storage.kv.list();
+```
+
+Blob：
+
+```js
+const record = await client.storage.blob.put({
+  name: 'avatar.png',
+  contentType: 'image/png',
+  content: base64Payload,
+  encoding: 'base64'
+});
+
+const blob = await client.storage.blob.get(record.id);
+```
+
+SQL：
+
+```js
+await client.sql.migrate({
+  database: 'main',
+  migrations: [
+    {
+      id: '001_create_notes',
+      statement: 'CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)'
+    }
+  ]
+});
+
+await client.sql.exec({
+  database: 'main',
+  statement: 'INSERT INTO notes (title) VALUES (?)',
+  params: ['hello']
+});
+
+const result = await client.sql.query({
+  database: 'main',
+  statement: 'SELECT id, title FROM notes ORDER BY id DESC',
+  params: []
+});
+```
+
+HTTP：
+
+```js
+const response = await client.http.fetch({
+  url: 'https://api.example.com/data',
+  method: 'GET'
+});
+```
+
+Jobs：
+
+```js
+const job = await client.jobs.create('delay', {
+  durationMs: 3000,
+  message: 'done'
+});
+
+const latest = await client.jobs.get(job.id);
+```
+
+Events：
+
+```js
+const subscription = await client.events.subscribe({
+  channel: 'extension:third-party/your-extension',
+  eventNames: ['authority.connected', 'authority.job'],
+  onEvent: event => {
+    console.log(event.name, event.data);
+  }
+});
+
+subscription.close();
+```
+
+打开 Security Center：
+
+```js
+await client.openSecurityCenter();
+```
+
+## 服务端 API
+
+这些接口由 SillyTavern server plugin 路由暴露在：
+
+```text
+/api/plugins/authority/*
+```
+
+当前主要接口：
+
+- `POST /probe`
+- `POST /session/init`
+- `GET /session/current`
+- `POST /permissions/evaluate`
+- `POST /permissions/resolve`
+- `GET /extensions`
+- `GET /extensions/:id`
+- `POST /extensions/:id/grants/reset`
+- `POST /storage/kv/get`
+- `POST /storage/kv/set`
+- `POST /storage/kv/delete`
+- `POST /storage/kv/list`
+- `POST /storage/blob/put`
+- `POST /storage/blob/get`
+- `POST /storage/blob/delete`
+- `POST /storage/blob/list`
+- `POST /sql/query`
+- `POST /sql/exec`
+- `POST /sql/batch`
+- `POST /sql/transaction`
+- `POST /sql/migrate`
+- `GET /sql/databases`
+- `POST /http/fetch`
+- `POST /jobs/create`
+- `GET /jobs`
+- `GET /jobs/:id`
+- `POST /jobs/:id/cancel`
+- `GET /events/stream`
+- `GET /admin/policies`
+- `POST /admin/policies`
+
+普通扩展应优先通过 SDK 调用，而不是直接把 REST API 当作主要接入方式。
+
+## Probe 与诊断
+
+调用：
+
+```text
+POST /api/plugins/authority/probe
+```
+
+常用字段：
 
 - `pluginVersion`
 - `sdkBundledVersion`
@@ -83,85 +459,44 @@ SillyTavern/public/scripts/extensions/third-party/st-authority-sdk
 - `coreVerified`
 - `installStatus`
 - `installMessage`
+- `core.state`
+- `core.pid`
+- `core.port`
+- `core.version`
+- `core.lastError`
+- `core.health.uptimeMs`
 - `core.health.requestCount`
 - `core.health.errorCount`
 - `core.health.activeJobCount`
 - `core.health.limits`
 
-`installStatus` 的取值为：
+`core.health.limits` 包括：
 
-- `ready`
-- `installed`
-- `updated`
-- `conflict`
-- `error`
-- `missing`
+- `maxRequestBytes`
+- `maxKvValueBytes`
+- `maxBlobBytes`
+- `maxHttpBodyBytes`
+- `maxHttpResponseBytes`
+- `maxEventPollLimit`
 
-## V1 能力范围
+## 开发环境
 
-当前已实现的可治理能力：
+开发需要：
 
-- `storage.kv`
-- `storage.blob`
-- `http.fetch`
-- `jobs.background`
-- `events.stream`
+- Node.js
+- npm
+- Rust toolchain
+- Windows x64 环境用于生成当前 managed core installable
 
-当前已实现的治理能力：
-
-- 扩展注册与会话初始化
-- 会话级授权与持久授权
-- `granted / denied / prompt / blocked` 授权状态
-- `allow-once / allow-session / allow-always / deny` 用户选择
-- HTTP 按 `hostname` 粒度授权
-- 管理员全局策略与扩展覆盖策略
-- 权限审计、调用审计、错误审计
-- 安全中心 UI
-- 统一权限请求弹窗
-
-V1 明确不做：
-
-- 任意服务端代码托管
-- shell 执行
-- vm 执行
-- 任意文件系统访问
-
-## 仓库结构
-
-这个仓库现在同时承担两种角色：
-
-- 仓库根目录：可直接被 SillyTavern 当作 `authority` 服务端插件加载
-- `packages/`：monorepo 源码、测试和开发脚本
-
-```text
-ST-Delegation-of-authority/
-├─ runtime/                # 受管服务端运行时产物
-├─ managed/
-│  ├─ sdk-extension/       # 受管前端 SDK 运行时产物
-│  └─ core/                # 受管 authority-core 预编译二进制与元数据
-├─ packages/
-│  ├─ server-plugin/
-│  ├─ sdk-extension/
-│  ├─ example-extension/
-│  └─ shared-types/
-├─ scripts/
-├─ .authority-release.json
-└─ package.json
-```
-
-固定命名如下：
-
-- 服务端插件 ID: `authority`
-- SDK 扩展目录/ID: `third-party/st-authority-sdk`
-- 示例扩展目录/ID: `third-party/st-authority-example`
-- 安全中心显示名: `Authority Security Center`
-
-## 开发命令
-
-开发者常用命令：
+安装依赖：
 
 ```bash
 npm install
+```
+
+常用命令：
+
+```bash
 npm run typecheck
 npm run build
 npm test
@@ -171,20 +506,19 @@ npm run dev:link
 npm run dev:unlink
 ```
 
-这些命令分别用于：
+命令说明：
 
-- `npm install`: 安装 workspace 依赖
-- `npm run typecheck`: 全仓类型检查
-- `npm run build`: 构建四个 package
-- `npm test`: 运行 Vitest 测试与 Rust core 稳定性测试
-- `npm run sync:installable`: 重新生成根目录可直装产物，包括 runtime、managed SDK、managed core 和 release 元数据
-- `npm run check:installable`: 校验根目录可直装产物是否与源码、managed core 元数据一致
-- `npm run dev:link`: 构建并把开发产物链接进本地 SillyTavern
-- `npm run dev:unlink`: 清理本地联调链接
+- `npm run typecheck`：TypeScript project references 类型检查。
+- `npm run build`：构建 shared-types、Rust core、server-plugin、sdk-extension、example-extension。
+- `npm test`：运行 Vitest 测试和 Rust core 稳定性测试。
+- `npm run sync:installable`：重新生成根目录可直装产物。
+- `npm run check:installable`：检查根目录可直装产物是否与源码构建一致。
+- `npm run dev:link`：构建并链接到本地 SillyTavern。
+- `npm run dev:unlink`：清理本地 SillyTavern 联调链接。
 
 ## 本地联调
 
-当前 `dev:link` 脚本假设你的目录结构是：
+当前 `dev:link` 脚本假设目录结构为：
 
 ```text
 E:\cursor_project\ST-Delegation of authority\
@@ -194,79 +528,39 @@ E:\cursor_project\ST-Delegation of authority\
 
 联调步骤：
 
-1. `npm install`
-2. `npm run build`
-3. `npm run dev:link`
-4. 确认 SillyTavern 配置里已启用 `enableServerPlugins: true`
-5. 建议本地联调时把 `enableServerPluginsAutoUpdate` 设为 `false`，避免 SillyTavern 启动时自动拉取开发仓库
+1. 运行 `npm install`。
+2. 运行 `npm run build`。
+3. 运行 `npm run dev:link`。
+4. 确认 SillyTavern 已启用 `enableServerPlugins: true`。
+5. 建议本地开发时把 `enableServerPluginsAutoUpdate` 设为 `false`。
+6. 启动 SillyTavern。
 
-`dev:link` 会自动创建以下联调链接：
+`dev:link` 会创建：
 
 - `SillyTavern/plugins/authority`
 - `SillyTavern/public/scripts/extensions/third-party/st-authority-sdk`
 - `SillyTavern/public/scripts/extensions/third-party/st-authority-example`
 
-## 运行时入口
+## 发布与 installable 同步
 
-当前前端接入入口：
+发布前建议执行：
 
-- `window.STAuthority`
-- `window.STAuthority.AuthoritySDK`
-- `window.STAuthority.openSecurityCenter()`
-
-服务端公开接口：
-
-- `POST /probe`
-- `POST /session/init`
-- `GET /session/current`
-- `POST /permissions/evaluate`
-- `POST /permissions/resolve`
-- `GET /extensions`
-- `GET /extensions/:id`
-- `POST /storage/kv/get`
-- `POST /storage/kv/set`
-- `POST /storage/kv/delete`
-- `POST /storage/kv/list`
-- `POST /storage/blob/put`
-- `POST /storage/blob/get`
-- `POST /storage/blob/delete`
-- `POST /storage/blob/list`
-- `POST /http/fetch`
-- `POST /jobs/create`
-- `GET /jobs`
-- `GET /jobs/:id`
-- `POST /jobs/:id/cancel`
-- `GET /events/stream`
-- `GET /admin/policies`
-- `POST /admin/policies`
-- `POST /extensions/:id/grants/reset`
-
-## 在其他扩展中接入
-
-接入方扩展建议声明：
-
-```json
-{
-  "dependencies": [
-    "third-party/st-authority-sdk"
-  ]
-}
+```bash
+npm run typecheck
+npm run build
+npm test
+npm run sync:installable
+npm run check:installable
 ```
 
-运行时初始化方式：
+`sync:installable` 会刷新：
 
-```js
-const client = await window.STAuthority.AuthoritySDK.init({
-  extensionId: 'third-party/your-extension',
-  displayName: 'Your Extension',
-  version: '0.1.0',
-  installType: 'local',
-  declaredPermissions: {
-    storage: { kv: true },
-    http: { allow: ['api.example.com'] }
-  }
-});
-```
+- `runtime/index.cjs`
+- `managed/sdk-extension/*`
+- `managed/core/<platform>/*`
+- `.authority-release.json`
+
+`check:installable` 会校验 installable 产物是否与当前源码和构建结果一致。
 
 ## 测试覆盖
 
@@ -277,27 +571,99 @@ const client = await window.STAuthority.AuthoritySDK.init({
 - 管理员策略覆盖用户授权
 - KV 命名空间隔离
 - Blob 读写与删除
-- 内建 delay 任务创建 / 完成 / 取消
-- Managed SDK 首装、幂等、升级、冲突保护、漂移修复
-- Managed core 平台匹配、版本一致性与哈希校验
-- SQL 事务回滚、迁移幂等、任务/事件一致性、事件分页上限
-- Core health 请求数、错误数、活跃任务数与限制值诊断
-- 根目录可直装产物一致性检查
+- 内建 delay 任务创建、完成、取消
+- Managed SDK 首装、幂等、升级、冲突保护、漂移修复、失败回滚
+- Managed core 平台匹配、版本一致性、binary hash、artifact hash
+- SQL transaction 失败回滚
+- SQL migration 幂等
+- Jobs 与 Events 一致性
+- Event polling 上限保护
+- Core health 请求数、错误数、活跃任务数和限制值诊断
+- 根目录 installable 一致性检查
 
-CI 当前会运行：
+`npm test` 当前会运行：
 
-- `npm run typecheck`
-- `npm run build`
-- `npm test`
-- `npm run check:installable`
+- `vitest run`
+- `cargo test --manifest-path crates/authority-core/Cargo.toml`
+
+## 排障
+
+### Security Center 看不到
+
+- 确认 `enableServerPlugins: true`。
+- 确认服务端插件已加载。
+- 查看 `POST /api/plugins/authority/probe` 的 `installStatus`。
+- 如果 SDK 目录冲突，按冲突处理步骤删除或改名旧目录。
+
+### Core 无法启动
+
+- 查看 `probe.core.state`。
+- 查看 `probe.core.lastError`。
+- 确认当前平台是已内置 managed core 的平台。
+- 确认 `.authority-release.json` 与 `managed/core/<platform>/authority-core.json` 存在。
+- 运行 `npm run check:installable` 检查产物一致性。
+
+### SDK 一直是 conflict
+
+- 检查：
+
+```text
+SillyTavern/public/scripts/extensions/third-party/st-authority-sdk
+```
+
+- 如果这是旧目录或手动复制目录，请备份后删除。
+- 重启 SillyTavern，让 `authority` 重新部署。
+
+### SQL 报权限错误
+
+- 确认扩展声明了：
+
+```js
+declaredPermissions: {
+  sql: {
+    private: true
+  }
+}
+```
+
+- 打开 Security Center 查看该扩展的 `sql.private` grant 或管理员策略。
+- 确认使用的是 SDK 的 `client.sql.*` API，而不是手动传宿主路径。
+
+### Events 没有收到 job 事件
+
+- 确认声明了 `events.stream` 权限。
+- 默认 job 事件 channel 为：
+
+```text
+extension:<extensionId>
+```
+
+- 使用 Security Center 查看 jobs 和 activity 状态。
 
 ## 当前限制
 
-这是 V1 基础版本，当前限制包括：
+当前是 Beta 基线，不是最终完整平台。
 
-- 后台任务只实现了内建 `delay`
-- SSE 只做每用户、每扩展独立流
-- 不支持 WebSocket
-- 不支持跨用户广播
-- 不支持任意服务端代码托管
-- 不支持直接把 REST 直连当 first-class 接入方式
+已知限制：
+
+- 免编译 installable 当前只内置 Windows x64 core。
+- 后台任务当前只实现内建 `delay`。
+- SSE 事件流由 Node adapter 桥接，core 负责事件队列。
+- 不支持 WebSocket。
+- 不支持跨用户广播。
+- 当前 SQL 主要覆盖 `sql.private`。
+- 不支持任意服务端代码托管。
+- 不支持任意 shell / VM 执行。
+- 不支持把 REST 直连作为普通扩展的一等接入方式。
+
+## 路线方向
+
+后续可继续推进：
+
+- 多平台 managed core 产物。
+- 更系统的 stress benchmark。
+- 更细分的错误分类和指标导出。
+- 更多内建 job 类型。
+- 更完善的事件订阅模型。
+- Security Center 深度运维视图。
+- 公开发布后的升级和迁移策略。
