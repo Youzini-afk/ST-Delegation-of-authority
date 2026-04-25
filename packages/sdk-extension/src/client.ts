@@ -10,6 +10,12 @@ import type {
     PermissionEvaluateResponse,
     PermissionResource,
     SessionInitResponse,
+    SqlBatchRequest,
+    SqlBatchResponse,
+    SqlExecRequest,
+    SqlExecResult,
+    SqlQueryRequest,
+    SqlQueryResult,
 } from '@stdo/shared-types';
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt, type PermissionPromptContext } from './permission-prompt.js';
@@ -73,6 +79,12 @@ export class AuthorityClient {
             delete: (id: string) => Promise<void>;
             list: () => Promise<BlobRecord[]>;
         };
+    };
+
+    readonly sql: {
+        query: (input: SqlQueryRequest) => Promise<SqlQueryResult>;
+        exec: (input: SqlExecRequest) => Promise<SqlExecResult>;
+        batch: (input: SqlBatchRequest) => Promise<SqlBatchResponse>;
     };
 
     readonly http: {
@@ -156,6 +168,54 @@ export class AuthorityClient {
                     });
                     return response.entries;
                 },
+            },
+        };
+
+        this.sql = {
+            query: async input => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `查询 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession<SqlQueryResult>('/sql/query', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            exec: async input => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `执行 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession<SqlExecResult>('/sql/exec', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            batch: async input => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `批量执行 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession<SqlBatchResponse>('/sql/batch', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
             },
         };
 
@@ -475,6 +535,7 @@ function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items:
     const result = {
         'storage.kv': [],
         'storage.blob': [],
+        'sql.private': [],
         'http.fetch': [],
         'jobs.background': [],
         'events.stream': [],
@@ -501,7 +562,7 @@ function getPermissionFailureMessage(
     target: string,
     decision: PermissionEvaluateResponse['decision'],
 ): string {
-    const resourceLabel = resource === 'http.fetch' ? `${resource} (${target})` : resource;
+    const resourceLabel = target && target !== '*' ? `${resource} (${target})` : resource;
     if (decision === 'denied') {
         return `${displayName} 对 ${resourceLabel} 的请求已被拒绝，请在安全中心手动重置。`;
     }
@@ -511,4 +572,8 @@ function getPermissionFailureMessage(
     }
 
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
+}
+
+function getSqlDatabaseName(value: unknown): string {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }

@@ -4,6 +4,7 @@ import { openSecurityCenter } from './security-center.js';
 export class AuthorityClient {
     config;
     storage;
+    sql;
     http;
     jobs;
     events;
@@ -73,6 +74,53 @@ export class AuthorityClient {
                     });
                     return response.entries;
                 },
+            },
+        };
+        this.sql = {
+            query: async (input) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `查询 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession('/sql/query', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            exec: async (input) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `执行 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession('/sql/exec', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            batch: async (input) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `批量执行 SQL 数据库 ${database}`,
+                });
+                return await this.requestWithSession('/sql/batch', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
             },
         };
         this.http = {
@@ -342,6 +390,7 @@ function groupByResource(items) {
     const result = {
         'storage.kv': [],
         'storage.blob': [],
+        'sql.private': [],
         'http.fetch': [],
         'jobs.background': [],
         'events.stream': [],
@@ -360,7 +409,7 @@ function safeParse(value) {
     }
 }
 function getPermissionFailureMessage(displayName, resource, target, decision) {
-    const resourceLabel = resource === 'http.fetch' ? `${resource} (${target})` : resource;
+    const resourceLabel = target && target !== '*' ? `${resource} (${target})` : resource;
     if (decision === 'denied') {
         return `${displayName} 对 ${resourceLabel} 的请求已被拒绝，请在安全中心手动重置。`;
     }
@@ -368,5 +417,8 @@ function getPermissionFailureMessage(displayName, resource, target, decision) {
         return `${displayName} 对 ${resourceLabel} 的请求被管理员策略封锁。`;
     }
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
+}
+function getSqlDatabaseName(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 //# sourceMappingURL=client.js.map

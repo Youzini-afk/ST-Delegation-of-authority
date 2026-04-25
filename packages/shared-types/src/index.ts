@@ -3,6 +3,7 @@ export type InstallType = 'system' | 'local' | 'global';
 export type PermissionResource =
     | 'storage.kv'
     | 'storage.blob'
+    | 'sql.private'
     | 'http.fetch'
     | 'jobs.background'
     | 'events.stream';
@@ -17,6 +18,9 @@ export interface DeclaredPermissions {
     storage?: {
         kv?: boolean;
         blob?: boolean;
+    };
+    sql?: {
+        private?: boolean | string[];
     };
     http?: {
         allow?: string[];
@@ -129,5 +133,50 @@ export interface JobRecord {
     progress: number;
     summary?: string;
     error?: string;
+}
+
+export type SqlValue = string | number | boolean | null;
+export type SqlStatementMode = 'query' | 'exec';
+
+export interface SqlQueryRequest {
+    database?: string;
+    statement: string;
+    params?: SqlValue[];
+}
+
+export interface SqlExecRequest {
+    database?: string;
+    statement: string;
+    params?: SqlValue[];
+}
+
+export interface SqlStatementInput {
+    mode?: SqlStatementMode;
+    statement: string;
+    params?: SqlValue[];
+}
+
+export interface SqlBatchRequest {
+    database?: string;
+    statements: SqlStatementInput[];
+}
+
+export interface SqlQueryResult {
+    kind: 'query';
+    columns: string[];
+    rows: Record<string, SqlValue>[];
+    rowCount: number;
+}
+
+export interface SqlExecResult {
+    kind: 'exec';
+    rowsAffected: number;
+    lastInsertRowid: number | null;
+}
+
+export type SqlStatementResult = SqlQueryResult | SqlExecResult;
+
+export interface SqlBatchResponse {
+    results: SqlStatementResult[];
 }
 

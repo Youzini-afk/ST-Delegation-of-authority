@@ -3,6 +3,7 @@ import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn, type ChildProcess } from 'node:child_process';
+import type { SqlBatchRequest, SqlBatchResponse, SqlExecRequest, SqlExecResult, SqlQueryRequest, SqlQueryResult } from '@stdo/shared-types';
 import { AUTHORITY_MANAGED_CORE_DIR } from '../constants.js';
 import type { AuthorityCoreHealthSnapshot, AuthorityCoreManagedMetadata, AuthorityCoreStatus, CoreRuntimeState } from '../types.js';
 import { asErrorMessage, randomToken } from '../utils.js';
@@ -17,6 +18,17 @@ interface CoreServiceOptions {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     logger?: Pick<typeof console, 'info' | 'warn' | 'error'>;
+}
+
+interface CoreSqlRequestPayload {
+    dbPath: string;
+    statement: string;
+    params?: SqlQueryRequest['params'];
+}
+
+interface CoreSqlBatchRequestPayload {
+    dbPath: string;
+    statements: SqlBatchRequest['statements'];
 }
 
 const HEALTH_TIMEOUT_MS = 5000;
@@ -68,6 +80,10 @@ export class CoreService {
 
         if (this.status.state === 'starting') {
             return this.waitUntilReady();
+        }
+
+        if (this.child) {
+            await this.stop();
         }
 
         const artifact = this.resolveArtifact();
@@ -209,6 +225,29 @@ export class CoreService {
         }
     }
 
+    async querySql(dbPath: string, request: SqlQueryRequest): Promise<SqlQueryResult> {
+        return await this.request('/v1/sql/query', {
+            dbPath,
+            statement: request.statement,
+            params: request.params ?? [],
+        } satisfies CoreSqlRequestPayload);
+    }
+
+    async execSql(dbPath: string, request: SqlExecRequest): Promise<SqlExecResult> {
+        return await this.request('/v1/sql/exec', {
+            dbPath,
+            statement: request.statement,
+            params: request.params ?? [],
+        } satisfies CoreSqlRequestPayload);
+    }
+
+    async batchSql(dbPath: string, request: SqlBatchRequest): Promise<SqlBatchResponse> {
+        return await this.request('/v1/sql/batch', {
+            dbPath,
+            statements: request.statements,
+        } satisfies CoreSqlBatchRequestPayload);
+    }
+
     private attachProcessListeners(child: ChildProcess): void {
         child.stdout?.on('data', chunk => {
             const text = String(chunk).trim();
@@ -314,6 +353,33 @@ export class CoreService {
             state,
         };
     }
+
+    private async request<T>(requestPath: string, body: unknown): Promise<T> {
+        let status = this.getStatus();
+        if (status.state !== 'running' || !this.token || !status.port) {
+            status = await this.start();
+        }
+
+        if (status.state !== 'running' || !this.token || !status.port) {
+            throw new Error(status.lastError ?? 'Authority core is not available');
+        }
+
+        const response = await fetch(`http://127.0.0.1:${status.port}${requestPath}`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'x-authority-core-token': this.token,
+            },
+            body: JSON.stringify(body),
+        });
+        const payload = await readCorePayload(response);
+
+        if (!response.ok) {
+            throw new Error(extractCoreErrorMessage(payload, response.status));
+        }
+
+        return payload as T;
+    }
 }
 
 function readArtifact(root: string): CoreArtifact | null {
@@ -376,6 +442,28 @@ function onceChildExit(child: ChildProcess): Promise<void> {
     return new Promise(resolve => {
         child.once('exit', () => resolve());
     });
+}
+
+async function readCorePayload(response: Response): Promise<unknown> {
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType.includes('application/json')) {
+        return await response.json();
+    }
+
+    const text = await response.text();
+    return text || undefined;
+}
+
+function extractCoreErrorMessage(payload: unknown, statusCode: number): string {
+    if (payload && typeof payload === 'object' && 'error' in payload) {
+        return String((payload as { error: unknown }).error);
+    }
+
+    if (typeof payload === 'string' && payload.trim()) {
+        return payload.trim();
+    }
+
+    return `authority-core request failed with ${statusCode}`;
 }
 
 function delay(durationMs: number): Promise<void> {

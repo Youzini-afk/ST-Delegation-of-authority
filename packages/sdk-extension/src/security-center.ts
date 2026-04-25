@@ -83,7 +83,7 @@ const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
     uiLabel: 'Authority Security Center',
 };
 
-const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'http.fetch', 'jobs.background', 'events.stream'];
+const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];
 const STATUS_OPTIONS: PermissionStatus[] = ['prompt', 'granted', 'denied', 'blocked'];
 
 let bootPromise: Promise<void> | null = null;
@@ -707,6 +707,7 @@ function getDeclaredPermissionLabels(declaredPermissions: DeclaredPermissions): 
     const labels: string[] = [];
     if (declaredPermissions.storage?.kv) labels.push('storage.kv');
     if (declaredPermissions.storage?.blob) labels.push('storage.blob');
+    if (declaredPermissions.sql?.private) labels.push(Array.isArray(declaredPermissions.sql.private) ? `sql.private -> ${declaredPermissions.sql.private.join(', ')}` : 'sql.private');
     if (declaredPermissions.http?.allow?.length) labels.push(`http.fetch -> ${declaredPermissions.http.allow.join(', ')}`);
     if (declaredPermissions.jobs?.background) labels.push(Array.isArray(declaredPermissions.jobs.background) ? `jobs.background -> ${declaredPermissions.jobs.background.join(', ')}` : 'jobs.background');
     if (declaredPermissions.events?.channels) labels.push(Array.isArray(declaredPermissions.events.channels) ? `events.stream -> ${declaredPermissions.events.channels.join(', ')}` : 'events.stream');
@@ -717,6 +718,7 @@ function getResourceLabel(resource: PermissionResource): string {
     switch (resource) {
         case 'storage.kv': return 'KV 存储';
         case 'storage.blob': return 'Blob 存储';
+        case 'sql.private': return '私有 SQL 数据库';
         case 'http.fetch': return 'HTTP 访问';
         case 'jobs.background': return '后台任务';
         case 'events.stream': return '事件流';
@@ -749,6 +751,7 @@ function getRiskLevel(resource: PermissionResource): 'low' | 'medium' | 'high' {
         case 'storage.blob':
         case 'events.stream':
             return 'low';
+        case 'sql.private':
         case 'http.fetch':
         case 'jobs.background':
             return 'medium';

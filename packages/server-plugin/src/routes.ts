@@ -1,7 +1,9 @@
-import type { AuthorityInitConfig, PermissionEvaluateRequest, PermissionResolveRequest } from '@stdo/shared-types';
+import path from 'node:path';
+import type { AuthorityInitConfig, PermissionEvaluateRequest, PermissionResolveRequest, SqlBatchRequest, SqlExecRequest, SqlQueryRequest } from '@stdo/shared-types';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
+import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AuthorityRequest, AuthorityResponse } from './types.js';
-import { asErrorMessage, getSessionToken, getUserContext, normalizeHostname } from './utils.js';
+import { asErrorMessage, getSessionToken, getUserContext, normalizeHostname, sanitizeFileSegment } from './utils.js';
 
 type RouterLike = {
     get(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
@@ -21,6 +23,24 @@ function fail(runtime: AuthorityRuntime, req: AuthorityRequest, res: AuthorityRe
         // ignore errors raised before auth is available
     }
     res.status(400).json({ error: message });
+}
+
+function getSqlDatabaseName(value: unknown): string {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+
+function resolvePrivateSqlDatabasePath(user: ReturnType<typeof getUserContext>, extensionId: string, databaseName: string): string {
+    const paths = getUserAuthorityPaths(user);
+    return path.join(
+        paths.sqlPrivateDir,
+        sanitizeFileSegment(extensionId),
+        `${sanitizeFileSegment(databaseName)}.sqlite`,
+    );
+}
+
+function previewSqlStatement(statement: string): string {
+    const normalized = statement.replace(/\s+/g, ' ').trim();
+    return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
 }
 
 export function registerRoutes(router: RouterLike, runtime = createAuthorityRuntime()): AuthorityRuntime {
@@ -277,6 +297,81 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             ok(res, { entries: runtime.storage.listBlobs(user, session.extension.id) });
         } catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
+        }
+    });
+
+    router.post('/sql/query', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as SqlQueryRequest;
+            const database = getSqlDatabaseName(payload.database);
+            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.querySql(dbPath, {
+                ...payload,
+                database,
+            });
+            runtime.audit.logUsage(user, session.extension.id, 'SQL query', {
+                database,
+                statement: previewSqlStatement(payload.statement ?? ''),
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.post('/sql/exec', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as SqlExecRequest;
+            const database = getSqlDatabaseName(payload.database);
+            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.execSql(dbPath, {
+                ...payload,
+                database,
+            });
+            runtime.audit.logUsage(user, session.extension.id, 'SQL exec', {
+                database,
+                statement: previewSqlStatement(payload.statement ?? ''),
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.post('/sql/batch', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as SqlBatchRequest;
+            const database = getSqlDatabaseName(payload.database);
+            if (!runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.batchSql(dbPath, {
+                ...payload,
+                database,
+            });
+            runtime.audit.logUsage(user, session.extension.id, 'SQL batch', {
+                database,
+                statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
         }
     });
 

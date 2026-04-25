@@ -65,6 +65,8 @@ function getResourceLabel(resource: PermissionResource): string {
             return 'KV 存储';
         case 'storage.blob':
             return 'Blob 存储';
+        case 'sql.private':
+            return '私有 SQL 数据库';
         case 'http.fetch':
             return '外部 HTTP 访问';
         case 'jobs.background':

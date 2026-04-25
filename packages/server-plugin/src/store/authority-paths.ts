@@ -7,6 +7,8 @@ export interface UserAuthorityPaths {
     stateDir: string;
     auditDir: string;
     storageDir: string;
+    sqlDir: string;
+    sqlPrivateDir: string;
     kvDir: string;
     blobDir: string;
     jobsDir: string;
@@ -30,6 +32,7 @@ export function getUserAuthorityPaths(user: UserContext): UserAuthorityPaths {
     const stateDir = path.join(baseDir, 'state');
     const auditDir = path.join(baseDir, 'audit');
     const storageDir = path.join(baseDir, 'storage');
+    const sqlDir = path.join(baseDir, 'sql');
     const jobsDir = path.join(baseDir, 'jobs');
 
     return {
@@ -37,6 +40,8 @@ export function getUserAuthorityPaths(user: UserContext): UserAuthorityPaths {
         stateDir,
         auditDir,
         storageDir,
+        sqlDir,
+        sqlPrivateDir: path.join(sqlDir, 'private'),
         kvDir: path.join(storageDir, 'kv'),
         blobDir: path.join(storageDir, 'blobs'),
         jobsDir,
