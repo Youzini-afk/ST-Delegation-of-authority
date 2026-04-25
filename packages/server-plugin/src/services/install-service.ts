@@ -25,6 +25,20 @@ interface InstallServiceOptions {
 }
 
 const DEFAULT_VERSION = '0.0.0-dev';
+const TEXT_HASH_EXTENSIONS = new Set([
+    '.cjs',
+    '.css',
+    '.html',
+    '.js',
+    '.json',
+    '.map',
+    '.md',
+    '.mjs',
+    '.svg',
+    '.txt',
+    '.yaml',
+    '.yml',
+]);
 
 export class InstallService {
     private readonly runtimeDir: string;
@@ -408,7 +422,7 @@ function hashDirectory(rootDir: string, ignoreNames = new Set<string>()): string
         const relativePath = path.relative(rootDir, filePath).replace(/\\/g, '/');
         hash.update(relativePath);
         hash.update('\0');
-        hash.update(fs.readFileSync(filePath));
+        hash.update(readStableHashContent(filePath));
         hash.update('\0');
     }
     return hash.digest('hex');
@@ -416,6 +430,15 @@ function hashDirectory(rootDir: string, ignoreNames = new Set<string>()): string
 
 function hashFile(filePath: string): string {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function readStableHashContent(filePath: string): Buffer {
+    const content = fs.readFileSync(filePath);
+    if (!TEXT_HASH_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+        return content;
+    }
+
+    return Buffer.from(content.toString('utf8').replace(/\r\n?/g, '\n'), 'utf8');
 }
 
 function listFiles(rootDir: string, ignoreNames: Set<string>): string[] {

@@ -14,6 +14,20 @@ import type { AuthorityManagedMetadata, AuthorityReleaseMetadata } from '../type
 import { InstallService } from './install-service.js';
 
 const cleanupDirs: string[] = [];
+const TEXT_HASH_EXTENSIONS = new Set([
+    '.cjs',
+    '.css',
+    '.html',
+    '.js',
+    '.json',
+    '.map',
+    '.md',
+    '.mjs',
+    '.svg',
+    '.txt',
+    '.yaml',
+    '.yml',
+]);
 
 describe('InstallService', () => {
     afterEach(() => {
@@ -143,6 +157,20 @@ describe('InstallService', () => {
         expect(status.coreArtifactPlatform).toBe(`${process.platform}-${process.arch}`);
         expect(status.coreArtifactPlatforms).toContain(`${process.platform}-${process.arch}`);
         expect(status.coreArtifactPlatforms).toContain('android-arm64');
+    });
+
+    it('accepts managed core text files with CRLF line endings when release metadata was hashed with LF', async () => {
+        const setup = createInstallFixture();
+        const platformDir = path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, `${process.platform}-${process.arch}`);
+        const metadataPath = path.join(platformDir, 'authority-core.json');
+        const metadataText = fs.readFileSync(metadataPath, 'utf8');
+        fs.writeFileSync(metadataPath, metadataText.replace(/\n/g, '\r\n'), 'utf8');
+
+        const service = createService(setup);
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.coreVerified).toBe(true);
     });
 });
 
@@ -310,7 +338,7 @@ function hashDirectory(rootDir: string): string {
         const relativePath = path.relative(rootDir, filePath).replace(/\\/g, '/');
         hash.update(relativePath);
         hash.update('\0');
-        hash.update(fs.readFileSync(filePath));
+        hash.update(readStableHashContent(filePath));
         hash.update('\0');
     }
     return hash.digest('hex');
@@ -318,6 +346,15 @@ function hashDirectory(rootDir: string): string {
 
 function hashFile(filePath: string): string {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function readStableHashContent(filePath: string): Buffer {
+    const content = fs.readFileSync(filePath);
+    if (!TEXT_HASH_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+        return content;
+    }
+
+    return Buffer.from(content.toString('utf8').replace(/\r\n?/g, '\n'), 'utf8');
 }
 
 function listFiles(rootDir: string): string[] {

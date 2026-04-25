@@ -1737,6 +1737,20 @@ __webpack_require__.r(__webpack_exports__);
 
 
 const DEFAULT_VERSION = '0.0.0-dev';
+const TEXT_HASH_EXTENSIONS = new Set([
+    '.cjs',
+    '.css',
+    '.html',
+    '.js',
+    '.json',
+    '.map',
+    '.md',
+    '.mjs',
+    '.svg',
+    '.txt',
+    '.yaml',
+    '.yml',
+]);
 class InstallService {
     runtimeDir;
     pluginRoot;
@@ -2060,13 +2074,20 @@ function hashDirectory(rootDir, ignoreNames = new Set()) {
         const relativePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().relative(rootDir, filePath).replace(/\\/g, '/');
         hash.update(relativePath);
         hash.update('\0');
-        hash.update(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath));
+        hash.update(readStableHashContent(filePath));
         hash.update('\0');
     }
     return hash.digest('hex');
 }
 function hashFile(filePath) {
     return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath)).digest('hex');
+}
+function readStableHashContent(filePath) {
+    const content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath);
+    if (!TEXT_HASH_EXTENSIONS.has(node_path__WEBPACK_IMPORTED_MODULE_2___default().extname(filePath).toLowerCase())) {
+        return content;
+    }
+    return Buffer.from(content.toString('utf8').replace(/\r\n?/g, '\n'), 'utf8');
 }
 function listFiles(rootDir, ignoreNames) {
     const files = [];
