@@ -51,6 +51,8 @@ function getResourceLabel(resource) {
             return '私有文件';
         case 'sql.private':
             return '私有数据库';
+        case 'trivium.private':
+            return '私有记忆数据库';
         case 'http.fetch':
             return '网络访问';
         case 'jobs.background':
@@ -70,6 +72,9 @@ function getTargetLabel(resource, target) {
 function getDefaultReason(resource) {
     if (resource === 'fs.private') {
         return '该扩展请求在它自己的服务端私有目录中创建、读取、修改或删除文件。';
+    }
+    if (resource === 'trivium.private') {
+        return '该扩展请求访问它自己的私有记忆数据库，用于存储和检索长期语义记忆、向量和图谱关系。';
     }
     return '该扩展请求使用一项受治理的服务端能力。';
 }

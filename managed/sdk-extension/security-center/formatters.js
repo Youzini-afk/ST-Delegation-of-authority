@@ -153,6 +153,8 @@ export function getDeclaredPermissionLabels(declaredPermissions) {
         labels.push('私有文件');
     if (declaredPermissions.sql?.private)
         labels.push(Array.isArray(declaredPermissions.sql.private) ? `私有数据库（${declaredPermissions.sql.private.join('、')}）` : '私有数据库');
+    if (declaredPermissions.trivium?.private)
+        labels.push(Array.isArray(declaredPermissions.trivium.private) ? `私有记忆数据库（${declaredPermissions.trivium.private.join('、')}）` : '私有记忆数据库');
     if (declaredPermissions.http?.allow?.length)
         labels.push(`网络访问（${declaredPermissions.http.allow.join('、')}）`);
     if (declaredPermissions.jobs?.background)
@@ -167,6 +169,7 @@ export function getResourceLabel(resource) {
         case 'storage.blob': return '文件存储';
         case 'fs.private': return '私有文件';
         case 'sql.private': return '私有数据库';
+        case 'trivium.private': return '私有记忆数据库';
         case 'http.fetch': return '网络访问';
         case 'jobs.background': return '后台任务';
         case 'events.stream': return '消息通道';
@@ -201,11 +204,16 @@ export function getRiskLevel(resource) {
         case 'http.fetch':
         case 'jobs.background':
             return 'medium';
+        case 'trivium.private':
+            return 'high';
         default:
             return 'high';
     }
 }
 export function getExtensionRiskLevel(extension) {
+    if (extension.declaredPermissions.trivium?.private) {
+        return 'high';
+    }
     if (extension.declaredPermissions.sql?.private
         || extension.declaredPermissions.http?.allow?.length
         || extension.declaredPermissions.jobs?.background

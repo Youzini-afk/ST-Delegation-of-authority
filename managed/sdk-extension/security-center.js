@@ -1,6 +1,6 @@
 import { authorityRequest } from './api.js';
 import { clearChildren, escapeHtml, formatDate } from './dom.js';
-import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseGroupTable, renderDatabaseTable, renderGrantSettingsRows, renderJobTable, renderMetricTile, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
+import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseAssetSections, renderDatabaseGroupTable, renderGrantSettingsRows, renderJobTable, renderMetricTile, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
 import { RESOURCE_OPTIONS, SECURITY_CENTER_CONFIG, STATUS_OPTIONS, } from './security-center/constants.js';
 import { formatBytes, getCoreStateLabel, getDeclaredPermissionLabels, getExtensionRiskLevel, getInstallStatusLabel, getInstallTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, sortByTimestampDesc, } from './security-center/formatters.js';
 import { bootstrapSecurityCenter as bootstrapSecurityCenterHost, openSecurityCenter as openSecurityCenterHost, } from './security-center/host.js';
@@ -43,6 +43,8 @@ class SecurityCenterView {
             extensionFilter: '',
             policies: null,
             policyEditorExtensionId: focusExtensionId ?? null,
+            updateResult: null,
+            updateInProgress: false,
         };
     }
     async initialize() {
@@ -67,7 +69,7 @@ class SecurityCenterView {
             const tabButton = target.closest('[data-tab]');
             if (tabButton) {
                 const tab = tabButton.dataset.tab;
-                if (tab !== 'policies' || this.state.isAdmin) {
+                if ((tab !== 'policies' && tab !== 'updates') || this.state.isAdmin) {
                     this.state.selectedTab = tab;
                     void this.render();
                 }
@@ -109,6 +111,14 @@ class SecurityCenterView {
             const savePoliciesButton = target.closest('[data-action="save-policies"]');
             if (savePoliciesButton) {
                 void this.savePolicies();
+                return;
+            }
+            const adminUpdateButton = target.closest('[data-action="admin-update"]');
+            if (adminUpdateButton) {
+                const action = adminUpdateButton.dataset.updateAction;
+                if (action) {
+                    void this.runAdminUpdate(action);
+                }
             }
         });
         this.root.addEventListener('input', event => {
@@ -158,7 +168,7 @@ class SecurityCenterView {
             this.state.policies = this.state.isAdmin
                 ? await authorityRequest('/admin/policies')
                 : null;
-            if (!this.state.isAdmin && this.state.selectedTab === 'policies') {
+            if (!this.state.isAdmin && (this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
                 this.state.selectedTab = 'overview';
             }
         }
@@ -168,6 +178,32 @@ class SecurityCenterView {
         finally {
             this.state.loading = false;
             void this.render();
+        }
+    }
+    async runAdminUpdate(action) {
+        if (!this.state.isAdmin || this.state.updateInProgress) {
+            return;
+        }
+        this.state.updateInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const result = await authorityRequest('/admin/update', {
+                method: 'POST',
+                body: { action },
+            });
+            this.state.updateResult = result;
+            toastr.success(result.message, TOAST_TITLE);
+            await this.refresh();
+            this.state.updateResult = result;
+            this.state.selectedTab = 'updates';
+            void this.render();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.updateInProgress = false;
+            void this.renderUpdatesSection();
         }
     }
     async selectExtension(extensionId, tab) {
@@ -273,6 +309,7 @@ class SecurityCenterView {
         await this.renderDatabasesSection();
         await this.renderActivitySection();
         await this.renderPoliciesSection();
+        await this.renderUpdatesSection();
         this.toggleSections();
     }
     renderHeader() {
@@ -318,7 +355,7 @@ class SecurityCenterView {
         for (const tab of this.root.querySelectorAll('[data-tab]')) {
             const tabName = tab.dataset.tab;
             tab.classList.toggle('authority-tab--active', tabName === this.state.selectedTab);
-            tab.hidden = tabName === 'policies' && !this.state.isAdmin;
+            tab.hidden = (tabName === 'policies' || tabName === 'updates') && !this.state.isAdmin;
         }
     }
     renderExtensionList() {
@@ -375,7 +412,7 @@ class SecurityCenterView {
         const grants = [...this.state.details.values()].flatMap(detail => detail.grants);
         const grantedCount = grants.filter(grant => grant.status === 'granted').length;
         const deniedCount = grants.filter(grant => grant.status === 'denied' || grant.status === 'blocked').length;
-        const databaseCount = overview.databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+        const databaseCount = overview.databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
         container.innerHTML = `
             <div class="authority-overview-layout">
                 <div class="authority-overview-main">
@@ -500,11 +537,13 @@ class SecurityCenterView {
         const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
         const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
         const databases = [...detail.databases].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const triviumDatabases = [...detail.triviumDatabases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const storage = detail.storage;
         const risk = getExtensionRiskLevel(detail.extension);
+        const databaseCount = detail.databases.length + detail.triviumDatabases.length;
         container.innerHTML = `
-            <div class="authority-detail-dossier">
-                <header class="authority-dossier-header">
+            <div class="authority-page-stack authority-page-stack--detail">
+                <div class="authority-page-header authority-page-header--detail">
                     <button type="button" class="menu_button" data-tab="overview">返回总览</button>
                     <div class="authority-dossier-title">
                         <div class="authority-eyebrow">扩展详情</div>
@@ -516,11 +555,11 @@ class SecurityCenterView {
                         <span class="authority-pill authority-pill--medium">${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</span>
                         <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
                     </div>
-                </header>
+                </div>
                 <div class="authority-detail-metrics">
                     ${renderMetricTile('授权记录', String(detail.grants.length), `${granted.length} 允许 · ${denied.length} 拒绝/封锁`, detail.grants.length > 0 ? 'primary' : 'neutral')}
                     ${renderMetricTile('策略覆盖', String(detail.policies.length), '管理员覆盖规则', detail.policies.length > 0 ? 'warning' : 'neutral')}
-                    ${renderMetricTile('数据库', String(detail.databases.length), formatBytes(storage.databaseBytes), detail.databases.length > 0 ? 'runtime' : 'neutral')}
+                    ${renderMetricTile('数据库', String(databaseCount), `SQL ${detail.databases.length} · Trivium ${detail.triviumDatabases.length}`, databaseCount > 0 ? 'runtime' : 'neutral')}
                     ${renderMetricTile('后台任务', String(detail.jobs.length), `${errors.length} 条近期错误`, errors.length > 0 ? 'error' : 'neutral')}
                 </div>
                 <section class="authority-section-block">
@@ -554,10 +593,10 @@ class SecurityCenterView {
                     <div class="authority-section-heading">
                         <div>
                             <h3>数据资产</h3>
-                            <div class="authority-muted">该扩展创建的私有数据库</div>
+                            <div class="authority-muted">该扩展创建的 SQL 数据库与 Trivium 记忆库</div>
                         </div>
                     </div>
-                    ${renderDatabaseTable(databases, '该扩展还没有私有数据库。')}
+                    ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
                 </section>
                 <section class="authority-detail-grid">
                     <div class="authority-log-panel">
@@ -608,7 +647,7 @@ class SecurityCenterView {
             return;
         }
         const databaseGroups = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
-        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
         const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
         container.innerHTML = `
             <div class="authority-page-stack">
@@ -616,7 +655,7 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">数据资产</div>
                         <h2>扩展私有数据库</h2>
-                        <p>按扩展汇总当前用户的私有数据库文件。</p>
+                        <p>按扩展汇总当前用户的 SQL 私有数据库与 Trivium 私有记忆库。</p>
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>
@@ -761,6 +800,107 @@ class SecurityCenterView {
                         <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>
                     </div>
                 </section>
+            </div>
+        `;
+    }
+    async renderUpdatesSection() {
+        const container = this.root.querySelector('[data-role="updates-view"]');
+        if (!container) {
+            return;
+        }
+        if (!this.state.isAdmin) {
+            container.innerHTML = '<div class="authority-empty">只有管理员可执行插件与前端 SDK 更新。</div>';
+            return;
+        }
+        const probe = this.state.probe;
+        const result = this.state.updateResult;
+        const installPath = result?.git?.pluginRoot ?? '未获取';
+        const pullButtonLabel = this.state.updateInProgress ? '更新中…' : '更新服务端插件';
+        const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端插件';
+        container.innerHTML = `
+            <div class="authority-page-stack">
+                <div class="authority-page-header">
+                    <div>
+                        <div class="authority-eyebrow">更新管理</div>
+                        <h2>服务端插件与前端插件更新</h2>
+                        <p>手动拉取 Authority 服务端插件最新提交，或重新部署它携带的前端 SDK 扩展。</p>
+                    </div>
+                    <div class="authority-page-actions">
+                        <button type="button" class="menu_button authority-primary-action" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
+                        <button type="button" class="menu_button" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
+                    </div>
+                </div>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>当前安装状态</h3>
+                            <div class="authority-muted">当前运行中的 Authority 插件与 bundled SDK 摘要</div>
+                        </div>
+                        <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
+                    </div>
+                    <div class="authority-kv-grid">
+                        <div><strong>服务端插件版本</strong><div>${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>Bundled SDK 版本</strong><div>${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>已部署 SDK 版本</strong><div>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>Core 版本</strong><div>${escapeHtml(probe?.core.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>插件目录</strong><div>${escapeHtml(installPath)}</div></div>
+                        <div><strong>最近操作</strong><div>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</div></div>
+                    </div>
+                </section>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>操作说明</h3>
+                            <div class="authority-muted">请根据你的部署方式选择对应动作</div>
+                        </div>
+                    </div>
+                    <div class="authority-stack">
+                        <div class="authority-list-card authority-list-card--column">
+                            <strong>更新服务端插件</strong>
+                            <div class="authority-muted">适用于以 Git 仓库形式安装的 \`plugins/authority\`。会执行 \`git pull --ff-only\`，然后重新部署 bundled SDK，并重启 Authority core。</div>
+                        </div>
+                        <div class="authority-list-card authority-list-card--column">
+                            <strong>重新部署前端插件</strong>
+                            <div class="authority-muted">只刷新 \`third-party/st-authority-sdk\` 到最新 bundled 版本，不访问远端，不改服务端插件代码。</div>
+                        </div>
+                        <div class="authority-list-card authority-list-card--column">
+                            <strong>重启提示</strong>
+                            <div class="authority-muted">如果 \`git pull\` 拉到了新的 Node 服务端代码，当前运行中的 server plugin 模块通常仍需重启 SillyTavern 才会完全切换到新代码。</div>
+                        </div>
+                    </div>
+                </section>
+                ${result ? `
+                    <section class="authority-card authority-card--flat">
+                        <div class="authority-card__header">
+                            <div>
+                                <h3>最近一次更新结果</h3>
+                                <div class="authority-muted">${escapeHtml(result.message)}</div>
+                            </div>
+                            <div class="authority-page-actions">
+                                <span class="authority-pill authority-pill--${result.requiresRestart ? 'warning' : 'granted'}">${escapeHtml(result.requiresRestart ? '需要重启 ST' : '无需重启 ST')}</span>
+                                <span class="authority-pill authority-pill--runtime">${escapeHtml(result.action === 'git-pull' ? '服务端插件更新' : '前端插件重部署')}</span>
+                            </div>
+                        </div>
+                        <div class="authority-kv-grid">
+                            <div><strong>更新前插件版本</strong><div>${escapeHtml(result.before.pluginVersion)}</div></div>
+                            <div><strong>更新后插件版本</strong><div>${escapeHtml(result.after.pluginVersion)}</div></div>
+                            <div><strong>更新前 SDK</strong><div>${escapeHtml(result.before.sdkDeployedVersion ?? '未部署')}</div></div>
+                            <div><strong>更新后 SDK</strong><div>${escapeHtml(result.after.sdkDeployedVersion ?? '未部署')}</div></div>
+                            <div><strong>后台服务状态</strong><div>${escapeHtml(getCoreStateLabel(result.core.state))}</div></div>
+                            <div><strong>后台服务说明</strong><div>${escapeHtml(result.coreRestartMessage ?? '后台服务已正常运行')}</div></div>
+                        </div>
+                        ${result.git ? `
+                            <div class="authority-stack">
+                                <div class="authority-list-card authority-list-card--column">
+                                    <strong>Git 分支 / 提交</strong>
+                                    <div class="authority-muted">${escapeHtml(result.git.branch ?? '未获取')} · ${escapeHtml(result.git.previousRevision ?? '未知')} → ${escapeHtml(result.git.currentRevision ?? '未知')}</div>
+                                </div>
+                                ${result.git.stdout ? `<pre class="authority-code-block">${escapeHtml(result.git.stdout)}</pre>` : ''}
+                                ${result.git.stderr ? `<pre class="authority-code-block">${escapeHtml(result.git.stderr)}</pre>` : ''}
+                            </div>
+                        ` : ''}
+                    </section>
+                ` : ''}
             </div>
         `;
     }

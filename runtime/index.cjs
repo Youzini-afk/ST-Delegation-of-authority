@@ -48,6 +48,7 @@ const SUPPORTED_RESOURCES = [
     'storage.blob',
     'fs.private',
     'sql.private',
+    'trivium.private',
     'http.fetch',
     'jobs.background',
     'events.stream',
@@ -57,6 +58,7 @@ const RESOURCE_RISK = {
     'storage.blob': 'low',
     'fs.private': 'medium',
     'sql.private': 'medium',
+    'trivium.private': 'high',
     'http.fetch': 'medium',
     'jobs.background': 'medium',
     'events.stream': 'low',
@@ -66,6 +68,7 @@ const DEFAULT_POLICY_STATUS = {
     'storage.blob': 'prompt',
     'fs.private': 'prompt',
     'sql.private': 'prompt',
+    'trivium.private': 'prompt',
     'http.fetch': 'prompt',
     'jobs.background': 'prompt',
     'events.stream': 'prompt',
@@ -188,6 +191,9 @@ function fail(runtime, req, res, extensionId, error) {
     }
     res.status(400).json({ error: message });
 }
+function parseAdminUpdateAction(value) {
+    return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
+}
 function getSqlDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
@@ -197,6 +203,71 @@ function resolvePrivateSqlDatabaseDir(user, extensionId) {
 }
 function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
     return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.sqlite`);
+}
+function getTriviumDatabaseName(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+function resolvePrivateTriviumDatabaseDir(user, extensionId) {
+    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
+    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId));
+}
+function resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
+    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.tdb`);
+}
+function readTriviumDimension(filePath) {
+    try {
+        const handle = node_fs__WEBPACK_IMPORTED_MODULE_0___default().openSync(filePath, 'r');
+        try {
+            const header = Buffer.alloc(10);
+            const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readSync(handle, header, 0, 10, 0);
+            if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
+                return null;
+            }
+            return header.readUInt32LE(6);
+        }
+        finally {
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().closeSync(handle);
+        }
+    }
+    catch {
+        return null;
+    }
+}
+function buildTriviumDatabaseRecord(filePath, entryName) {
+    const mainStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
+    const walPath = `${filePath}.wal`;
+    const vecPath = `${filePath}.vec`;
+    const walStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(walPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(walPath) : null;
+    const vecStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(vecPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(vecPath) : null;
+    const storageMode = vecStats ? 'mmap' : 'rom';
+    const timestamps = [mainStats, walStats, vecStats]
+        .filter((value) => value !== null)
+        .map(stats => stats.mtime.toISOString())
+        .sort((left, right) => left.localeCompare(right));
+    return {
+        name: entryName.slice(0, -'.tdb'.length),
+        fileName: entryName,
+        dim: readTriviumDimension(filePath),
+        dtype: null,
+        syncMode: null,
+        storageMode,
+        sizeBytes: mainStats.size,
+        walSizeBytes: walStats?.size ?? 0,
+        vecSizeBytes: vecStats?.size ?? 0,
+        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
+        updatedAt: timestamps.at(-1) ?? null,
+    };
+}
+function listPrivateTriviumDatabases(user, extensionId) {
+    const databaseDir = resolvePrivateTriviumDatabaseDir(user, extensionId);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(databaseDir)) {
+        return { databases: [] };
+    }
+    const databases = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(databaseDir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.tdb'))
+        .map(entry => buildTriviumDatabaseRecord(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(databaseDir, entry.name), entry.name))
+        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+    return { databases };
 }
 function listPrivateSqlDatabases(user, extensionId) {
     const databaseDir = resolvePrivateSqlDatabaseDir(user, extensionId);
@@ -234,20 +305,31 @@ function summarizeDatabases(databases) {
         totalSizeBytes: databases.reduce((sum, record) => sum + record.sizeBytes, 0),
     };
 }
-async function buildExtensionStorageSummary(runtime, user, extensionId, databases = listPrivateSqlDatabases(user, extensionId).databases) {
+function summarizeTriviumDatabases(databases) {
+    return {
+        count: databases.length,
+        totalSizeBytes: databases.reduce((sum, record) => sum + record.totalSizeBytes, 0),
+    };
+}
+async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatabases = listPrivateSqlDatabases(user, extensionId).databases, triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases) {
     const [kvEntries, blobs, files] = await Promise.all([
         runtime.storage.listKv(user, extensionId),
         runtime.storage.listBlobs(user, extensionId),
         runtime.files.getUsageSummary(user, extensionId),
     ]);
     const blobSummary = summarizeBlobRecords(blobs);
-    const databaseSummary = summarizeDatabases(databases);
+    const sqlDatabaseSummary = summarizeDatabases(sqlDatabases);
+    const triviumDatabaseSummary = summarizeTriviumDatabases(triviumDatabases);
     return {
         kvEntries: Object.keys(kvEntries).length,
         blobCount: blobSummary.count,
         blobBytes: blobSummary.totalSizeBytes,
-        databaseCount: databaseSummary.count,
-        databaseBytes: databaseSummary.totalSizeBytes,
+        databaseCount: sqlDatabaseSummary.count + triviumDatabaseSummary.count,
+        databaseBytes: sqlDatabaseSummary.totalSizeBytes + triviumDatabaseSummary.totalSizeBytes,
+        sqlDatabaseCount: sqlDatabaseSummary.count,
+        sqlDatabaseBytes: sqlDatabaseSummary.totalSizeBytes,
+        triviumDatabaseCount: triviumDatabaseSummary.count,
+        triviumDatabaseBytes: triviumDatabaseSummary.totalSizeBytes,
         files,
     };
 }
@@ -332,12 +414,13 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
-                const databases = listPrivateSqlDatabases(user, extension.id).databases;
+                const sqlDatabases = listPrivateSqlDatabases(user, extension.id).databases;
+                const triviumDatabases = listPrivateTriviumDatabases(user, extension.id).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
                     deniedCount: grants.filter(grant => grant.status === 'denied').length,
-                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, databases),
+                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, sqlDatabases, triviumDatabases),
                 };
             }));
             ok(res, list);
@@ -355,6 +438,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 throw new Error('Extension not found');
             }
             const databases = listPrivateSqlDatabases(user, extensionId).databases;
+            const triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases;
             ok(res, {
                 extension,
                 grants: await runtime.permissions.listPersistentGrants(user, extensionId),
@@ -362,7 +446,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 activity: await runtime.audit.getRecentActivity(user, extensionId),
                 jobs: await runtime.jobs.list(user, extensionId),
                 databases,
-                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases),
+                triviumDatabases,
+                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),
             });
         }
         catch (error) {
@@ -732,6 +817,483 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'sql.private', error);
         }
     });
+    router.post('/trivium/insert', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.insertTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert', {
+                database,
+                id: result.id,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/insert-with-id', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.insertTriviumWithId(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert with id', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/get', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const node = await runtime.core.getTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium get', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { node });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/update-payload', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.updateTriviumPayload(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium update payload', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/update-vector', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.updateTriviumVector(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium update vector', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/delete', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.deleteTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium delete', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/link', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.linkTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium link', {
+                database,
+                src: payload.src,
+                dst: payload.dst,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/unlink', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.unlinkTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium unlink', {
+                database,
+                src: payload.src,
+                dst: payload.dst,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/neighbors', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.neighborsTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium neighbors', {
+                database,
+                id: payload.id,
+                depth: payload.depth ?? 1,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/search', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const hits = await runtime.core.searchTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium search', {
+                database,
+                topK: payload.topK ?? 5,
+                expandDepth: payload.expandDepth ?? 0,
+            });
+            ok(res, { hits });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/search-advanced', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const hits = await runtime.core.searchAdvancedTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium advanced search', {
+                database,
+                topK: payload.topK ?? 5,
+                expandDepth: payload.expandDepth ?? 2,
+            });
+            ok(res, { hits });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/search-hybrid', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const hits = await runtime.core.searchHybridTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium hybrid search', {
+                database,
+                topK: payload.topK ?? 5,
+                expandDepth: payload.expandDepth ?? 2,
+            });
+            ok(res, { hits });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/filter-where', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const nodes = await runtime.core.filterWhereTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium filter where', {
+                database,
+                count: nodes.length,
+            });
+            ok(res, { nodes });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/query', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const rows = await runtime.core.queryTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium query', {
+                database,
+                rowCount: rows.length,
+            });
+            ok(res, { rows });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/index-text', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.indexTextTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium index text', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/index-keyword', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.indexKeywordTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium index keyword', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/build-text-index', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.buildTextIndexTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium build text index', {
+                database,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/flush', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.flushTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium flush', {
+                database,
+            });
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/stat', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.statTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
+                database,
+                nodeCount: result.nodeCount,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.get('/trivium/databases', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private' }, false)) {
+                throw new Error('Permission not granted: trivium.private');
+            }
+            const result = listPrivateTriviumDatabases(user, session.extension.id);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium list databases', {
+                count: result.databases.length,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
     router.post('/http/fetch', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
@@ -839,6 +1401,70 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/update', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            const action = parseAdminUpdateAction(req.body?.action);
+            const before = runtime.install.getStatus();
+            const coreBefore = runtime.core.getStatus();
+            const shouldStopCore = action === 'git-pull' && (coreBefore.state === 'running' || coreBefore.state === 'starting' || coreBefore.state === 'error');
+            let git = null;
+            if (shouldStopCore) {
+                await runtime.core.stop();
+            }
+            try {
+                if (action === 'git-pull') {
+                    git = runtime.install.pullLatestFromGit();
+                }
+                const after = await runtime.install.redeployBundledSdk();
+                const core = await runtime.core.start();
+                const coreRestarted = shouldStopCore && core.state === 'running';
+                const requiresRestart = action === 'git-pull' && Boolean(git?.changed);
+                const message = action === 'git-pull'
+                    ? requiresRestart
+                        ? '服务端插件已拉取最新提交，并已重新部署携带的前端插件。要应用新的 Node 服务端代码，请重启 SillyTavern 并刷新页面。'
+                        : '服务端插件已经是最新版本，已重新校验并部署携带的前端插件。'
+                    : '已重新部署携带的前端插件，并重新校验 Authority 后台服务状态。';
+                const response = {
+                    action,
+                    message,
+                    requiresRestart,
+                    before,
+                    after,
+                    git,
+                    core,
+                    coreRestarted,
+                    coreRestartMessage: coreRestarted
+                        ? null
+                        : core.state === 'running'
+                            ? 'Authority 后台服务已保持运行。'
+                            : `Authority 后台服务当前状态：${core.state}`,
+                    updatedAt: new Date().toISOString(),
+                };
+                await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', action === 'git-pull' ? 'Authority plugin updated' : 'Authority SDK redeployed');
+                ok(res, response);
+            }
+            catch (error) {
+                let recoveryMessage = '';
+                try {
+                    const recovery = await runtime.core.start();
+                    recoveryMessage = recovery.state === 'running'
+                        ? '更新失败后后台服务已恢复。'
+                        : `更新失败后后台服务状态为 ${recovery.state}。`;
+                }
+                catch (recoveryError) {
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(recoveryError)}`;
+                }
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+            }
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -1230,6 +1856,159 @@ class CoreService {
             tableName: request.tableName,
         });
     }
+    async insertTrivium(dbPath, request) {
+        return await this.request('/v1/trivium/insert', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            payload: request.payload,
+        });
+    }
+    async insertTriviumWithId(dbPath, request) {
+        await this.request('/v1/trivium/insert-with-id', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            vector: request.vector,
+            payload: request.payload,
+        });
+    }
+    async getTrivium(dbPath, request) {
+        const response = await this.request('/v1/trivium/get', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+        });
+        return response.node;
+    }
+    async updateTriviumPayload(dbPath, request) {
+        await this.request('/v1/trivium/update-payload', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            payload: request.payload,
+        });
+    }
+    async updateTriviumVector(dbPath, request) {
+        await this.request('/v1/trivium/update-vector', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            vector: request.vector,
+        });
+    }
+    async deleteTrivium(dbPath, request) {
+        await this.request('/v1/trivium/delete', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+        });
+    }
+    async linkTrivium(dbPath, request) {
+        await this.request('/v1/trivium/link', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            src: request.src,
+            dst: request.dst,
+            label: request.label,
+            weight: request.weight,
+        });
+    }
+    async unlinkTrivium(dbPath, request) {
+        await this.request('/v1/trivium/unlink', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            src: request.src,
+            dst: request.dst,
+        });
+    }
+    async neighborsTrivium(dbPath, request) {
+        return await this.request('/v1/trivium/neighbors', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            depth: request.depth,
+        });
+    }
+    async searchTrivium(dbPath, request) {
+        const response = await this.request('/v1/trivium/search', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            topK: request.topK,
+            expandDepth: request.expandDepth,
+            minScore: request.minScore,
+        });
+        return response.hits;
+    }
+    async searchAdvancedTrivium(dbPath, request) {
+        const response = await this.request('/v1/trivium/search-advanced', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
+            ...(request.topK === undefined ? {} : { topK: request.topK }),
+            ...(request.expandDepth === undefined ? {} : { expandDepth: request.expandDepth }),
+            ...(request.minScore === undefined ? {} : { minScore: request.minScore }),
+            ...(request.teleportAlpha === undefined ? {} : { teleportAlpha: request.teleportAlpha }),
+            ...(request.enableAdvancedPipeline === undefined ? {} : { enableAdvancedPipeline: request.enableAdvancedPipeline }),
+            ...(request.enableSparseResidual === undefined ? {} : { enableSparseResidual: request.enableSparseResidual }),
+            ...(request.fistaLambda === undefined ? {} : { fistaLambda: request.fistaLambda }),
+            ...(request.fistaThreshold === undefined ? {} : { fistaThreshold: request.fistaThreshold }),
+            ...(request.enableDpp === undefined ? {} : { enableDpp: request.enableDpp }),
+            ...(request.dppQualityWeight === undefined ? {} : { dppQualityWeight: request.dppQualityWeight }),
+            ...(request.enableRefractoryFatigue === undefined ? {} : { enableRefractoryFatigue: request.enableRefractoryFatigue }),
+            ...(request.enableInverseInhibition === undefined ? {} : { enableInverseInhibition: request.enableInverseInhibition }),
+            ...(request.lateralInhibitionThreshold === undefined ? {} : { lateralInhibitionThreshold: request.lateralInhibitionThreshold }),
+            ...(request.enableBqCoarseSearch === undefined ? {} : { enableBqCoarseSearch: request.enableBqCoarseSearch }),
+            ...(request.bqCandidateRatio === undefined ? {} : { bqCandidateRatio: request.bqCandidateRatio }),
+            ...(request.textBoost === undefined ? {} : { textBoost: request.textBoost }),
+            ...(request.enableTextHybridSearch === undefined ? {} : { enableTextHybridSearch: request.enableTextHybridSearch }),
+            ...(request.bm25K1 === undefined ? {} : { bm25K1: request.bm25K1 }),
+            ...(request.bm25B === undefined ? {} : { bm25B: request.bm25B }),
+            ...(request.payloadFilter === undefined ? {} : { payloadFilter: request.payloadFilter }),
+        });
+        return response.hits;
+    }
+    async searchHybridTrivium(dbPath, request) {
+        const response = await this.request('/v1/trivium/search-hybrid', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            queryText: request.queryText,
+            ...(request.topK === undefined ? {} : { topK: request.topK }),
+            ...(request.expandDepth === undefined ? {} : { expandDepth: request.expandDepth }),
+            ...(request.minScore === undefined ? {} : { minScore: request.minScore }),
+            ...(request.hybridAlpha === undefined ? {} : { hybridAlpha: request.hybridAlpha }),
+            ...(request.payloadFilter === undefined ? {} : { payloadFilter: request.payloadFilter }),
+        });
+        return response.hits;
+    }
+    async filterWhereTrivium(dbPath, request) {
+        const response = await this.request('/v1/trivium/filter-where', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            condition: request.condition,
+        });
+        return response.nodes;
+    }
+    async queryTrivium(dbPath, request) {
+        const response = await this.request('/v1/trivium/query', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            cypher: request.cypher,
+        });
+        return response.rows;
+    }
+    async indexTextTrivium(dbPath, request) {
+        await this.request('/v1/trivium/index-text', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            text: request.text,
+        });
+    }
+    async indexKeywordTrivium(dbPath, request) {
+        await this.request('/v1/trivium/index-keyword', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            keyword: request.keyword,
+        });
+    }
+    async buildTextIndexTrivium(dbPath, request = {}) {
+        await this.request('/v1/trivium/build-text-index', buildTriviumOpenPayload(dbPath, request));
+    }
+    async flushTrivium(dbPath, request = {}) {
+        await this.request('/v1/trivium/flush', buildTriviumOpenPayload(dbPath, request));
+    }
+    async statTrivium(dbPath, request = {}) {
+        return await this.request('/v1/trivium/stat', buildTriviumOpenPayload(dbPath, request));
+    }
     async initializeControlSession(dbPath, sessionToken, timestamp, user, config) {
         return await this.request('/v1/control/session/init', {
             dbPath,
@@ -1596,6 +2375,15 @@ function readArtifact(root) {
         metadata,
     };
 }
+function buildTriviumOpenPayload(dbPath, request) {
+    return {
+        dbPath,
+        ...(request.dim === undefined ? {} : { dim: request.dim }),
+        ...(request.dtype === undefined ? {} : { dtype: request.dtype }),
+        ...(request.syncMode === undefined ? {} : { syncMode: request.syncMode }),
+        ...(request.storageMode === undefined ? {} : { storageMode: request.storageMode }),
+    };
+}
 async function fetchHealth(port, token) {
     const response = await fetch(`http://127.0.0.1:${port}/health`, {
         headers: {
@@ -1726,12 +2514,15 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 
@@ -1761,27 +2552,24 @@ class InstallService {
     releaseMetadata;
     status;
     constructor(options = {}) {
-        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(options.runtimeDir ?? __dirname);
+        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.runtimeDir ?? __dirname);
         this.pluginRoot = resolvePluginRoot(this.runtimeDir);
-        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(options.cwd ?? process.cwd());
+        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.cwd ?? process.cwd());
         this.env = options.env ?? process.env;
         this.logger = options.logger ?? console;
         this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
-        const pluginVersion = this.releaseMetadata?.pluginVersion ?? readPackageVersion(this.pluginRoot) ?? DEFAULT_VERSION;
-        const sdkBundledVersion = this.releaseMetadata?.sdkVersion ?? readBundledSdkVersion(this.pluginRoot) ?? pluginVersion;
-        const coreArtifactPlatforms = getReleaseCorePlatforms(this.releaseMetadata);
         const expectedCorePlatform = getCurrentCorePlatform();
         this.status = {
             installStatus: 'missing',
             installMessage: 'Authority SDK deployment has not run yet.',
-            pluginVersion,
-            sdkBundledVersion,
+            pluginVersion: this.getPluginVersion(),
+            sdkBundledVersion: this.getBundledSdkVersion(),
             sdkDeployedVersion: null,
             coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
-            coreArtifactPlatform: coreArtifactPlatforms.includes(expectedCorePlatform)
+            coreArtifactPlatform: this.getCoreArtifactPlatforms().includes(expectedCorePlatform)
                 ? expectedCorePlatform
                 : this.releaseMetadata?.coreArtifactPlatform ?? null,
-            coreArtifactPlatforms,
+            coreArtifactPlatforms: this.getCoreArtifactPlatforms(),
             coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
             coreBinarySha256: this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
                 ?? this.releaseMetadata?.coreBinarySha256
@@ -1797,9 +2585,10 @@ class InstallService {
         };
     }
     async bootstrap() {
-        const bundledDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_SDK_DIR);
+        this.refreshReleaseMetadata();
+        const bundledDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_SDK_DIR);
         try {
-            if (!this.releaseMetadata || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(bundledDir)) {
+            if (!this.releaseMetadata || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(bundledDir)) {
                 return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.', {
                     sdkDeployedVersion: null,
                     coreVerified: false,
@@ -1817,10 +2606,10 @@ class InstallService {
                     coreMessage,
                 });
             }
-            const targetDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-authority-sdk');
-            const managedFile = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE);
-            const existingManaged = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(managedFile, null);
-            if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetDir)) {
+            const targetDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-authority-sdk');
+            const managedFile = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE);
+            const existingManaged = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(managedFile, null);
+            if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir)) {
                 this.deployBundledSdk(bundledDir, targetDir);
                 return this.setStatus('installed', buildInstallMessage('deployed', targetDir, coreCheck), {
                     sdkDeployedVersion: this.releaseMetadata.sdkVersion,
@@ -1828,14 +2617,14 @@ class InstallService {
                     coreMessage,
                 });
             }
-            if (!existingManaged || existingManaged.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID) {
-                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID}.`, {
+            if (!existingManaged || existingManaged.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID) {
+                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${_constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID}.`, {
                     sdkDeployedVersion: null,
                     coreVerified,
                     coreMessage,
                 });
             }
-            const currentHash = hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE]));
+            const currentHash = hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE]));
             const needsUpdate = existingManaged.sdkVersion !== this.releaseMetadata.sdkVersion
                 || existingManaged.assetHash !== this.releaseMetadata.assetHash
                 || currentHash !== this.releaseMetadata.assetHash;
@@ -1863,12 +2652,72 @@ class InstallService {
             });
         }
     }
+    getPluginRoot() {
+        return this.pluginRoot;
+    }
+    redeployBundledSdk() {
+        return this.bootstrap();
+    }
+    pullLatestFromGit() {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, '.git'))) {
+            throw new Error('当前 Authority 插件目录不是 Git 仓库，无法执行服务端插件更新。');
+        }
+        const branch = runGit(this.pluginRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], this.env).stdout || null;
+        const previousRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
+        const pullResult = runGit(this.pluginRoot, ['pull', '--ff-only'], this.env, true);
+        const currentRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
+        this.refreshReleaseMetadata();
+        return {
+            pluginRoot: this.pluginRoot,
+            branch,
+            previousRevision,
+            currentRevision,
+            changed: previousRevision !== currentRevision,
+            stdout: pullResult.stdout || null,
+            stderr: pullResult.stderr || null,
+        };
+    }
+    refreshReleaseMetadata() {
+        this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
+        this.status = {
+            ...this.status,
+            pluginVersion: this.getPluginVersion(),
+            sdkBundledVersion: this.getBundledSdkVersion(),
+            coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
+            coreArtifactPlatform: this.getResolvedCoreArtifactPlatform(),
+            coreArtifactPlatforms: this.getCoreArtifactPlatforms(),
+            coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
+            coreBinarySha256: this.getCoreBinarySha256(),
+        };
+    }
+    getPluginVersion() {
+        return this.releaseMetadata?.pluginVersion ?? readPackageVersion(this.pluginRoot) ?? DEFAULT_VERSION;
+    }
+    getBundledSdkVersion() {
+        return this.releaseMetadata?.sdkVersion ?? readBundledSdkVersion(this.pluginRoot) ?? this.getPluginVersion();
+    }
+    getCoreArtifactPlatforms() {
+        return getReleaseCorePlatforms(this.releaseMetadata);
+    }
+    getResolvedCoreArtifactPlatform() {
+        const expectedCorePlatform = getCurrentCorePlatform();
+        const coreArtifactPlatforms = this.getCoreArtifactPlatforms();
+        return coreArtifactPlatforms.includes(expectedCorePlatform)
+            ? expectedCorePlatform
+            : this.releaseMetadata?.coreArtifactPlatform ?? null;
+    }
+    getCoreBinarySha256() {
+        const expectedCorePlatform = getCurrentCorePlatform();
+        return this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
+            ?? this.releaseMetadata?.coreBinarySha256
+            ?? null;
+    }
     resolveSillyTavernRoot() {
         const envRoot = this.env.AUTHORITY_ST_ROOT?.trim();
         const candidates = [
             this.cwd,
-            node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(this.pluginRoot, '..', '..'),
-            envRoot ? node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(envRoot) : null,
+            node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(this.pluginRoot, '..', '..'),
+            envRoot ? node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(envRoot) : null,
         ];
         for (const candidate of candidates) {
             if (candidate && isSillyTavernRoot(candidate)) {
@@ -1878,34 +2727,34 @@ class InstallService {
         return null;
     }
     deployBundledSdk(bundledDir, targetDir) {
-        const parentDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetDir);
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(parentDir, { recursive: true });
-        const backupDir = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetDir)
-            ? node_path__WEBPACK_IMPORTED_MODULE_2___default().join(parentDir, `${node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(targetDir)}.authority-backup-${Date.now()}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`)
+        const parentDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(targetDir);
+        node_fs__WEBPACK_IMPORTED_MODULE_2___default().mkdirSync(parentDir, { recursive: true });
+        const backupDir = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir)
+            ? node_path__WEBPACK_IMPORTED_MODULE_3___default().join(parentDir, `${node_path__WEBPACK_IMPORTED_MODULE_3___default().basename(targetDir)}.authority-backup-${Date.now()}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`)
             : null;
         if (backupDir) {
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(targetDir, backupDir);
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().renameSync(targetDir, backupDir);
         }
         try {
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().cpSync(bundledDir, targetDir, { recursive: true, force: true });
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(bundledDir, targetDir, { recursive: true, force: true });
             const metadata = {
-                managedBy: _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID,
+                managedBy: _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID,
                 pluginVersion: this.releaseMetadata?.pluginVersion ?? this.status.pluginVersion,
                 sdkVersion: this.releaseMetadata?.sdkVersion ?? this.status.sdkBundledVersion,
-                assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE])),
-                installedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
+                assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE])),
+                installedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
                 targetPath: targetDir,
             };
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_FILE), metadata);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE), metadata);
             if (backupDir) {
-                node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(backupDir, { recursive: true, force: true });
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(backupDir, { recursive: true, force: true });
             }
             this.logger.info(`[authority] Managed SDK deployed to ${targetDir}`);
         }
         catch (error) {
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(targetDir, { recursive: true, force: true });
-            if (backupDir && node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(backupDir)) {
-                node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(backupDir, targetDir);
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetDir, { recursive: true, force: true });
+            if (backupDir && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(backupDir)) {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().renameSync(backupDir, targetDir);
             }
             throw error;
         }
@@ -1923,16 +2772,16 @@ class InstallService {
                 message: `Managed authority-core artifacts target ${releasePlatforms.join(', ')}, but this runtime needs ${expectedPlatform}.`,
             };
         }
-        const platformDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
-        const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, 'authority-core.json');
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(metadataPath)) {
+        const platformDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
+        const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, 'authority-core.json');
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(metadataPath)) {
             return {
                 ok: false,
                 message: `Managed authority-core metadata is missing for ${expectedPlatform}.`,
             };
         }
-        const metadata = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(metadataPath, null);
-        if (!metadata || metadata.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID) {
+        const metadata = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(metadataPath, null);
+        if (!metadata || metadata.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID) {
             return {
                 ok: false,
                 message: `Managed authority-core metadata for ${expectedPlatform} is invalid.`,
@@ -1950,8 +2799,8 @@ class InstallService {
                 message: `Managed authority-core version mismatch: expected ${release.coreVersion}, found ${metadata.version}.`,
             };
         }
-        const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, metadata.binaryName);
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(binaryPath)) {
+        const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, metadata.binaryName);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(binaryPath)) {
             return {
                 ok: false,
                 message: `Managed authority-core binary is missing: ${binaryPath}.`,
@@ -1985,7 +2834,7 @@ class InstallService {
             }
         }
         if (release.coreArtifactHash) {
-            const artifactHash = hashDirectory(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_CORE_DIR));
+            const artifactHash = hashDirectory(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_CORE_DIR));
             if (artifactHash !== release.coreArtifactHash) {
                 warnings.push('Managed authority-core artifact directory hash drift detected. SDK deployment remains enabled because the current platform binary is verified.');
             }
@@ -2033,17 +2882,17 @@ function buildInstallMessage(kind, targetDir, coreCheck) {
 function resolvePluginRoot(runtimeDir) {
     let current = runtimeDir;
     while (true) {
-        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_RELEASE_FILE))) {
+        if (node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_RELEASE_FILE))) {
             return current;
         }
-        const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, 'package.json');
-        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(packageJsonPath)) {
-            const packageJson = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(packageJsonPath, {});
-            if (packageJson.name === _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_PLUGIN_ID) {
+        const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, 'package.json');
+        if (node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(packageJsonPath)) {
+            const packageJson = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(packageJsonPath, {});
+            if (packageJson.name === _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID) {
                 return current;
             }
         }
-        const parent = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(current);
+        const parent = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(current);
         if (parent === current) {
             return runtimeDir;
         }
@@ -2051,7 +2900,28 @@ function resolvePluginRoot(runtimeDir) {
     }
 }
 function readReleaseMetadata(pluginRoot) {
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_RELEASE_FILE), null);
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_RELEASE_FILE), null);
+}
+function runGit(cwd, args, env, allowNoisyOutput = false) {
+    const result = (0,node_child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)('git', args, {
+        cwd,
+        env,
+        encoding: 'utf8',
+        windowsHide: true,
+    });
+    const stdout = (result.stdout ?? '').trim();
+    const stderr = (result.stderr ?? '').trim();
+    if (result.error) {
+        throw result.error;
+    }
+    if (typeof result.status === 'number' && result.status !== 0) {
+        const message = [stderr, stdout].filter(Boolean).join('\n') || `git ${args.join(' ')} failed with exit code ${result.status}`;
+        throw new Error(message);
+    }
+    if (!allowNoisyOutput && stderr) {
+        return { stdout, stderr: '' };
+    }
+    return { stdout, stderr };
 }
 function getCurrentCorePlatform() {
     return `${process.platform}-${process.arch}`;
@@ -2069,27 +2939,27 @@ function getReleaseCorePlatforms(release) {
     return release.coreArtifactPlatform ? [release.coreArtifactPlatform] : [];
 }
 function readPackageVersion(pluginRoot) {
-    const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(pluginRoot, 'package.json');
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(packageJsonPath)) {
+    const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(pluginRoot, 'package.json');
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(packageJsonPath)) {
         return null;
     }
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(packageJsonPath, {}).version ?? null;
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(packageJsonPath, {}).version ?? null;
 }
 function readBundledSdkVersion(pluginRoot) {
-    const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_SDK_DIR, 'manifest.json');
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(manifestPath)) {
+    const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_SDK_DIR, 'manifest.json');
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(manifestPath)) {
         return null;
     }
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(manifestPath, {}).version ?? null;
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(manifestPath, {}).version ?? null;
 }
 function isSillyTavernRoot(candidate) {
-    return node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(candidate, 'plugins'))
-        && node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(candidate, 'public', 'scripts', 'extensions'));
+    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(candidate, 'plugins'))
+        && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(candidate, 'public', 'scripts', 'extensions'));
 }
 function hashDirectory(rootDir, ignoreNames = new Set()) {
     const hash = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256');
     for (const filePath of listFiles(rootDir, ignoreNames)) {
-        const relativePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().relative(rootDir, filePath).replace(/\\/g, '/');
+        const relativePath = node_path__WEBPACK_IMPORTED_MODULE_3___default().relative(rootDir, filePath).replace(/\\/g, '/');
         hash.update(relativePath);
         hash.update('\0');
         hash.update(readStableHashContent(filePath));
@@ -2098,26 +2968,26 @@ function hashDirectory(rootDir, ignoreNames = new Set()) {
     return hash.digest('hex');
 }
 function hashFile(filePath) {
-    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath)).digest('hex');
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath)).digest('hex');
 }
 function readStableHashContent(filePath) {
-    const content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath);
-    if (!TEXT_HASH_EXTENSIONS.has(node_path__WEBPACK_IMPORTED_MODULE_2___default().extname(filePath).toLowerCase())) {
+    const content = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath);
+    if (!TEXT_HASH_EXTENSIONS.has(node_path__WEBPACK_IMPORTED_MODULE_3___default().extname(filePath).toLowerCase())) {
         return content;
     }
     return Buffer.from(content.toString('utf8').replace(/\r\n?/g, '\n'), 'utf8');
 }
 function listFiles(rootDir, ignoreNames) {
     const files = [];
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(rootDir)) {
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(rootDir)) {
         return files;
     }
     const visit = (currentDir) => {
-        const entries = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(currentDir, { withFileTypes: true })
+        const entries = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readdirSync(currentDir, { withFileTypes: true })
             .filter(entry => !ignoreNames.has(entry.name))
             .sort((left, right) => left.name.localeCompare(right.name));
         for (const entry of entries) {
-            const fullPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(currentDir, entry.name);
+            const fullPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(currentDir, entry.name);
             if (entry.isDirectory()) {
                 visit(fullPath);
             }
@@ -2743,8 +3613,10 @@ function getUserAuthorityPaths(user) {
     const stateDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'state');
     const storageDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'storage');
     const sqlDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'sql');
+    const triviumDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'trivium');
     return {
         sqlPrivateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(sqlDir, 'private'),
+        triviumPrivateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(triviumDir, 'private'),
         kvDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'kv'),
         blobDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'blobs'),
         filesDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'files'),

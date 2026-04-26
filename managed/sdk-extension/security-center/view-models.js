@@ -1,7 +1,7 @@
 import { sortByTimestampDesc } from './formatters.js';
 export function buildOverviewModel(state) {
     const databaseGroups = getDatabaseGroupSummaries(state.extensions, state.details);
-    const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+    const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
     const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
     const allDetails = [...state.details.values()];
     const allJobs = allDetails
@@ -35,14 +35,24 @@ export function getDatabaseGroupSummaries(extensions, details) {
     return extensions.map(extension => {
         const databases = [...(details.get(extension.id)?.databases ?? [])]
             .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const triviumDatabases = [...(details.get(extension.id)?.triviumDatabases ?? [])]
+            .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+        const latestUpdatedAt = [
+            databases[0]?.updatedAt ?? null,
+            triviumDatabases[0]?.updatedAt ?? null,
+        ]
+            .filter((value) => value !== null)
+            .sort((left, right) => right.localeCompare(left))[0] ?? null;
         return {
             extension,
             databases,
-            totalSizeBytes: databases.reduce((sum, item) => sum + item.sizeBytes, 0),
-            latestUpdatedAt: databases[0]?.updatedAt ?? null,
+            triviumDatabases,
+            databaseCount: databases.length + triviumDatabases.length,
+            totalSizeBytes: databases.reduce((sum, item) => sum + item.sizeBytes, 0) + triviumDatabases.reduce((sum, item) => sum + item.totalSizeBytes, 0),
+            latestUpdatedAt,
         };
     })
-        .filter(item => item.databases.length > 0)
+        .filter(item => item.databaseCount > 0)
         .sort((left, right) => (right.latestUpdatedAt ?? '').localeCompare(left.latestUpdatedAt ?? ''));
 }
 //# sourceMappingURL=view-models.js.map
