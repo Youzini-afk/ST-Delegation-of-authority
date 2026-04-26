@@ -105,6 +105,17 @@ function isTerminalJobStatus(status: JobRecord['status']): boolean {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
+function isJobRecord(value: unknown): value is JobRecord {
+    return typeof value === 'object'
+        && value !== null
+        && typeof (value as { id?: unknown }).id === 'string'
+        && typeof (value as { status?: unknown }).status === 'string';
+}
+
+function getJobSubscriptionSnapshot(job: JobRecord): string {
+    return JSON.stringify(job);
+}
+
 function getJobWaitPollInterval(value: unknown): number {
     if (value == null) {
         return 1000;
@@ -188,6 +199,12 @@ export interface JobWaitForCompletionOptions {
     timeoutMs?: number;
     signal?: AbortSignal;
     onProgress?: (job: JobRecord) => void | Promise<void>;
+}
+
+export interface JobSubscribeOptions {
+    pollIntervalMs?: number;
+    emitCurrent?: boolean;
+    onUpdate?: (job: JobRecord) => void | Promise<void>;
 }
 
 export interface SqlPageAllOptions {
@@ -412,6 +429,7 @@ export class AuthorityClient {
         list: () => Promise<JobRecord[]>;
         cancel: (id: string) => Promise<JobRecord>;
         waitForCompletion: (id: string, options?: JobWaitForCompletionOptions) => Promise<JobRecord>;
+        subscribe: (id: string, options?: JobSubscribeOptions) => Promise<AuthorityEventsSubscription>;
     };
 
     readonly events: {
@@ -1247,6 +1265,77 @@ export class AuthorityClient {
                     }
                     await waitForDelay(pollIntervalMs, options.signal);
                 }
+            },
+            subscribe: async (id, options = {}) => {
+                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
+                let closed = false;
+                let pollTimer: ReturnType<typeof setTimeout> | null = null;
+                let lastSnapshot: string | null = null;
+
+                const close = (subscription?: AuthorityEventsSubscription) => {
+                    if (closed) {
+                        return;
+                    }
+                    closed = true;
+                    if (pollTimer) {
+                        clearTimeout(pollTimer);
+                        pollTimer = null;
+                    }
+                    subscription?.close();
+                };
+
+                const emitIfMatch = async (value: unknown, subscription?: AuthorityEventsSubscription): Promise<void> => {
+                    if (!isJobRecord(value) || value.id !== id) {
+                        return;
+                    }
+                    const snapshot = getJobSubscriptionSnapshot(value);
+                    if (snapshot === lastSnapshot) {
+                        return;
+                    }
+                    lastSnapshot = snapshot;
+                    await options.onUpdate?.(value);
+                    if (isTerminalJobStatus(value.status)) {
+                        close(subscription);
+                    }
+                };
+
+                const subscription = await this.events.subscribe({
+                    eventNames: ['authority.job'],
+                    onEvent: event => {
+                        void emitIfMatch(event.data, subscription);
+                    },
+                });
+
+                const poll = async (): Promise<void> => {
+                    if (closed) {
+                        return;
+                    }
+                    try {
+                        const job = await this.jobs.get(id);
+                        await emitIfMatch(job, subscription);
+                    } finally {
+                        if (!closed) {
+                            pollTimer = setTimeout(() => {
+                                void poll();
+                            }, pollIntervalMs);
+                        }
+                    }
+                };
+
+                if (options.emitCurrent !== false) {
+                    const job = await this.jobs.get(id);
+                    await emitIfMatch(job, subscription);
+                }
+
+                if (!closed) {
+                    pollTimer = setTimeout(() => {
+                        void poll();
+                    }, pollIntervalMs);
+                }
+
+                return {
+                    close: () => close(subscription),
+                };
             },
         };
 

@@ -309,6 +309,74 @@ describe('AuthorityClient', () => {
         })).rejects.toThrow('Authority job job-2 did not complete within 1ms');
     });
 
+    it('subscribes to job updates through authority.job events with polling fallback', async () => {
+        vi.useFakeTimers();
+        try {
+            const { AuthorityClient } = await import('./client.js');
+
+            const client = new AuthorityClient({
+                extensionId: 'third-party/ext-a',
+                displayName: 'Ext A',
+                version: '0.1.0',
+                installType: 'local',
+                declaredPermissions: {},
+            });
+
+            let onEvent: ((event: { name: string; data: unknown }) => void) | undefined;
+            const closeMock = vi.fn();
+            const get = vi.fn()
+                .mockResolvedValueOnce({
+                    id: 'job-3',
+                    extensionId: 'third-party/ext-a',
+                    type: 'delay',
+                    status: 'completed',
+                    createdAt: 't1',
+                    updatedAt: 't2',
+                    progress: 100,
+                });
+            const onUpdate = vi.fn();
+
+            Object.assign(client.events as object, {
+                subscribe: vi.fn(async (options: { onEvent?: (event: { name: string; data: unknown }) => void }) => {
+                    onEvent = options.onEvent;
+                    return { close: closeMock };
+                }),
+            });
+            Object.assign(client.jobs as object, { get });
+
+            const subscription = await client.jobs.subscribe('job-3', {
+                emitCurrent: false,
+                pollIntervalMs: 5,
+                onUpdate,
+            });
+
+            await onEvent?.({
+                name: 'authority.job',
+                data: {
+                    id: 'job-3',
+                    extensionId: 'third-party/ext-a',
+                    type: 'delay',
+                    status: 'running',
+                    createdAt: 't1',
+                    updatedAt: 't1',
+                    progress: 30,
+                },
+            });
+            expect(onUpdate).toHaveBeenCalledTimes(1);
+            expect(onUpdate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ status: 'running', progress: 30 }));
+
+            await vi.advanceTimersByTimeAsync(5);
+            expect(get).toHaveBeenCalledTimes(1);
+            expect(onUpdate).toHaveBeenCalledTimes(2);
+            expect(onUpdate.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ status: 'completed', progress: 100 }));
+            expect(closeMock).toHaveBeenCalledTimes(1);
+
+            subscription.close();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('aggregates paged SQL query results through sql.pageAll', async () => {
         const { AuthorityClient } = await import('./client.js');
 

@@ -4,6 +4,15 @@ import { openSecurityCenter } from './security-center.js';
 function isTerminalJobStatus(status) {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
+function isJobRecord(value) {
+    return typeof value === 'object'
+        && value !== null
+        && typeof value.id === 'string'
+        && typeof value.status === 'string';
+}
+function getJobSubscriptionSnapshot(job) {
+    return JSON.stringify(job);
+}
 function getJobWaitPollInterval(value) {
     if (value == null) {
         return 1000;
@@ -898,6 +907,71 @@ export class AuthorityClient {
                     }
                     await waitForDelay(pollIntervalMs, options.signal);
                 }
+            },
+            subscribe: async (id, options = {}) => {
+                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
+                let closed = false;
+                let pollTimer = null;
+                let lastSnapshot = null;
+                const close = (subscription) => {
+                    if (closed) {
+                        return;
+                    }
+                    closed = true;
+                    if (pollTimer) {
+                        clearTimeout(pollTimer);
+                        pollTimer = null;
+                    }
+                    subscription?.close();
+                };
+                const emitIfMatch = async (value, subscription) => {
+                    if (!isJobRecord(value) || value.id !== id) {
+                        return;
+                    }
+                    const snapshot = getJobSubscriptionSnapshot(value);
+                    if (snapshot === lastSnapshot) {
+                        return;
+                    }
+                    lastSnapshot = snapshot;
+                    await options.onUpdate?.(value);
+                    if (isTerminalJobStatus(value.status)) {
+                        close(subscription);
+                    }
+                };
+                const subscription = await this.events.subscribe({
+                    eventNames: ['authority.job'],
+                    onEvent: event => {
+                        void emitIfMatch(event.data, subscription);
+                    },
+                });
+                const poll = async () => {
+                    if (closed) {
+                        return;
+                    }
+                    try {
+                        const job = await this.jobs.get(id);
+                        await emitIfMatch(job, subscription);
+                    }
+                    finally {
+                        if (!closed) {
+                            pollTimer = setTimeout(() => {
+                                void poll();
+                            }, pollIntervalMs);
+                        }
+                    }
+                };
+                if (options.emitCurrent !== false) {
+                    const job = await this.jobs.get(id);
+                    await emitIfMatch(job, subscription);
+                }
+                if (!closed) {
+                    pollTimer = setTimeout(() => {
+                        void poll();
+                    }, pollIntervalMs);
+                }
+                return {
+                    close: () => close(subscription),
+                };
             },
         };
         this.events = {
