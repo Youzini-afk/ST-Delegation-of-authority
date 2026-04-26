@@ -240,6 +240,22 @@ export class AuthorityClient {
                     },
                 });
             },
+            listSchemaPage: async (input = {}) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.requireFeature('sql.schemaManifest', 'Authority 当前版本尚未提供 SQL schema manifest introspection 能力');
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `列出 SQL schema 清单 ${database}`,
+                });
+                return await this.requestWithSession('/sql/list-schema', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             listDatabases: async () => {
                 await this.ensurePermission({
                     resource: 'sql.private',
@@ -1506,6 +1522,8 @@ function getFeatureAvailability(features, feature) {
             return features.sql.queryPage;
         case 'sql.migrations':
             return features.sql.migrations;
+        case 'sql.schemaManifest':
+            return features.sql.schemaManifest;
         case 'trivium.resolveId':
             return features.trivium.resolveId;
         case 'trivium.resolveMany':

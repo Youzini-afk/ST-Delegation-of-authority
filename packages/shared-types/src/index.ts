@@ -97,6 +97,7 @@ export interface AuthorityFeatureFlags {
     sql: {
         queryPage: boolean;
         migrations: boolean;
+        schemaManifest: boolean;
     };
     trivium: {
         resolveId: boolean;
@@ -837,6 +838,26 @@ export interface SqlListMigrationsRequest {
 export interface SqlListMigrationsResponse {
     tableName: string;
     migrations: SqlMigrationRecord[];
+    page?: CursorPageInfo;
+}
+
+export type SqlSchemaObjectType = 'table' | 'index' | 'view' | 'trigger';
+
+export interface SqlSchemaObjectRecord {
+    type: SqlSchemaObjectType;
+    name: string;
+    tableName: string | null;
+    sql: string | null;
+}
+
+export interface SqlListSchemaRequest {
+    database?: string;
+    type?: SqlSchemaObjectType;
+    page?: CursorPageRequest;
+}
+
+export interface SqlListSchemaResponse {
+    objects: SqlSchemaObjectRecord[];
     page?: CursorPageInfo;
 }
 

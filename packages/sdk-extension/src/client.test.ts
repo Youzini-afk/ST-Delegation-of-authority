@@ -406,6 +406,45 @@ describe('AuthorityClient', () => {
             },
         });
     });
+
+    it('routes sql.listSchemaPage through the SQL schema listing endpoint', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async () => ({
+            objects: [{ type: 'table', name: 'notes', tableName: 'notes', sql: 'CREATE TABLE notes (id INTEGER)' }],
+            page: { nextCursor: null, limit: 10, hasMore: false, totalCount: 1 },
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const result = await client.sql.listSchemaPage({
+            database: 'graph',
+            type: 'table',
+            page: { limit: 10 },
+        });
+
+        expect(result.objects).toEqual([{ type: 'table', name: 'notes', tableName: 'notes', sql: 'CREATE TABLE notes (id INTEGER)' }]);
+        expect(requestWithSession).toHaveBeenCalledWith('/sql/list-schema', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+                type: 'table',
+                page: { limit: 10 },
+            },
+        });
+    });
 });
 
 function buildProbe(overrides: Partial<{
@@ -418,6 +457,12 @@ function buildProbe(overrides: Partial<{
     mappingPages: boolean;
     mappingIntegrity: boolean;
 }> = {}): AuthorityProbeResponse {
+    const sqlFeatures = {
+        queryPage: true,
+        migrations: true,
+        schemaManifest: true,
+    } as unknown as AuthorityProbeResponse['features']['sql'];
+
     return {
         id: 'authority',
         online: true,
@@ -440,10 +485,7 @@ function buildProbe(overrides: Partial<{
         features: {
             securityCenter: true,
             admin: false,
-            sql: {
-                queryPage: true,
-                migrations: true,
-            },
+            sql: sqlFeatures,
             trivium: {
                 resolveId: true,
                 resolveMany: true,

@@ -26,6 +26,7 @@ describe('SessionService', () => {
 
         expect(response.features.admin).toBe(true);
         expect(response.features.sql.queryPage).toBe(true);
+        expect(response.features.sql.schemaManifest).toBe(true);
         expect(response.features.trivium.queryPage).toBe(true);
         expect(response.features.trivium.filterWherePage).toBe(true);
         expect(response.features.trivium.resolveMany).toBe(true);

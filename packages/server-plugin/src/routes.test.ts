@@ -41,6 +41,7 @@ describe('registerRoutes', () => {
             '/fs/private/read-file',
             '/fs/private/open-read',
             '/sql/list-migrations',
+            '/sql/list-schema',
             '/trivium/resolve-id',
             '/trivium/check-mappings-integrity',
             '/trivium/delete-orphan-mappings',

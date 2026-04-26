@@ -34,6 +34,8 @@ import type {
     SqlListDatabasesResponse,
     SqlListMigrationsRequest,
     SqlListMigrationsResponse,
+    SqlListSchemaRequest,
+    SqlListSchemaResponse,
     SqlMigrateRequest,
     SqlMigrateResponse,
     SqlExecRequest,
@@ -141,6 +143,7 @@ export type AuthorityFeaturePath =
     | 'admin'
     | 'sql.queryPage'
     | 'sql.migrations'
+    | 'sql.schemaManifest'
     | 'trivium.resolveId'
     | 'trivium.resolveMany'
     | 'trivium.upsert'
@@ -266,6 +269,7 @@ export class AuthorityClient {
         transaction: (input: SqlTransactionRequest) => Promise<SqlTransactionResponse>;
         migrate: (input: SqlMigrateRequest) => Promise<SqlMigrateResponse>;
         listMigrationsPage: (input?: SqlListMigrationsRequest) => Promise<SqlListMigrationsResponse>;
+        listSchemaPage: (input?: SqlListSchemaRequest) => Promise<SqlListSchemaResponse>;
         listDatabases: () => Promise<SqlListDatabasesResponse>;
     };
 
@@ -544,6 +548,22 @@ export class AuthorityClient {
                     reason: `列出 SQL 迁移记录 ${database}`,
                 });
                 return await this.requestWithSession<SqlListMigrationsResponse>('/sql/list-migrations', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            listSchemaPage: async (input = {}) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.requireFeature('sql.schemaManifest', 'Authority 当前版本尚未提供 SQL schema manifest introspection 能力');
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `列出 SQL schema 清单 ${database}`,
+                });
+                return await this.requestWithSession<SqlListSchemaResponse>('/sql/list-schema', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -1955,6 +1975,8 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
             return features.sql.queryPage;
         case 'sql.migrations':
             return features.sql.migrations;
+        case 'sql.schemaManifest':
+            return features.sql.schemaManifest;
         case 'trivium.resolveId':
             return features.trivium.resolveId;
         case 'trivium.resolveMany':

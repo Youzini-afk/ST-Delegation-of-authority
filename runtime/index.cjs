@@ -88,6 +88,7 @@ function buildAuthorityFeatureFlags(isAdmin) {
         sql: {
             queryPage: true,
             migrations: true,
+            schemaManifest: true,
         },
         trivium: {
             resolveId: true,
@@ -282,6 +283,30 @@ function readSqlMigrationRecord(row) {
         appliedAt: typeof row.appliedAt === 'string' ? row.appliedAt : '',
     };
 }
+function getSqlSchemaObjectType(value) {
+    if (value == null || value === '') {
+        return null;
+    }
+    if (value === 'table' || value === 'index' || value === 'view' || value === 'trigger') {
+        return value;
+    }
+    throw new Error('SQL schema type must be table, index, view, or trigger');
+}
+function readSqlSchemaObjectRecord(row) {
+    const type = getSqlSchemaObjectType(row.type);
+    if (!type) {
+        throw new Error('SQL schema row is missing type');
+    }
+    if (typeof row.name !== 'string' || !row.name.trim()) {
+        throw new Error('SQL schema row is missing name');
+    }
+    return {
+        type,
+        name: row.name,
+        tableName: typeof row.tableName === 'string' && row.tableName.trim() ? row.tableName : null,
+        sql: typeof row.sql === 'string' ? row.sql : null,
+    };
+}
 function resolvePrivateSqlDatabaseDir(user, extensionId) {
     const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
     return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
@@ -314,6 +339,31 @@ async function listSqlMigrationsPage(runtime, user, extensionId, request) {
     return {
         tableName,
         migrations: result.rows.map(row => readSqlMigrationRecord(row)),
+        ...(result.page ? { page: result.page } : {}),
+    };
+}
+async function listSqlSchemaPage(runtime, user, extensionId, request) {
+    const database = getSqlDatabaseName(request.database);
+    const type = getSqlSchemaObjectType(request.type);
+    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath)) {
+        return {
+            objects: [],
+            ...(request.page ? { page: buildEmptySqlCursorPage(request.page) } : {}),
+        };
+    }
+    const params = type ? [type] : [];
+    const result = await runtime.core.querySql(dbPath, {
+        statement: `SELECT type, name, tbl_name AS tableName, sql
+            FROM sqlite_master
+            WHERE type IN ('table', 'index', 'view', 'trigger')
+                AND name NOT LIKE 'sqlite_%'${type ? ' AND type = ?1' : ''}
+            ORDER BY type ASC, name ASC`,
+        ...(params.length > 0 ? { params } : {}),
+        ...(request.page ? { page: request.page } : {}),
+    });
+    return {
+        objects: result.rows.map(row => readSqlSchemaObjectRecord(row)),
         ...(result.page ? { page: result.page } : {}),
     };
 }
@@ -1125,6 +1175,28 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 database,
                 tableName: result.tableName,
                 count: result.migrations.length,
+                limit: result.page?.limit ?? null,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/list-schema', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const result = await listSqlSchemaPage(runtime, user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL list schema', {
+                database,
+                type: payload.type ?? null,
+                count: result.objects.length,
                 limit: result.page?.limit ?? null,
             });
             ok(res, result);

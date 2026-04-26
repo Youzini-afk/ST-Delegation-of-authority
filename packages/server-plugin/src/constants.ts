@@ -62,6 +62,7 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
         sql: {
             queryPage: true,
             migrations: true,
+            schemaManifest: true,
         },
         trivium: {
             resolveId: true,
