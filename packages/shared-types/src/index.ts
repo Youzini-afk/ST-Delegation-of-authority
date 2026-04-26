@@ -645,6 +645,63 @@ export interface TriviumSearchRequest extends TriviumOpenOptions {
     minScore?: number;
 }
 
+export type TriviumFilterCondition = Record<string, unknown>;
+
+export interface TriviumSearchAdvancedRequest extends TriviumOpenOptions {
+    vector: number[];
+    queryText?: string;
+    topK?: number;
+    expandDepth?: number;
+    minScore?: number;
+    teleportAlpha?: number;
+    enableAdvancedPipeline?: boolean;
+    enableSparseResidual?: boolean;
+    fistaLambda?: number;
+    fistaThreshold?: number;
+    enableDpp?: boolean;
+    dppQualityWeight?: number;
+    enableRefractoryFatigue?: boolean;
+    enableInverseInhibition?: boolean;
+    lateralInhibitionThreshold?: number;
+    enableBqCoarseSearch?: boolean;
+    bqCandidateRatio?: number;
+    textBoost?: number;
+    enableTextHybridSearch?: boolean;
+    bm25K1?: number;
+    bm25B?: number;
+    payloadFilter?: TriviumFilterCondition;
+}
+
+export interface TriviumSearchHybridRequest extends TriviumOpenOptions {
+    vector: number[];
+    queryText: string;
+    topK?: number;
+    expandDepth?: number;
+    minScore?: number;
+    hybridAlpha?: number;
+    payloadFilter?: TriviumFilterCondition;
+}
+
+export interface TriviumFilterWhereRequest extends TriviumOpenOptions {
+    condition: TriviumFilterCondition;
+}
+
+export interface TriviumQueryRequest extends TriviumOpenOptions {
+    cypher: string;
+}
+
+export interface TriviumIndexTextRequest extends TriviumOpenOptions {
+    id: number;
+    text: string;
+}
+
+export interface TriviumIndexKeywordRequest extends TriviumOpenOptions {
+    id: number;
+    keyword: string;
+}
+
+export interface TriviumBuildTextIndexRequest extends TriviumOpenOptions {}
+
 export interface TriviumFlushRequest extends TriviumOpenOptions {}
 
 export interface TriviumStatRequest extends TriviumOpenOptions {}
@@ -655,6 +712,16 @@ export interface TriviumInsertResponse {
 
 export interface TriviumNeighborsResponse {
     ids: number[];
+}
+
+export interface TriviumFilterWhereResponse {
+    nodes: TriviumNodeView[];
+}
+
+export type TriviumQueryRow = Record<string, TriviumNodeView>;
+
+export interface TriviumQueryResponse {
+    rows: TriviumQueryRow[];
 }
 
 export interface TriviumDatabaseRecord {

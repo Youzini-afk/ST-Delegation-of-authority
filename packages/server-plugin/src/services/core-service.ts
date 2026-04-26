@@ -73,8 +73,12 @@ import type {
     SqlTransactionRequest,
     SqlTransactionResponse,
     TriviumDeleteRequest,
+    TriviumBuildTextIndexRequest,
+    TriviumFilterWhereRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
+    TriviumIndexKeywordRequest,
+    TriviumIndexTextRequest,
     TriviumInsertRequest,
     TriviumInsertResponse,
     TriviumInsertWithIdRequest,
@@ -82,7 +86,11 @@ import type {
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
     TriviumNodeView,
+    TriviumQueryRequest,
+    TriviumQueryRow,
     TriviumSearchHit,
+    TriviumSearchAdvancedRequest,
+    TriviumSearchHybridRequest,
     TriviumSearchRequest,
     TriviumStatRequest,
     TriviumStatResponse,
@@ -446,6 +454,85 @@ export class CoreService {
             minScore: request.minScore,
         });
         return response.hits;
+    }
+
+    async searchAdvancedTrivium(dbPath: string, request: TriviumSearchAdvancedRequest): Promise<TriviumSearchHit[]> {
+        const response = await this.request<{ hits: TriviumSearchHit[] }>('/v1/trivium/search-advanced', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
+            ...(request.topK === undefined ? {} : { topK: request.topK }),
+            ...(request.expandDepth === undefined ? {} : { expandDepth: request.expandDepth }),
+            ...(request.minScore === undefined ? {} : { minScore: request.minScore }),
+            ...(request.teleportAlpha === undefined ? {} : { teleportAlpha: request.teleportAlpha }),
+            ...(request.enableAdvancedPipeline === undefined ? {} : { enableAdvancedPipeline: request.enableAdvancedPipeline }),
+            ...(request.enableSparseResidual === undefined ? {} : { enableSparseResidual: request.enableSparseResidual }),
+            ...(request.fistaLambda === undefined ? {} : { fistaLambda: request.fistaLambda }),
+            ...(request.fistaThreshold === undefined ? {} : { fistaThreshold: request.fistaThreshold }),
+            ...(request.enableDpp === undefined ? {} : { enableDpp: request.enableDpp }),
+            ...(request.dppQualityWeight === undefined ? {} : { dppQualityWeight: request.dppQualityWeight }),
+            ...(request.enableRefractoryFatigue === undefined ? {} : { enableRefractoryFatigue: request.enableRefractoryFatigue }),
+            ...(request.enableInverseInhibition === undefined ? {} : { enableInverseInhibition: request.enableInverseInhibition }),
+            ...(request.lateralInhibitionThreshold === undefined ? {} : { lateralInhibitionThreshold: request.lateralInhibitionThreshold }),
+            ...(request.enableBqCoarseSearch === undefined ? {} : { enableBqCoarseSearch: request.enableBqCoarseSearch }),
+            ...(request.bqCandidateRatio === undefined ? {} : { bqCandidateRatio: request.bqCandidateRatio }),
+            ...(request.textBoost === undefined ? {} : { textBoost: request.textBoost }),
+            ...(request.enableTextHybridSearch === undefined ? {} : { enableTextHybridSearch: request.enableTextHybridSearch }),
+            ...(request.bm25K1 === undefined ? {} : { bm25K1: request.bm25K1 }),
+            ...(request.bm25B === undefined ? {} : { bm25B: request.bm25B }),
+            ...(request.payloadFilter === undefined ? {} : { payloadFilter: request.payloadFilter }),
+        });
+        return response.hits;
+    }
+
+    async searchHybridTrivium(dbPath: string, request: TriviumSearchHybridRequest): Promise<TriviumSearchHit[]> {
+        const response = await this.request<{ hits: TriviumSearchHit[] }>('/v1/trivium/search-hybrid', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            queryText: request.queryText,
+            ...(request.topK === undefined ? {} : { topK: request.topK }),
+            ...(request.expandDepth === undefined ? {} : { expandDepth: request.expandDepth }),
+            ...(request.minScore === undefined ? {} : { minScore: request.minScore }),
+            ...(request.hybridAlpha === undefined ? {} : { hybridAlpha: request.hybridAlpha }),
+            ...(request.payloadFilter === undefined ? {} : { payloadFilter: request.payloadFilter }),
+        });
+        return response.hits;
+    }
+
+    async filterWhereTrivium(dbPath: string, request: TriviumFilterWhereRequest): Promise<TriviumNodeView[]> {
+        const response = await this.request<{ nodes: TriviumNodeView[] }>('/v1/trivium/filter-where', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            condition: request.condition,
+        });
+        return response.nodes;
+    }
+
+    async queryTrivium(dbPath: string, request: TriviumQueryRequest): Promise<TriviumQueryRow[]> {
+        const response = await this.request<{ rows: TriviumQueryRow[] }>('/v1/trivium/query', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            cypher: request.cypher,
+        });
+        return response.rows;
+    }
+
+    async indexTextTrivium(dbPath: string, request: TriviumIndexTextRequest): Promise<void> {
+        await this.request('/v1/trivium/index-text', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            text: request.text,
+        });
+    }
+
+    async indexKeywordTrivium(dbPath: string, request: TriviumIndexKeywordRequest): Promise<void> {
+        await this.request('/v1/trivium/index-keyword', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            keyword: request.keyword,
+        });
+    }
+
+    async buildTextIndexTrivium(dbPath: string, request: TriviumBuildTextIndexRequest = {}): Promise<void> {
+        await this.request('/v1/trivium/build-text-index', buildTriviumOpenPayload(dbPath, request));
     }
 
     async flushTrivium(dbPath: string, request: TriviumFlushRequest = {}): Promise<void> {

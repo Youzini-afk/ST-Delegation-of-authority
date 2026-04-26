@@ -4,6 +4,6 @@
   "platform": "win32",
   "arch": "x64",
   "binaryName": "authority-core.exe",
-  "binarySha256": "c8f23700c88c77e9bf118b4136f2290b36a3fadc80a631e00abe2317352fbc19",
-  "builtAt": "2026-04-26T05:52:12.559Z"
+  "binarySha256": "a3236f96a6419a11255c9750df057cfd126e9ec8315b855dd3f1b1c18d31dee0",
+  "builtAt": "2026-04-26T06:16:28.926Z"
 }

@@ -20,7 +20,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use triviumdb::database::{Config as TriviumConfig, Database as TriviumDatabase, StorageMode as TriviumStorageMode};
+use triviumdb::database::{Config as TriviumConfig, Database as TriviumDatabase, SearchConfig as TriviumSearchConfig, StorageMode as TriviumStorageMode};
+use triviumdb::filter::Filter as TriviumFilter;
 use triviumdb::node::{NodeView as TriviumRawNodeView, SearchHit as TriviumRawSearchHit};
 use triviumdb::storage::wal::SyncMode as TriviumSyncMode;
 use url::Url;
@@ -247,6 +248,90 @@ struct TriviumSearchRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TriviumSearchAdvancedRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    vector: Vec<f64>,
+    query_text: Option<String>,
+    top_k: Option<usize>,
+    expand_depth: Option<usize>,
+    min_score: Option<f32>,
+    teleport_alpha: Option<f32>,
+    enable_advanced_pipeline: Option<bool>,
+    enable_sparse_residual: Option<bool>,
+    fista_lambda: Option<f32>,
+    fista_threshold: Option<f32>,
+    enable_dpp: Option<bool>,
+    dpp_quality_weight: Option<f32>,
+    enable_refractory_fatigue: Option<bool>,
+    enable_inverse_inhibition: Option<bool>,
+    lateral_inhibition_threshold: Option<usize>,
+    enable_bq_coarse_search: Option<bool>,
+    bq_candidate_ratio: Option<f32>,
+    text_boost: Option<f32>,
+    enable_text_hybrid_search: Option<bool>,
+    bm25_k1: Option<f32>,
+    bm25_b: Option<f32>,
+    payload_filter: Option<JsonValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumSearchHybridRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    vector: Vec<f64>,
+    query_text: String,
+    top_k: Option<usize>,
+    expand_depth: Option<usize>,
+    min_score: Option<f32>,
+    hybrid_alpha: Option<f32>,
+    payload_filter: Option<JsonValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumFilterWhereRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    condition: JsonValue,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumQueryRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    cypher: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumIndexTextRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+    text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumIndexKeywordRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+    keyword: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBuildTextIndexRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TriviumFlushRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
@@ -295,6 +380,18 @@ struct TriviumSearchHit {
 #[serde(rename_all = "camelCase")]
 struct TriviumNeighborsResponse {
     ids: Vec<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumFilterWhereResponse {
+    nodes: Vec<TriviumNodeView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumQueryResponse {
+    rows: Vec<HashMap<String, TriviumNodeView>>,
 }
 
 #[derive(Serialize)]
@@ -942,6 +1039,13 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
         ("POST", "/v1/trivium/unlink") => parse_json_body::<TriviumUnlinkRequest>(&request).and_then(handle_trivium_unlink),
         ("POST", "/v1/trivium/neighbors") => parse_json_body::<TriviumNeighborsRequest>(&request).and_then(handle_trivium_neighbors),
         ("POST", "/v1/trivium/search") => parse_json_body::<TriviumSearchRequest>(&request).and_then(handle_trivium_search),
+        ("POST", "/v1/trivium/search-advanced") => parse_json_body::<TriviumSearchAdvancedRequest>(&request).and_then(handle_trivium_search_advanced),
+        ("POST", "/v1/trivium/search-hybrid") => parse_json_body::<TriviumSearchHybridRequest>(&request).and_then(handle_trivium_search_hybrid),
+        ("POST", "/v1/trivium/filter-where") => parse_json_body::<TriviumFilterWhereRequest>(&request).and_then(handle_trivium_filter_where),
+        ("POST", "/v1/trivium/query") => parse_json_body::<TriviumQueryRequest>(&request).and_then(handle_trivium_query),
+        ("POST", "/v1/trivium/index-text") => parse_json_body::<TriviumIndexTextRequest>(&request).and_then(handle_trivium_index_text),
+        ("POST", "/v1/trivium/index-keyword") => parse_json_body::<TriviumIndexKeywordRequest>(&request).and_then(handle_trivium_index_keyword),
+        ("POST", "/v1/trivium/build-text-index") => parse_json_body::<TriviumBuildTextIndexRequest>(&request).and_then(handle_trivium_build_text_index),
         ("POST", "/v1/trivium/flush") => parse_json_body::<TriviumFlushRequest>(&request).and_then(handle_trivium_flush),
         ("POST", "/v1/trivium/stat") => parse_json_body::<TriviumStatRequest>(&request).and_then(handle_trivium_stat),
         ("POST", "/v1/control/session/init") => parse_json_body::<ControlSessionInitRequest>(&request).and_then(handle_control_session_init),
@@ -1191,6 +1295,152 @@ fn handle_trivium_search(request: TriviumSearchRequest) -> Result<JsonValue, Api
     };
     let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
     Ok(json!({ "hits": hits }))
+}
+
+fn handle_trivium_search_advanced(request: TriviumSearchAdvancedRequest) -> Result<JsonValue, ApiError> {
+    if let Some(value) = request.query_text.as_deref() {
+        validate_non_empty("queryText", value)?;
+    }
+
+    let config = build_trivium_advanced_search_config(&request)?;
+    let query_text = request.query_text.as_deref();
+    let hits = match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
+            .search_hybrid(query_text, Some(&request.vector.iter().map(|&value| value as f32).collect::<Vec<_>>()), &config)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
+            .search_hybrid(query_text, Some(&request.vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>()), &config)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
+            .search_hybrid(query_text, Some(&request.vector.iter().map(|&value| value as u64).collect::<Vec<_>>()), &config)
+            .map_err(to_trivium_error)?,
+    };
+    let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
+    Ok(json!({ "hits": hits }))
+}
+
+fn handle_trivium_search_hybrid(request: TriviumSearchHybridRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("queryText", &request.query_text)?;
+
+    let config = build_trivium_hybrid_search_config(&request)?;
+    let hits = match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
+            .search_hybrid(Some(&request.query_text), Some(&request.vector.iter().map(|&value| value as f32).collect::<Vec<_>>()), &config)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
+            .search_hybrid(Some(&request.query_text), Some(&request.vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>()), &config)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
+            .search_hybrid(Some(&request.query_text), Some(&request.vector.iter().map(|&value| value as u64).collect::<Vec<_>>()), &config)
+            .map_err(to_trivium_error)?,
+    };
+    let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
+    Ok(json!({ "hits": hits }))
+}
+
+fn handle_trivium_filter_where(request: TriviumFilterWhereRequest) -> Result<JsonValue, ApiError> {
+    let filter = parse_trivium_filter_condition(&request.condition)?;
+    let nodes = match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
+            .filter_where(&filter)
+            .into_iter()
+            .map(|node| map_trivium_node(node, |value| value as f64))
+            .collect(),
+        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
+            .filter_where(&filter)
+            .into_iter()
+            .map(|node| map_trivium_node(node, |value| value.to_f64()))
+            .collect(),
+        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
+            .filter_where(&filter)
+            .into_iter()
+            .map(|node| map_trivium_node(node, |value| value as f64))
+            .collect(),
+    };
+
+    Ok(serde_json::to_value(TriviumFilterWhereResponse { nodes }).expect("trivium filter where response should serialize"))
+}
+
+fn handle_trivium_query(request: TriviumQueryRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("cypher", &request.cypher)?;
+
+    let rows = match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => map_trivium_query_rows(
+            open_trivium_f32(&request.open)?.query(&request.cypher).map_err(to_trivium_error)?,
+            |value| value as f64,
+        ),
+        TriviumDTypeTag::F16 => map_trivium_query_rows(
+            open_trivium_f16(&request.open)?.query(&request.cypher).map_err(to_trivium_error)?,
+            |value| value.to_f64(),
+        ),
+        TriviumDTypeTag::U64 => map_trivium_query_rows(
+            open_trivium_u64(&request.open)?.query(&request.cypher).map_err(to_trivium_error)?,
+            |value| value as f64,
+        ),
+    };
+
+    Ok(serde_json::to_value(TriviumQueryResponse { rows }).expect("trivium query response should serialize"))
+}
+
+fn handle_trivium_index_text(request: TriviumIndexTextRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("text", &request.text)?;
+
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&request.open)?;
+            db.index_text(request.id, &request.text).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&request.open)?;
+            db.index_text(request.id, &request.text).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&request.open)?;
+            db.index_text(request.id, &request.text).map_err(to_trivium_error)?;
+        }
+    }
+
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_index_keyword(request: TriviumIndexKeywordRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("keyword", &request.keyword)?;
+
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&request.open)?;
+            db.index_keyword(request.id, &request.keyword).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&request.open)?;
+            db.index_keyword(request.id, &request.keyword).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&request.open)?;
+            db.index_keyword(request.id, &request.keyword).map_err(to_trivium_error)?;
+        }
+    }
+
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_build_text_index(request: TriviumBuildTextIndexRequest) -> Result<JsonValue, ApiError> {
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&request.open)?;
+            db.build_text_index().map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&request.open)?;
+            db.build_text_index().map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&request.open)?;
+            db.build_text_index().map_err(to_trivium_error)?;
+        }
+    }
+
+    Ok(json!({ "ok": true }))
 }
 
 fn handle_trivium_flush(request: TriviumFlushRequest) -> Result<JsonValue, ApiError> {
@@ -2402,6 +2652,197 @@ fn map_trivium_search_hit(hit: TriviumRawSearchHit) -> TriviumSearchHit {
         id: hit.id,
         score: hit.score as f64,
         payload: hit.payload,
+    }
+}
+
+fn map_trivium_query_rows<T, F>(
+    rows: Vec<HashMap<String, TriviumRawNodeView<T>>>,
+    map_value: F,
+) -> Vec<HashMap<String, TriviumNodeView>>
+where
+    T: Copy,
+    F: Fn(T) -> f64 + Copy,
+{
+    rows.into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|(key, node)| (key, map_trivium_node(node, map_value)))
+                .collect()
+        })
+        .collect()
+}
+
+fn build_trivium_advanced_search_config(request: &TriviumSearchAdvancedRequest) -> Result<TriviumSearchConfig, ApiError> {
+    Ok(TriviumSearchConfig {
+        top_k: request.top_k.unwrap_or(5),
+        expand_depth: request.expand_depth.unwrap_or(2),
+        min_score: request.min_score.unwrap_or(0.1),
+        teleport_alpha: request.teleport_alpha.unwrap_or(0.0),
+        enable_advanced_pipeline: request.enable_advanced_pipeline.unwrap_or(true),
+        enable_sparse_residual: request.enable_sparse_residual.unwrap_or(false),
+        fista_lambda: request.fista_lambda.unwrap_or(0.1),
+        fista_threshold: request.fista_threshold.unwrap_or(0.3),
+        enable_dpp: request.enable_dpp.unwrap_or(false),
+        dpp_quality_weight: request.dpp_quality_weight.unwrap_or(1.0),
+        enable_refractory_fatigue: request.enable_refractory_fatigue.unwrap_or(false),
+        enable_inverse_inhibition: request.enable_inverse_inhibition.unwrap_or(false),
+        lateral_inhibition_threshold: request.lateral_inhibition_threshold.unwrap_or(0),
+        enable_bq_coarse_search: request.enable_bq_coarse_search.unwrap_or(false),
+        bq_candidate_ratio: request.bq_candidate_ratio.unwrap_or(0.05),
+        text_boost: request.text_boost.unwrap_or(1.5),
+        enable_text_hybrid_search: request.enable_text_hybrid_search.unwrap_or(false),
+        bm25_k1: request.bm25_k1.unwrap_or(1.2),
+        bm25_b: request.bm25_b.unwrap_or(0.75),
+        payload_filter: request.payload_filter.as_ref().map(parse_trivium_filter_condition).transpose()?,
+    })
+}
+
+fn build_trivium_hybrid_search_config(request: &TriviumSearchHybridRequest) -> Result<TriviumSearchConfig, ApiError> {
+    let hybrid_alpha = request.hybrid_alpha.unwrap_or(0.7);
+    Ok(TriviumSearchConfig {
+        top_k: request.top_k.unwrap_or(5),
+        expand_depth: request.expand_depth.unwrap_or(2),
+        min_score: request.min_score.unwrap_or(0.1),
+        text_boost: (1.0 - hybrid_alpha).max(0.1) * 3.0,
+        enable_text_hybrid_search: true,
+        payload_filter: request.payload_filter.as_ref().map(parse_trivium_filter_condition).transpose()?,
+        ..Default::default()
+    })
+}
+
+fn parse_trivium_filter_condition(value: &JsonValue) -> Result<TriviumFilter, ApiError> {
+    let object = value.as_object().ok_or_else(|| ApiError {
+        status_code: 400,
+        message: String::from("trivium filter condition must be a JSON object"),
+    })?;
+    parse_trivium_filter_object(object)
+}
+
+fn parse_trivium_filter_object(object: &JsonMap<String, JsonValue>) -> Result<TriviumFilter, ApiError> {
+    let mut filters = Vec::new();
+
+    for (key, value) in object {
+        if key == "$and" {
+            let values = value.as_array().ok_or_else(|| ApiError {
+                status_code: 400,
+                message: String::from("trivium filter $and must be an array"),
+            })?;
+            let filters_and = values
+                .iter()
+                .map(parse_trivium_filter_condition)
+                .collect::<Result<Vec<_>, _>>()?;
+            filters.push(TriviumFilter::And(filters_and));
+            continue;
+        }
+
+        if key == "$or" {
+            let values = value.as_array().ok_or_else(|| ApiError {
+                status_code: 400,
+                message: String::from("trivium filter $or must be an array"),
+            })?;
+            let filters_or = values
+                .iter()
+                .map(parse_trivium_filter_condition)
+                .collect::<Result<Vec<_>, _>>()?;
+            filters.push(TriviumFilter::Or(filters_or));
+            continue;
+        }
+
+        if let Some(operator_map) = value.as_object() {
+            for (operator, operand) in operator_map {
+                let filter = match operator.as_str() {
+                    "$eq" => TriviumFilter::Eq(key.clone(), operand.clone()),
+                    "$ne" => TriviumFilter::Ne(key.clone(), operand.clone()),
+                    "$gt" => TriviumFilter::Gt(
+                        key.clone(),
+                        operand.as_f64().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $gt requires a number"),
+                        })?,
+                    ),
+                    "$gte" => TriviumFilter::Gte(
+                        key.clone(),
+                        operand.as_f64().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $gte requires a number"),
+                        })?,
+                    ),
+                    "$lt" => TriviumFilter::Lt(
+                        key.clone(),
+                        operand.as_f64().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $lt requires a number"),
+                        })?,
+                    ),
+                    "$lte" => TriviumFilter::Lte(
+                        key.clone(),
+                        operand.as_f64().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $lte requires a number"),
+                        })?,
+                    ),
+                    "$in" => TriviumFilter::In(
+                        key.clone(),
+                        operand.as_array().cloned().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $in requires an array"),
+                        })?,
+                    ),
+                    "$exists" => TriviumFilter::Exists(
+                        key.clone(),
+                        operand.as_bool().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $exists requires a boolean"),
+                        })?,
+                    ),
+                    "$nin" => TriviumFilter::Nin(
+                        key.clone(),
+                        operand.as_array().cloned().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $nin requires an array"),
+                        })?,
+                    ),
+                    "$size" => TriviumFilter::Size(
+                        key.clone(),
+                        operand.as_u64().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $size requires a non-negative integer"),
+                        })? as usize,
+                    ),
+                    "$all" => TriviumFilter::All(
+                        key.clone(),
+                        operand.as_array().cloned().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $all requires an array"),
+                        })?,
+                    ),
+                    "$type" => TriviumFilter::TypeMatch(
+                        key.clone(),
+                        operand.as_str().ok_or_else(|| ApiError {
+                            status_code: 400,
+                            message: String::from("trivium filter $type requires a string"),
+                        })?.to_string(),
+                    ),
+                    other => {
+                        return Err(ApiError {
+                            status_code: 400,
+                            message: format!("unsupported trivium filter operator: {other}"),
+                        });
+                    }
+                };
+                filters.push(filter);
+            }
+        } else {
+            filters.push(TriviumFilter::Eq(key.clone(), value.clone()));
+        }
+    }
+
+    if filters.is_empty() {
+        Ok(TriviumFilter::Eq(String::from("none"), JsonValue::Null))
+    } else if filters.len() == 1 {
+        Ok(filters.pop().expect("trivium filter should contain one item"))
+    } else {
+        Ok(TriviumFilter::And(filters))
     }
 }
 

@@ -27,9 +27,13 @@ import type {
     SqlQueryResult,
     SqlTransactionRequest,
     SqlTransactionResponse,
+    TriviumBuildTextIndexRequest,
     TriviumDeleteRequest,
+    TriviumFilterWhereRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
+    TriviumIndexKeywordRequest,
+    TriviumIndexTextRequest,
     TriviumInsertRequest,
     TriviumInsertResponse,
     TriviumInsertWithIdRequest,
@@ -38,7 +42,11 @@ import type {
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
     TriviumNodeView,
+    TriviumQueryRequest,
+    TriviumQueryRow,
     TriviumSearchHit,
+    TriviumSearchAdvancedRequest,
+    TriviumSearchHybridRequest,
     TriviumSearchRequest,
     TriviumStatRequest,
     TriviumStatResponse,
@@ -139,6 +147,13 @@ export class AuthorityClient {
         unlink: (input: TriviumUnlinkRequest) => Promise<void>;
         neighbors: (input: TriviumNeighborsRequest) => Promise<TriviumNeighborsResponse>;
         search: (input: TriviumSearchRequest) => Promise<TriviumSearchHit[]>;
+        searchAdvanced: (input: TriviumSearchAdvancedRequest) => Promise<TriviumSearchHit[]>;
+        searchHybrid: (input: TriviumSearchHybridRequest) => Promise<TriviumSearchHit[]>;
+        filterWhere: (input: TriviumFilterWhereRequest) => Promise<TriviumNodeView[]>;
+        query: (input: TriviumQueryRequest) => Promise<TriviumQueryRow[]>;
+        indexText: (input: TriviumIndexTextRequest) => Promise<void>;
+        indexKeyword: (input: TriviumIndexKeywordRequest) => Promise<void>;
+        buildTextIndex: (input?: TriviumBuildTextIndexRequest) => Promise<void>;
         flush: (input?: TriviumFlushRequest) => Promise<void>;
         stat: (input?: TriviumStatRequest) => Promise<TriviumStatResponse>;
         listDatabases: () => Promise<TriviumListDatabasesResponse>;
@@ -531,6 +546,115 @@ export class AuthorityClient {
                     },
                 });
                 return response.hits;
+            },
+            searchAdvanced: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `高级检索 Trivium 数据库 ${database}`,
+                });
+                const response = await this.requestWithSession<{ hits: TriviumSearchHit[] }>('/trivium/search-advanced', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+                return response.hits;
+            },
+            searchHybrid: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `混合检索 Trivium 数据库 ${database}`,
+                });
+                const response = await this.requestWithSession<{ hits: TriviumSearchHit[] }>('/trivium/search-hybrid', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+                return response.hits;
+            },
+            filterWhere: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `过滤查询 Trivium 数据库 ${database}`,
+                });
+                const response = await this.requestWithSession<{ nodes: TriviumNodeView[] }>('/trivium/filter-where', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+                return response.nodes;
+            },
+            query: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `图查询 Trivium 数据库 ${database}`,
+                });
+                const response = await this.requestWithSession<{ rows: TriviumQueryRow[] }>('/trivium/query', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+                return response.rows;
+            },
+            indexText: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `写入 Trivium 文本索引 ${database}`,
+                });
+                await this.requestWithSession('/trivium/index-text', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            indexKeyword: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `写入 Trivium 关键词索引 ${database}`,
+                });
+                await this.requestWithSession('/trivium/index-keyword', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            buildTextIndex: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `构建 Trivium 文本索引 ${database}`,
+                });
+                await this.requestWithSession('/trivium/build-text-index', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
             },
             flush: async (input = {}) => {
                 const database = getTriviumDatabaseName(input.database);
