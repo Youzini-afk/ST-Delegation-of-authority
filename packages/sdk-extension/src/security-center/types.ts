@@ -1,4 +1,6 @@
 import type {
+    AuthorityInstallStatusCode,
+    AuthorityProbeResponse,
     ControlExtensionRecord,
     CursorPageInfo,
     PrivateFileUsageSummary,
@@ -41,62 +43,7 @@ export interface ExtensionStorageSummary {
     files: PrivateFileUsageSummary;
 }
 
-export interface ProbeResponse {
-    pluginVersion: string;
-    sdkBundledVersion: string;
-    sdkDeployedVersion: string | null;
-    coreBundledVersion: string | null;
-    coreArtifactPlatform: string | null;
-    coreArtifactPlatforms: string[];
-    coreArtifactHash: string | null;
-    coreBinarySha256: string | null;
-    coreVerified: boolean;
-    coreMessage: string | null;
-    installStatus: string;
-    installMessage: string;
-    storageRoot: string;
-    core: {
-        enabled: boolean;
-        state: string;
-        port: number | null;
-        pid: number | null;
-        version: string | null;
-        startedAt: string | null;
-        lastError: string | null;
-        health: {
-            name: string;
-            apiVersion: string;
-            version: string;
-            buildHash: string | null;
-            platform: string;
-            pid: number;
-            startedAt: string;
-            uptimeMs: number;
-            requestCount: number;
-            errorCount: number;
-            activeJobCount: number;
-            queuedJobCount: number;
-            queuedRequestCount: number;
-            maxConcurrency: number;
-            currentConcurrency: number;
-            workerCount: number;
-            lastError: string | null;
-            jobRegistrySummary: {
-                registered: number;
-                jobTypes: string[];
-            };
-            timeoutMs: number;
-            limits: {
-                maxRequestBytes: number;
-                maxKvValueBytes: number;
-                maxBlobBytes: number;
-                maxHttpBodyBytes: number;
-                maxHttpResponseBytes: number;
-                maxEventPollLimit: number;
-            };
-        } | null;
-    };
-}
+export type ProbeResponse = AuthorityProbeResponse;
 
 export interface InstallSnapshot {
     pluginVersion: string;
@@ -109,7 +56,7 @@ export interface InstallSnapshot {
     coreBinarySha256: string | null;
     coreVerified: boolean;
     coreMessage: string | null;
-    installStatus: string;
+    installStatus: AuthorityInstallStatusCode;
     installMessage: string;
 }
 

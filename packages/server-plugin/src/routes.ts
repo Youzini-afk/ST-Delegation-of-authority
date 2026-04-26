@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+    AuthorityProbeResponse,
     AuthorityInitConfig,
     BlobRecord,
     BlobTransferCommitRequest,
@@ -52,7 +53,20 @@ import type {
     TriviumUpdatePayloadRequest,
     TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
-import { AUTHORITY_DATA_FOLDER, DATA_TRANSFER_INLINE_THRESHOLD_BYTES } from './constants.js';
+import {
+    AUTHORITY_DATA_FOLDER,
+    AUTHORITY_PLUGIN_ID,
+    AUTHORITY_SDK_EXTENSION_ID,
+    BUILTIN_JOB_TYPES,
+    DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+    DATA_TRANSFER_CHUNK_BYTES,
+    MAX_BLOB_BYTES,
+    MAX_DATA_TRANSFER_BYTES,
+    MAX_HTTP_BODY_BYTES,
+    MAX_HTTP_RESPONSE_BYTES,
+    MAX_KV_VALUE_BYTES,
+    buildAuthorityFeatureFlags,
+} from './constants.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
@@ -283,10 +297,13 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         const user = getUserContext(req);
         const install = runtime.install.getStatus();
         const core = runtime.core.getStatus();
-        ok(res, {
+        const features = buildAuthorityFeatureFlags(user.isAdmin);
+        const response: AuthorityProbeResponse = {
             id: 'authority',
             online: true,
             version: install.pluginVersion,
+            pluginId: AUTHORITY_PLUGIN_ID,
+            sdkExtensionId: AUTHORITY_SDK_EXTENSION_ID,
             pluginVersion: install.pluginVersion,
             sdkBundledVersion: install.sdkBundledVersion,
             sdkDeployedVersion: install.sdkDeployedVersion,
@@ -300,8 +317,28 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             installStatus: install.installStatus,
             installMessage: install.installMessage,
             storageRoot: path.join(user.rootDir, AUTHORITY_DATA_FOLDER, 'storage'),
+            features,
+            limits: {
+                maxRequestBytes: core.health?.limits.maxRequestBytes ?? null,
+                maxKvValueBytes: MAX_KV_VALUE_BYTES,
+                maxBlobBytes: MAX_BLOB_BYTES,
+                maxHttpBodyBytes: MAX_HTTP_BODY_BYTES,
+                maxHttpResponseBytes: MAX_HTTP_RESPONSE_BYTES,
+                maxEventPollLimit: core.health?.limits.maxEventPollLimit ?? null,
+                maxDataTransferBytes: MAX_DATA_TRANSFER_BYTES,
+                dataTransferChunkBytes: DATA_TRANSFER_CHUNK_BYTES,
+                dataTransferInlineThresholdBytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+            },
+            jobs: {
+                builtinTypes: [...BUILTIN_JOB_TYPES],
+                registry: core.health?.jobRegistrySummary ?? {
+                    registered: BUILTIN_JOB_TYPES.length,
+                    jobTypes: [...BUILTIN_JOB_TYPES],
+                },
+            },
             core,
-        });
+        };
+        ok(res, response);
     });
 
     router.post('/session/init', async (req, res) => {

@@ -13,6 +13,8 @@ export class AuthorityClient {
     events;
     session = null;
     sessionPromise = null;
+    probeSnapshot = null;
+    probePromise = null;
     runtimeGrants = new Map();
     constructor(config) {
         this.config = config;
@@ -507,6 +509,7 @@ export class AuthorityClient {
                 return response.nodes;
             },
             filterWherePage: async (input) => {
+                await this.requireFeature('trivium.filterWherePage', 'Authority 当前版本尚未提供 Trivium 分页过滤能力');
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
@@ -526,6 +529,7 @@ export class AuthorityClient {
                 return response.rows;
             },
             queryPage: async (input) => {
+                await this.requireFeature('trivium.queryPage', 'Authority 当前版本尚未提供 Trivium 图查询分页能力');
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
@@ -718,6 +722,35 @@ export class AuthorityClient {
     setConfig(config) {
         this.config = cloneInitConfig(config);
     }
+    async probe(force = false) {
+        if (force) {
+            this.probeSnapshot = null;
+            this.probePromise = null;
+        }
+        return cloneAuthorityProbe(await this.ensureProbe());
+    }
+    getProbe() {
+        return this.probeSnapshot ? cloneAuthorityProbe(this.probeSnapshot) : null;
+    }
+    hasFeature(feature) {
+        if (this.probeSnapshot) {
+            return getFeatureAvailability(this.probeSnapshot.features, feature);
+        }
+        if (this.session) {
+            return getFeatureAvailability(this.session.features, feature);
+        }
+        return false;
+    }
+    async requireFeature(feature, message) {
+        if (this.hasFeature(feature)) {
+            return;
+        }
+        const probe = await this.ensureProbe();
+        if (getFeatureAvailability(probe.features, feature)) {
+            return;
+        }
+        throw new Error(message ?? `Authority feature not available: ${feature}`);
+    }
     getSession() {
         if (!this.session) {
             return null;
@@ -738,6 +771,7 @@ export class AuthorityClient {
             features: session.features,
             grants: groupByResource(session.grants),
             policies: groupByResource(session.policies),
+            probe: this.getProbe(),
         };
     }
     async ensurePermission(request) {
@@ -823,6 +857,22 @@ export class AuthorityClient {
             });
         }
         return await this.sessionPromise;
+    }
+    async ensureProbe() {
+        if (this.probeSnapshot) {
+            return this.probeSnapshot;
+        }
+        if (!this.probePromise) {
+            this.probePromise = authorityRequest('/probe', {
+                method: 'POST',
+            }).then(probe => {
+                this.probeSnapshot = cloneAuthorityProbe(probe);
+                return this.probeSnapshot;
+            }).finally(() => {
+                this.probePromise = null;
+            });
+        }
+        return await this.probePromise;
     }
     async requestWithSession(path, options = {}, retried = false) {
         const session = await this.ensureInitialized();
@@ -1096,6 +1146,9 @@ function cloneInitConfig(config) {
     }
     return clone;
 }
+function cloneAuthorityProbe(probe) {
+    return JSON.parse(JSON.stringify(probe));
+}
 function groupByResource(items) {
     const result = {
         'storage.kv': [],
@@ -1111,6 +1164,44 @@ function groupByResource(items) {
         result[item.resource].push(item);
     }
     return result;
+}
+function getFeatureAvailability(features, feature) {
+    switch (feature) {
+        case 'securityCenter':
+            return features.securityCenter;
+        case 'admin':
+            return features.admin;
+        case 'sql.queryPage':
+            return features.sql.queryPage;
+        case 'sql.migrations':
+            return features.sql.migrations;
+        case 'trivium.resolveId':
+            return features.trivium.resolveId;
+        case 'trivium.upsert':
+            return features.trivium.upsert;
+        case 'trivium.bulkMutations':
+            return features.trivium.bulkMutations;
+        case 'trivium.filterWherePage':
+            return features.trivium.filterWherePage;
+        case 'trivium.queryPage':
+            return features.trivium.queryPage;
+        case 'transfers.blob':
+            return features.transfers.blob;
+        case 'transfers.fs':
+            return features.transfers.fs;
+        case 'transfers.httpFetch':
+            return features.transfers.httpFetch;
+        case 'jobs.background':
+            return features.jobs.background;
+        case 'diagnostics.warnings':
+            return features.diagnostics.warnings;
+        case 'diagnostics.activityPages':
+            return features.diagnostics.activityPages;
+        case 'diagnostics.jobsPage':
+            return features.diagnostics.jobsPage;
+        case 'diagnostics.benchmarkCore':
+            return features.diagnostics.benchmarkCore;
+    }
 }
 function safeParse(value) {
     try {

@@ -30,7 +30,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   RESOURCE_RISK: () => (/* binding */ RESOURCE_RISK),
 /* harmony export */   SESSION_HEADER: () => (/* binding */ SESSION_HEADER),
 /* harmony export */   SESSION_QUERY: () => (/* binding */ SESSION_QUERY),
-/* harmony export */   SUPPORTED_RESOURCES: () => (/* binding */ SUPPORTED_RESOURCES)
+/* harmony export */   SUPPORTED_RESOURCES: () => (/* binding */ SUPPORTED_RESOURCES),
+/* harmony export */   buildAuthorityFeatureFlags: () => (/* binding */ buildAuthorityFeatureFlags)
 /* harmony export */ });
 const AUTHORITY_PLUGIN_ID = 'authority';
 const AUTHORITY_DATA_FOLDER = 'extensions-data/authority';
@@ -80,6 +81,38 @@ const DEFAULT_POLICY_STATUS = {
     'events.stream': 'prompt',
 };
 const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'];
+function buildAuthorityFeatureFlags(isAdmin) {
+    return {
+        securityCenter: true,
+        admin: isAdmin,
+        sql: {
+            queryPage: true,
+            migrations: true,
+        },
+        trivium: {
+            resolveId: true,
+            upsert: true,
+            bulkMutations: true,
+            filterWherePage: true,
+            queryPage: true,
+        },
+        transfers: {
+            blob: true,
+            fs: true,
+            httpFetch: true,
+        },
+        jobs: {
+            background: true,
+            builtinTypes: [...BUILTIN_JOB_TYPES],
+        },
+        diagnostics: {
+            warnings: true,
+            activityPages: true,
+            jobsPage: true,
+            benchmarkCore: true,
+        },
+    };
+}
 
 
 /***/ },
@@ -360,10 +393,13 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
         const install = runtime.install.getStatus();
         const core = runtime.core.getStatus();
-        ok(res, {
+        const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin);
+        const response = {
             id: 'authority',
             online: true,
             version: install.pluginVersion,
+            pluginId: _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_PLUGIN_ID,
+            sdkExtensionId: _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID,
             pluginVersion: install.pluginVersion,
             sdkBundledVersion: install.sdkBundledVersion,
             sdkDeployedVersion: install.sdkDeployedVersion,
@@ -377,8 +413,28 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             installStatus: install.installStatus,
             installMessage: install.installMessage,
             storageRoot: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(user.rootDir, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_DATA_FOLDER, 'storage'),
+            features,
+            limits: {
+                maxRequestBytes: core.health?.limits.maxRequestBytes ?? null,
+                maxKvValueBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_KV_VALUE_BYTES,
+                maxBlobBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_BLOB_BYTES,
+                maxHttpBodyBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_BODY_BYTES,
+                maxHttpResponseBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_RESPONSE_BYTES,
+                maxEventPollLimit: core.health?.limits.maxEventPollLimit ?? null,
+                maxDataTransferBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_DATA_TRANSFER_BYTES,
+                dataTransferChunkBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_CHUNK_BYTES,
+                dataTransferInlineThresholdBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+            },
+            jobs: {
+                builtinTypes: [..._constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES],
+                registry: core.health?.jobRegistrySummary ?? {
+                    registered: _constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES.length,
+                    jobTypes: [..._constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES],
+                },
+            },
             core,
-        });
+        };
+        ok(res, response);
     });
     router.post('/session/init', async (req, res) => {
         try {
@@ -4239,8 +4295,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   SessionService: () => (/* binding */ SessionService)
 /* harmony export */ });
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 class SessionService {
@@ -4250,9 +4308,9 @@ class SessionService {
         this.core = core;
     }
     async createSession(user, config) {
-        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.randomToken)();
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
-        const snapshot = await this.core.initializeControlSession(paths.controlDbFile, token, (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.nowIso)(), { handle: user.handle, isAdmin: user.isAdmin }, config);
+        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.randomToken)();
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const snapshot = await this.core.initializeControlSession(paths.controlDbFile, token, (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(), { handle: user.handle, isAdmin: user.isAdmin }, config);
         const session = this.sessionFromSnapshot(snapshot);
         this.sessions.set(token, session);
         return session;
@@ -4265,7 +4323,7 @@ class SessionService {
         if (cached) {
             return cached;
         }
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
         const snapshot = await this.core.getControlSession(paths.controlDbFile, user.handle, token);
         if (!snapshot) {
             return null;
@@ -4294,10 +4352,7 @@ class SessionService {
             extension: session.extension,
             grants,
             policies,
-            features: {
-                securityCenter: true,
-                admin: session.isAdmin,
-            },
+            features: (0,_constants_js__WEBPACK_IMPORTED_MODULE_0__.buildAuthorityFeatureFlags)(session.isAdmin),
         };
     }
     sessionFromSnapshot(snapshot) {

@@ -1,10 +1,15 @@
-import type { AuthorityInitConfig } from '@stdo/shared-types';
+import type { AuthorityInitConfig, AuthorityProbeResponse } from '@stdo/shared-types';
+import { authorityRequest } from './api.js';
 import { AuthorityClient } from './client.js';
 
 const clients = new Map<string, AuthorityClient>();
 const initLocks = new Map<string, Promise<AuthorityClient>>();
 
 export class AuthoritySDK {
+    static async probe(): Promise<AuthorityProbeResponse> {
+        return await authorityRequest<AuthorityProbeResponse>('/probe', { method: 'POST' });
+    }
+
     static async init(config: AuthorityInitConfig): Promise<AuthorityClient> {
         const existing = clients.get(config.extensionId);
         if (existing) {

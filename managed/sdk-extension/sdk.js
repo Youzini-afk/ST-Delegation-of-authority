@@ -1,7 +1,11 @@
+import { authorityRequest } from './api.js';
 import { AuthorityClient } from './client.js';
 const clients = new Map();
 const initLocks = new Map();
 export class AuthoritySDK {
+    static async probe() {
+        return await authorityRequest('/probe', { method: 'POST' });
+    }
     static async init(config) {
         const existing = clients.get(config.extensionId);
         if (existing) {

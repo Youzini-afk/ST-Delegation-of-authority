@@ -1,4 +1,5 @@
 import type { AuthorityInitConfig, ControlSessionSnapshot, SessionInitResponse } from '@stdo/shared-types';
+import { buildAuthorityFeatureFlags } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { SessionRecord, UserContext } from '../types.js';
 import { nowIso, randomToken } from '../utils.js';
@@ -68,10 +69,7 @@ export class SessionService {
             extension: session.extension,
             grants,
             policies,
-            features: {
-                securityCenter: true,
-                admin: session.isAdmin,
-            },
+            features: buildAuthorityFeatureFlags(session.isAdmin),
         };
     }
 

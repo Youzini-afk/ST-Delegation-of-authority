@@ -180,6 +180,9 @@ function copySdkRuntime(sourceDir, targetDir) {
         if (entry.name.endsWith('.d.ts')) {
             continue;
         }
+        if (entry.name.endsWith('.test.js') || entry.name.endsWith('.test.js.map')) {
+            continue;
+        }
 
         const sourcePath = path.join(sourceDir, entry.name);
         const targetPath = path.join(targetDir, entry.name);

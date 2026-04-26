@@ -1,4 +1,4 @@
-import type { PermissionResource, PermissionStatus, RiskLevel } from '@stdo/shared-types';
+import type { AuthorityFeatureFlags, PermissionResource, PermissionStatus, RiskLevel } from '@stdo/shared-types';
 
 export const AUTHORITY_PLUGIN_ID = 'authority';
 export const AUTHORITY_DATA_FOLDER = 'extensions-data/authority';
@@ -54,3 +54,36 @@ export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus>
 };
 
 export const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'] as const;
+
+export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFlags {
+    return {
+        securityCenter: true,
+        admin: isAdmin,
+        sql: {
+            queryPage: true,
+            migrations: true,
+        },
+        trivium: {
+            resolveId: true,
+            upsert: true,
+            bulkMutations: true,
+            filterWherePage: true,
+            queryPage: true,
+        },
+        transfers: {
+            blob: true,
+            fs: true,
+            httpFetch: true,
+        },
+        jobs: {
+            background: true,
+            builtinTypes: [...BUILTIN_JOB_TYPES],
+        },
+        diagnostics: {
+            warnings: true,
+            activityPages: true,
+            jobsPage: true,
+            benchmarkCore: true,
+        },
+    };
+}

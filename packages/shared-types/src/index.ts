@@ -88,16 +88,134 @@ export interface SessionExtensionInfo {
     firstSeenAt: string;
 }
 
+export type AuthorityInstallStatusCode = 'ready' | 'installed' | 'updated' | 'conflict' | 'error' | 'missing';
+export type AuthorityCoreRuntimeState = 'stopped' | 'starting' | 'running' | 'missing' | 'error';
+
+export interface AuthorityFeatureFlags {
+    securityCenter: boolean;
+    admin: boolean;
+    sql: {
+        queryPage: boolean;
+        migrations: boolean;
+    };
+    trivium: {
+        resolveId: boolean;
+        upsert: boolean;
+        bulkMutations: boolean;
+        filterWherePage: boolean;
+        queryPage: boolean;
+    };
+    transfers: {
+        blob: boolean;
+        fs: boolean;
+        httpFetch: boolean;
+    };
+    jobs: {
+        background: boolean;
+        builtinTypes: string[];
+    };
+    diagnostics: {
+        warnings: boolean;
+        activityPages: boolean;
+        jobsPage: boolean;
+        benchmarkCore: boolean;
+    };
+}
+
+export interface AuthorityJobRegistrySummary {
+    registered: number;
+    jobTypes: string[];
+}
+
+export interface AuthorityProbeLimits {
+    maxRequestBytes: number | null;
+    maxKvValueBytes: number;
+    maxBlobBytes: number;
+    maxHttpBodyBytes: number;
+    maxHttpResponseBytes: number;
+    maxEventPollLimit: number | null;
+    maxDataTransferBytes: number;
+    dataTransferChunkBytes: number;
+    dataTransferInlineThresholdBytes: number;
+}
+
+export interface AuthorityProbeCoreHealth {
+    name: string;
+    apiVersion: string;
+    version: string;
+    buildHash: string | null;
+    platform: string;
+    pid: number;
+    startedAt: string;
+    uptimeMs: number;
+    requestCount: number;
+    errorCount: number;
+    activeJobCount: number;
+    queuedJobCount: number;
+    queuedRequestCount: number;
+    runtimeMode: string;
+    maxConcurrency: number;
+    currentConcurrency: number;
+    workerCount: number;
+    lastError: string | null;
+    jobRegistrySummary: AuthorityJobRegistrySummary;
+    timeoutMs: number;
+    limits: {
+        maxRequestBytes: number;
+        maxKvValueBytes: number;
+        maxBlobBytes: number;
+        maxHttpBodyBytes: number;
+        maxHttpResponseBytes: number;
+        maxEventPollLimit: number;
+    };
+}
+
+export interface AuthorityProbeCoreStatus {
+    enabled: boolean;
+    state: AuthorityCoreRuntimeState;
+    port: number | null;
+    pid: number | null;
+    version: string | null;
+    startedAt: string | null;
+    lastError: string | null;
+    health: AuthorityProbeCoreHealth | null;
+}
+
+export interface AuthorityProbeResponse {
+    id: string;
+    online: boolean;
+    version: string;
+    pluginId: string;
+    sdkExtensionId: string;
+    pluginVersion: string;
+    sdkBundledVersion: string;
+    sdkDeployedVersion: string | null;
+    coreBundledVersion: string | null;
+    coreArtifactPlatform: string | null;
+    coreArtifactPlatforms: string[];
+    coreArtifactHash: string | null;
+    coreBinarySha256: string | null;
+    coreVerified: boolean;
+    coreMessage: string | null;
+    installStatus: AuthorityInstallStatusCode;
+    installMessage: string;
+    storageRoot: string;
+    features: AuthorityFeatureFlags;
+    limits: AuthorityProbeLimits;
+    jobs: {
+        builtinTypes: string[];
+        registry: AuthorityJobRegistrySummary;
+    };
+    core: AuthorityProbeCoreStatus;
+}
+
 export interface SessionInitResponse {
     sessionToken: string;
     user: SessionUserInfo;
     extension: SessionExtensionInfo;
     grants: AuthorityGrant[];
     policies: AuthorityPolicyEntry[];
-    features: {
-        securityCenter: boolean;
-        admin: boolean;
-    };
+    features: AuthorityFeatureFlags;
 }
 
 export interface ControlSessionSnapshot {
