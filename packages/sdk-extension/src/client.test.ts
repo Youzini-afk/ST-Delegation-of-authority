@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthorityFeatureFlags, AuthorityProbeResponse } from '@stdo/shared-types';
+import type {
+    AuthorityFeatureFlags,
+    AuthorityProbeResponse,
+    TriviumBulkDeleteRequest,
+    TriviumBulkUpsertRequest,
+} from '@stdo/shared-types';
 
 const authorityRequestMock = vi.hoisted(() => vi.fn());
 
@@ -58,26 +63,38 @@ describe('AuthorityClient', () => {
         expect(authorityRequestMock).toHaveBeenCalledWith('/probe', { method: 'POST' });
     });
 
-    it('splits items by item count and estimated JSON bytes', async () => {
+    it('splits items by chunk item count and estimated json bytes', async () => {
         const { splitAuthorityItemsIntoChunks } = await import('./client.js');
 
-        const chunks = splitAuthorityItemsIntoChunks([
-            { id: 'a', text: '1234567890' },
-            { id: 'b', text: '1234567890' },
-            { id: 'c', text: '1234567890' },
+        const countChunks = splitAuthorityItemsIntoChunks([
+            { value: 1 },
+            { value: 2 },
+            { value: 3 },
+            { value: 4 },
+            { value: 5 },
         ], {
             maxItemsPerChunk: 2,
-            maxBytesPerChunk: 80,
+            maxBytesPerChunk: 1024,
         });
 
-        expect(chunks).toHaveLength(2);
-        expect(chunks[0]?.itemOffset).toBe(0);
-        expect(chunks[0]?.itemCount).toBe(2);
-        expect(chunks[1]?.itemOffset).toBe(2);
-        expect(chunks[1]?.itemCount).toBe(1);
+        expect(countChunks).toHaveLength(3);
+        expect(countChunks.map(chunk => chunk.itemCount)).toEqual([2, 2, 1]);
+        expect(countChunks.map(chunk => chunk.itemOffset)).toEqual([0, 2, 4]);
+
+        const byteChunks = splitAuthorityItemsIntoChunks([
+            { text: 'a'.repeat(20) },
+            { text: 'b'.repeat(20) },
+            { text: 'c'.repeat(20) },
+        ], {
+            maxItemsPerChunk: 10,
+            maxBytesPerChunk: 40,
+        });
+
+        expect(byteChunks).toHaveLength(3);
+        expect(byteChunks.every(chunk => chunk.estimatedBytes <= 40)).toBe(true);
     });
 
-    it('aggregates chunked Trivium bulk upsert progress and global failure indexes', async () => {
+    it('aggregates chunked Trivium bulk upsert progress and global indexes', async () => {
         const { AuthorityClient } = await import('./client.js');
 
         const client = new AuthorityClient({
@@ -88,51 +105,52 @@ describe('AuthorityClient', () => {
             declaredPermissions: {},
         });
 
-        const privateClient = client as unknown as {
-            requireFeature: ReturnType<typeof vi.fn>;
-            ensurePermission: ReturnType<typeof vi.fn>;
-            bulkUpsertTriviumRequest: ReturnType<typeof vi.fn>;
-        };
-        privateClient.requireFeature = vi.fn().mockResolvedValue(undefined);
-        privateClient.ensurePermission = vi.fn().mockResolvedValue(undefined);
-        privateClient.bulkUpsertTriviumRequest = vi.fn()
-            .mockResolvedValueOnce({
+        const progress = vi.fn();
+        const bulkUpsertTriviumRequest = vi.fn(async (input: TriviumBulkUpsertRequest) => {
+            if (input.items[0]?.externalId === 'node-a') {
+                return {
+                    totalCount: 2,
+                    successCount: 1,
+                    failureCount: 1,
+                    failures: [{ index: 1, message: 'bad payload' }],
+                    items: [{ index: 0, id: 101, action: 'inserted', externalId: 'node-a', namespace: 'graph' }],
+                };
+            }
+
+            return {
                 totalCount: 2,
-                successCount: 1,
-                failureCount: 1,
-                failures: [{ index: 1, message: 'duplicate externalId' }],
-                items: [{ index: 0, id: 101, action: 'inserted', externalId: 'n1', namespace: 'default' }],
-            })
-            .mockResolvedValueOnce({
-                totalCount: 1,
-                successCount: 1,
+                successCount: 2,
                 failureCount: 0,
                 failures: [],
-                items: [{ index: 0, id: 103, action: 'updated', externalId: 'n3', namespace: 'default' }],
-            });
+                items: [
+                    { index: 0, id: 102, action: 'updated', externalId: 'node-c', namespace: 'graph' },
+                    { index: 1, id: 103, action: 'inserted', externalId: 'node-d', namespace: 'graph' },
+                ],
+            };
+        });
 
-        const progress: Array<{ completedChunks: number; completedItems: number; failureCount: number }> = [];
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            bulkUpsertTriviumRequest,
+        });
+
         const result = await client.trivium.bulkUpsertChunked({
             database: 'graph',
             items: [
-                { externalId: 'n1', vector: [1], payload: { name: 'one' } },
-                { externalId: 'n2', vector: [2], payload: { name: 'two' } },
-                { externalId: 'n3', vector: [3], payload: { name: 'three' } },
+                { externalId: 'node-a', namespace: 'graph', vector: [1, 0], payload: { label: 'A' } },
+                { externalId: 'node-b', namespace: 'graph', vector: [0, 1], payload: { label: 'B' } },
+                { externalId: 'node-c', namespace: 'graph', vector: [1, 1], payload: { label: 'C' } },
+                { externalId: 'node-d', namespace: 'graph', vector: [0, 0], payload: { label: 'D' } },
             ],
         }, {
             maxItemsPerChunk: 2,
-            onProgress(update) {
-                progress.push({
-                    completedChunks: update.completedChunks,
-                    completedItems: update.completedItems,
-                    failureCount: update.failureCount,
-                });
-            },
+            onProgress: progress,
         });
 
-        expect(privateClient.bulkUpsertTriviumRequest).toHaveBeenCalledTimes(2);
-        expect(result.chunkCount).toBe(2);
-        expect(result.successCount).toBe(2);
+        expect(bulkUpsertTriviumRequest).toHaveBeenCalledTimes(2);
+        expect(result.totalCount).toBe(4);
+        expect(result.successCount).toBe(3);
         expect(result.failureCount).toBe(1);
         expect(result.failures).toEqual([
             expect.objectContaining({
@@ -141,20 +159,32 @@ describe('AuthorityClient', () => {
                 chunkIndex: 0,
                 chunkItemIndex: 1,
                 kind: 'item',
-                message: 'duplicate externalId',
+                message: 'bad payload',
             }),
         ]);
         expect(result.items).toEqual([
-            expect.objectContaining({ id: 101, index: 0, globalIndex: 0, chunkIndex: 0, chunkItemIndex: 0 }),
-            expect.objectContaining({ id: 103, index: 2, globalIndex: 2, chunkIndex: 1, chunkItemIndex: 0 }),
+            expect.objectContaining({ index: 0, globalIndex: 0, chunkIndex: 0, chunkItemIndex: 0, id: 101 }),
+            expect.objectContaining({ index: 2, globalIndex: 2, chunkIndex: 1, chunkItemIndex: 0, id: 102 }),
+            expect.objectContaining({ index: 3, globalIndex: 3, chunkIndex: 1, chunkItemIndex: 1, id: 103 }),
         ]);
-        expect(progress).toEqual([
-            { completedChunks: 1, completedItems: 2, failureCount: 1 },
-            { completedChunks: 2, completedItems: 3, failureCount: 1 },
-        ]);
+        expect(progress).toHaveBeenCalledTimes(2);
+        expect(progress.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+            totalChunks: 2,
+            completedChunks: 1,
+            totalItems: 4,
+            completedItems: 2,
+            successCount: 1,
+            failureCount: 1,
+        }));
+        expect(progress.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+            completedChunks: 2,
+            completedItems: 4,
+            successCount: 3,
+            failureCount: 1,
+        }));
     });
 
-    it('continues after chunk-level Trivium bulk failures when configured', async () => {
+    it('records chunk-level failures for chunked Trivium bulk delete and continues', async () => {
         const { AuthorityClient } = await import('./client.js');
 
         const client = new AuthorityClient({
@@ -165,41 +195,55 @@ describe('AuthorityClient', () => {
             declaredPermissions: {},
         });
 
-        const privateClient = client as unknown as {
-            requireFeature: ReturnType<typeof vi.fn>;
-            ensurePermission: ReturnType<typeof vi.fn>;
-            bulkDeleteTriviumRequest: ReturnType<typeof vi.fn>;
-        };
-        privateClient.requireFeature = vi.fn().mockResolvedValue(undefined);
-        privateClient.ensurePermission = vi.fn().mockResolvedValue(undefined);
-        privateClient.bulkDeleteTriviumRequest = vi.fn()
-            .mockRejectedValueOnce(new Error('chunk request timeout'))
-            .mockResolvedValueOnce({
-                totalCount: 1,
-                successCount: 1,
+        const bulkDeleteTriviumRequest = vi.fn(async (input: TriviumBulkDeleteRequest) => {
+            const firstExternalId = input.items[0]?.externalId;
+            if (firstExternalId === 'node-c') {
+                throw new Error('chunk write failed');
+            }
+
+            return {
+                totalCount: input.items.length,
+                successCount: input.items.length,
                 failureCount: 0,
                 failures: [],
-            });
+            };
+        });
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            bulkDeleteTriviumRequest,
+        });
 
         const result = await client.trivium.bulkDeleteChunked({
             database: 'graph',
             items: [
-                { externalId: 'n1' },
-                { externalId: 'n2' },
-                { externalId: 'n3' },
+                { externalId: 'node-a', namespace: 'graph' },
+                { externalId: 'node-b', namespace: 'graph' },
+                { externalId: 'node-c', namespace: 'graph' },
+                { externalId: 'node-d', namespace: 'graph' },
+                { externalId: 'node-e', namespace: 'graph' },
             ],
         }, {
             maxItemsPerChunk: 2,
-            continueOnChunkError: true,
         });
 
-        expect(privateClient.bulkDeleteTriviumRequest).toHaveBeenCalledTimes(2);
-        expect(result.successCount).toBe(1);
+        expect(bulkDeleteTriviumRequest).toHaveBeenCalledTimes(3);
+        expect(result.chunkCount).toBe(3);
+        expect(result.successCount).toBe(3);
         expect(result.failureCount).toBe(2);
         expect(result.failures).toEqual([
-            expect.objectContaining({ globalIndex: 0, chunkIndex: 0, kind: 'chunk', message: 'chunk request timeout' }),
-            expect.objectContaining({ globalIndex: 1, chunkIndex: 0, kind: 'chunk', message: 'chunk request timeout' }),
+            expect.objectContaining({ index: 2, globalIndex: 2, chunkIndex: 1, chunkItemIndex: 0, kind: 'chunk', message: 'chunk write failed' }),
+            expect.objectContaining({ index: 3, globalIndex: 3, chunkIndex: 1, chunkItemIndex: 1, kind: 'chunk', message: 'chunk write failed' }),
         ]);
+        expect(result.chunks[1]).toEqual(expect.objectContaining({
+            chunkIndex: 1,
+            itemOffset: 2,
+            itemCount: 2,
+            successCount: 0,
+            failureCount: 2,
+            error: 'chunk write failed',
+        }));
     });
 });
 

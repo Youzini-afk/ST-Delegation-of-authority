@@ -8,4 +8,19 @@ window.STAuthority = {
     openSecurityCenter,
 };
 
+export {
+    AuthorityClient,
+    splitAuthorityItemsIntoChunks,
+} from './client.js';
+export type {
+    AuthorityChunk,
+    AuthorityChunkSplitOptions,
+    AuthorityChunkedFailure,
+    AuthorityChunkedMutationChunkResult,
+    AuthorityChunkedTriviumMutationResult,
+    AuthorityChunkedTriviumOptions,
+    AuthorityChunkedTriviumProgress,
+    AuthorityChunkedTriviumUpsertResponseItem,
+    AuthorityChunkedTriviumUpsertResult,
+} from './client.js';
 export { AuthoritySDK, openSecurityCenter };

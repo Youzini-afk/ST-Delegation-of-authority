@@ -5,5 +5,6 @@ window.STAuthority = {
     AuthoritySDK,
     openSecurityCenter,
 };
+export { AuthorityClient, splitAuthorityItemsIntoChunks, } from './client.js';
 export { AuthoritySDK, openSecurityCenter };
 //# sourceMappingURL=index.js.map

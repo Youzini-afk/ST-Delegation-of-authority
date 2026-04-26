@@ -295,7 +295,6 @@ export class AuthorityClient {
             },
             bulkUpsert: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量写入能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
@@ -372,7 +371,6 @@ export class AuthorityClient {
             },
             bulkDelete: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量删除能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
@@ -403,7 +401,6 @@ export class AuthorityClient {
             },
             bulkLink: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量建边能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
@@ -434,7 +431,6 @@ export class AuthorityClient {
             },
             bulkUnlink: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量删边能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,

@@ -589,7 +589,6 @@ export class AuthorityClient {
             },
             bulkUpsert: async input => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量写入能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
@@ -666,7 +665,6 @@ export class AuthorityClient {
             },
             bulkDelete: async input => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量删除能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
@@ -697,7 +695,6 @@ export class AuthorityClient {
             },
             bulkLink: async input => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量建边能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
@@ -728,7 +725,6 @@ export class AuthorityClient {
             },
             bulkUnlink: async input => {
                 const database = getTriviumDatabaseName(input.database);
-                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量删边能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
@@ -1264,7 +1260,7 @@ export class AuthorityClient {
             reason: `分块批量写入或更新 Trivium 节点（${database}）`,
         });
 
-        const result = await this.runTriviumChunkedMutation(
+        const result = await this.runTriviumChunkedMutation<TriviumBulkUpsertRequest, TriviumBulkUpsertResponse>(
             {
                 ...input,
                 database,
@@ -1309,7 +1305,7 @@ export class AuthorityClient {
             reason: `分块批量删除 Trivium 节点（${database}）`,
         });
 
-        return await this.runTriviumChunkedMutation(
+        return await this.runTriviumChunkedMutation<TriviumBulkDeleteRequest, TriviumBulkMutationResponse>(
             {
                 ...input,
                 database,
@@ -1331,7 +1327,7 @@ export class AuthorityClient {
             reason: `分块批量建立 Trivium 图边（${database}）`,
         });
 
-        return await this.runTriviumChunkedMutation(
+        return await this.runTriviumChunkedMutation<TriviumBulkLinkRequest, TriviumBulkMutationResponse>(
             {
                 ...input,
                 database,
@@ -1353,7 +1349,7 @@ export class AuthorityClient {
             reason: `分块批量删除 Trivium 图边（${database}）`,
         });
 
-        return await this.runTriviumChunkedMutation(
+        return await this.runTriviumChunkedMutation<TriviumBulkUnlinkRequest, TriviumBulkMutationResponse>(
             {
                 ...input,
                 database,
@@ -1363,7 +1359,7 @@ export class AuthorityClient {
         );
     }
 
-    private async runTriviumChunkedMutation<Input extends { items: Item[] }, Response extends TriviumBulkMutationResponse, Item>(
+    private async runTriviumChunkedMutation<Input extends { items: unknown[] }, Response extends TriviumBulkMutationResponse>(
         input: Input,
         options: AuthorityChunkedTriviumOptions<Response>,
         execute: (chunkInput: Input) => Promise<Response>,
@@ -1382,7 +1378,7 @@ export class AuthorityClient {
                 const response = await execute({
                     ...input,
                     items: chunk.items,
-                });
+                } as Input);
                 const normalizedFailures = response.failures.map(failure => {
                     const globalIndex = chunk.itemOffset + failure.index;
                     return {
