@@ -1745,11 +1745,13 @@ fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError>
             continue;
         }
 
-        transaction.execute_batch(&migration.statement).map_err(to_sql_error)?;
+        transaction
+            .execute_batch(&migration.statement)
+            .map_err(|error| to_sql_migration_error(migration_id, &migration.statement, error))?;
         let insert_statement = format!("INSERT INTO {} (id, applied_at) VALUES (?1, ?2)", table_name);
         transaction
             .execute(&insert_statement, (migration_id, current_timestamp_millis()))
-            .map_err(to_sql_error)?;
+            .map_err(|error| to_sql_migration_error(migration_id, &insert_statement, error))?;
         applied_ids.insert(migration_id.to_string());
         applied.push(migration_id.to_string());
     }
@@ -5921,6 +5923,32 @@ fn to_sql_error(error: rusqlite::Error) -> ApiError {
     }
 }
 
+fn to_sql_migration_error(migration_id: &str, statement: &str, error: rusqlite::Error) -> ApiError {
+    ApiError {
+        status_code: 400,
+        message: format!(
+            "sql_error: migration {migration_id} failed: {error} [statement: {}]",
+            preview_sql_statement(statement),
+        ),
+    }
+}
+
+fn preview_sql_statement(statement: &str) -> String {
+    let collapsed = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut preview = String::new();
+    let mut chars = collapsed.chars();
+    for _ in 0..120 {
+        match chars.next() {
+            Some(ch) => preview.push(ch),
+            None => return collapsed,
+        }
+    }
+    if chars.next().is_some() {
+        preview.push_str("...");
+    }
+    preview
+}
+
 fn to_trivium_error(error: impl std::fmt::Display) -> ApiError {
     ApiError {
         status_code: 400,
@@ -6288,6 +6316,22 @@ mod tests {
         }).expect("second migration should succeed");
         assert_eq!(second["applied"].as_array().expect("applied should be an array").len(), 0);
         assert_eq!(second["skipped"].as_array().expect("skipped should be an array").len(), 2);
+    }
+
+    #[test]
+    fn sql_migration_errors_include_id_and_statement_preview() {
+        let db_path = test_db_path("sql-migration-error-preview");
+        let error = handle_sql_migrate(SqlMigrateRequest {
+            db_path,
+            migrations: vec![SqlMigrationInput {
+                id: String::from("002_broken"),
+                statement: String::from("CREATE TABL broken_records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+            }],
+            table_name: None,
+        }).expect_err("broken migration should fail");
+
+        assert!(error.message.contains("migration 002_broken failed"));
+        assert!(error.message.contains("CREATE TABL broken_records"));
     }
 
     #[test]

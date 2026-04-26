@@ -5,7 +5,7 @@
   "sdkVersion": "0.1.0",
   "assetHash": "4812eaffa9333e1901e351fb7958054944cae41d6aadfe41b9b6041572dbea74",
   "coreVersion": "0.1.0",
-  "coreArtifactHash": "6c8cf7aeac296a6179b5229bb2bc608c69863279279fd515c0251e7968577527",
+  "coreArtifactHash": "5acaca6d3fb8949c8ad33033b24710f1875c2aaab7271fecf7525cffa0e08efd",
   "coreArtifactPlatform": "win32-x64",
   "coreArtifactPlatforms": [
     "win32-x64"
@@ -15,10 +15,10 @@
       "platform": "win32",
       "arch": "x64",
       "binaryName": "authority-core.exe",
-      "binarySha256": "d6f902aebe641bba31f5f4068a98ac2165b419afff75c3c9dd577e21c9185502",
-      "artifactHash": "72ff34ba5b67ef23c1c7a4972fb535d335518541b7b3382d500b10482795b1d2"
+      "binarySha256": "c8e192b80534ee62af1943bd8565dea703affcbcef012d75d14a211003c866a8",
+      "artifactHash": "5ff685118d5b7894c2ab93049418c5c4436475ba5f51c768a3c0828d25991c43"
     }
   },
-  "coreBinarySha256": "d6f902aebe641bba31f5f4068a98ac2165b419afff75c3c9dd577e21c9185502",
-  "buildTime": "2026-04-26T16:54:23.595Z"
+  "coreBinarySha256": "c8e192b80534ee62af1943bd8565dea703affcbcef012d75d14a211003c866a8",
+  "buildTime": "2026-04-26T16:58:35.675Z"
 }
