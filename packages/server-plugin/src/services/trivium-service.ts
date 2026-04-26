@@ -14,6 +14,7 @@ import type {
     TriviumBulkUpsertResponse,
     TriviumDeleteRequest,
     TriviumFilterWhereRequest,
+    TriviumFilterWhereResponse,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumNeighborsRequest,
@@ -21,6 +22,7 @@ import type {
     TriviumNodeReference,
     TriviumNodeView,
     TriviumQueryRequest,
+    TriviumQueryResponse,
     TriviumQueryRow,
     TriviumResolveIdRequest,
     TriviumResolveIdResponse,
@@ -314,15 +316,33 @@ export class TriviumService {
     }
 
     async filterWhere(user: UserContext, extensionId: string, request: TriviumFilterWhereRequest): Promise<TriviumNodeView[]> {
+        const response = await this.filterWherePage(user, extensionId, request);
+        return response.nodes;
+    }
+
+    async filterWherePage(user: UserContext, extensionId: string, request: TriviumFilterWhereRequest): Promise<TriviumFilterWhereResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichNodes(mappingDbPath, await this.core.filterWhereTrivium(dbPath, { ...request, database }));
+        const response = await this.core.filterWhereTriviumPage(dbPath, { ...request, database });
+        return {
+            ...response,
+            nodes: await this.enrichNodes(mappingDbPath, response.nodes),
+        };
     }
 
     async query(user: UserContext, extensionId: string, request: TriviumQueryRequest): Promise<TriviumQueryRow[]> {
+        const response = await this.queryPage(user, extensionId, request);
+        return response.rows;
+    }
+
+    async queryPage(user: UserContext, extensionId: string, request: TriviumQueryRequest): Promise<TriviumQueryResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichRows(mappingDbPath, await this.core.queryTrivium(dbPath, { ...request, database }));
+        const response = await this.core.queryTriviumPage(dbPath, { ...request, database });
+        return {
+            ...response,
+            rows: await this.enrichRows(mappingDbPath, response.rows),
+        };
     }
 
     async flush(user: UserContext, extensionId: string, request: TriviumFlushRequest = {}): Promise<void> {

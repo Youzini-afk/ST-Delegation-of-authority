@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+    CursorPageInfo,
     ControlTriviumBulkUpsertRequest,
     ControlTriviumBulkUpsertResponse,
     SqlExecResult,
@@ -12,6 +13,8 @@ import type {
     TriviumBulkMutationResponse,
     TriviumNodeView,
     TriviumSearchHit,
+    TriviumFilterWhereResponse,
+    TriviumQueryResponse,
 } from '@stdo/shared-types';
 import { TriviumService } from './trivium-service.js';
 import type { CoreService } from './core-service.js';
@@ -101,11 +104,75 @@ describe('TriviumService', () => {
         });
         expect(resolved.id).toBeNull();
     });
+
+    it('returns page-aware enriched filter/query responses while keeping array wrappers compatible', async () => {
+        const user = createUser(dirs);
+        const trivium = new TriviumService(createMockCore());
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha', vector: [1, 0], payload: { name: 'alpha' } },
+                { externalId: 'beta', vector: [0, 1], payload: { name: 'beta' } },
+            ],
+        });
+
+        const filterPage = await trivium.filterWherePage(user, 'third-party/ext-a', {
+            database: 'graph',
+            condition: { name: { $exists: true } },
+            page: { limit: 1 },
+        });
+        expect(filterPage.nodes).toHaveLength(1);
+        expect(filterPage.nodes[0]?.externalId).toBe('alpha');
+        expect(filterPage.page).toEqual({
+            nextCursor: '1',
+            limit: 1,
+            hasMore: true,
+            totalCount: 2,
+        });
+
+        const filterRows = await trivium.filterWhere(user, 'third-party/ext-a', {
+            database: 'graph',
+            condition: { name: { $exists: true } },
+            page: { limit: 1 },
+        });
+        expect(filterRows.map(node => node.externalId)).toEqual(['alpha']);
+
+        const queryPage = await trivium.queryPage(user, 'third-party/ext-a', {
+            database: 'graph',
+            cypher: 'MATCH (n) RETURN n',
+            page: { limit: 1 },
+        });
+        expect(queryPage.rows).toHaveLength(1);
+        expect(queryPage.rows[0]?.n?.externalId).toBe('alpha');
+        expect(queryPage.page).toEqual({
+            nextCursor: '1',
+            limit: 1,
+            hasMore: true,
+            totalCount: 2,
+        });
+
+        const queryRows = await trivium.query(user, 'third-party/ext-a', {
+            database: 'graph',
+            cypher: 'MATCH (n) RETURN n',
+            page: { limit: 1 },
+        });
+        expect(queryRows.map(row => row.n?.externalId)).toEqual(['alpha']);
+    });
 });
 
 function createMockCore(): CoreService {
     const mappings = new Map<string, { nextId: number; rows: MappingRow[]; meta: Map<string, string> }>();
     const databases = new Map<string, Map<number, MockNode>>();
+
+    function toPage(totalCount: number, limit: number): CursorPageInfo {
+        return {
+            nextCursor: totalCount > limit ? String(limit) : null,
+            limit,
+            hasMore: totalCount > limit,
+            totalCount,
+        };
+    }
 
     function touch(filePath: string): void {
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -302,6 +369,26 @@ function createMockCore(): CoreService {
             return [...getDatabase(dbPath).values()]
                 .sort((left, right) => left.id - right.id)
                 .map(node => ({ id: node.id, score: 1, payload: node.payload }));
+        },
+        async filterWhereTriviumPage(dbPath: string, request: { page?: { limit?: number } }): Promise<TriviumFilterWhereResponse> {
+            const nodes = [...getDatabase(dbPath).values()]
+                .sort((left, right) => left.id - right.id)
+                .map(node => JSON.parse(JSON.stringify(node)) as TriviumNodeView);
+            const limit = request.page?.limit ?? nodes.length;
+            return {
+                nodes: nodes.slice(0, limit),
+                ...(request.page ? { page: toPage(nodes.length, limit) } : {}),
+            };
+        },
+        async queryTriviumPage(dbPath: string, request: { page?: { limit?: number } }): Promise<TriviumQueryResponse> {
+            const rows = [...getDatabase(dbPath).values()]
+                .sort((left, right) => left.id - right.id)
+                .map(node => ({ n: JSON.parse(JSON.stringify(node)) as TriviumNodeView }));
+            const limit = request.page?.limit ?? rows.length;
+            return {
+                rows: rows.slice(0, limit),
+                ...(request.page ? { page: toPage(rows.length, limit) } : {}),
+            };
         },
     } as unknown as CoreService;
 }

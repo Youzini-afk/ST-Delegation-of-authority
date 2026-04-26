@@ -47,6 +47,7 @@ import type {
     TriviumBuildTextIndexRequest,
     TriviumDeleteRequest,
     TriviumFilterWhereRequest,
+    TriviumFilterWhereResponse,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumIndexKeywordRequest,
@@ -60,6 +61,7 @@ import type {
     TriviumNeighborsResponse,
     TriviumNodeView,
     TriviumQueryRequest,
+    TriviumQueryResponse,
     TriviumQueryRow,
     TriviumResolveIdRequest,
     TriviumResolveIdResponse,
@@ -180,7 +182,9 @@ export class AuthorityClient {
         searchAdvanced: (input: TriviumSearchAdvancedRequest) => Promise<TriviumSearchHit[]>;
         searchHybrid: (input: TriviumSearchHybridRequest) => Promise<TriviumSearchHit[]>;
         filterWhere: (input: TriviumFilterWhereRequest) => Promise<TriviumNodeView[]>;
+        filterWherePage: (input: TriviumFilterWhereRequest) => Promise<TriviumFilterWhereResponse>;
         query: (input: TriviumQueryRequest) => Promise<TriviumQueryRow[]>;
+        queryPage: (input: TriviumQueryRequest) => Promise<TriviumQueryResponse>;
         indexText: (input: TriviumIndexTextRequest) => Promise<void>;
         indexKeyword: (input: TriviumIndexKeywordRequest) => Promise<void>;
         buildTextIndex: (input?: TriviumBuildTextIndexRequest) => Promise<void>;
@@ -699,36 +703,42 @@ export class AuthorityClient {
                 return response.hits;
             },
             filterWhere: async input => {
+                const response = await this.trivium.filterWherePage(input);
+                return response.nodes;
+            },
+            filterWherePage: async input => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `过滤查询 Trivium 数据库 ${database}`,
                 });
-                const response = await this.requestWithSession<{ nodes: TriviumNodeView[] }>('/trivium/filter-where', {
+                return await this.requestWithSession<TriviumFilterWhereResponse>('/trivium/filter-where', {
                     method: 'POST',
                     body: {
                         ...input,
                         database,
                     },
                 });
-                return response.nodes;
             },
             query: async input => {
+                const response = await this.trivium.queryPage(input);
+                return response.rows;
+            },
+            queryPage: async input => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `图查询 Trivium 数据库 ${database}`,
                 });
-                const response = await this.requestWithSession<{ rows: TriviumQueryRow[] }>('/trivium/query', {
+                return await this.requestWithSession<TriviumQueryResponse>('/trivium/query', {
                     method: 'POST',
                     body: {
                         ...input,
                         database,
                     },
                 });
-                return response.rows;
             },
             indexText: async input => {
                 const database = getTriviumDatabaseName(input.database);

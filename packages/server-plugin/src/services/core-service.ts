@@ -85,6 +85,7 @@ import type {
     TriviumBuildTextIndexRequest,
     TriviumBulkMutationResponse,
     TriviumFilterWhereRequest,
+    TriviumFilterWhereResponse,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumIndexKeywordRequest,
@@ -97,6 +98,7 @@ import type {
     TriviumNeighborsResponse,
     TriviumNodeView,
     TriviumQueryRequest,
+    TriviumQueryResponse,
     TriviumQueryRow,
     TriviumSearchHit,
     TriviumSearchAdvancedRequest,
@@ -128,6 +130,7 @@ interface CoreSqlRequestPayload {
     dbPath: string;
     statement: string;
     params?: SqlQueryRequest['params'];
+    page?: SqlQueryRequest['page'];
 }
 
 interface CoreSqlBatchRequestPayload {
@@ -348,6 +351,7 @@ export class CoreService {
             dbPath,
             statement: request.statement,
             params: request.params ?? [],
+            ...(request.page === undefined ? {} : { page: request.page }),
         } satisfies CoreSqlRequestPayload);
     }
 
@@ -538,19 +542,31 @@ export class CoreService {
     }
 
     async filterWhereTrivium(dbPath: string, request: TriviumFilterWhereRequest): Promise<TriviumNodeView[]> {
-        const response = await this.request<{ nodes: TriviumNodeView[] }>('/v1/trivium/filter-where', {
-            ...buildTriviumOpenPayload(dbPath, request),
-            condition: request.condition,
-        });
+        const response = await this.filterWhereTriviumPage(dbPath, request);
         return response.nodes;
     }
 
+    async filterWhereTriviumPage(dbPath: string, request: TriviumFilterWhereRequest): Promise<TriviumFilterWhereResponse> {
+        const response = await this.request<TriviumFilterWhereResponse>('/v1/trivium/filter-where', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            condition: request.condition,
+            ...(request.page === undefined ? {} : { page: request.page }),
+        });
+        return response;
+    }
+
     async queryTrivium(dbPath: string, request: TriviumQueryRequest): Promise<TriviumQueryRow[]> {
-        const response = await this.request<{ rows: TriviumQueryRow[] }>('/v1/trivium/query', {
+        const response = await this.queryTriviumPage(dbPath, request);
+        return response.rows;
+    }
+
+    async queryTriviumPage(dbPath: string, request: TriviumQueryRequest): Promise<TriviumQueryResponse> {
+        const response = await this.request<TriviumQueryResponse>('/v1/trivium/query', {
             ...buildTriviumOpenPayload(dbPath, request),
             cypher: request.cypher,
+            ...(request.page === undefined ? {} : { page: request.page }),
         });
-        return response.rows;
+        return response;
     }
 
     async indexTextTrivium(dbPath: string, request: TriviumIndexTextRequest): Promise<void> {

@@ -1419,12 +1419,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const nodes = await runtime.trivium.filterWhere(user, session.extension.id, payload);
+            const response = await runtime.trivium.filterWherePage(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium filter where', {
                 database,
-                count: nodes.length,
+                count: response.nodes.length,
             });
-            ok(res, { nodes });
+            ok(res, response);
         }
         catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
@@ -1439,12 +1439,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const rows = await runtime.trivium.query(user, session.extension.id, payload);
+            const response = await runtime.trivium.queryPage(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium query', {
                 database,
-                rowCount: rows.length,
+                rowCount: response.rows.length,
             });
-            ok(res, { rows });
+            ok(res, response);
         }
         catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
@@ -2229,6 +2229,7 @@ class CoreService {
             dbPath,
             statement: request.statement,
             params: request.params ?? [],
+            ...(request.page === undefined ? {} : { page: request.page }),
         });
     }
     async execSql(dbPath, request) {
@@ -2398,18 +2399,28 @@ class CoreService {
         return response.hits;
     }
     async filterWhereTrivium(dbPath, request) {
+        const response = await this.filterWhereTriviumPage(dbPath, request);
+        return response.nodes;
+    }
+    async filterWhereTriviumPage(dbPath, request) {
         const response = await this.request('/v1/trivium/filter-where', {
             ...buildTriviumOpenPayload(dbPath, request),
             condition: request.condition,
+            ...(request.page === undefined ? {} : { page: request.page }),
         });
-        return response.nodes;
+        return response;
     }
     async queryTrivium(dbPath, request) {
+        const response = await this.queryTriviumPage(dbPath, request);
+        return response.rows;
+    }
+    async queryTriviumPage(dbPath, request) {
         const response = await this.request('/v1/trivium/query', {
             ...buildTriviumOpenPayload(dbPath, request),
             cypher: request.cypher,
+            ...(request.page === undefined ? {} : { page: request.page }),
         });
-        return response.rows;
+        return response;
     }
     async indexTextTrivium(dbPath, request) {
         await this.request('/v1/trivium/index-text', {
@@ -4672,14 +4683,30 @@ class TriviumService {
         return await this.enrichSearchHits(mappingDbPath, await this.core.searchHybridTrivium(dbPath, { ...request, database }));
     }
     async filterWhere(user, extensionId, request) {
+        const response = await this.filterWherePage(user, extensionId, request);
+        return response.nodes;
+    }
+    async filterWherePage(user, extensionId, request) {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichNodes(mappingDbPath, await this.core.filterWhereTrivium(dbPath, { ...request, database }));
+        const response = await this.core.filterWhereTriviumPage(dbPath, { ...request, database });
+        return {
+            ...response,
+            nodes: await this.enrichNodes(mappingDbPath, response.nodes),
+        };
     }
     async query(user, extensionId, request) {
+        const response = await this.queryPage(user, extensionId, request);
+        return response.rows;
+    }
+    async queryPage(user, extensionId, request) {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichRows(mappingDbPath, await this.core.queryTrivium(dbPath, { ...request, database }));
+        const response = await this.core.queryTriviumPage(dbPath, { ...request, database });
+        return {
+            ...response,
+            rows: await this.enrichRows(mappingDbPath, response.rows),
+        };
     }
     async flush(user, extensionId, request = {}) {
         const database = getTriviumDatabaseName(request.database);

@@ -503,36 +503,42 @@ export class AuthorityClient {
                 return response.hits;
             },
             filterWhere: async (input) => {
+                const response = await this.trivium.filterWherePage(input);
+                return response.nodes;
+            },
+            filterWherePage: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `过滤查询 Trivium 数据库 ${database}`,
                 });
-                const response = await this.requestWithSession('/trivium/filter-where', {
+                return await this.requestWithSession('/trivium/filter-where', {
                     method: 'POST',
                     body: {
                         ...input,
                         database,
                     },
                 });
-                return response.nodes;
             },
             query: async (input) => {
+                const response = await this.trivium.queryPage(input);
+                return response.rows;
+            },
+            queryPage: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `图查询 Trivium 数据库 ${database}`,
                 });
-                const response = await this.requestWithSession('/trivium/query', {
+                return await this.requestWithSession('/trivium/query', {
                     method: 'POST',
                     body: {
                         ...input,
                         database,
                     },
                 });
-                return response.rows;
             },
             indexText: async (input) => {
                 const database = getTriviumDatabaseName(input.database);

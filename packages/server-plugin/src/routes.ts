@@ -1407,12 +1407,12 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const nodes = await runtime.trivium.filterWhere(user, session.extension.id, payload);
+            const response = await runtime.trivium.filterWherePage(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium filter where', {
                 database,
-                count: nodes.length,
+                count: response.nodes.length,
             });
-            ok(res, { nodes });
+            ok(res, response);
         } catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
         }
@@ -1428,12 +1428,12 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const rows = await runtime.trivium.query(user, session.extension.id, payload);
+            const response = await runtime.trivium.queryPage(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium query', {
                 database,
-                rowCount: rows.length,
+                rowCount: response.rows.length,
             });
-            ok(res, { rows });
+            ok(res, response);
         } catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
         }
