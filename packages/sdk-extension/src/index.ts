@@ -10,8 +10,11 @@ window.STAuthority = {
 
 export {
     AuthorityClient,
+    AuthorityPermissionError,
+    isAuthorityPermissionError,
     splitAuthorityItemsIntoChunks,
 } from './client.js';
+export { AuthorityApiError } from './api.js';
 export type {
     AuthorityChunk,
     AuthorityChunkSplitOptions,
@@ -22,5 +25,8 @@ export type {
     AuthorityChunkedTriviumProgress,
     AuthorityChunkedTriviumUpsertResponseItem,
     AuthorityChunkedTriviumUpsertResult,
+    AuthorityPermissionErrorCode,
+    AuthorityPermissionErrorDecision,
+    AuthorityPermissionErrorDetails,
 } from './client.js';
 export { AuthoritySDK, openSecurityCenter };

@@ -6,6 +6,13 @@ import type {
 } from '@stdo/shared-types';
 
 const authorityRequestMock = vi.hoisted(() => vi.fn());
+const toastrMock = vi.hoisted(() => ({
+    warning: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+}));
+
+(globalThis as typeof globalThis & { toastr: typeof toastrMock }).toastr = toastrMock;
 
 vi.mock('./api.js', () => ({
     authorityRequest: authorityRequestMock,
@@ -24,7 +31,11 @@ vi.mock('./security-center.js', () => ({
 
 describe('AuthorityClient', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
         authorityRequestMock.mockReset();
+        toastrMock.warning.mockReset();
+        toastrMock.success.mockReset();
+        toastrMock.error.mockReset();
     });
 
     it('caches probe responses and exposes feature checks', async () => {
@@ -60,6 +71,93 @@ describe('AuthorityClient', () => {
 
         await expect(client.trivium.queryPage({ cypher: 'MATCH (n) RETURN n' })).rejects.toThrow('Authority 当前版本尚未提供 Trivium 图查询分页能力');
         expect(authorityRequestMock).toHaveBeenCalledWith('/probe', { method: 'POST' });
+    });
+
+    it('throws AuthorityPermissionError for blocked permissions and opens security center', async () => {
+        const { AuthorityClient, AuthorityPermissionError, isAuthorityPermissionError } = await import('./client.js');
+        const { openSecurityCenter } = await import('./security-center.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const blocked = {
+            decision: 'blocked',
+            key: 'jobs.background:reindex',
+            riskLevel: 'medium',
+            target: 'reindex',
+            resource: 'jobs.background',
+        } as const;
+
+        Object.assign(client as object, {
+            evaluatePermission: vi.fn().mockResolvedValue(blocked),
+        });
+
+        const error = await client.ensurePermission({
+            resource: 'jobs.background',
+            target: 'reindex',
+            reason: '运行重建任务',
+        }).catch(value => value);
+
+        expect(error).toBeInstanceOf(AuthorityPermissionError);
+        expect(isAuthorityPermissionError(error)).toBe(true);
+        expect(error).toMatchObject({
+            code: 'permission_blocked',
+            decision: 'blocked',
+            key: 'jobs.background:reindex',
+            riskLevel: 'medium',
+            target: 'reindex',
+            resource: 'jobs.background',
+        });
+        expect(toastrMock.warning).toHaveBeenCalledTimes(1);
+        expect(openSecurityCenter).toHaveBeenCalledWith({ focusExtensionId: 'third-party/ext-a' });
+    });
+
+    it('throws AuthorityPermissionError for unresolved prompts without opening security center', async () => {
+        const { AuthorityClient, AuthorityPermissionError } = await import('./client.js');
+        const { openSecurityCenter } = await import('./security-center.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const prompt = {
+            decision: 'prompt',
+            key: 'storage.kv:*',
+            riskLevel: 'low',
+            target: '*',
+            resource: 'storage.kv',
+        } as const;
+
+        Object.assign(client as object, {
+            evaluatePermission: vi.fn().mockResolvedValue(prompt),
+            requestPermission: vi.fn().mockResolvedValue(prompt),
+        });
+
+        const error = await client.ensurePermission({
+            resource: 'storage.kv',
+            reason: '读取测试键',
+        }).catch(value => value);
+
+        expect(error).toBeInstanceOf(AuthorityPermissionError);
+        expect(error).toMatchObject({
+            code: 'permission_not_granted',
+            decision: 'prompt',
+            key: 'storage.kv:*',
+            riskLevel: 'low',
+            target: '*',
+            resource: 'storage.kv',
+        });
+        expect(toastrMock.warning).toHaveBeenCalledTimes(1);
+        expect(openSecurityCenter).not.toHaveBeenCalled();
     });
 
     it('splits items by chunk item count and estimated json bytes', async () => {

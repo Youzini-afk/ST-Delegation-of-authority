@@ -1,19 +1,19 @@
+use axum::Json;
+use axum::Router;
+use axum::extract::Request;
+use axum::middleware;
+use axum::routing::{get, post};
 use axum::{
     extract::State,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use axum::middleware;
-use axum::routing::{get, post};
-use axum::Json;
-use axum::extract::Request;
-use axum::Router;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use half::f16;
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use rusqlite::types::{Value as SqliteValue, ValueRef};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json};
@@ -25,19 +25,22 @@ use std::io::Read;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
 #[cfg(test)]
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tower_http::timeout::TimeoutLayer;
 use tower_http::limit::RequestBodyLimitLayer;
-use triviumdb::database::{Config as TriviumConfig, Database as TriviumDatabase, SearchConfig as TriviumSearchConfig, StorageMode as TriviumStorageMode};
+use tower_http::timeout::TimeoutLayer;
+use triviumdb::database::{
+    Config as TriviumConfig, Database as TriviumDatabase, SearchConfig as TriviumSearchConfig,
+    StorageMode as TriviumStorageMode,
+};
 use triviumdb::filter::Filter as TriviumFilter;
 use triviumdb::node::{NodeView as TriviumRawNodeView, SearchHit as TriviumRawSearchHit};
 use triviumdb::storage::wal::SyncMode as TriviumSyncMode;
@@ -119,7 +122,8 @@ struct ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let body = json!({ "error": self.message });
         (status, Json(body)).into_response()
     }
@@ -957,6 +961,35 @@ struct ControlPoliciesDocument {
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+enum JobAttemptEvent {
+    Started,
+    RetryScheduled,
+    Completed,
+    Failed,
+    Cancelled,
+    Recovered,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JobAttemptRecord {
+    attempt: i64,
+    event: JobAttemptEvent,
+    timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backoff_ms: Option<i64>,
+}
+
+fn is_none_or_empty_attempt_history(value: &Option<Vec<JobAttemptRecord>>) -> bool {
+    value.as_ref().map(|items| items.is_empty()).unwrap_or(true)
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ControlJobRecord {
     id: String,
     extension_id: String,
@@ -985,6 +1018,8 @@ struct ControlJobRecord {
     max_attempts: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cancel_requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "is_none_or_empty_attempt_history")]
+    attempt_history: Option<Vec<JobAttemptRecord>>,
 }
 
 fn is_zero(value: &i64) -> bool {
@@ -1205,9 +1240,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or(8173);
     let token = env::var("AUTHORITY_CORE_TOKEN").unwrap_or_default();
     let version = env::var("AUTHORITY_CORE_VERSION").unwrap_or_else(|_| String::from("0.0.0-dev"));
-    let build_hash = env::var("AUTHORITY_CORE_BUILD_HASH").ok().filter(|value| !value.trim().is_empty());
+    let build_hash = env::var("AUTHORITY_CORE_BUILD_HASH")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
     let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-    let api_version = env::var("AUTHORITY_CORE_API_VERSION").unwrap_or_else(|_| String::from("authority-core/v1"));
+    let api_version = env::var("AUTHORITY_CORE_API_VERSION")
+        .unwrap_or_else(|_| String::from("authority-core/v1"));
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
@@ -1267,7 +1305,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/trivium/query", post(v1_trivium_query))
         .route("/trivium/index-text", post(v1_trivium_index_text))
         .route("/trivium/index-keyword", post(v1_trivium_index_keyword))
-        .route("/trivium/build-text-index", post(v1_trivium_build_text_index))
+        .route(
+            "/trivium/build-text-index",
+            post(v1_trivium_build_text_index),
+        )
         .route("/trivium/flush", post(v1_trivium_flush))
         .route("/trivium/stat", post(v1_trivium_stat))
         .route("/control/session/init", post(v1_control_session_init))
@@ -1290,8 +1331,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/control/events/poll", post(v1_control_events_poll))
         .layer(TimeoutLayer::new(Duration::from_secs(REQUEST_TIMEOUT_SECS)))
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_SIZE))
-        .layer(middleware::from_fn_with_state(config.clone(), concurrency_guard))
-        .layer(middleware::from_fn_with_state(config.clone(), auth_middleware));
+        .layer(middleware::from_fn_with_state(
+            config.clone(),
+            concurrency_guard,
+        ))
+        .layer(middleware::from_fn_with_state(
+            config.clone(),
+            auth_middleware,
+        ));
 
     let app = Router::new()
         .route("/health", get(health_handler))
@@ -1305,7 +1352,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-type JobRunner = fn(&str, &str, &ControlJobRecord, Arc<AtomicBool>, Option<u64>, i64) -> Result<(), ApiError>;
+type JobRunner =
+    fn(&str, &str, &ControlJobRecord, Arc<AtomicBool>, Option<u64>, i64) -> Result<(), ApiError>;
 
 fn create_runtime_state() -> Arc<RuntimeState> {
     let runtime = Arc::new(RuntimeState {
@@ -1346,17 +1394,24 @@ fn job_worker_loop(runtime: Arc<RuntimeState>) {
     }
 }
 
-fn enqueue_job_dispatch(runtime: &Arc<RuntimeState>, dispatch: JobDispatch) -> Result<(), ApiError> {
+fn enqueue_job_dispatch(
+    runtime: &Arc<RuntimeState>,
+    dispatch: JobDispatch,
+) -> Result<(), ApiError> {
     let mut state = runtime.job_queue.state.lock().map_err(|_| ApiError {
         status_code: 500,
         message: String::from("internal_error: job queue lock poisoned"),
     })?;
     if state.items.len() >= MAX_JOB_QUEUE_SIZE {
         set_runtime_last_error(runtime, "job_queue_full");
-        emit_runtime_event("warning", "job_queue_full", json!({
-            "maxJobQueueSize": MAX_JOB_QUEUE_SIZE,
-            "queuedJobCount": runtime.queued_job_count.load(Ordering::SeqCst),
-        }));
+        emit_runtime_event(
+            "warning",
+            "job_queue_full",
+            json!({
+                "maxJobQueueSize": MAX_JOB_QUEUE_SIZE,
+                "queuedJobCount": runtime.queued_job_count.load(Ordering::SeqCst),
+            }),
+        );
         return Err(ApiError {
             status_code: 503,
             message: String::from("job_queue_full"),
@@ -1392,13 +1447,22 @@ fn process_job_dispatch(dispatch: JobDispatch, runtime: &Arc<RuntimeState>) {
     let current = match fetch_job_for_dispatch(&dispatch) {
         Ok(job) => job,
         Err(error) => {
-            let _ = mark_job_failed(&dispatch.db_path, &dispatch.user_handle, &dispatch.job, &error.message);
+            let _ = mark_job_failed(
+                &dispatch.db_path,
+                &dispatch.user_handle,
+                &dispatch.job,
+                &error.message,
+            );
             set_runtime_last_error(runtime, error.message.clone());
-            emit_runtime_event("error", "job_dispatch_fetch_failed", json!({
-                "jobId": dispatch.job.id,
-                "jobType": dispatch.job.job_type,
-                "message": error.message,
-            }));
+            emit_runtime_event(
+                "error",
+                "job_dispatch_fetch_failed",
+                json!({
+                    "jobId": dispatch.job.id,
+                    "jobType": dispatch.job.job_type,
+                    "message": error.message,
+                }),
+            );
             return;
         }
     };
@@ -1415,18 +1479,32 @@ fn process_job_dispatch(dispatch: JobDispatch, runtime: &Arc<RuntimeState>) {
     let started = Instant::now();
     let run_result = run_job_dispatch(&dispatch, Arc::clone(&control));
     if let Err(error) = run_result {
-        let _ = mark_job_failed(&dispatch.db_path, &dispatch.user_handle, &dispatch.job, &error.message);
+        let _ = mark_job_failed(
+            &dispatch.db_path,
+            &dispatch.user_handle,
+            &dispatch.job,
+            &error.message,
+        );
         set_runtime_last_error(runtime, error.message.clone());
-        emit_runtime_event("error", "job_failed", json!({
-            "jobId": dispatch.job.id,
-            "jobType": dispatch.job.job_type,
-            "message": error.message,
-        }));
+        emit_runtime_event(
+            "error",
+            "job_failed",
+            json!({
+                "jobId": dispatch.job.id,
+                "jobType": dispatch.job.job_type,
+                "message": error.message,
+            }),
+        );
     } else {
-        emit_if_slow("job_slow", started.elapsed(), SLOW_JOB_LOG_MS, json!({
-            "jobId": dispatch.job.id,
-            "jobType": dispatch.job.job_type,
-        }));
+        emit_if_slow(
+            "job_slow",
+            started.elapsed(),
+            SLOW_JOB_LOG_MS,
+            json!({
+                "jobId": dispatch.job.id,
+                "jobType": dispatch.job.job_type,
+            }),
+        );
         if started.elapsed().as_millis() >= SLOW_JOB_LOG_MS as u128 {
             if let Ok(connection) = open_connection(&dispatch.db_path) {
                 let _ = ensure_control_schema(&connection);
@@ -1461,7 +1539,9 @@ fn run_job_dispatch(dispatch: &JobDispatch, control: Arc<AtomicBool>) -> Result<
 
     loop {
         let current = fetch_job_for_dispatch(dispatch)?;
-        if matches!(current.status.as_str(), "cancelled" | "completed") || control.load(Ordering::SeqCst) {
+        if matches!(current.status.as_str(), "cancelled" | "completed")
+            || control.load(Ordering::SeqCst)
+        {
             return Ok(());
         }
 
@@ -1502,11 +1582,17 @@ fn run_job_dispatch(dispatch: &JobDispatch, control: Arc<AtomicBool>) -> Result<
 fn fetch_job_for_dispatch(dispatch: &JobDispatch) -> Result<ControlJobRecord, ApiError> {
     let connection = open_connection(&dispatch.db_path)?;
     ensure_control_schema(&connection)?;
-    Ok(fetch_control_job(&connection, &dispatch.user_handle, &dispatch.job.id)?
-        .unwrap_or_else(|| dispatch.job.clone()))
+    Ok(
+        fetch_control_job(&connection, &dispatch.user_handle, &dispatch.job.id)?
+            .unwrap_or_else(|| dispatch.job.clone()),
+    )
 }
 
-fn recover_stale_jobs(connection: &Connection, user_handle: &str, runtime: &Arc<RuntimeState>) -> Result<usize, ApiError> {
+fn recover_stale_jobs(
+    connection: &Connection,
+    user_handle: &str,
+    runtime: &Arc<RuntimeState>,
+) -> Result<usize, ApiError> {
     let mut statement = connection.prepare(
         "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
          FROM authority_jobs
@@ -1519,14 +1605,14 @@ fn recover_stale_jobs(connection: &Connection, user_handle: &str, runtime: &Arc<
 
     let mut recovered = 0usize;
     for row in rows {
-        let job = row.map_err(to_sql_error)?;
+        let job = attach_job_attempt_history(connection, user_handle, row.map_err(to_sql_error)?)?;
         if !should_recover_stale_job(runtime, user_handle, &job)? {
             continue;
         }
 
         let previous_status = job.status.clone();
         let timestamp = current_timestamp_iso();
-        let recovered_job = ControlJobRecord {
+        let mut recovered_job = ControlJobRecord {
             status: String::from("failed"),
             updated_at: timestamp.clone(),
             finished_at: Some(timestamp),
@@ -1535,6 +1621,15 @@ fn recover_stale_jobs(connection: &Connection, user_handle: &str, runtime: &Arc<
             result: None,
             ..job
         };
+        let recovered_attempt_record = JobAttemptRecord {
+            attempt: recovered_job.attempt,
+            event: JobAttemptEvent::Recovered,
+            timestamp: recovered_job.updated_at.clone(),
+            summary: recovered_job.summary.clone(),
+            error: recovered_job.error.clone(),
+            backoff_ms: None,
+        };
+        append_attempt_history(&mut recovered_job, recovered_attempt_record);
         save_control_job_record(connection, user_handle, &recovered_job)?;
         publish_job_record(connection, user_handle, &recovered_job)?;
         append_control_audit_record(
@@ -1556,7 +1651,11 @@ fn recover_stale_jobs(connection: &Connection, user_handle: &str, runtime: &Arc<
     Ok(recovered)
 }
 
-fn should_recover_stale_job(runtime: &Arc<RuntimeState>, user_handle: &str, job: &ControlJobRecord) -> Result<bool, ApiError> {
+fn should_recover_stale_job(
+    runtime: &Arc<RuntimeState>,
+    user_handle: &str,
+    job: &ControlJobRecord,
+) -> Result<bool, ApiError> {
     if !matches!(job.status.as_str(), "queued" | "running") {
         return Ok(false);
     }
@@ -1581,7 +1680,10 @@ fn should_recover_stale_job(runtime: &Arc<RuntimeState>, user_handle: &str, job:
         status_code: 500,
         message: String::from("internal_error: job queue lock poisoned"),
     })?;
-    Ok(!queue_state.items.iter().any(|dispatch| dispatch.user_handle == user_handle && dispatch.job.id == job.id))
+    Ok(!queue_state
+        .items
+        .iter()
+        .any(|dispatch| dispatch.user_handle == user_handle && dispatch.job.id == job.id))
 }
 
 fn timestamp_is_before(left: &str, right: &str) -> bool {
@@ -1639,16 +1741,24 @@ async fn auth_middleware(
     next: Next,
 ) -> Result<Response, ApiError> {
     if !config.token.is_empty() {
-        let token_header = request.headers()
+        let token_header = request
+            .headers()
             .get("x-authority-core-token")
             .and_then(|value| value.to_str().ok());
         if token_header != Some(config.token.as_str()) {
             config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
             set_runtime_last_error(&config.runtime, "unauthorized");
-            emit_runtime_event("error", "auth_failed", json!({
-                "reason": "unauthorized",
-            }));
-            return Err(ApiError { status_code: 401, message: String::from("unauthorized") });
+            emit_runtime_event(
+                "error",
+                "auth_failed",
+                json!({
+                    "reason": "unauthorized",
+                }),
+            );
+            return Err(ApiError {
+                status_code: 401,
+                message: String::from("unauthorized"),
+            });
         }
     }
     config.runtime.request_count.fetch_add(1, Ordering::SeqCst);
@@ -1660,109 +1770,456 @@ async fn concurrency_guard(
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    config.runtime.queued_request_count.fetch_add(1, Ordering::SeqCst);
+    config
+        .runtime
+        .queued_request_count
+        .fetch_add(1, Ordering::SeqCst);
     let permit = config.runtime.concurrency_semaphore.try_acquire();
-    config.runtime.queued_request_count.fetch_sub(1, Ordering::SeqCst);
+    config
+        .runtime
+        .queued_request_count
+        .fetch_sub(1, Ordering::SeqCst);
     if permit.is_err() {
         config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
         set_runtime_last_error(&config.runtime, "concurrency_limit_exceeded");
-        emit_runtime_event("warning", "queue_full", json!({
-            "reason": "concurrency_limit_exceeded",
-            "maxConcurrency": MAX_CONCURRENCY,
-            "currentConcurrency": config.runtime.current_concurrency.load(Ordering::SeqCst),
-        }));
-        return Err(ApiError { status_code: 503, message: String::from("concurrency_limit_exceeded") });
+        emit_runtime_event(
+            "warning",
+            "queue_full",
+            json!({
+                "reason": "concurrency_limit_exceeded",
+                "maxConcurrency": MAX_CONCURRENCY,
+                "currentConcurrency": config.runtime.current_concurrency.load(Ordering::SeqCst),
+            }),
+        );
+        return Err(ApiError {
+            status_code: 503,
+            message: String::from("concurrency_limit_exceeded"),
+        });
     }
-    config.runtime.current_concurrency.fetch_add(1, Ordering::SeqCst);
+    config
+        .runtime
+        .current_concurrency
+        .fetch_add(1, Ordering::SeqCst);
     let response = next.run(request).await;
-    config.runtime.current_concurrency.fetch_sub(1, Ordering::SeqCst);
+    config
+        .runtime
+        .current_concurrency
+        .fetch_sub(1, Ordering::SeqCst);
     drop(permit);
     Ok(response)
 }
 
-async fn v1_storage_kv_get(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_get).await }
-async fn v1_storage_kv_set(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvSetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_set).await }
-async fn v1_storage_kv_delete(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_delete).await }
-async fn v1_storage_kv_list(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_list).await }
-async fn v1_storage_blob_put(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobPutRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_put).await }
-async fn v1_storage_blob_open_read(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_open_read).await }
-async fn v1_storage_blob_get(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_get).await }
-async fn v1_storage_blob_delete(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_delete).await }
-async fn v1_storage_blob_list(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_list).await }
-async fn v1_private_mkdir(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileMkdirRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_mkdir).await }
-async fn v1_private_read_dir(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadDirRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_read_dir).await }
-async fn v1_private_write(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileWriteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_write).await }
-async fn v1_private_open_read(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_open_read).await }
-async fn v1_private_read(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_read).await }
-async fn v1_private_delete(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_delete).await }
-async fn v1_private_stat(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileStatRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_stat).await }
-async fn v1_http_fetch(State(_config): State<Arc<Config>>, Json(body): Json<CoreHttpFetchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_http_fetch).await }
-async fn v1_http_fetch_open(State(_config): State<Arc<Config>>, Json(body): Json<CoreHttpFetchOpenRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_http_fetch_open).await }
-async fn v1_sql_query(State(_config): State<Arc<Config>>, Json(body): Json<SqlRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_query).await }
-async fn v1_sql_exec(State(_config): State<Arc<Config>>, Json(body): Json<SqlRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_exec).await }
-async fn v1_sql_batch(State(_config): State<Arc<Config>>, Json(body): Json<SqlBatchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_batch).await }
-async fn v1_sql_transaction(State(_config): State<Arc<Config>>, Json(body): Json<SqlBatchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_transaction).await }
-async fn v1_sql_migrate(State(_config): State<Arc<Config>>, Json(body): Json<SqlMigrateRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_migrate).await }
-async fn v1_trivium_insert(State(_config): State<Arc<Config>>, Json(body): Json<TriviumInsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_insert).await }
-async fn v1_trivium_insert_with_id(State(_config): State<Arc<Config>>, Json(body): Json<TriviumInsertWithIdRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_insert_with_id).await }
-async fn v1_trivium_bulk_upsert(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkUpsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_upsert).await }
-async fn v1_trivium_get(State(_config): State<Arc<Config>>, Json(body): Json<TriviumGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_get).await }
-async fn v1_trivium_update_payload(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUpdatePayloadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_update_payload).await }
-async fn v1_trivium_update_vector(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUpdateVectorRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_update_vector).await }
-async fn v1_trivium_delete(State(_config): State<Arc<Config>>, Json(body): Json<TriviumDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_delete).await }
-async fn v1_trivium_bulk_delete(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_delete).await }
-async fn v1_trivium_link(State(_config): State<Arc<Config>>, Json(body): Json<TriviumLinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_link).await }
-async fn v1_trivium_bulk_link(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkLinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_link).await }
-async fn v1_trivium_unlink(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUnlinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_unlink).await }
-async fn v1_trivium_bulk_unlink(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkUnlinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_unlink).await }
-async fn v1_trivium_neighbors(State(_config): State<Arc<Config>>, Json(body): Json<TriviumNeighborsRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_neighbors).await }
-async fn v1_trivium_search(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search).await }
-async fn v1_trivium_search_advanced(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchAdvancedRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search_advanced).await }
-async fn v1_trivium_search_hybrid(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchHybridRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search_hybrid).await }
-async fn v1_trivium_filter_where(State(_config): State<Arc<Config>>, Json(body): Json<TriviumFilterWhereRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_filter_where).await }
-async fn v1_trivium_query(State(_config): State<Arc<Config>>, Json(body): Json<TriviumQueryRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_query).await }
-async fn v1_trivium_index_text(State(_config): State<Arc<Config>>, Json(body): Json<TriviumIndexTextRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_index_text).await }
-async fn v1_trivium_index_keyword(State(_config): State<Arc<Config>>, Json(body): Json<TriviumIndexKeywordRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_index_keyword).await }
-async fn v1_trivium_build_text_index(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBuildTextIndexRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_build_text_index).await }
-async fn v1_trivium_flush(State(_config): State<Arc<Config>>, Json(body): Json<TriviumFlushRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_flush).await }
-async fn v1_trivium_stat(State(_config): State<Arc<Config>>, Json(body): Json<TriviumStatRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_stat).await }
-async fn v1_control_session_init(State(_config): State<Arc<Config>>, Json(body): Json<ControlSessionInitRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_session_init).await }
-async fn v1_control_session_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlSessionGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_session_get).await }
-async fn v1_control_extensions_list(State(_config): State<Arc<Config>>, Json(body): Json<ControlExtensionsListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_extensions_list).await }
-async fn v1_control_extension_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlExtensionGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_extension_get).await }
-async fn v1_control_audit_log(State(_config): State<Arc<Config>>, Json(body): Json<ControlAuditLogRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_audit_log).await }
-async fn v1_control_audit_recent(State(_config): State<Arc<Config>>, Json(body): Json<ControlAuditRecentRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_audit_recent).await }
-async fn v1_control_grants_list(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grants_list).await }
-async fn v1_control_grant_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grant_get).await }
-async fn v1_control_grant_upsert(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantUpsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grant_upsert).await }
-async fn v1_control_grants_reset(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantResetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grants_reset).await }
-async fn v1_control_policies_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlPoliciesRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_policies_get).await }
-async fn v1_control_policies_save(State(_config): State<Arc<Config>>, Json(body): Json<ControlPoliciesSaveRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_policies_save).await }
-async fn v1_control_jobs_list(State(config): State<Arc<Config>>, Json(body): Json<ControlJobsListRequest>) -> Result<Json<JsonValue>, ApiError> {
+async fn v1_storage_kv_get(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageKvGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_kv_get).await
+}
+async fn v1_storage_kv_set(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageKvSetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_kv_set).await
+}
+async fn v1_storage_kv_delete(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageKvDeleteRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_kv_delete).await
+}
+async fn v1_storage_kv_list(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageKvListRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_kv_list).await
+}
+async fn v1_storage_blob_put(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageBlobPutRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_blob_put).await
+}
+async fn v1_storage_blob_open_read(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageBlobGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_blob_open_read).await
+}
+async fn v1_storage_blob_get(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageBlobGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_blob_get).await
+}
+async fn v1_storage_blob_delete(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageBlobDeleteRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_blob_delete).await
+}
+async fn v1_storage_blob_list(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<StorageBlobListRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_storage_blob_list).await
+}
+async fn v1_private_mkdir(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<PrivateFileMkdirRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_private_file_mkdir).await
+}
+async fn v1_private_read_dir(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<PrivateFileReadDirRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_private_file_read_dir).await
+}
+async fn v1_private_write(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<PrivateFileWriteRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_private_file_write).await
+}
+async fn v1_private_open_read(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<PrivateFileReadRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_private_file_open_read).await
+}
+async fn v1_private_read(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<PrivateFileReadRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_private_file_read).await
+}
+async fn v1_private_delete(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<PrivateFileDeleteRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_private_file_delete).await
+}
+async fn v1_private_stat(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<PrivateFileStatRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_private_file_stat).await
+}
+async fn v1_http_fetch(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<CoreHttpFetchRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_http_fetch).await
+}
+async fn v1_http_fetch_open(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<CoreHttpFetchOpenRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_http_fetch_open).await
+}
+async fn v1_sql_query(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<SqlRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_sql_query).await
+}
+async fn v1_sql_exec(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<SqlRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_sql_exec).await
+}
+async fn v1_sql_batch(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<SqlBatchRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_sql_batch).await
+}
+async fn v1_sql_transaction(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<SqlBatchRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_sql_transaction).await
+}
+async fn v1_sql_migrate(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<SqlMigrateRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_sql_migrate).await
+}
+async fn v1_trivium_insert(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumInsertRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_insert).await
+}
+async fn v1_trivium_insert_with_id(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumInsertWithIdRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_insert_with_id).await
+}
+async fn v1_trivium_bulk_upsert(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumBulkUpsertRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_bulk_upsert).await
+}
+async fn v1_trivium_get(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_get).await
+}
+async fn v1_trivium_update_payload(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumUpdatePayloadRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_update_payload).await
+}
+async fn v1_trivium_update_vector(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumUpdateVectorRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_update_vector).await
+}
+async fn v1_trivium_delete(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumDeleteRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_delete).await
+}
+async fn v1_trivium_bulk_delete(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumBulkDeleteRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_bulk_delete).await
+}
+async fn v1_trivium_link(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumLinkRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_link).await
+}
+async fn v1_trivium_bulk_link(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumBulkLinkRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_bulk_link).await
+}
+async fn v1_trivium_unlink(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumUnlinkRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_unlink).await
+}
+async fn v1_trivium_bulk_unlink(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumBulkUnlinkRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_bulk_unlink).await
+}
+async fn v1_trivium_neighbors(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumNeighborsRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_neighbors).await
+}
+async fn v1_trivium_search(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumSearchRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_search).await
+}
+async fn v1_trivium_search_advanced(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumSearchAdvancedRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_search_advanced).await
+}
+async fn v1_trivium_search_hybrid(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumSearchHybridRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_search_hybrid).await
+}
+async fn v1_trivium_filter_where(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumFilterWhereRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_filter_where).await
+}
+async fn v1_trivium_query(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumQueryRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_query).await
+}
+async fn v1_trivium_index_text(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumIndexTextRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_index_text).await
+}
+async fn v1_trivium_index_keyword(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumIndexKeywordRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_index_keyword).await
+}
+async fn v1_trivium_build_text_index(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumBuildTextIndexRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_build_text_index).await
+}
+async fn v1_trivium_flush(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumFlushRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_flush).await
+}
+async fn v1_trivium_stat(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumStatRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_stat).await
+}
+async fn v1_control_session_init(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlSessionInitRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_session_init).await
+}
+async fn v1_control_session_get(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlSessionGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_session_get).await
+}
+async fn v1_control_extensions_list(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlExtensionsListRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_extensions_list).await
+}
+async fn v1_control_extension_get(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlExtensionGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_extension_get).await
+}
+async fn v1_control_audit_log(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlAuditLogRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_audit_log).await
+}
+async fn v1_control_audit_recent(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlAuditRecentRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_audit_recent).await
+}
+async fn v1_control_grants_list(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlGrantListRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_grants_list).await
+}
+async fn v1_control_grant_get(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlGrantGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_grant_get).await
+}
+async fn v1_control_grant_upsert(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlGrantUpsertRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_grant_upsert).await
+}
+async fn v1_control_grants_reset(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlGrantResetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_grants_reset).await
+}
+async fn v1_control_policies_get(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlPoliciesRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_policies_get).await
+}
+async fn v1_control_policies_save(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlPoliciesSaveRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_policies_save).await
+}
+async fn v1_control_jobs_list(
+    State(config): State<Arc<Config>>,
+    Json(body): Json<ControlJobsListRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
     let runtime = config.runtime.clone();
-    let result = tokio::task::spawn_blocking(move || handle_control_jobs_list(body, &runtime)).await
-        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    let result = tokio::task::spawn_blocking(move || handle_control_jobs_list(body, &runtime))
+        .await
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("task_join_error"),
+        })?;
     result.map(Json)
 }
-async fn v1_control_job_get(State(config): State<Arc<Config>>, Json(body): Json<ControlJobGetRequest>) -> Result<Json<JsonValue>, ApiError> {
+async fn v1_control_job_get(
+    State(config): State<Arc<Config>>,
+    Json(body): Json<ControlJobGetRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
     let runtime = config.runtime.clone();
-    let result = tokio::task::spawn_blocking(move || handle_control_job_get(body, &runtime)).await
-        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    let result = tokio::task::spawn_blocking(move || handle_control_job_get(body, &runtime))
+        .await
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("task_join_error"),
+        })?;
     result.map(Json)
 }
-async fn v1_control_job_upsert(State(_config): State<Arc<Config>>, Json(body): Json<ControlJobUpsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_job_upsert).await }
-async fn v1_control_events_poll(State(_config): State<Arc<Config>>, Json(body): Json<ControlEventsPollRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_events_poll).await }
+async fn v1_control_job_upsert(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlJobUpsertRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_job_upsert).await
+}
+async fn v1_control_events_poll(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<ControlEventsPollRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_control_events_poll).await
+}
 
-async fn v1_control_job_create(State(config): State<Arc<Config>>, Json(body): Json<ControlJobCreateRequest>) -> Result<Json<JsonValue>, ApiError> {
+async fn v1_control_job_create(
+    State(config): State<Arc<Config>>,
+    Json(body): Json<ControlJobCreateRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
     let runtime = config.runtime.clone();
-    let result = tokio::task::spawn_blocking(move || handle_control_job_create(body, &runtime)).await
-        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    let result = tokio::task::spawn_blocking(move || handle_control_job_create(body, &runtime))
+        .await
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("task_join_error"),
+        })?;
     result.map(Json)
 }
-async fn v1_control_job_cancel(State(config): State<Arc<Config>>, Json(body): Json<ControlJobCancelRequest>) -> Result<Json<JsonValue>, ApiError> {
+async fn v1_control_job_cancel(
+    State(config): State<Arc<Config>>,
+    Json(body): Json<ControlJobCancelRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
     let runtime = config.runtime.clone();
-    let result = tokio::task::spawn_blocking(move || handle_control_job_cancel(body, &runtime)).await
-        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    let result = tokio::task::spawn_blocking(move || handle_control_job_cancel(body, &runtime))
+        .await
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("task_join_error"),
+        })?;
     result.map(Json)
 }
 
@@ -1773,7 +2230,10 @@ where
 {
     tokio::task::spawn_blocking(move || handler(body))
         .await
-        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("task_join_error"),
+        })?
         .map(Json)
 }
 
@@ -1784,9 +2244,14 @@ fn handle_sql_query(request: SqlRequest) -> Result<JsonValue, ApiError> {
     let (rows, page) = slice_vec_page(result.rows, request.page.as_ref(), 100, 1000)?;
     result.rows = rows;
     result.page = page;
-    emit_if_slow("sql_query_slow", started.elapsed(), SLOW_SQL_LOG_MS, json!({
-        "statement": request.statement,
-    }));
+    emit_if_slow(
+        "sql_query_slow",
+        started.elapsed(),
+        SLOW_SQL_LOG_MS,
+        json!({
+            "statement": request.statement,
+        }),
+    );
     Ok(serde_json::to_value(result).expect("sql query result should serialize"))
 }
 
@@ -1811,7 +2276,12 @@ fn handle_sql_transaction(request: SqlBatchRequest) -> Result<JsonValue, ApiErro
 }
 
 fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError> {
-    let table_name = validate_sql_identifier(request.table_name.as_deref().unwrap_or("_authority_migrations"))?;
+    let table_name = validate_sql_identifier(
+        request
+            .table_name
+            .as_deref()
+            .unwrap_or("_authority_migrations"),
+    )?;
     let mut connection = open_connection(&request.db_path)?;
     let transaction = connection.transaction().map_err(to_sql_error)?;
     ensure_migration_table(&transaction, &table_name)?;
@@ -1830,7 +2300,10 @@ fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError>
         if migration.statement.trim().is_empty() {
             return Err(ApiError {
                 status_code: 400,
-                message: format!("sql migration statement must not be empty for {}", migration_id),
+                message: format!(
+                    "sql migration statement must not be empty for {}",
+                    migration_id
+                ),
             });
         }
 
@@ -1842,23 +2315,27 @@ fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError>
         transaction
             .execute_batch(&migration.statement)
             .map_err(|error| to_sql_migration_error(migration_id, &migration.statement, error))?;
-        let insert_statement = format!("INSERT INTO {} (id, applied_at) VALUES (?1, ?2)", table_name);
+        let insert_statement = format!(
+            "INSERT INTO {} (id, applied_at) VALUES (?1, ?2)",
+            table_name
+        );
         transaction
-            .execute(&insert_statement, (migration_id, current_timestamp_millis()))
+            .execute(
+                &insert_statement,
+                (migration_id, current_timestamp_millis()),
+            )
             .map_err(|error| to_sql_migration_error(migration_id, &insert_statement, error))?;
         applied_ids.insert(migration_id.to_string());
         applied.push(migration_id.to_string());
     }
 
     transaction.commit().map_err(to_sql_error)?;
-    let latest_id = request
-        .migrations
-        .iter()
-        .rev()
-        .find_map(|migration| {
-            let migration_id = migration.id.trim();
-            applied_ids.contains(migration_id).then(|| migration_id.to_string())
-        });
+    let latest_id = request.migrations.iter().rev().find_map(|migration| {
+        let migration_id = migration.id.trim();
+        applied_ids
+            .contains(migration_id)
+            .then(|| migration_id.to_string())
+    });
     let response = SqlMigrateResponse {
         table_name,
         applied,
@@ -1869,39 +2346,84 @@ fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError>
 }
 
 fn handle_trivium_insert(request: TriviumInsertRequest) -> Result<JsonValue, ApiError> {
-    let TriviumInsertRequest { open, vector, payload } = request;
+    let TriviumInsertRequest {
+        open,
+        vector,
+        payload,
+    } = request;
     let id = match parse_trivium_dtype(open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
             let mut db = open_trivium_f32(&open)?;
-            db.insert(&vector.iter().map(|&value| value as f32).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?
+            db.insert(
+                &vector.iter().map(|&value| value as f32).collect::<Vec<_>>(),
+                payload,
+            )
+            .map_err(to_trivium_error)?
         }
         TriviumDTypeTag::F16 => {
             let mut db = open_trivium_f16(&open)?;
-            db.insert(&vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?
+            db.insert(
+                &vector
+                    .iter()
+                    .map(|&value| f16::from_f64(value))
+                    .collect::<Vec<_>>(),
+                payload,
+            )
+            .map_err(to_trivium_error)?
         }
         TriviumDTypeTag::U64 => {
             let mut db = open_trivium_u64(&open)?;
-            db.insert(&vector.iter().map(|&value| value as u64).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?
+            db.insert(
+                &vector.iter().map(|&value| value as u64).collect::<Vec<_>>(),
+                payload,
+            )
+            .map_err(to_trivium_error)?
         }
     };
 
-    Ok(serde_json::to_value(TriviumInsertResponse { id }).expect("trivium insert response should serialize"))
+    Ok(serde_json::to_value(TriviumInsertResponse { id })
+        .expect("trivium insert response should serialize"))
 }
 
-fn handle_trivium_insert_with_id(request: TriviumInsertWithIdRequest) -> Result<JsonValue, ApiError> {
-    let TriviumInsertWithIdRequest { open, id, vector, payload } = request;
+fn handle_trivium_insert_with_id(
+    request: TriviumInsertWithIdRequest,
+) -> Result<JsonValue, ApiError> {
+    let TriviumInsertWithIdRequest {
+        open,
+        id,
+        vector,
+        payload,
+    } = request;
     match parse_trivium_dtype(open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
             let mut db = open_trivium_f32(&open)?;
-            db.insert_with_id(id, &vector.iter().map(|&value| value as f32).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?;
+            db.insert_with_id(
+                id,
+                &vector.iter().map(|&value| value as f32).collect::<Vec<_>>(),
+                payload,
+            )
+            .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::F16 => {
             let mut db = open_trivium_f16(&open)?;
-            db.insert_with_id(id, &vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?;
+            db.insert_with_id(
+                id,
+                &vector
+                    .iter()
+                    .map(|&value| f16::from_f64(value))
+                    .collect::<Vec<_>>(),
+                payload,
+            )
+            .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::U64 => {
             let mut db = open_trivium_u64(&open)?;
-            db.insert_with_id(id, &vector.iter().map(|&value| value as u64).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?;
+            db.insert_with_id(
+                id,
+                &vector.iter().map(|&value| value as u64).collect::<Vec<_>>(),
+                payload,
+            )
+            .map_err(to_trivium_error)?;
         }
     }
 
@@ -1918,7 +2440,8 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
             failure_count: 0,
             failures: Vec::new(),
             items: Vec::new(),
-        }).expect("trivium bulk upsert response should serialize"));
+        })
+        .expect("trivium bulk upsert response should serialize"));
     }
 
     let mut failures = Vec::new();
@@ -1928,11 +2451,17 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
             let mut db = open_trivium_f32(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 let exists = db.contains(item.id);
-                let vector = item.vector.iter().map(|&value| value as f32).collect::<Vec<_>>();
+                let vector = item
+                    .vector
+                    .iter()
+                    .map(|&value| value as f32)
+                    .collect::<Vec<_>>();
                 let result = if exists {
-                    db.update_vector(item.id, &vector).and_then(|_| db.update_payload(item.id, item.payload))
+                    db.update_vector(item.id, &vector)
+                        .and_then(|_| db.update_payload(item.id, item.payload))
                 } else {
-                    db.insert_with_id(item.id, &vector, item.payload).map(|_| ())
+                    db.insert_with_id(item.id, &vector, item.payload)
+                        .map(|_| ())
                 };
                 match result {
                     Ok(()) => items.push(TriviumBulkUpsertResponseItem {
@@ -1940,7 +2469,10 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
                         id: item.id,
                         action: String::from(if exists { "updated" } else { "inserted" }),
                     }),
-                    Err(error) => failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message }),
+                    Err(error) => failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    }),
                 }
             }
         }
@@ -1948,11 +2480,17 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
             let mut db = open_trivium_f16(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 let exists = db.contains(item.id);
-                let vector = item.vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>();
+                let vector = item
+                    .vector
+                    .iter()
+                    .map(|&value| f16::from_f64(value))
+                    .collect::<Vec<_>>();
                 let result = if exists {
-                    db.update_vector(item.id, &vector).and_then(|_| db.update_payload(item.id, item.payload))
+                    db.update_vector(item.id, &vector)
+                        .and_then(|_| db.update_payload(item.id, item.payload))
                 } else {
-                    db.insert_with_id(item.id, &vector, item.payload).map(|_| ())
+                    db.insert_with_id(item.id, &vector, item.payload)
+                        .map(|_| ())
                 };
                 match result {
                     Ok(()) => items.push(TriviumBulkUpsertResponseItem {
@@ -1960,7 +2498,10 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
                         id: item.id,
                         action: String::from(if exists { "updated" } else { "inserted" }),
                     }),
-                    Err(error) => failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message }),
+                    Err(error) => failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    }),
                 }
             }
         }
@@ -1968,11 +2509,17 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
             let mut db = open_trivium_u64(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 let exists = db.contains(item.id);
-                let vector = item.vector.iter().map(|&value| value as u64).collect::<Vec<_>>();
+                let vector = item
+                    .vector
+                    .iter()
+                    .map(|&value| value as u64)
+                    .collect::<Vec<_>>();
                 let result = if exists {
-                    db.update_vector(item.id, &vector).and_then(|_| db.update_payload(item.id, item.payload))
+                    db.update_vector(item.id, &vector)
+                        .and_then(|_| db.update_payload(item.id, item.payload))
                 } else {
-                    db.insert_with_id(item.id, &vector, item.payload).map(|_| ())
+                    db.insert_with_id(item.id, &vector, item.payload)
+                        .map(|_| ())
                 };
                 match result {
                     Ok(()) => items.push(TriviumBulkUpsertResponseItem {
@@ -1980,7 +2527,10 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
                         id: item.id,
                         action: String::from(if exists { "updated" } else { "inserted" }),
                     }),
-                    Err(error) => failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message }),
+                    Err(error) => failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    }),
                 }
             }
         }
@@ -1992,25 +2542,40 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
         failure_count: failures.len(),
         failures,
         items,
-    }).expect("trivium bulk upsert response should serialize"))
+    })
+    .expect("trivium bulk upsert response should serialize"))
 }
 
 fn handle_trivium_get(request: TriviumGetRequest) -> Result<JsonValue, ApiError> {
     let TriviumGetRequest { open, id } = request;
     let node = match parse_trivium_dtype(open.dtype.as_deref())? {
-        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.get(id).map(|node| map_trivium_node(node, |value| value as f64)),
-        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.get(id).map(|node| map_trivium_node(node, |value| value.to_f64())),
-        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.get(id).map(|node| map_trivium_node(node, |value| value as f64)),
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?
+            .get(id)
+            .map(|node| map_trivium_node(node, |value| value as f64)),
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?
+            .get(id)
+            .map(|node| map_trivium_node(node, |value| value.to_f64())),
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?
+            .get(id)
+            .map(|node| map_trivium_node(node, |value| value as f64)),
     };
     Ok(json!({ "node": node }))
 }
 
-fn handle_trivium_update_payload(request: TriviumUpdatePayloadRequest) -> Result<JsonValue, ApiError> {
+fn handle_trivium_update_payload(
+    request: TriviumUpdatePayloadRequest,
+) -> Result<JsonValue, ApiError> {
     let TriviumUpdatePayloadRequest { open, id, payload } = request;
     match parse_trivium_dtype(open.dtype.as_deref())? {
-        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.update_payload(id, payload).map_err(to_trivium_error)?,
-        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.update_payload(id, payload).map_err(to_trivium_error)?,
-        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.update_payload(id, payload).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?
+            .update_payload(id, payload)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?
+            .update_payload(id, payload)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?
+            .update_payload(id, payload)
+            .map_err(to_trivium_error)?,
     }
     Ok(json!({ "ok": true }))
 }
@@ -2024,7 +2589,10 @@ fn handle_trivium_bulk_unlink(request: TriviumBulkUnlinkRequest) -> Result<JsonV
             let mut db = open_trivium_f32(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 if let Err(error) = db.unlink(item.src, item.dst) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2032,7 +2600,10 @@ fn handle_trivium_bulk_unlink(request: TriviumBulkUnlinkRequest) -> Result<JsonV
             let mut db = open_trivium_f16(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 if let Err(error) = db.unlink(item.src, item.dst) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2040,7 +2611,10 @@ fn handle_trivium_bulk_unlink(request: TriviumBulkUnlinkRequest) -> Result<JsonV
             let mut db = open_trivium_u64(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 if let Err(error) = db.unlink(item.src, item.dst) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2051,20 +2625,41 @@ fn handle_trivium_bulk_unlink(request: TriviumBulkUnlinkRequest) -> Result<JsonV
         success_count: total_count.saturating_sub(failures.len()),
         failure_count: failures.len(),
         failures,
-    }).expect("trivium bulk unlink response should serialize"))
+    })
+    .expect("trivium bulk unlink response should serialize"))
 }
 
-fn handle_trivium_update_vector(request: TriviumUpdateVectorRequest) -> Result<JsonValue, ApiError> {
+fn handle_trivium_update_vector(
+    request: TriviumUpdateVectorRequest,
+) -> Result<JsonValue, ApiError> {
     let TriviumUpdateVectorRequest { open, id, vector } = request;
     match parse_trivium_dtype(open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
-            open_trivium_f32(&open)?.update_vector(id, &vector.iter().map(|&value| value as f32).collect::<Vec<_>>()).map_err(to_trivium_error)?;
+            open_trivium_f32(&open)?
+                .update_vector(
+                    id,
+                    &vector.iter().map(|&value| value as f32).collect::<Vec<_>>(),
+                )
+                .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::F16 => {
-            open_trivium_f16(&open)?.update_vector(id, &vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>()).map_err(to_trivium_error)?;
+            open_trivium_f16(&open)?
+                .update_vector(
+                    id,
+                    &vector
+                        .iter()
+                        .map(|&value| f16::from_f64(value))
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::U64 => {
-            open_trivium_u64(&open)?.update_vector(id, &vector.iter().map(|&value| value as u64).collect::<Vec<_>>()).map_err(to_trivium_error)?;
+            open_trivium_u64(&open)?
+                .update_vector(
+                    id,
+                    &vector.iter().map(|&value| value as u64).collect::<Vec<_>>(),
+                )
+                .map_err(to_trivium_error)?;
         }
     }
     Ok(json!({ "ok": true }))
@@ -2073,9 +2668,15 @@ fn handle_trivium_update_vector(request: TriviumUpdateVectorRequest) -> Result<J
 fn handle_trivium_delete(request: TriviumDeleteRequest) -> Result<JsonValue, ApiError> {
     let TriviumDeleteRequest { open, id } = request;
     match parse_trivium_dtype(open.dtype.as_deref())? {
-        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.delete(id).map_err(to_trivium_error)?,
-        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.delete(id).map_err(to_trivium_error)?,
-        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.delete(id).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?
+            .delete(id)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?
+            .delete(id)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?
+            .delete(id)
+            .map_err(to_trivium_error)?,
     }
     Ok(json!({ "ok": true }))
 }
@@ -2089,7 +2690,10 @@ fn handle_trivium_bulk_delete(request: TriviumBulkDeleteRequest) -> Result<JsonV
             let mut db = open_trivium_f32(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 if let Err(error) = db.delete(item.id) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2097,7 +2701,10 @@ fn handle_trivium_bulk_delete(request: TriviumBulkDeleteRequest) -> Result<JsonV
             let mut db = open_trivium_f16(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 if let Err(error) = db.delete(item.id) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2105,7 +2712,10 @@ fn handle_trivium_bulk_delete(request: TriviumBulkDeleteRequest) -> Result<JsonV
             let mut db = open_trivium_u64(&request.open)?;
             for (index, item) in request.items.into_iter().enumerate() {
                 if let Err(error) = db.delete(item.id) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2116,17 +2726,30 @@ fn handle_trivium_bulk_delete(request: TriviumBulkDeleteRequest) -> Result<JsonV
         success_count: total_count.saturating_sub(failures.len()),
         failure_count: failures.len(),
         failures,
-    }).expect("trivium bulk delete response should serialize"))
+    })
+    .expect("trivium bulk delete response should serialize"))
 }
 
 fn handle_trivium_link(request: TriviumLinkRequest) -> Result<JsonValue, ApiError> {
-    let TriviumLinkRequest { open, src, dst, label, weight } = request;
+    let TriviumLinkRequest {
+        open,
+        src,
+        dst,
+        label,
+        weight,
+    } = request;
     let label = label.unwrap_or_else(|| String::from("related"));
     let weight = weight.unwrap_or(1.0) as f32;
     match parse_trivium_dtype(open.dtype.as_deref())? {
-        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.link(src, dst, &label, weight).map_err(to_trivium_error)?,
-        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.link(src, dst, &label, weight).map_err(to_trivium_error)?,
-        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.link(src, dst, &label, weight).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?
+            .link(src, dst, &label, weight)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?
+            .link(src, dst, &label, weight)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?
+            .link(src, dst, &label, weight)
+            .map_err(to_trivium_error)?,
     }
     Ok(json!({ "ok": true }))
 }
@@ -2142,7 +2765,10 @@ fn handle_trivium_bulk_link(request: TriviumBulkLinkRequest) -> Result<JsonValue
                 let label = item.label.unwrap_or_else(|| String::from("related"));
                 let weight = item.weight.unwrap_or(1.0) as f32;
                 if let Err(error) = db.link(item.src, item.dst, &label, weight) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2152,7 +2778,10 @@ fn handle_trivium_bulk_link(request: TriviumBulkLinkRequest) -> Result<JsonValue
                 let label = item.label.unwrap_or_else(|| String::from("related"));
                 let weight = item.weight.unwrap_or(1.0) as f32;
                 if let Err(error) = db.link(item.src, item.dst, &label, weight) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2162,7 +2791,10 @@ fn handle_trivium_bulk_link(request: TriviumBulkLinkRequest) -> Result<JsonValue
                 let label = item.label.unwrap_or_else(|| String::from("related"));
                 let weight = item.weight.unwrap_or(1.0) as f32;
                 if let Err(error) = db.link(item.src, item.dst, &label, weight) {
-                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                    failures.push(TriviumBulkFailure {
+                        index,
+                        message: to_trivium_error(error).message,
+                    });
                 }
             }
         }
@@ -2173,15 +2805,22 @@ fn handle_trivium_bulk_link(request: TriviumBulkLinkRequest) -> Result<JsonValue
         success_count: total_count.saturating_sub(failures.len()),
         failure_count: failures.len(),
         failures,
-    }).expect("trivium bulk link response should serialize"))
+    })
+    .expect("trivium bulk link response should serialize"))
 }
 
 fn handle_trivium_unlink(request: TriviumUnlinkRequest) -> Result<JsonValue, ApiError> {
     let TriviumUnlinkRequest { open, src, dst } = request;
     match parse_trivium_dtype(open.dtype.as_deref())? {
-        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.unlink(src, dst).map_err(to_trivium_error)?,
-        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.unlink(src, dst).map_err(to_trivium_error)?,
-        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.unlink(src, dst).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?
+            .unlink(src, dst)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?
+            .unlink(src, dst)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?
+            .unlink(src, dst)
+            .map_err(to_trivium_error)?,
     }
     Ok(json!({ "ok": true }))
 }
@@ -2194,31 +2833,69 @@ fn handle_trivium_neighbors(request: TriviumNeighborsRequest) -> Result<JsonValu
         TriviumDTypeTag::F16 => open_trivium_f16(&open)?.neighbors(id, depth),
         TriviumDTypeTag::U64 => open_trivium_u64(&open)?.neighbors(id, depth),
     };
-    Ok(serde_json::to_value(TriviumNeighborsResponse { ids }).expect("trivium neighbors response should serialize"))
+    Ok(serde_json::to_value(TriviumNeighborsResponse { ids })
+        .expect("trivium neighbors response should serialize"))
 }
 
 fn handle_trivium_search(request: TriviumSearchRequest) -> Result<JsonValue, ApiError> {
     let started = Instant::now();
-    let TriviumSearchRequest { open, vector, top_k, expand_depth, min_score } = request;
+    let TriviumSearchRequest {
+        open,
+        vector,
+        top_k,
+        expand_depth,
+        min_score,
+    } = request;
     let top_k = top_k.unwrap_or(5);
     let expand_depth = expand_depth.unwrap_or(0);
     let min_score = min_score.unwrap_or(0.5);
     let hits = match parse_trivium_dtype(open.dtype.as_deref())? {
-        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.search(&vector.iter().map(|&value| value as f32).collect::<Vec<_>>(), top_k, expand_depth, min_score).map_err(to_trivium_error)?,
-        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.search(&vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>(), top_k, expand_depth, min_score).map_err(to_trivium_error)?,
-        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.search(&vector.iter().map(|&value| value as u64).collect::<Vec<_>>(), top_k, expand_depth, min_score).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?
+            .search(
+                &vector.iter().map(|&value| value as f32).collect::<Vec<_>>(),
+                top_k,
+                expand_depth,
+                min_score,
+            )
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?
+            .search(
+                &vector
+                    .iter()
+                    .map(|&value| f16::from_f64(value))
+                    .collect::<Vec<_>>(),
+                top_k,
+                expand_depth,
+                min_score,
+            )
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?
+            .search(
+                &vector.iter().map(|&value| value as u64).collect::<Vec<_>>(),
+                top_k,
+                expand_depth,
+                min_score,
+            )
+            .map_err(to_trivium_error)?,
     };
     let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
-    emit_if_slow("trivium_slow_search", started.elapsed(), SLOW_TRIVIUM_LOG_MS, json!({
-        "dbPath": open.db_path,
-        "mode": "vector",
-        "topK": top_k,
-        "hitCount": hits.len(),
-    }));
+    emit_if_slow(
+        "trivium_slow_search",
+        started.elapsed(),
+        SLOW_TRIVIUM_LOG_MS,
+        json!({
+            "dbPath": open.db_path,
+            "mode": "vector",
+            "topK": top_k,
+            "hitCount": hits.len(),
+        }),
+    );
     Ok(json!({ "hits": hits }))
 }
 
-fn handle_trivium_search_advanced(request: TriviumSearchAdvancedRequest) -> Result<JsonValue, ApiError> {
+fn handle_trivium_search_advanced(
+    request: TriviumSearchAdvancedRequest,
+) -> Result<JsonValue, ApiError> {
     let started = Instant::now();
     if let Some(value) = request.query_text.as_deref() {
         validate_non_empty("queryText", value)?;
@@ -2228,48 +2905,120 @@ fn handle_trivium_search_advanced(request: TriviumSearchAdvancedRequest) -> Resu
     let query_text = request.query_text.as_deref();
     let hits = match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
-            .search_hybrid(query_text, Some(&request.vector.iter().map(|&value| value as f32).collect::<Vec<_>>()), &config)
+            .search_hybrid(
+                query_text,
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| value as f32)
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
             .map_err(to_trivium_error)?,
         TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
-            .search_hybrid(query_text, Some(&request.vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>()), &config)
+            .search_hybrid(
+                query_text,
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| f16::from_f64(value))
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
             .map_err(to_trivium_error)?,
         TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
-            .search_hybrid(query_text, Some(&request.vector.iter().map(|&value| value as u64).collect::<Vec<_>>()), &config)
+            .search_hybrid(
+                query_text,
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| value as u64)
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
             .map_err(to_trivium_error)?,
     };
     let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
-    emit_if_slow("trivium_slow_search", started.elapsed(), SLOW_TRIVIUM_LOG_MS, json!({
-        "dbPath": request.open.db_path,
-        "mode": "advanced",
-        "topK": request.top_k.unwrap_or(5),
-        "hitCount": hits.len(),
-    }));
+    emit_if_slow(
+        "trivium_slow_search",
+        started.elapsed(),
+        SLOW_TRIVIUM_LOG_MS,
+        json!({
+            "dbPath": request.open.db_path,
+            "mode": "advanced",
+            "topK": request.top_k.unwrap_or(5),
+            "hitCount": hits.len(),
+        }),
+    );
     Ok(json!({ "hits": hits }))
 }
 
-fn handle_trivium_search_hybrid(request: TriviumSearchHybridRequest) -> Result<JsonValue, ApiError> {
+fn handle_trivium_search_hybrid(
+    request: TriviumSearchHybridRequest,
+) -> Result<JsonValue, ApiError> {
     let started = Instant::now();
     validate_non_empty("queryText", &request.query_text)?;
 
     let config = build_trivium_hybrid_search_config(&request)?;
     let hits = match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
-            .search_hybrid(Some(&request.query_text), Some(&request.vector.iter().map(|&value| value as f32).collect::<Vec<_>>()), &config)
+            .search_hybrid(
+                Some(&request.query_text),
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| value as f32)
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
             .map_err(to_trivium_error)?,
         TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
-            .search_hybrid(Some(&request.query_text), Some(&request.vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>()), &config)
+            .search_hybrid(
+                Some(&request.query_text),
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| f16::from_f64(value))
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
             .map_err(to_trivium_error)?,
         TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
-            .search_hybrid(Some(&request.query_text), Some(&request.vector.iter().map(|&value| value as u64).collect::<Vec<_>>()), &config)
+            .search_hybrid(
+                Some(&request.query_text),
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| value as u64)
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
             .map_err(to_trivium_error)?,
     };
     let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
-    emit_if_slow("trivium_slow_search", started.elapsed(), SLOW_TRIVIUM_LOG_MS, json!({
-        "dbPath": request.open.db_path,
-        "mode": "hybrid",
-        "topK": request.top_k.unwrap_or(5),
-        "hitCount": hits.len(),
-    }));
+    emit_if_slow(
+        "trivium_slow_search",
+        started.elapsed(),
+        SLOW_TRIVIUM_LOG_MS,
+        json!({
+            "dbPath": request.open.db_path,
+            "mode": "hybrid",
+            "topK": request.top_k.unwrap_or(5),
+            "hitCount": hits.len(),
+        }),
+    );
     Ok(json!({ "hits": hits }))
 }
 
@@ -2294,7 +3043,10 @@ fn handle_trivium_filter_where(request: TriviumFilterWhereRequest) -> Result<Jso
     };
     let (nodes, page) = slice_vec_page(nodes, request.page.as_ref(), 100, 1000)?;
 
-    Ok(serde_json::to_value(TriviumFilterWhereResponse { nodes, page }).expect("trivium filter where response should serialize"))
+    Ok(
+        serde_json::to_value(TriviumFilterWhereResponse { nodes, page })
+            .expect("trivium filter where response should serialize"),
+    )
 }
 
 fn handle_trivium_query(request: TriviumQueryRequest) -> Result<JsonValue, ApiError> {
@@ -2302,21 +3054,28 @@ fn handle_trivium_query(request: TriviumQueryRequest) -> Result<JsonValue, ApiEr
 
     let rows = match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => map_trivium_query_rows(
-            open_trivium_f32(&request.open)?.query(&request.cypher).map_err(to_trivium_error)?,
+            open_trivium_f32(&request.open)?
+                .query(&request.cypher)
+                .map_err(to_trivium_error)?,
             |value| value as f64,
         ),
         TriviumDTypeTag::F16 => map_trivium_query_rows(
-            open_trivium_f16(&request.open)?.query(&request.cypher).map_err(to_trivium_error)?,
+            open_trivium_f16(&request.open)?
+                .query(&request.cypher)
+                .map_err(to_trivium_error)?,
             |value| value.to_f64(),
         ),
         TriviumDTypeTag::U64 => map_trivium_query_rows(
-            open_trivium_u64(&request.open)?.query(&request.cypher).map_err(to_trivium_error)?,
+            open_trivium_u64(&request.open)?
+                .query(&request.cypher)
+                .map_err(to_trivium_error)?,
             |value| value as f64,
         ),
     };
     let (rows, page) = slice_vec_page(rows, request.page.as_ref(), 100, 1000)?;
 
-    Ok(serde_json::to_value(TriviumQueryResponse { rows, page }).expect("trivium query response should serialize"))
+    Ok(serde_json::to_value(TriviumQueryResponse { rows, page })
+        .expect("trivium query response should serialize"))
 }
 
 fn handle_trivium_index_text(request: TriviumIndexTextRequest) -> Result<JsonValue, ApiError> {
@@ -2325,43 +3084,53 @@ fn handle_trivium_index_text(request: TriviumIndexTextRequest) -> Result<JsonVal
     match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
             let mut db = open_trivium_f32(&request.open)?;
-            db.index_text(request.id, &request.text).map_err(to_trivium_error)?;
+            db.index_text(request.id, &request.text)
+                .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::F16 => {
             let mut db = open_trivium_f16(&request.open)?;
-            db.index_text(request.id, &request.text).map_err(to_trivium_error)?;
+            db.index_text(request.id, &request.text)
+                .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::U64 => {
             let mut db = open_trivium_u64(&request.open)?;
-            db.index_text(request.id, &request.text).map_err(to_trivium_error)?;
+            db.index_text(request.id, &request.text)
+                .map_err(to_trivium_error)?;
         }
     }
 
     Ok(json!({ "ok": true }))
 }
 
-fn handle_trivium_index_keyword(request: TriviumIndexKeywordRequest) -> Result<JsonValue, ApiError> {
+fn handle_trivium_index_keyword(
+    request: TriviumIndexKeywordRequest,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("keyword", &request.keyword)?;
 
     match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
             let mut db = open_trivium_f32(&request.open)?;
-            db.index_keyword(request.id, &request.keyword).map_err(to_trivium_error)?;
+            db.index_keyword(request.id, &request.keyword)
+                .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::F16 => {
             let mut db = open_trivium_f16(&request.open)?;
-            db.index_keyword(request.id, &request.keyword).map_err(to_trivium_error)?;
+            db.index_keyword(request.id, &request.keyword)
+                .map_err(to_trivium_error)?;
         }
         TriviumDTypeTag::U64 => {
             let mut db = open_trivium_u64(&request.open)?;
-            db.index_keyword(request.id, &request.keyword).map_err(to_trivium_error)?;
+            db.index_keyword(request.id, &request.keyword)
+                .map_err(to_trivium_error)?;
         }
     }
 
     Ok(json!({ "ok": true }))
 }
 
-fn handle_trivium_build_text_index(request: TriviumBuildTextIndexRequest) -> Result<JsonValue, ApiError> {
+fn handle_trivium_build_text_index(
+    request: TriviumBuildTextIndexRequest,
+) -> Result<JsonValue, ApiError> {
     match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
             let mut db = open_trivium_f32(&request.open)?;
@@ -2447,17 +3216,29 @@ fn handle_trivium_stat(request: TriviumStatRequest) -> Result<JsonValue, ApiErro
     let (node_count, edge_count, estimated_memory_bytes) = match dtype {
         TriviumDTypeTag::F32 => {
             let db = open_trivium_f32(&open)?;
-            let edge_count = db.all_node_ids().into_iter().map(|id| db.get_edges(id).len()).sum();
+            let edge_count = db
+                .all_node_ids()
+                .into_iter()
+                .map(|id| db.get_edges(id).len())
+                .sum();
             (db.node_count(), edge_count, db.estimated_memory())
         }
         TriviumDTypeTag::F16 => {
             let db = open_trivium_f16(&open)?;
-            let edge_count = db.all_node_ids().into_iter().map(|id| db.get_edges(id).len()).sum();
+            let edge_count = db
+                .all_node_ids()
+                .into_iter()
+                .map(|id| db.get_edges(id).len())
+                .sum();
             (db.node_count(), edge_count, db.estimated_memory())
         }
         TriviumDTypeTag::U64 => {
             let db = open_trivium_u64(&open)?;
-            let edge_count = db.all_node_ids().into_iter().map(|id| db.get_edges(id).len()).sum();
+            let edge_count = db
+                .all_node_ids()
+                .into_iter()
+                .map(|id| db.get_edges(id).len())
+                .sum();
             (db.node_count(), edge_count, db.estimated_memory())
         }
     };
@@ -2489,12 +3270,17 @@ fn handle_control_session_init(request: ControlSessionInitRequest) -> Result<Jso
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let current_extension = fetch_control_extension(&connection, &request.user.handle, &request.config.extension_id)?;
+    let current_extension = fetch_control_extension(
+        &connection,
+        &request.user.handle,
+        &request.config.extension_id,
+    )?;
     let first_seen_at = current_extension
         .as_ref()
         .map(|extension| extension.first_seen_at.clone())
         .unwrap_or_else(|| request.timestamp.clone());
-    let declared_permissions = serde_json::to_string(&request.config.declared_permissions).map_err(to_json_error)?;
+    let declared_permissions =
+        serde_json::to_string(&request.config.declared_permissions).map_err(to_json_error)?;
 
     connection.execute(
         "INSERT INTO authority_extensions (
@@ -2520,12 +3306,17 @@ fn handle_control_session_init(request: ControlSessionInitRequest) -> Result<Jso
         ],
     ).map_err(to_sql_error)?;
 
-    let extension = fetch_control_extension(&connection, &request.user.handle, &request.config.extension_id)?
-        .ok_or_else(|| ApiError {
-            status_code: 500,
-            message: String::from("control extension was not persisted"),
-        })?;
-    let session_declared_permissions = serde_json::to_string(&extension.declared_permissions).map_err(to_json_error)?;
+    let extension = fetch_control_extension(
+        &connection,
+        &request.user.handle,
+        &request.config.extension_id,
+    )?
+    .ok_or_else(|| ApiError {
+        status_code: 500,
+        message: String::from("control extension was not persisted"),
+    })?;
+    let session_declared_permissions =
+        serde_json::to_string(&extension.declared_permissions).map_err(to_json_error)?;
 
     connection.execute(
         "INSERT INTO authority_sessions (
@@ -2573,7 +3364,9 @@ fn handle_control_session_get(request: ControlSessionGetRequest) -> Result<JsonV
     Ok(json!({ "session": session }))
 }
 
-fn handle_control_extensions_list(request: ControlExtensionsListRequest) -> Result<JsonValue, ApiError> {
+fn handle_control_extensions_list(
+    request: ControlExtensionsListRequest,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
 
     let connection = open_connection(&request.db_path)?;
@@ -2594,13 +3387,16 @@ fn handle_control_extensions_list(request: ControlExtensionsListRequest) -> Resu
     Ok(json!({ "extensions": extensions }))
 }
 
-fn handle_control_extension_get(request: ControlExtensionGetRequest) -> Result<JsonValue, ApiError> {
+fn handle_control_extension_get(
+    request: ControlExtensionGetRequest,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
     validate_non_empty("extensionId", &request.extension_id)?;
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let extension = fetch_control_extension(&connection, &request.user_handle, &request.extension_id)?;
+    let extension =
+        fetch_control_extension(&connection, &request.user_handle, &request.extension_id)?;
     Ok(json!({ "extension": extension }))
 }
 
@@ -2620,7 +3416,8 @@ fn handle_control_audit_recent(request: ControlAuditRecentRequest) -> Result<Jso
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let (audit_offset, audit_limit) = normalize_offset_page_request(request.page.as_ref(), request.limit, 50, 500)?;
+    let (audit_offset, audit_limit) =
+        normalize_offset_page_request(request.page.as_ref(), request.limit, 50, 500)?;
     let (permissions, permissions_page) = fetch_recent_audit_records_page(
         &connection,
         &request.user_handle,
@@ -2684,7 +3481,12 @@ fn handle_control_grant_get(request: ControlGrantGetRequest) -> Result<JsonValue
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let grant = fetch_control_grant(&connection, &request.user_handle, &request.extension_id, &request.key)?;
+    let grant = fetch_control_grant(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        &request.key,
+    )?;
     Ok(json!({ "grant": grant }))
 }
 
@@ -2742,10 +3544,12 @@ fn handle_control_grants_reset(request: ControlGrantResetRequest) -> Result<Json
             }
         }
         _ => {
-            connection.execute(
-                "DELETE FROM authority_grants WHERE user_handle = ?1 AND extension_id = ?2",
-                params![&request.user_handle, &request.extension_id],
-            ).map_err(to_sql_error)?;
+            connection
+                .execute(
+                    "DELETE FROM authority_grants WHERE user_handle = ?1 AND extension_id = ?2",
+                    params![&request.user_handle, &request.extension_id],
+                )
+                .map_err(to_sql_error)?;
         }
     }
     Ok(json!({ "ok": true }))
@@ -2760,7 +3564,9 @@ fn handle_control_policies_get(request: ControlPoliciesRequest) -> Result<JsonVa
     Ok(serde_json::to_value(document).expect("control policies document should serialize"))
 }
 
-fn handle_control_policies_save(request: ControlPoliciesSaveRequest) -> Result<JsonValue, ApiError> {
+fn handle_control_policies_save(
+    request: ControlPoliciesSaveRequest,
+) -> Result<JsonValue, ApiError> {
     if !request.actor.is_admin {
         return Err(ApiError {
             status_code: 403,
@@ -2795,13 +3601,17 @@ fn handle_control_policies_save(request: ControlPoliciesSaveRequest) -> Result<J
     Ok(serde_json::to_value(document).expect("control policies document should serialize"))
 }
 
-fn handle_control_jobs_list(request: ControlJobsListRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
+fn handle_control_jobs_list(
+    request: ControlJobsListRequest,
+    runtime: &Arc<RuntimeState>,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
     recover_stale_jobs(&connection, &request.user_handle, runtime)?;
-    let (job_offset, job_limit) = normalize_offset_page_request(request.page.as_ref(), None, 50, 500)?;
+    let (job_offset, job_limit) =
+        normalize_offset_page_request(request.page.as_ref(), None, 50, 500)?;
     let (jobs, page) = fetch_control_jobs_page(
         &connection,
         &request.user_handle,
@@ -2812,7 +3622,10 @@ fn handle_control_jobs_list(request: ControlJobsListRequest, runtime: &Arc<Runti
     Ok(json!({ "jobs": jobs, "page": page }))
 }
 
-fn handle_control_job_get(request: ControlJobGetRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
+fn handle_control_job_get(
+    request: ControlJobGetRequest,
+    runtime: &Arc<RuntimeState>,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
     validate_non_empty("jobId", &request.job_id)?;
 
@@ -2829,61 +3642,7 @@ fn handle_control_job_upsert(request: ControlJobUpsertRequest) -> Result<JsonVal
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let payload = match &request.job.payload {
-        Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
-        None => None,
-    };
-    let result = match &request.job.result {
-        Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
-        None => None,
-    };
-    connection.execute(
-        "INSERT INTO authority_jobs (
-            user_handle, id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel,
-            started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
-        ON CONFLICT(user_handle, id) DO UPDATE SET
-            extension_id = excluded.extension_id,
-            type = excluded.type,
-            status = excluded.status,
-            created_at = excluded.created_at,
-            updated_at = excluded.updated_at,
-            progress = excluded.progress,
-            summary = excluded.summary,
-            error = excluded.error,
-            payload = excluded.payload,
-            result = excluded.result,
-            channel = excluded.channel,
-            started_at = excluded.started_at,
-            finished_at = excluded.finished_at,
-            timeout_ms = excluded.timeout_ms,
-            idempotency_key = excluded.idempotency_key,
-            attempt = excluded.attempt,
-            max_attempts = excluded.max_attempts,
-            cancel_requested_at = excluded.cancel_requested_at",
-        params![
-            &request.user_handle,
-            &request.job.id,
-            &request.job.extension_id,
-            &request.job.job_type,
-            &request.job.status,
-            &request.job.created_at,
-            &request.job.updated_at,
-            request.job.progress,
-            &request.job.summary,
-            &request.job.error,
-            &payload,
-            &result,
-            &request.job.channel,
-            &request.job.started_at,
-            &request.job.finished_at,
-            &request.job.timeout_ms,
-            &request.job.idempotency_key,
-            request.job.attempt,
-            &request.job.max_attempts,
-            &request.job.cancel_requested_at,
-        ],
-    ).map_err(to_sql_error)?;
+    save_control_job_record(&connection, &request.user_handle, &request.job)?;
     Ok(json!({ "job": request.job }))
 }
 
@@ -2911,14 +3670,16 @@ fn handle_storage_kv_set(request: StorageKvSetRequest) -> Result<JsonValue, ApiE
 
     let connection = open_connection(&request.db_path)?;
     ensure_kv_schema(&connection)?;
-    connection.execute(
-        "INSERT INTO kv_entries (key, value, updated_at)
+    connection
+        .execute(
+            "INSERT INTO kv_entries (key, value, updated_at)
          VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET
             value = excluded.value,
             updated_at = excluded.updated_at",
-        params![&request.key, &serialized, current_timestamp_iso()],
-    ).map_err(to_sql_error)?;
+            params![&request.key, &serialized, current_timestamp_iso()],
+        )
+        .map_err(to_sql_error)?;
     Ok(json!({ "ok": true }))
 }
 
@@ -2928,7 +3689,10 @@ fn handle_storage_kv_delete(request: StorageKvDeleteRequest) -> Result<JsonValue
     let connection = open_connection(&request.db_path)?;
     ensure_kv_schema(&connection)?;
     connection
-        .execute("DELETE FROM kv_entries WHERE key = ?1", params![&request.key])
+        .execute(
+            "DELETE FROM kv_entries WHERE key = ?1",
+            params![&request.key],
+        )
         .map_err(to_sql_error)?;
     Ok(json!({ "ok": true }))
 }
@@ -2988,11 +3752,18 @@ fn handle_storage_blob_put(request: StorageBlobPutRequest) -> Result<JsonValue, 
     let record = BlobRecord {
         id: blob_id,
         name,
-        content_type: request.content_type.unwrap_or_else(|| String::from("application/octet-stream")),
+        content_type: request
+            .content_type
+            .unwrap_or_else(|| String::from("application/octet-stream")),
         size: size_bytes as i64,
         updated_at: current_timestamp_iso(),
     };
-    upsert_blob_record(&connection, &request.user_handle, &request.extension_id, &record)?;
+    upsert_blob_record(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        &record,
+    )?;
     Ok(serde_json::to_value(record).expect("blob record should serialize"))
 }
 
@@ -3004,11 +3775,16 @@ fn handle_storage_blob_get(request: StorageBlobGetRequest) -> Result<JsonValue, 
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let record = fetch_blob_record(&connection, &request.user_handle, &request.extension_id, &request.id)?
-        .ok_or_else(|| ApiError {
-            status_code: 400,
-            message: String::from("Blob not found"),
-        })?;
+    let record = fetch_blob_record(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        &request.id,
+    )?
+    .ok_or_else(|| ApiError {
+        status_code: 400,
+        message: String::from("Blob not found"),
+    })?;
     let binary_path = blob_binary_path(&request.blob_dir, &request.extension_id, &record.id);
     if !binary_path.exists() {
         return Err(ApiError {
@@ -3022,7 +3798,8 @@ fn handle_storage_blob_get(request: StorageBlobGetRequest) -> Result<JsonValue, 
         record,
         content,
         encoding: "base64",
-    }).expect("blob get response should serialize"))
+    })
+    .expect("blob get response should serialize"))
 }
 
 fn handle_storage_blob_open_read(request: StorageBlobGetRequest) -> Result<JsonValue, ApiError> {
@@ -3033,11 +3810,16 @@ fn handle_storage_blob_open_read(request: StorageBlobGetRequest) -> Result<JsonV
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let record = fetch_blob_record(&connection, &request.user_handle, &request.extension_id, &request.id)?
-        .ok_or_else(|| ApiError {
-            status_code: 400,
-            message: String::from("Blob not found"),
-        })?;
+    let record = fetch_blob_record(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        &request.id,
+    )?
+    .ok_or_else(|| ApiError {
+        status_code: 400,
+        message: String::from("Blob not found"),
+    })?;
     let binary_path = blob_binary_path(&request.blob_dir, &request.extension_id, &record.id);
     let metadata = fs::symlink_metadata(&binary_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -3064,7 +3846,8 @@ fn handle_storage_blob_open_read(request: StorageBlobGetRequest) -> Result<JsonV
     Ok(serde_json::to_value(BlobOpenReadResponse {
         record,
         source_path: binary_path.to_string_lossy().into_owned(),
-    }).expect("blob open read response should serialize"))
+    })
+    .expect("blob open read response should serialize"))
 }
 
 fn handle_storage_blob_delete(request: StorageBlobDeleteRequest) -> Result<JsonValue, ApiError> {
@@ -3075,7 +3858,12 @@ fn handle_storage_blob_delete(request: StorageBlobDeleteRequest) -> Result<JsonV
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    delete_blob_record(&connection, &request.user_handle, &request.extension_id, &request.id)?;
+    delete_blob_record(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        &request.id,
+    )?;
     let binary_path = blob_binary_path(&request.blob_dir, &request.extension_id, &request.id);
     if let Err(error) = fs::remove_file(binary_path) {
         if error.kind() != std::io::ErrorKind::NotFound {
@@ -3113,7 +3901,8 @@ fn handle_private_file_mkdir(request: PrivateFileMkdirRequest) -> Result<JsonVal
             });
         }
         let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
-        return Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"));
+        return Ok(serde_json::to_value(PrivateFileResponse { entry })
+            .expect("private file response should serialize"));
     }
 
     if request.recursive.unwrap_or(false) {
@@ -3134,7 +3923,8 @@ fn handle_private_file_mkdir(request: PrivateFileMkdirRequest) -> Result<JsonVal
 
     let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
     let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
-    Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"))
+    Ok(serde_json::to_value(PrivateFileResponse { entry })
+        .expect("private file response should serialize"))
 }
 
 fn handle_private_file_read_dir(request: PrivateFileReadDirRequest) -> Result<JsonValue, ApiError> {
@@ -3145,7 +3935,10 @@ fn handle_private_file_read_dir(request: PrivateFileReadDirRequest) -> Result<Js
 
     if !target_path.exists() {
         if virtual_path == "/" {
-            return Ok(serde_json::to_value(PrivateFileListResponse { entries: Vec::new() }).expect("private file list should serialize"));
+            return Ok(serde_json::to_value(PrivateFileListResponse {
+                entries: Vec::new(),
+            })
+            .expect("private file list should serialize"));
         }
         return Err(ApiError {
             status_code: 404,
@@ -3161,7 +3954,10 @@ fn handle_private_file_read_dir(request: PrivateFileReadDirRequest) -> Result<Js
         });
     }
 
-    let limit = request.limit.unwrap_or(MAX_PRIVATE_READ_DIR_LIMIT).min(MAX_PRIVATE_READ_DIR_LIMIT);
+    let limit = request
+        .limit
+        .unwrap_or(MAX_PRIVATE_READ_DIR_LIMIT)
+        .min(MAX_PRIVATE_READ_DIR_LIMIT);
     let mut entries = fs::read_dir(&target_path)
         .map_err(to_internal_error)?
         .take(limit)
@@ -3173,7 +3969,8 @@ fn handle_private_file_read_dir(request: PrivateFileReadDirRequest) -> Result<Js
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(serde_json::to_value(PrivateFileListResponse { entries }).expect("private file list should serialize"))
+    Ok(serde_json::to_value(PrivateFileListResponse { entries })
+        .expect("private file list should serialize"))
 }
 
 fn handle_private_file_write(request: PrivateFileWriteRequest) -> Result<JsonValue, ApiError> {
@@ -3238,7 +4035,8 @@ fn handle_private_file_write(request: PrivateFileWriteRequest) -> Result<JsonVal
     }
     let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
     let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
-    Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"))
+    Ok(serde_json::to_value(PrivateFileResponse { entry })
+        .expect("private file response should serialize"))
 }
 
 fn handle_private_file_read(request: PrivateFileReadRequest) -> Result<JsonValue, ApiError> {
@@ -3275,7 +4073,8 @@ fn handle_private_file_read(request: PrivateFileReadRequest) -> Result<JsonValue
         entry,
         content,
         encoding: encoding.to_string(),
-    }).expect("private file read response should serialize"))
+    })
+    .expect("private file read response should serialize"))
 }
 
 fn handle_private_file_open_read(request: PrivateFileReadRequest) -> Result<JsonValue, ApiError> {
@@ -3301,7 +4100,8 @@ fn handle_private_file_open_read(request: PrivateFileReadRequest) -> Result<Json
     Ok(serde_json::to_value(PrivateFileOpenReadResponse {
         entry,
         source_path: target_path.to_string_lossy().into_owned(),
-    }).expect("private file open read response should serialize"))
+    })
+    .expect("private file open read response should serialize"))
 }
 
 fn handle_private_file_delete(request: PrivateFileDeleteRequest) -> Result<JsonValue, ApiError> {
@@ -3356,7 +4156,8 @@ fn handle_private_file_stat(request: PrivateFileStatRequest) -> Result<JsonValue
 
     let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
     let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
-    Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"))
+    Ok(serde_json::to_value(PrivateFileResponse { entry })
+        .expect("private file response should serialize"))
 }
 
 fn handle_http_fetch(request: CoreHttpFetchRequest) -> Result<JsonValue, ApiError> {
@@ -3370,7 +4171,10 @@ fn handle_http_fetch(request: CoreHttpFetchRequest) -> Result<JsonValue, ApiErro
     if body_size > MAX_HTTP_INLINE_BODY_BYTES {
         return Err(ApiError {
             status_code: 400,
-            message: format!("HTTP request body exceeds {} bytes", MAX_HTTP_INLINE_BODY_BYTES),
+            message: format!(
+                "HTTP request body exceeds {} bytes",
+                MAX_HTTP_INLINE_BODY_BYTES
+            ),
         });
     }
 
@@ -3396,7 +4200,8 @@ fn handle_http_fetch(request: CoreHttpFetchRequest) -> Result<JsonValue, ApiErro
         body,
         body_encoding: fetched.body_encoding,
         content_type: fetched.content_type,
-    }).expect("http fetch response should serialize"))
+    })
+    .expect("http fetch response should serialize"))
 }
 
 fn handle_http_fetch_open(request: CoreHttpFetchOpenRequest) -> Result<JsonValue, ApiError> {
@@ -3457,10 +4262,14 @@ fn handle_http_fetch_open(request: CoreHttpFetchOpenRequest) -> Result<JsonValue
         body_encoding: fetched.body_encoding,
         content_type: fetched.content_type,
         size_bytes: fetched.body_bytes.len(),
-    }).expect("http fetch open response should serialize"))
+    })
+    .expect("http fetch open response should serialize"))
 }
 
-fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
+fn handle_control_job_create(
+    request: ControlJobCreateRequest,
+    runtime: &Arc<RuntimeState>,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
     validate_non_empty("extensionId", &request.extension_id)?;
     validate_non_empty("type", &request.job_type)?;
@@ -3499,6 +4308,7 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
             .optional()
             .map_err(to_sql_error)?;
         if let Some(job) = existing {
+            let job = attach_job_attempt_history(&connection, &request.user_handle, job)?;
             return Ok(json!({ "job": job }));
         }
     }
@@ -3524,6 +4334,7 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
         attempt: 0,
         max_attempts: request.max_attempts,
         cancel_requested_at: None,
+        attempt_history: None,
     };
 
     save_control_job_record(&connection, &request.user_handle, &job)?;
@@ -3544,14 +4355,24 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
             job: job.clone(),
         },
     ) {
-        let rejected = ControlJobRecord {
+        let rejected_finished_at = current_timestamp_iso();
+        let mut rejected = ControlJobRecord {
             status: String::from("failed"),
-            updated_at: current_timestamp_iso(),
-            finished_at: Some(current_timestamp_iso()),
+            updated_at: rejected_finished_at.clone(),
+            finished_at: Some(rejected_finished_at),
             summary: Some(String::from("Job rejected by worker queue")),
             error: Some(error.message.clone()),
             ..job.clone()
         };
+        let rejected_attempt_record = JobAttemptRecord {
+            attempt: rejected.attempt,
+            event: JobAttemptEvent::Failed,
+            timestamp: rejected.updated_at.clone(),
+            summary: rejected.summary.clone(),
+            error: rejected.error.clone(),
+            backoff_ms: None,
+        };
+        append_attempt_history(&mut rejected, rejected_attempt_record);
         save_control_job_record(&connection, &request.user_handle, &rejected)?;
         publish_control_event(
             &connection,
@@ -3579,7 +4400,10 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
     Ok(json!({ "job": job }))
 }
 
-fn handle_control_job_cancel(request: ControlJobCancelRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
+fn handle_control_job_cancel(
+    request: ControlJobCancelRequest,
+    runtime: &Arc<RuntimeState>,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
     validate_non_empty("extensionId", &request.extension_id)?;
     validate_non_empty("jobId", &request.job_id)?;
@@ -3587,11 +4411,12 @@ fn handle_control_job_cancel(request: ControlJobCancelRequest, runtime: &Arc<Run
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
     recover_stale_jobs(&connection, &request.user_handle, runtime)?;
-    let job = fetch_control_job(&connection, &request.user_handle, &request.job_id)?
-        .ok_or_else(|| ApiError {
+    let job = fetch_control_job(&connection, &request.user_handle, &request.job_id)?.ok_or_else(
+        || ApiError {
             status_code: 400,
             message: String::from("Job not found"),
-        })?;
+        },
+    )?;
     if job.extension_id != request.extension_id {
         return Err(ApiError {
             status_code: 400,
@@ -3612,13 +4437,23 @@ fn handle_control_job_cancel(request: ControlJobCancelRequest, runtime: &Arc<Run
         control.store(true, Ordering::SeqCst);
     }
 
-    let next = ControlJobRecord {
+    let cancelled_at = current_timestamp_iso();
+    let mut next = ControlJobRecord {
         status: String::from("cancelled"),
-        updated_at: current_timestamp_iso(),
-        cancel_requested_at: Some(current_timestamp_iso()),
+        updated_at: cancelled_at.clone(),
+        cancel_requested_at: Some(cancelled_at),
         summary: Some(String::from("Cancelled by user")),
         ..job
     };
+    let cancelled_attempt_record = JobAttemptRecord {
+        attempt: next.attempt,
+        event: JobAttemptEvent::Cancelled,
+        timestamp: next.updated_at.clone(),
+        summary: next.summary.clone(),
+        error: next.error.clone(),
+        backoff_ms: None,
+    };
+    append_attempt_history(&mut next, cancelled_attempt_record);
     save_control_job_record(&connection, &request.user_handle, &next)?;
     publish_control_event(
         &connection,
@@ -3646,10 +4481,16 @@ fn handle_control_events_poll(request: ControlEventsPollRequest) -> Result<JsonV
         .clamp(1, MAX_EVENT_POLL_LIMIT);
     let after_id = match request.after_id {
         Some(value) => Some(value),
-        None => parse_event_cursor(request.page.as_ref().and_then(|page| page.cursor.as_deref()))?,
+        None => parse_event_cursor(
+            request
+                .page
+                .as_ref()
+                .and_then(|page| page.cursor.as_deref()),
+        )?,
     };
     if let Some(after_id) = after_id {
-        let total_count = count_control_events(&connection, &request.user_handle, &request.channel)?;
+        let total_count =
+            count_control_events(&connection, &request.user_handle, &request.channel)?;
         let (events, has_more) = fetch_control_events_page(
             &connection,
             &request.user_handle,
@@ -3659,14 +4500,19 @@ fn handle_control_events_poll(request: ControlEventsPollRequest) -> Result<JsonV
         )?;
         let cursor = events.last().map(|event| event.id).unwrap_or(after_id);
         let page = CursorPageInfo {
-            next_cursor: if has_more { Some(cursor.to_string()) } else { None },
+            next_cursor: if has_more {
+                Some(cursor.to_string())
+            } else {
+                None
+            },
             limit,
             has_more,
             total_count,
         };
         Ok(json!({ "events": events, "cursor": cursor, "page": page }))
     } else {
-        let cursor = fetch_latest_control_event_id(&connection, &request.user_handle, &request.channel)?;
+        let cursor =
+            fetch_latest_control_event_id(&connection, &request.user_handle, &request.channel)?;
         let page = CursorPageInfo {
             next_cursor: None,
             limit,
@@ -3715,7 +4561,11 @@ fn parse_event_cursor(cursor: Option<&str>) -> Result<Option<i64>, ApiError> {
 fn build_offset_page_info(offset: usize, limit: usize, total_count: usize) -> CursorPageInfo {
     let next_offset = offset.saturating_add(limit);
     CursorPageInfo {
-        next_cursor: if next_offset < total_count { Some(next_offset.to_string()) } else { None },
+        next_cursor: if next_offset < total_count {
+            Some(next_offset.to_string())
+        } else {
+            None
+        },
         limit,
         has_more: next_offset < total_count,
         total_count,
@@ -3731,15 +4581,22 @@ fn slice_vec_page<T>(
     match page {
         Some(page_request) => {
             let total_count = items.len();
-            let (offset, limit) = normalize_offset_page_request(Some(page_request), None, default_limit, max_limit)?;
+            let (offset, limit) =
+                normalize_offset_page_request(Some(page_request), None, default_limit, max_limit)?;
             let paged = items.into_iter().skip(offset).take(limit).collect();
-            Ok((paged, Some(build_offset_page_info(offset, limit, total_count))))
+            Ok((
+                paged,
+                Some(build_offset_page_info(offset, limit, total_count)),
+            ))
         }
         None => Ok((items, None)),
     }
 }
 
-fn execute_transactional_statements(db_path: &str, statements: &[SqlBatchStatement]) -> Result<Vec<JsonValue>, ApiError> {
+fn execute_transactional_statements(
+    db_path: &str,
+    statements: &[SqlBatchStatement],
+) -> Result<Vec<JsonValue>, ApiError> {
     if statements.is_empty() {
         return Err(ApiError {
             status_code: 400,
@@ -3769,7 +4626,11 @@ fn execute_transactional_statements(db_path: &str, statements: &[SqlBatchStateme
     Ok(results)
 }
 
-fn run_query(connection: &Connection, statement_text: &str, params: &[JsonValue]) -> Result<SqlQueryResult, ApiError> {
+fn run_query(
+    connection: &Connection,
+    statement_text: &str,
+    params: &[JsonValue],
+) -> Result<SqlQueryResult, ApiError> {
     if statement_text.trim().is_empty() {
         return Err(ApiError {
             status_code: 400,
@@ -3807,7 +4668,11 @@ fn run_query(connection: &Connection, statement_text: &str, params: &[JsonValue]
     })
 }
 
-fn run_exec(connection: &Connection, statement_text: &str, params: &[JsonValue]) -> Result<SqlExecResult, ApiError> {
+fn run_exec(
+    connection: &Connection,
+    statement_text: &str,
+    params: &[JsonValue],
+) -> Result<SqlExecResult, ApiError> {
     if statement_text.trim().is_empty() {
         return Err(ApiError {
             status_code: 400,
@@ -3898,15 +4763,18 @@ fn build_trivium_config(request: &TriviumOpenRequest) -> Result<TriviumConfig, A
 }
 
 fn open_trivium_f32(request: &TriviumOpenRequest) -> Result<TriviumDatabase<f32>, ApiError> {
-    TriviumDatabase::<f32>::open_with_config(&request.db_path, build_trivium_config(request)?).map_err(to_trivium_error)
+    TriviumDatabase::<f32>::open_with_config(&request.db_path, build_trivium_config(request)?)
+        .map_err(to_trivium_error)
 }
 
 fn open_trivium_f16(request: &TriviumOpenRequest) -> Result<TriviumDatabase<f16>, ApiError> {
-    TriviumDatabase::<f16>::open_with_config(&request.db_path, build_trivium_config(request)?).map_err(to_trivium_error)
+    TriviumDatabase::<f16>::open_with_config(&request.db_path, build_trivium_config(request)?)
+        .map_err(to_trivium_error)
 }
 
 fn open_trivium_u64(request: &TriviumOpenRequest) -> Result<TriviumDatabase<u64>, ApiError> {
-    TriviumDatabase::<u64>::open_with_config(&request.db_path, build_trivium_config(request)?).map_err(to_trivium_error)
+    TriviumDatabase::<u64>::open_with_config(&request.db_path, build_trivium_config(request)?)
+        .map_err(to_trivium_error)
 }
 
 fn map_trivium_node<T, F>(node: TriviumRawNodeView<T>, map_value: F) -> TriviumNodeView
@@ -3959,7 +4827,9 @@ where
         .collect()
 }
 
-fn build_trivium_advanced_search_config(request: &TriviumSearchAdvancedRequest) -> Result<TriviumSearchConfig, ApiError> {
+fn build_trivium_advanced_search_config(
+    request: &TriviumSearchAdvancedRequest,
+) -> Result<TriviumSearchConfig, ApiError> {
     Ok(TriviumSearchConfig {
         top_k: request.top_k.unwrap_or(5),
         expand_depth: request.expand_depth.unwrap_or(2),
@@ -3980,11 +4850,17 @@ fn build_trivium_advanced_search_config(request: &TriviumSearchAdvancedRequest) 
         enable_text_hybrid_search: request.enable_text_hybrid_search.unwrap_or(false),
         bm25_k1: request.bm25_k1.unwrap_or(1.2),
         bm25_b: request.bm25_b.unwrap_or(0.75),
-        payload_filter: request.payload_filter.as_ref().map(parse_trivium_filter_condition).transpose()?,
+        payload_filter: request
+            .payload_filter
+            .as_ref()
+            .map(parse_trivium_filter_condition)
+            .transpose()?,
     })
 }
 
-fn build_trivium_hybrid_search_config(request: &TriviumSearchHybridRequest) -> Result<TriviumSearchConfig, ApiError> {
+fn build_trivium_hybrid_search_config(
+    request: &TriviumSearchHybridRequest,
+) -> Result<TriviumSearchConfig, ApiError> {
     let hybrid_alpha = request.hybrid_alpha.unwrap_or(0.7);
     Ok(TriviumSearchConfig {
         top_k: request.top_k.unwrap_or(5),
@@ -3992,7 +4868,11 @@ fn build_trivium_hybrid_search_config(request: &TriviumSearchHybridRequest) -> R
         min_score: request.min_score.unwrap_or(0.1),
         text_boost: (1.0 - hybrid_alpha).max(0.1) * 3.0,
         enable_text_hybrid_search: true,
-        payload_filter: request.payload_filter.as_ref().map(parse_trivium_filter_condition).transpose()?,
+        payload_filter: request
+            .payload_filter
+            .as_ref()
+            .map(parse_trivium_filter_condition)
+            .transpose()?,
         ..Default::default()
     })
 }
@@ -4005,7 +4885,9 @@ fn parse_trivium_filter_condition(value: &JsonValue) -> Result<TriviumFilter, Ap
     parse_trivium_filter_object(object)
 }
 
-fn parse_trivium_filter_object(object: &JsonMap<String, JsonValue>) -> Result<TriviumFilter, ApiError> {
+fn parse_trivium_filter_object(
+    object: &JsonMap<String, JsonValue>,
+) -> Result<TriviumFilter, ApiError> {
     let mut filters = Vec::new();
 
     for (key, value) in object {
@@ -4093,7 +4975,9 @@ fn parse_trivium_filter_object(object: &JsonMap<String, JsonValue>) -> Result<Tr
                         key.clone(),
                         operand.as_u64().ok_or_else(|| ApiError {
                             status_code: 400,
-                            message: String::from("trivium filter $size requires a non-negative integer"),
+                            message: String::from(
+                                "trivium filter $size requires a non-negative integer",
+                            ),
                         })? as usize,
                     ),
                     "$all" => TriviumFilter::All(
@@ -4105,10 +4989,13 @@ fn parse_trivium_filter_object(object: &JsonMap<String, JsonValue>) -> Result<Tr
                     ),
                     "$type" => TriviumFilter::TypeMatch(
                         key.clone(),
-                        operand.as_str().ok_or_else(|| ApiError {
-                            status_code: 400,
-                            message: String::from("trivium filter $type requires a string"),
-                        })?.to_string(),
+                        operand
+                            .as_str()
+                            .ok_or_else(|| ApiError {
+                                status_code: 400,
+                                message: String::from("trivium filter $type requires a string"),
+                            })?
+                            .to_string(),
                     ),
                     other => {
                         return Err(ApiError {
@@ -4127,7 +5014,9 @@ fn parse_trivium_filter_object(object: &JsonMap<String, JsonValue>) -> Result<Tr
     if filters.is_empty() {
         Ok(TriviumFilter::Eq(String::from("none"), JsonValue::Null))
     } else if filters.len() == 1 {
-        Ok(filters.pop().expect("trivium filter should contain one item"))
+        Ok(filters
+            .pop()
+            .expect("trivium filter should contain one item"))
     } else {
         Ok(TriviumFilter::And(filters))
     }
@@ -4158,11 +5047,24 @@ fn build_trivium_database_record(
     let main_metadata = fs::metadata(path).ok();
     let wal_metadata = fs::metadata(&wal_path).ok();
     let vec_metadata = fs::metadata(&vec_path).ok();
-    let size_bytes = main_metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0);
-    let wal_size_bytes = wal_metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0);
-    let vec_size_bytes = vec_metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0);
+    let size_bytes = main_metadata
+        .as_ref()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let wal_size_bytes = wal_metadata
+        .as_ref()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let vec_size_bytes = vec_metadata
+        .as_ref()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     let actual_storage_mode = if main_metadata.is_some() {
-        Some(if vec_metadata.is_some() { String::from("mmap") } else { String::from("rom") })
+        Some(if vec_metadata.is_some() {
+            String::from("mmap")
+        } else {
+            String::from("rom")
+        })
     } else {
         storage_mode
     };
@@ -4300,6 +5202,19 @@ fn ensure_control_schema(connection: &Connection) -> Result<(), ApiError> {
         );
         CREATE INDEX IF NOT EXISTS idx_authority_jobs_extension ON authority_jobs(user_handle, extension_id, updated_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_authority_jobs_idempotency ON authority_jobs(user_handle, idempotency_key);
+        CREATE TABLE IF NOT EXISTS authority_job_attempts (
+            user_handle TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            attempt INTEGER NOT NULL,
+            event TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            summary TEXT,
+            error TEXT,
+            backoff_ms INTEGER,
+            PRIMARY KEY (user_handle, job_id, sequence)
+        );
+        CREATE INDEX IF NOT EXISTS idx_authority_job_attempts_job ON authority_job_attempts(user_handle, job_id, sequence ASC);
         CREATE TABLE IF NOT EXISTS authority_blob_records (
             user_handle TEXT NOT NULL,
             extension_id TEXT NOT NULL,
@@ -4325,35 +5240,51 @@ fn ensure_control_schema(connection: &Connection) -> Result<(), ApiError> {
 }
 
 fn ensure_kv_schema(connection: &Connection) -> Result<(), ApiError> {
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS kv_entries (
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS kv_entries (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );",
-    ).map_err(to_sql_error)
+        )
+        .map_err(to_sql_error)
 }
 
-fn fetch_control_extension(connection: &Connection, user_handle: &str, extension_id: &str) -> Result<Option<ControlExtensionRecord>, ApiError> {
+fn fetch_control_extension(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+) -> Result<Option<ControlExtensionRecord>, ApiError> {
     let mut statement = connection.prepare(
         "SELECT extension_id, install_type, display_name, version, first_seen_at, last_seen_at, declared_permissions, ui_label
          FROM authority_extensions
          WHERE user_handle = ?1 AND extension_id = ?2",
     ).map_err(to_sql_error)?;
     statement
-        .query_row(params![user_handle, extension_id], control_extension_from_row)
+        .query_row(
+            params![user_handle, extension_id],
+            control_extension_from_row,
+        )
         .optional()
         .map_err(to_sql_error)
 }
 
-fn fetch_control_session(connection: &Connection, user_handle: &str, session_token: &str) -> Result<Option<ControlSessionSnapshot>, ApiError> {
+fn fetch_control_session(
+    connection: &Connection,
+    user_handle: &str,
+    session_token: &str,
+) -> Result<Option<ControlSessionSnapshot>, ApiError> {
     let mut statement = connection.prepare(
         "SELECT token, user_handle, is_admin, extension_id, install_type, display_name, version, first_seen_at, created_at, declared_permissions
          FROM authority_sessions
          WHERE user_handle = ?1 AND token = ?2",
     ).map_err(to_sql_error)?;
     statement
-        .query_row(params![user_handle, session_token], control_session_from_row)
+        .query_row(
+            params![user_handle, session_token],
+            control_session_from_row,
+        )
         .optional()
         .map_err(to_sql_error)
 }
@@ -4375,7 +5306,8 @@ fn control_extension_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Contr
 
 fn control_session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlSessionSnapshot> {
     let declared_permissions_text: String = row.get(9)?;
-    let declared_permissions = serde_json::from_str(&declared_permissions_text).unwrap_or_else(|_| json!({}));
+    let declared_permissions =
+        serde_json::from_str(&declared_permissions_text).unwrap_or_else(|_| json!({}));
     let is_admin: i64 = row.get(2)?;
     Ok(ControlSessionSnapshot {
         session_token: row.get(0)?,
@@ -4416,13 +5348,15 @@ fn fetch_recent_audit_records_page(
     limit: usize,
 ) -> Result<(Vec<ControlAuditRecord>, CursorPageInfo), ApiError> {
     let total_count = count_recent_audit_records(connection, user_handle, extension_id, kind)?;
-    let mut statement = connection.prepare(
-        "SELECT timestamp, kind, extension_id, message, details
+    let mut statement = connection
+        .prepare(
+            "SELECT timestamp, kind, extension_id, message, details
          FROM authority_audit
          WHERE user_handle = ?1 AND extension_id = ?2 AND kind = ?3
          ORDER BY timestamp DESC, id DESC
          LIMIT ?4 OFFSET ?5",
-    ).map_err(to_sql_error)?;
+        )
+        .map_err(to_sql_error)?;
     let rows = statement
         .query_map(
             params![user_handle, extension_id, kind, limit as i64, offset as i64],
@@ -4454,13 +5388,19 @@ fn count_recent_audit_records(
     Ok(total.max(0) as usize)
 }
 
-fn fetch_control_grants(connection: &Connection, user_handle: &str, extension_id: &str) -> Result<Vec<ControlGrantRecord>, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT key, resource, target, status, scope, risk_level, updated_at, source, choice
+fn fetch_control_grants(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+) -> Result<Vec<ControlGrantRecord>, ApiError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT key, resource, target, status, scope, risk_level, updated_at, source, choice
          FROM authority_grants
          WHERE user_handle = ?1 AND extension_id = ?2
          ORDER BY updated_at DESC, key ASC",
-    ).map_err(to_sql_error)?;
+        )
+        .map_err(to_sql_error)?;
     let rows = statement
         .query_map(params![user_handle, extension_id], control_grant_from_row)
         .map_err(to_sql_error)?;
@@ -4471,14 +5411,24 @@ fn fetch_control_grants(connection: &Connection, user_handle: &str, extension_id
     Ok(grants)
 }
 
-fn fetch_control_grant(connection: &Connection, user_handle: &str, extension_id: &str, key: &str) -> Result<Option<ControlGrantRecord>, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT key, resource, target, status, scope, risk_level, updated_at, source, choice
+fn fetch_control_grant(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+    key: &str,
+) -> Result<Option<ControlGrantRecord>, ApiError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT key, resource, target, status, scope, risk_level, updated_at, source, choice
          FROM authority_grants
          WHERE user_handle = ?1 AND extension_id = ?2 AND key = ?3",
-    ).map_err(to_sql_error)?;
+        )
+        .map_err(to_sql_error)?;
     statement
-        .query_row(params![user_handle, extension_id, key], control_grant_from_row)
+        .query_row(
+            params![user_handle, extension_id, key],
+            control_grant_from_row,
+        )
         .optional()
         .map_err(to_sql_error)
 }
@@ -4497,10 +5447,12 @@ fn control_grant_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlGr
     })
 }
 
-fn fetch_control_policies_document(connection: &Connection) -> Result<ControlPoliciesDocument, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT payload FROM authority_policy_documents WHERE name = 'global'",
-    ).map_err(to_sql_error)?;
+fn fetch_control_policies_document(
+    connection: &Connection,
+) -> Result<ControlPoliciesDocument, ApiError> {
+    let mut statement = connection
+        .prepare("SELECT payload FROM authority_policy_documents WHERE name = 'global'")
+        .map_err(to_sql_error)?;
     let payload = statement
         .query_row([], |row| row.get::<_, String>(0))
         .optional()
@@ -4512,7 +5464,10 @@ fn fetch_control_policies_document(connection: &Connection) -> Result<ControlPol
     }
 }
 
-fn save_control_policies_document(connection: &Connection, document: &ControlPoliciesDocument) -> Result<(), ApiError> {
+fn save_control_policies_document(
+    connection: &Connection,
+    document: &ControlPoliciesDocument,
+) -> Result<(), ApiError> {
     let payload = serde_json::to_string(document).map_err(to_json_error)?;
     connection.execute(
         "INSERT INTO authority_policy_documents (name, payload, updated_at) VALUES ('global', ?1, ?2)
@@ -4539,7 +5494,11 @@ fn default_control_policies_document() -> ControlPoliciesDocument {
     }
 }
 
-fn insert_control_audit_record(connection: &Connection, user_handle: &str, record: &ControlAuditRecordInput) -> Result<(), ApiError> {
+fn insert_control_audit_record(
+    connection: &Connection,
+    user_handle: &str,
+    record: &ControlAuditRecordInput,
+) -> Result<(), ApiError> {
     let details = match &record.details {
         Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
         None => None,
@@ -4596,10 +5555,14 @@ fn fetch_control_jobs_page(
              LIMIT ?3 OFFSET ?4",
         ).map_err(to_sql_error)?;
         let rows = statement
-            .query_map(params![user_handle, extension_id, limit as i64, offset as i64], control_job_from_row)
+            .query_map(
+                params![user_handle, extension_id, limit as i64, offset as i64],
+                control_job_from_row,
+            )
             .map_err(to_sql_error)?;
         for row in rows {
-            jobs.push(row.map_err(to_sql_error)?);
+            let job = row.map_err(to_sql_error)?;
+            jobs.push(attach_job_attempt_history(connection, user_handle, job)?);
         }
     } else {
         let mut statement = connection.prepare(
@@ -4610,16 +5573,24 @@ fn fetch_control_jobs_page(
              LIMIT ?2 OFFSET ?3",
         ).map_err(to_sql_error)?;
         let rows = statement
-            .query_map(params![user_handle, limit as i64, offset as i64], control_job_from_row)
+            .query_map(
+                params![user_handle, limit as i64, offset as i64],
+                control_job_from_row,
+            )
             .map_err(to_sql_error)?;
         for row in rows {
-            jobs.push(row.map_err(to_sql_error)?);
+            let job = row.map_err(to_sql_error)?;
+            jobs.push(attach_job_attempt_history(connection, user_handle, job)?);
         }
     }
     Ok((jobs, build_offset_page_info(offset, limit, total_count)))
 }
 
-fn count_control_jobs(connection: &Connection, user_handle: &str, extension_id: Option<&str>) -> Result<usize, ApiError> {
+fn count_control_jobs(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: Option<&str>,
+) -> Result<usize, ApiError> {
     let total = if let Some(extension_id) = extension_id {
         connection
             .query_row(
@@ -4640,16 +5611,28 @@ fn count_control_jobs(connection: &Connection, user_handle: &str, extension_id: 
     Ok(total.max(0) as usize)
 }
 
-fn fetch_control_job(connection: &Connection, user_handle: &str, job_id: &str) -> Result<Option<ControlJobRecord>, ApiError> {
+fn fetch_control_job(
+    connection: &Connection,
+    user_handle: &str,
+    job_id: &str,
+) -> Result<Option<ControlJobRecord>, ApiError> {
     let mut statement = connection.prepare(
         "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
          FROM authority_jobs
          WHERE user_handle = ?1 AND id = ?2",
     ).map_err(to_sql_error)?;
-    statement
+    let job = statement
         .query_row(params![user_handle, job_id], control_job_from_row)
         .optional()
-        .map_err(to_sql_error)
+        .map_err(to_sql_error)?;
+    match job {
+        Some(job) => Ok(Some(attach_job_attempt_history(
+            connection,
+            user_handle,
+            job,
+        )?)),
+        None => Ok(None),
+    }
 }
 
 fn control_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlJobRecord> {
@@ -4675,13 +5658,143 @@ fn control_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlJobR
         attempt: row.get::<_, Option<i64>>(16)?.unwrap_or(0),
         max_attempts: row.get(17)?,
         cancel_requested_at: row.get(18)?,
+        attempt_history: None,
     })
 }
 
-fn fetch_kv_value(connection: &Connection, key: &str) -> Result<Option<JsonValue>, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT value FROM kv_entries WHERE key = ?1",
+fn job_attempt_event_name(event: &JobAttemptEvent) -> &'static str {
+    match event {
+        JobAttemptEvent::Started => "started",
+        JobAttemptEvent::RetryScheduled => "retryScheduled",
+        JobAttemptEvent::Completed => "completed",
+        JobAttemptEvent::Failed => "failed",
+        JobAttemptEvent::Cancelled => "cancelled",
+        JobAttemptEvent::Recovered => "recovered",
+    }
+}
+
+fn parse_job_attempt_event(value: &str) -> Result<JobAttemptEvent, ApiError> {
+    match value {
+        "started" => Ok(JobAttemptEvent::Started),
+        "retryScheduled" => Ok(JobAttemptEvent::RetryScheduled),
+        "completed" => Ok(JobAttemptEvent::Completed),
+        "failed" => Ok(JobAttemptEvent::Failed),
+        "cancelled" => Ok(JobAttemptEvent::Cancelled),
+        "recovered" => Ok(JobAttemptEvent::Recovered),
+        other => Err(ApiError {
+            status_code: 500,
+            message: format!("internal_error: unsupported_job_attempt_event: {other}"),
+        }),
+    }
+}
+
+fn fetch_job_attempt_history(
+    connection: &Connection,
+    user_handle: &str,
+    job_id: &str,
+) -> Result<Vec<JobAttemptRecord>, ApiError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT attempt, event, timestamp, summary, error, backoff_ms
+         FROM authority_job_attempts
+         WHERE user_handle = ?1 AND job_id = ?2
+         ORDER BY sequence ASC",
+        )
+        .map_err(to_sql_error)?;
+    let mut rows = statement
+        .query(params![user_handle, job_id])
+        .map_err(to_sql_error)?;
+    let mut records = Vec::new();
+    while let Some(row) = rows.next().map_err(to_sql_error)? {
+        let event_name = row.get::<_, String>(1).map_err(to_sql_error)?;
+        records.push(JobAttemptRecord {
+            attempt: row.get(0).map_err(to_sql_error)?,
+            event: parse_job_attempt_event(&event_name)?,
+            timestamp: row.get(2).map_err(to_sql_error)?,
+            summary: row.get(3).map_err(to_sql_error)?,
+            error: row.get(4).map_err(to_sql_error)?,
+            backoff_ms: row.get(5).map_err(to_sql_error)?,
+        });
+    }
+    Ok(records)
+}
+
+fn attach_job_attempt_history(
+    connection: &Connection,
+    user_handle: &str,
+    mut job: ControlJobRecord,
+) -> Result<ControlJobRecord, ApiError> {
+    let history = fetch_job_attempt_history(connection, user_handle, &job.id)?;
+    job.attempt_history = if history.is_empty() {
+        None
+    } else {
+        Some(history)
+    };
+    Ok(job)
+}
+
+fn insert_job_attempt_record(
+    connection: &Connection,
+    user_handle: &str,
+    job_id: &str,
+    record: &JobAttemptRecord,
+) -> Result<(), ApiError> {
+    let sequence = connection
+        .query_row(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM authority_job_attempts WHERE user_handle = ?1 AND job_id = ?2",
+            params![user_handle, job_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(to_sql_error)?;
+    connection.execute(
+        "INSERT INTO authority_job_attempts (user_handle, job_id, sequence, attempt, event, timestamp, summary, error, backoff_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            user_handle,
+            job_id,
+            sequence,
+            record.attempt,
+            job_attempt_event_name(&record.event),
+            &record.timestamp,
+            &record.summary,
+            &record.error,
+            &record.backoff_ms,
+        ],
     ).map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn replace_job_attempt_history(
+    connection: &Connection,
+    user_handle: &str,
+    job_id: &str,
+    records: Option<&Vec<JobAttemptRecord>>,
+) -> Result<(), ApiError> {
+    let Some(records) = records else {
+        return Ok(());
+    };
+    connection
+        .execute(
+            "DELETE FROM authority_job_attempts WHERE user_handle = ?1 AND job_id = ?2",
+            params![user_handle, job_id],
+        )
+        .map_err(to_sql_error)?;
+    for record in records {
+        insert_job_attempt_record(connection, user_handle, job_id, record)?;
+    }
+    Ok(())
+}
+
+fn append_attempt_history(job: &mut ControlJobRecord, record: JobAttemptRecord) {
+    job.attempt_history
+        .get_or_insert_with(Vec::new)
+        .push(record);
+}
+
+fn fetch_kv_value(connection: &Connection, key: &str) -> Result<Option<JsonValue>, ApiError> {
+    let mut statement = connection
+        .prepare("SELECT value FROM kv_entries WHERE key = ?1")
+        .map_err(to_sql_error)?;
     let payload = statement
         .query_row(params![key], |row| row.get::<_, String>(0))
         .optional()
@@ -4693,9 +5806,9 @@ fn fetch_kv_value(connection: &Connection, key: &str) -> Result<Option<JsonValue
 }
 
 fn fetch_kv_entries(connection: &Connection) -> Result<JsonMap<String, JsonValue>, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT key, value FROM kv_entries ORDER BY key ASC",
-    ).map_err(to_sql_error)?;
+    let mut statement = connection
+        .prepare("SELECT key, value FROM kv_entries ORDER BY key ASC")
+        .map_err(to_sql_error)?;
     let mut rows = statement.query([]).map_err(to_sql_error)?;
     let mut entries = JsonMap::new();
     while let Some(row) = rows.next().map_err(to_sql_error)? {
@@ -4707,7 +5820,12 @@ fn fetch_kv_entries(connection: &Connection) -> Result<JsonMap<String, JsonValue
     Ok(entries)
 }
 
-fn upsert_blob_record(connection: &Connection, user_handle: &str, extension_id: &str, record: &BlobRecord) -> Result<(), ApiError> {
+fn upsert_blob_record(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+    record: &BlobRecord,
+) -> Result<(), ApiError> {
     connection.execute(
         "INSERT INTO authority_blob_records (user_handle, extension_id, id, name, content_type, size, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -4729,25 +5847,41 @@ fn upsert_blob_record(connection: &Connection, user_handle: &str, extension_id: 
     Ok(())
 }
 
-fn fetch_blob_record(connection: &Connection, user_handle: &str, extension_id: &str, blob_id: &str) -> Result<Option<BlobRecord>, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT id, name, content_type, size, updated_at
+fn fetch_blob_record(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+    blob_id: &str,
+) -> Result<Option<BlobRecord>, ApiError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, content_type, size, updated_at
          FROM authority_blob_records
          WHERE user_handle = ?1 AND extension_id = ?2 AND id = ?3",
-    ).map_err(to_sql_error)?;
+        )
+        .map_err(to_sql_error)?;
     statement
-        .query_row(params![user_handle, extension_id, blob_id], blob_record_from_row)
+        .query_row(
+            params![user_handle, extension_id, blob_id],
+            blob_record_from_row,
+        )
         .optional()
         .map_err(to_sql_error)
 }
 
-fn fetch_blob_records(connection: &Connection, user_handle: &str, extension_id: &str) -> Result<Vec<BlobRecord>, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT id, name, content_type, size, updated_at
+fn fetch_blob_records(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+) -> Result<Vec<BlobRecord>, ApiError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, content_type, size, updated_at
          FROM authority_blob_records
          WHERE user_handle = ?1 AND extension_id = ?2
          ORDER BY updated_at DESC, id DESC",
-    ).map_err(to_sql_error)?;
+        )
+        .map_err(to_sql_error)?;
     let rows = statement
         .query_map(params![user_handle, extension_id], blob_record_from_row)
         .map_err(to_sql_error)?;
@@ -4758,7 +5892,12 @@ fn fetch_blob_records(connection: &Connection, user_handle: &str, extension_id: 
     Ok(records)
 }
 
-fn delete_blob_record(connection: &Connection, user_handle: &str, extension_id: &str, blob_id: &str) -> Result<(), ApiError> {
+fn delete_blob_record(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+    blob_id: &str,
+) -> Result<(), ApiError> {
     connection.execute(
         "DELETE FROM authority_blob_records WHERE user_handle = ?1 AND extension_id = ?2 AND id = ?3",
         params![user_handle, extension_id, blob_id],
@@ -4803,15 +5942,25 @@ fn fetch_control_events_page(
     after_id: i64,
     limit: usize,
 ) -> Result<(Vec<ControlEventRecord>, bool), ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT id, created_at, extension_id, channel, name, payload
+    let mut statement = connection
+        .prepare(
+            "SELECT id, created_at, extension_id, channel, name, payload
          FROM authority_events
          WHERE user_handle = ?1 AND channel = ?2 AND id > ?3
          ORDER BY id ASC
          LIMIT ?4",
-    ).map_err(to_sql_error)?;
+        )
+        .map_err(to_sql_error)?;
     let rows = statement
-        .query_map(params![user_handle, channel, after_id, (limit.saturating_add(1)) as i64], control_event_from_row)
+        .query_map(
+            params![
+                user_handle,
+                channel,
+                after_id,
+                (limit.saturating_add(1)) as i64
+            ],
+            control_event_from_row,
+        )
         .map_err(to_sql_error)?;
     let mut records = Vec::new();
     for row in rows {
@@ -4824,7 +5973,11 @@ fn fetch_control_events_page(
     Ok((records, has_more))
 }
 
-fn count_control_events(connection: &Connection, user_handle: &str, channel: &str) -> Result<usize, ApiError> {
+fn count_control_events(
+    connection: &Connection,
+    user_handle: &str,
+    channel: &str,
+) -> Result<usize, ApiError> {
     let total = connection
         .query_row(
             "SELECT COUNT(*) FROM authority_events WHERE user_handle = ?1 AND channel = ?2",
@@ -4835,12 +5988,18 @@ fn count_control_events(connection: &Connection, user_handle: &str, channel: &st
     Ok(total.max(0) as usize)
 }
 
-fn fetch_latest_control_event_id(connection: &Connection, user_handle: &str, channel: &str) -> Result<i64, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT MAX(id) FROM authority_events WHERE user_handle = ?1 AND channel = ?2",
-    ).map_err(to_sql_error)?;
+fn fetch_latest_control_event_id(
+    connection: &Connection,
+    user_handle: &str,
+    channel: &str,
+) -> Result<i64, ApiError> {
+    let mut statement = connection
+        .prepare("SELECT MAX(id) FROM authority_events WHERE user_handle = ?1 AND channel = ?2")
+        .map_err(to_sql_error)?;
     let latest = statement
-        .query_row(params![user_handle, channel], |row| row.get::<_, Option<i64>>(0))
+        .query_row(params![user_handle, channel], |row| {
+            row.get::<_, Option<i64>>(0)
+        })
         .map_err(to_sql_error)?;
     Ok(latest.unwrap_or(0))
 }
@@ -4857,7 +6016,11 @@ fn control_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlEv
     })
 }
 
-fn save_control_job_record(connection: &Connection, user_handle: &str, job: &ControlJobRecord) -> Result<(), ApiError> {
+fn save_control_job_record(
+    connection: &Connection,
+    user_handle: &str,
+    job: &ControlJobRecord,
+) -> Result<(), ApiError> {
     let payload = match &job.payload {
         Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
         None => None,
@@ -4913,6 +6076,12 @@ fn save_control_job_record(connection: &Connection, user_handle: &str, job: &Con
             &job.cancel_requested_at,
         ],
     ).map_err(to_sql_error)?;
+    replace_job_attempt_history(
+        connection,
+        user_handle,
+        &job.id,
+        job.attempt_history.as_ref(),
+    )?;
     Ok(())
 }
 
@@ -4933,7 +6102,10 @@ fn run_delay_job(
         user_handle,
         job,
         attempt,
-        format!("Running delay job for {}ms (attempt {})", duration_ms, attempt),
+        format!(
+            "Running delay job for {}ms (attempt {})",
+            duration_ms, attempt
+        ),
     )?;
     if running.status == "cancelled" {
         return Ok(());
@@ -5020,17 +6192,26 @@ fn run_sql_backup_job(
     }
 
     let started = Instant::now();
-    let source_path = private_sql_database_path_from_control_db(db_path, &running.extension_id, &database)?;
+    let source_path =
+        private_sql_database_path_from_control_db(db_path, &running.extension_id, &database)?;
     if !source_path.exists() {
         return Err(ApiError {
             status_code: 400,
             message: format!("sql_backup_source_missing: {database}"),
         });
     }
-    let backup_dir = source_path.parent().unwrap_or_else(|| Path::new(db_path)).join("__backup__");
+    let backup_dir = source_path
+        .parent()
+        .unwrap_or_else(|| Path::new(db_path))
+        .join("__backup__");
     fs::create_dir_all(&backup_dir).map_err(to_internal_error)?;
-    let target_name = job_payload_string(job, "targetName")
-        .unwrap_or_else(|| format!("{}-backup-{}", database, sanitize_file_segment(&current_timestamp_iso())));
+    let target_name = job_payload_string(job, "targetName").unwrap_or_else(|| {
+        format!(
+            "{}-backup-{}",
+            database,
+            sanitize_file_segment(&current_timestamp_iso())
+        )
+    });
     let target_file_name = if target_name.ends_with(".sqlite") {
         sanitize_file_segment(&target_name)
     } else {
@@ -5076,7 +6257,10 @@ fn run_trivium_flush_job(
         user_handle,
         job,
         attempt,
-        format!("Flushing Trivium database {} (attempt {})", database, attempt),
+        format!(
+            "Flushing Trivium database {} (attempt {})",
+            database, attempt
+        ),
     )?;
     if running.status == "cancelled" || control.load(Ordering::SeqCst) {
         return Ok(());
@@ -5085,9 +6269,13 @@ fn run_trivium_flush_job(
     let started = Instant::now();
     let request = TriviumFlushRequest {
         open: TriviumOpenRequest {
-            db_path: private_trivium_database_path_from_control_db(db_path, &running.extension_id, &database)?
-                .to_string_lossy()
-                .into_owned(),
+            db_path: private_trivium_database_path_from_control_db(
+                db_path,
+                &running.extension_id,
+                &database,
+            )?
+            .to_string_lossy()
+            .into_owned(),
             dim: None,
             dtype: job_payload_string(job, "dtype"),
             sync_mode: job_payload_string(job, "syncMode"),
@@ -5131,7 +6319,10 @@ fn run_fs_import_jsonl_job(
         user_handle,
         job,
         attempt,
-        format!("Importing JSONL into {} (attempt {})", target_path_value, attempt),
+        format!(
+            "Importing JSONL into {} (attempt {})",
+            target_path_value, attempt
+        ),
     )?;
     if running.status == "cancelled" || control.load(Ordering::SeqCst) {
         return Ok(());
@@ -5139,7 +6330,8 @@ fn run_fs_import_jsonl_job(
 
     let started = Instant::now();
     let blob_dir = authority_blob_dir_from_control_db(db_path)?;
-    let source_path = blob_binary_path(&blob_dir.to_string_lossy(), &running.extension_id, &blob_id);
+    let source_path =
+        blob_binary_path(&blob_dir.to_string_lossy(), &running.extension_id, &blob_id);
     if !source_path.exists() {
         return Err(ApiError {
             status_code: 400,
@@ -5208,8 +6400,8 @@ fn mark_job_running(
     attempt: i64,
     summary: String,
 ) -> Result<ControlJobRecord, ApiError> {
-    let mut running = fetch_control_job(connection, user_handle, &job.id)?
-        .unwrap_or_else(|| job.clone());
+    let mut running =
+        fetch_control_job(connection, user_handle, &job.id)?.unwrap_or_else(|| job.clone());
     if running.status == "cancelled" {
         return Ok(running);
     }
@@ -5223,6 +6415,15 @@ fn mark_job_running(
     running.attempt = attempt;
     running.error = None;
     running.summary = Some(summary);
+    let started_attempt_record = JobAttemptRecord {
+        attempt,
+        event: JobAttemptEvent::Started,
+        timestamp: running.updated_at.clone(),
+        summary: running.summary.clone(),
+        error: None,
+        backoff_ms: None,
+    };
+    append_attempt_history(&mut running, started_attempt_record);
     save_control_job_record(connection, user_handle, &running)?;
     publish_job_record(connection, user_handle, &running)?;
     Ok(running)
@@ -5235,20 +6436,34 @@ fn mark_job_completed(
     summary: String,
     result: JsonValue,
 ) -> Result<(), ApiError> {
-    let completed = ControlJobRecord {
+    let completed_at = current_timestamp_iso();
+    let mut completed = ControlJobRecord {
         status: String::from("completed"),
         progress: 100,
-        updated_at: current_timestamp_iso(),
-        finished_at: Some(current_timestamp_iso()),
+        updated_at: completed_at.clone(),
+        finished_at: Some(completed_at),
         summary: Some(summary),
         result: Some(result),
         ..current
     };
+    let completed_attempt_record = JobAttemptRecord {
+        attempt: completed.attempt,
+        event: JobAttemptEvent::Completed,
+        timestamp: completed.updated_at.clone(),
+        summary: completed.summary.clone(),
+        error: None,
+        backoff_ms: None,
+    };
+    append_attempt_history(&mut completed, completed_attempt_record);
     save_control_job_record(connection, user_handle, &completed)?;
     publish_job_record(connection, user_handle, &completed)
 }
 
-fn publish_job_record(connection: &Connection, user_handle: &str, job: &ControlJobRecord) -> Result<(), ApiError> {
+fn publish_job_record(
+    connection: &Connection,
+    user_handle: &str,
+    job: &ControlJobRecord,
+) -> Result<(), ApiError> {
     let payload = serde_json::to_value(job).map_err(to_json_error)?;
     publish_control_event(
         connection,
@@ -5272,20 +6487,35 @@ fn ensure_job_within_timeout(started: &Instant, timeout_ms: Option<u64>) -> Resu
     Ok(())
 }
 
-fn mark_job_failed(db_path: &str, user_handle: &str, job: &ControlJobRecord, message: &str) -> Result<(), ApiError> {
+fn mark_job_failed(
+    db_path: &str,
+    user_handle: &str,
+    job: &ControlJobRecord,
+    message: &str,
+) -> Result<(), ApiError> {
     let connection = open_connection(db_path)?;
     ensure_control_schema(&connection)?;
     let current = match fetch_control_job(&connection, user_handle, &job.id)? {
         Some(current) if current.status != "cancelled" && current.status != "completed" => current,
         _ => return Ok(()),
     };
-    let failed = ControlJobRecord {
+    let failed_at = current_timestamp_iso();
+    let mut failed = ControlJobRecord {
         status: String::from("failed"),
-        updated_at: current_timestamp_iso(),
-        finished_at: Some(current_timestamp_iso()),
+        updated_at: failed_at.clone(),
+        finished_at: Some(failed_at),
         error: Some(message.to_string()),
         ..current
     };
+    let failed_attempt_record = JobAttemptRecord {
+        attempt: failed.attempt,
+        event: JobAttemptEvent::Failed,
+        timestamp: failed.updated_at.clone(),
+        summary: failed.summary.clone(),
+        error: failed.error.clone(),
+        backoff_ms: None,
+    };
+    append_attempt_history(&mut failed, failed_attempt_record);
     save_control_job_record(&connection, user_handle, &failed)?;
     let payload = serde_json::to_value(&failed).map_err(to_json_error)?;
     publish_control_event(
@@ -5332,17 +6562,30 @@ fn mark_job_retry_scheduled(
         Some(current) if current.status != "cancelled" && current.status != "completed" => current,
         _ => return Ok(()),
     };
-    let queued = ControlJobRecord {
+    let retry_scheduled_at = current_timestamp_iso();
+    let mut queued = ControlJobRecord {
         status: String::from("queued"),
-        updated_at: current_timestamp_iso(),
+        updated_at: retry_scheduled_at.clone(),
         progress: 0,
-        summary: Some(format!("Retrying in {}ms after attempt {}", backoff_ms, attempt)),
+        summary: Some(format!(
+            "Retrying in {}ms after attempt {}",
+            backoff_ms, attempt
+        )),
         error: Some(message.to_string()),
         result: None,
         finished_at: None,
         attempt,
         ..current
     };
+    let retry_attempt_record = JobAttemptRecord {
+        attempt,
+        event: JobAttemptEvent::RetryScheduled,
+        timestamp: queued.updated_at.clone(),
+        summary: queued.summary.clone(),
+        error: queued.error.clone(),
+        backoff_ms: Some(backoff_ms as i64),
+    };
+    append_attempt_history(&mut queued, retry_attempt_record);
     save_control_job_record(&connection, user_handle, &queued)?;
     let payload = serde_json::to_value(&queued).map_err(to_json_error)?;
     publish_control_event(
@@ -5370,7 +6613,11 @@ fn mark_job_retry_scheduled(
     Ok(())
 }
 
-fn decode_binary_content(kind: &str, encoding: Option<&str>, content: &str) -> Result<Vec<u8>, ApiError> {
+fn decode_binary_content(
+    kind: &str,
+    encoding: Option<&str>,
+    content: &str,
+) -> Result<Vec<u8>, ApiError> {
     match encoding.unwrap_or("utf8") {
         "utf8" => Ok(content.as_bytes().to_vec()),
         "base64" => BASE64_STANDARD.decode(content).map_err(|error| ApiError {
@@ -5445,7 +6692,10 @@ fn execute_http_fetch(
             })?;
             let next_url = resolve_http_fetch_redirect_url(&parsed_url, location)?;
             let next_method = redirect_http_method(response.status(), &current_method);
-            if next_method == "GET" && !current_method.eq_ignore_ascii_case("GET") && !current_method.eq_ignore_ascii_case("HEAD") {
+            if next_method == "GET"
+                && !current_method.eq_ignore_ascii_case("GET")
+                && !current_method.eq_ignore_ascii_case("HEAD")
+            {
                 current_body = None;
             }
             current_method = next_method;
@@ -5462,7 +6712,10 @@ fn execute_http_fetch(
     })
 }
 
-fn read_http_fetch_response(response: ureq::Response, max_bytes: usize) -> Result<FetchedHttpResponse, ApiError> {
+fn read_http_fetch_response(
+    response: ureq::Response,
+    max_bytes: usize,
+) -> Result<FetchedHttpResponse, ApiError> {
     let status = response.status();
     let ok = (200..300).contains(&status);
     let mut headers = HashMap::new();
@@ -5477,7 +6730,9 @@ fn read_http_fetch_response(response: ureq::Response, max_bytes: usize) -> Resul
         .unwrap_or_else(|| String::from("application/octet-stream"));
     let mut reader = response.into_reader().take((max_bytes + 1) as u64);
     let mut body_bytes = Vec::new();
-    reader.read_to_end(&mut body_bytes).map_err(to_internal_error)?;
+    reader
+        .read_to_end(&mut body_bytes)
+        .map_err(to_internal_error)?;
     if body_bytes.len() > max_bytes {
         return Err(ApiError {
             status_code: 400,
@@ -5518,10 +6773,16 @@ fn authority_base_dir_from_control_db(db_path: &str) -> Result<PathBuf, ApiError
 }
 
 fn authority_blob_dir_from_control_db(db_path: &str) -> Result<PathBuf, ApiError> {
-    Ok(authority_base_dir_from_control_db(db_path)?.join("storage").join("blobs"))
+    Ok(authority_base_dir_from_control_db(db_path)?
+        .join("storage")
+        .join("blobs"))
 }
 
-fn private_sql_database_path_from_control_db(db_path: &str, extension_id: &str, database: &str) -> Result<PathBuf, ApiError> {
+fn private_sql_database_path_from_control_db(
+    db_path: &str,
+    extension_id: &str,
+    database: &str,
+) -> Result<PathBuf, ApiError> {
     Ok(authority_base_dir_from_control_db(db_path)?
         .join("sql")
         .join("private")
@@ -5529,7 +6790,11 @@ fn private_sql_database_path_from_control_db(db_path: &str, extension_id: &str, 
         .join(format!("{}.sqlite", sanitize_file_segment(database))))
 }
 
-fn private_trivium_database_path_from_control_db(db_path: &str, extension_id: &str, database: &str) -> Result<PathBuf, ApiError> {
+fn private_trivium_database_path_from_control_db(
+    db_path: &str,
+    extension_id: &str,
+    database: &str,
+) -> Result<PathBuf, ApiError> {
     Ok(authority_base_dir_from_control_db(db_path)?
         .join("storage")
         .join("trivium")
@@ -5538,7 +6803,10 @@ fn private_trivium_database_path_from_control_db(db_path: &str, extension_id: &s
         .join(format!("{}.tdb", sanitize_file_segment(database))))
 }
 
-fn private_files_root_dir_from_control_db(db_path: &str, extension_id: &str) -> Result<PathBuf, ApiError> {
+fn private_files_root_dir_from_control_db(
+    db_path: &str,
+    extension_id: &str,
+) -> Result<PathBuf, ApiError> {
     Ok(authority_base_dir_from_control_db(db_path)?
         .join("storage")
         .join("files")
@@ -5579,7 +6847,9 @@ fn resolve_private_path(root_dir: &Path, value: &str) -> Result<(PathBuf, String
     let target = normalized
         .trim_start_matches('/')
         .split('/')
-        .fold(root_dir.to_path_buf(), |current, segment| current.join(segment));
+        .fold(root_dir.to_path_buf(), |current, segment| {
+            current.join(segment)
+        });
     Ok((target, normalized))
 }
 
@@ -5616,7 +6886,10 @@ fn normalize_private_virtual_path(value: &str) -> Result<String, ApiError> {
     Ok(format!("/{}", segments.join("/")))
 }
 
-fn ensure_private_path_components_safe(root_dir: &Path, virtual_path: &str) -> Result<(), ApiError> {
+fn ensure_private_path_components_safe(
+    root_dir: &Path,
+    virtual_path: &str,
+) -> Result<(), ApiError> {
     if root_dir.exists() {
         let metadata = fs::symlink_metadata(root_dir).map_err(to_internal_error)?;
         if metadata.file_type().is_symlink() {
@@ -5646,7 +6919,11 @@ fn ensure_private_path_components_safe(root_dir: &Path, virtual_path: &str) -> R
     Ok(())
 }
 
-fn build_private_file_entry(root_dir: &Path, target_path: &Path, metadata: &fs::Metadata) -> Result<PrivateFileEntry, ApiError> {
+fn build_private_file_entry(
+    root_dir: &Path,
+    target_path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<PrivateFileEntry, ApiError> {
     let relative = target_path.strip_prefix(root_dir).map_err(|_| ApiError {
         status_code: 400,
         message: String::from("private_path_outside_root"),
@@ -5663,7 +6940,11 @@ fn build_private_file_entry(root_dir: &Path, target_path: &Path, metadata: &fs::
                 .join("/")
         )
     };
-    let updated_at = metadata.modified().ok().and_then(system_time_to_iso).unwrap_or_else(current_timestamp_iso);
+    let updated_at = metadata
+        .modified()
+        .ok()
+        .and_then(system_time_to_iso)
+        .unwrap_or_else(current_timestamp_iso);
 
     Ok(PrivateFileEntry {
         name: if path == "/" {
@@ -5707,7 +6988,11 @@ fn sanitize_file_segment(input: &str) -> String {
     input
         .chars()
         .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '.' || character == '_' || character == '-' {
+            if character.is_ascii_alphanumeric()
+                || character == '.'
+                || character == '_'
+                || character == '-'
+            {
                 character
             } else {
                 '_'
@@ -5763,10 +7048,14 @@ fn validate_http_fetch_host(hostname: &str, port: u16) -> Result<(), ApiError> {
         });
     }
     if normalized == "localhost" || normalized.ends_with(".localhost") {
-        emit_runtime_event("warning", "ssrf_denied", json!({
-            "host": normalized,
-            "reason": "localhost",
-        }));
+        emit_runtime_event(
+            "warning",
+            "ssrf_denied",
+            json!({
+                "host": normalized,
+                "reason": "localhost",
+            }),
+        );
         return Err(ApiError {
             status_code: 403,
             message: format!("http_fetch_ssrf_denied: localhost: {normalized}"),
@@ -5778,10 +7067,13 @@ fn validate_http_fetch_host(hostname: &str, port: u16) -> Result<(), ApiError> {
 
     let mut resolved_any = false;
     let mut seen = HashSet::new();
-    for address in (normalized.as_str(), port).to_socket_addrs().map_err(|error| ApiError {
-        status_code: 400,
-        message: format!("http_fetch_dns_resolution_failed: {error}"),
-    })? {
+    for address in (normalized.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| ApiError {
+            status_code: 400,
+            message: format!("http_fetch_dns_resolution_failed: {error}"),
+        })?
+    {
         resolved_any = true;
         let ip = address.ip();
         if seen.insert(ip) {
@@ -5816,11 +7108,15 @@ fn validate_http_fetch_ip(ip: IpAddr, hostname: &str) -> Result<(), ApiError> {
         _ => None,
     };
     if let Some(reason) = denied_reason {
-        emit_runtime_event("warning", "ssrf_denied", json!({
-            "host": hostname,
-            "ip": ip.to_string(),
-            "reason": reason,
-        }));
+        emit_runtime_event(
+            "warning",
+            "ssrf_denied",
+            json!({
+                "host": hostname,
+                "ip": ip.to_string(),
+                "reason": reason,
+            }),
+        );
         return Err(ApiError {
             status_code: 403,
             message: format!("http_fetch_ssrf_denied: {reason}: {ip}"),
@@ -5893,7 +7189,11 @@ fn job_duration_ms(job: &ControlJobRecord) -> u64 {
     job.payload
         .as_ref()
         .and_then(|payload| payload.get("durationMs"))
-        .and_then(|value| value.as_u64().or_else(|| value.as_i64().and_then(|signed| u64::try_from(signed).ok())))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|signed| u64::try_from(signed).ok()))
+        })
         .unwrap_or(3000)
 }
 
@@ -5920,7 +7220,13 @@ fn job_should_fail_attempt(job: &ControlJobRecord, attempt: i64) -> bool {
     job.payload
         .as_ref()
         .and_then(|payload| payload.get("failAttempts"))
-        .and_then(|value| value.as_i64().or_else(|| value.as_u64().and_then(|unsigned| i64::try_from(unsigned).ok())))
+        .and_then(|value| {
+            value.as_i64().or_else(|| {
+                value
+                    .as_u64()
+                    .and_then(|unsigned| i64::try_from(unsigned).ok())
+            })
+        })
         .map(|max_failed_attempt| attempt <= max_failed_attempt)
         .unwrap_or(false)
 }
@@ -5935,7 +7241,9 @@ fn normalize_job_max_attempts(max_attempts: Option<i64>) -> i64 {
 }
 
 fn job_retry_backoff_ms(attempt: i64) -> u64 {
-    let exponent = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX).min(6);
+    let exponent = u32::try_from(attempt.saturating_sub(1))
+        .unwrap_or(u32::MAX)
+        .min(6);
     let multiplier = 2_u64.saturating_pow(exponent);
     JOB_RETRY_BACKOFF_BASE_MS
         .saturating_mul(multiplier)
@@ -5951,7 +7259,10 @@ fn job_message(job: &ControlJobRecord) -> String {
         .to_string()
 }
 
-fn fetch_applied_migration_ids(connection: &Connection, table_name: &str) -> Result<HashSet<String>, ApiError> {
+fn fetch_applied_migration_ids(
+    connection: &Connection,
+    table_name: &str,
+) -> Result<HashSet<String>, ApiError> {
     let statement = format!("SELECT id FROM {}", table_name);
     let mut query = connection.prepare(&statement).map_err(to_sql_error)?;
     let mut rows = query.query([]).map_err(to_sql_error)?;
@@ -6009,10 +7320,11 @@ fn sqlite_value_to_json(value: ValueRef<'_>) -> JsonValue {
             .map(JsonValue::Number)
             .unwrap_or(JsonValue::Null),
         ValueRef::Text(text) => JsonValue::String(String::from_utf8_lossy(text).into_owned()),
-        ValueRef::Blob(blob) => JsonValue::String(format!("base64:{}", BASE64_STANDARD.encode(blob))),
+        ValueRef::Blob(blob) => {
+            JsonValue::String(format!("base64:{}", BASE64_STANDARD.encode(blob)))
+        }
     }
 }
-
 
 fn to_sql_error(error: rusqlite::Error) -> ApiError {
     ApiError {
@@ -6098,7 +7410,10 @@ fn validate_supported_job_type(field_name: &str, value: &str) -> Result<(), ApiE
     })
 }
 
-fn validate_job_runtime_options(timeout_ms: Option<i64>, max_attempts: Option<i64>) -> Result<(), ApiError> {
+fn validate_job_runtime_options(
+    timeout_ms: Option<i64>,
+    max_attempts: Option<i64>,
+) -> Result<(), ApiError> {
     if let Some(timeout_ms) = timeout_ms {
         if timeout_ms <= 0 {
             return Err(ApiError {
@@ -6147,27 +7462,55 @@ fn validate_grant_record(grant: &ControlGrantRecord) -> Result<(), ApiError> {
     validate_non_empty("grant.riskLevel", &grant.risk_level)?;
     validate_non_empty("grant.updatedAt", &grant.updated_at)?;
     validate_non_empty("grant.source", &grant.source)?;
-    validate_one_of("grant.status", &grant.status, &["granted", "denied", "prompt", "blocked"])?;
-    validate_one_of("grant.scope", &grant.scope, &["session", "persistent", "policy"])?;
-    validate_one_of("grant.riskLevel", &grant.risk_level, &["low", "medium", "high"])?;
+    validate_one_of(
+        "grant.status",
+        &grant.status,
+        &["granted", "denied", "prompt", "blocked"],
+    )?;
+    validate_one_of(
+        "grant.scope",
+        &grant.scope,
+        &["session", "persistent", "policy"],
+    )?;
+    validate_one_of(
+        "grant.riskLevel",
+        &grant.risk_level,
+        &["low", "medium", "high"],
+    )?;
     validate_one_of("grant.source", &grant.source, &["user", "admin", "system"])?;
     if let Some(choice) = &grant.choice {
-        validate_one_of("grant.choice", choice, &["allow-once", "allow-session", "allow-always", "deny"])?;
+        validate_one_of(
+            "grant.choice",
+            choice,
+            &["allow-once", "allow-session", "allow-always", "deny"],
+        )?;
     }
     Ok(())
 }
 
 fn validate_policy_default(resource: &str, status: &str) -> Result<(), ApiError> {
     validate_supported_resource("policy.default.resource", resource)?;
-    validate_one_of("policy.default.status", status, &["granted", "denied", "prompt", "blocked"])
+    validate_one_of(
+        "policy.default.status",
+        status,
+        &["granted", "denied", "prompt", "blocked"],
+    )
 }
 
 fn validate_policy_entry(entry: &ControlPolicyEntry) -> Result<(), ApiError> {
     validate_non_empty("policy.key", &entry.key)?;
     validate_supported_resource("policy.resource", &entry.resource)?;
     validate_non_empty("policy.target", &entry.target)?;
-    validate_one_of("policy.status", &entry.status, &["granted", "denied", "prompt", "blocked"])?;
-    validate_one_of("policy.riskLevel", &entry.risk_level, &["low", "medium", "high"])?;
+    validate_one_of(
+        "policy.status",
+        &entry.status,
+        &["granted", "denied", "prompt", "blocked"],
+    )?;
+    validate_one_of(
+        "policy.riskLevel",
+        &entry.risk_level,
+        &["low", "medium", "high"],
+    )?;
     validate_non_empty("policy.updatedAt", &entry.updated_at)?;
     validate_one_of("policy.source", &entry.source, &["admin", "system"])?;
     Ok(())
@@ -6178,7 +7521,11 @@ fn validate_job_record(job: &ControlJobRecord) -> Result<(), ApiError> {
     validate_non_empty("job.extensionId", &job.extension_id)?;
     validate_non_empty("job.type", &job.job_type)?;
     validate_supported_job_type("job.type", &job.job_type)?;
-    validate_one_of("job.status", &job.status, &["queued", "running", "completed", "failed", "cancelled"])?;
+    validate_one_of(
+        "job.status",
+        &job.status,
+        &["queued", "running", "completed", "failed", "cancelled"],
+    )?;
     validate_non_empty("job.createdAt", &job.created_at)?;
     validate_non_empty("job.updatedAt", &job.updated_at)?;
     validate_non_empty("job.channel", &job.channel)?;
@@ -6227,10 +7574,16 @@ fn validate_sql_identifier(value: &str) -> Result<String, ApiError> {
             message: String::from("sql identifier must not be empty"),
         });
     }
-    if !trimmed.chars().all(|character| character.is_ascii_alphanumeric() || character == '_') {
+    if !trimmed
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
         return Err(ApiError {
             status_code: 400,
-            message: format!("sql identifier contains unsupported characters: {}", trimmed),
+            message: format!(
+                "sql identifier contains unsupported characters: {}",
+                trimmed
+            ),
         });
     }
     Ok(trimmed.to_string())
@@ -6249,7 +7602,9 @@ fn current_unix_millis() -> u64 {
 }
 
 fn runtime_uptime_ms(started_at: &str) -> u64 {
-    let started_at = started_at.parse::<u64>().unwrap_or_else(|_| current_unix_millis());
+    let started_at = started_at
+        .parse::<u64>()
+        .unwrap_or_else(|_| current_unix_millis());
     current_unix_millis().saturating_sub(started_at)
 }
 
@@ -6283,7 +7638,10 @@ fn current_timestamp_iso() -> String {
 
 fn emit_runtime_event(level: &str, event: &str, details: JsonValue) {
     let mut payload = JsonMap::new();
-    payload.insert(String::from("timestamp"), JsonValue::String(current_timestamp_iso()));
+    payload.insert(
+        String::from("timestamp"),
+        JsonValue::String(current_timestamp_iso()),
+    );
     payload.insert(String::from("level"), JsonValue::String(level.to_string()));
     payload.insert(String::from("event"), JsonValue::String(event.to_string()));
     if let JsonValue::Object(fields) = details {
@@ -6302,7 +7660,12 @@ fn emit_if_slow(event: &str, elapsed: Duration, threshold_ms: u128, details: Jso
         JsonValue::Object(map) => map,
         _ => JsonMap::new(),
     };
-    payload.insert(String::from("elapsedMs"), JsonValue::Number(serde_json::Number::from(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))));
+    payload.insert(
+        String::from("elapsedMs"),
+        JsonValue::Number(serde_json::Number::from(
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+        )),
+    );
     emit_runtime_event("warning", event, JsonValue::Object(payload));
 }
 
@@ -6387,7 +7750,6 @@ fn system_time_to_iso(value: SystemTime) -> Option<String> {
     timestamp.format(&Rfc3339).ok()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6426,7 +7788,9 @@ mod tests {
         let db_path = test_db_path("sql-rollback");
         let create = SqlBatchStatement {
             mode: SqlStatementMode::Exec,
-            statement: String::from("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)"),
+            statement: String::from(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)",
+            ),
             params: Vec::new(),
         };
         let insert_first = SqlBatchStatement {
@@ -6434,7 +7798,8 @@ mod tests {
             statement: String::from("INSERT INTO items (name) VALUES (?)"),
             params: vec![json!("alpha")],
         };
-        execute_transactional_statements(&db_path, &[create, insert_first]).expect("initial transaction should commit");
+        execute_transactional_statements(&db_path, &[create, insert_first])
+            .expect("initial transaction should commit");
 
         let insert_second = SqlBatchStatement {
             mode: SqlStatementMode::Exec,
@@ -6450,7 +7815,8 @@ mod tests {
         assert!(failed.is_err());
 
         let connection = open_connection(&db_path).expect("database should open");
-        let result = run_query(&connection, "SELECT name FROM items ORDER BY name", &[]).expect("query should succeed");
+        let result = run_query(&connection, "SELECT name FROM items ORDER BY name", &[])
+            .expect("query should succeed");
         assert_eq!(result.row_count, 1);
         assert_eq!(result.rows[0].get("name"), Some(&json!("alpha")));
     }
@@ -6461,7 +7827,9 @@ mod tests {
         let migrations = vec![
             SqlMigrationInput {
                 id: String::from("001_create"),
-                statement: String::from("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+                statement: String::from(
+                    "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)",
+                ),
             },
             SqlMigrationInput {
                 id: String::from("002_insert"),
@@ -6473,16 +7841,36 @@ mod tests {
             db_path: db_path.clone(),
             migrations: migrations.clone(),
             table_name: None,
-        }).expect("first migration should succeed");
-        assert_eq!(first["applied"].as_array().expect("applied should be an array").len(), 2);
+        })
+        .expect("first migration should succeed");
+        assert_eq!(
+            first["applied"]
+                .as_array()
+                .expect("applied should be an array")
+                .len(),
+            2
+        );
 
         let second = handle_sql_migrate(SqlMigrateRequest {
             db_path,
             migrations,
             table_name: None,
-        }).expect("second migration should succeed");
-        assert_eq!(second["applied"].as_array().expect("applied should be an array").len(), 0);
-        assert_eq!(second["skipped"].as_array().expect("skipped should be an array").len(), 2);
+        })
+        .expect("second migration should succeed");
+        assert_eq!(
+            second["applied"]
+                .as_array()
+                .expect("applied should be an array")
+                .len(),
+            0
+        );
+        assert_eq!(
+            second["skipped"]
+                .as_array()
+                .expect("skipped should be an array")
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -6492,10 +7880,13 @@ mod tests {
             db_path,
             migrations: vec![SqlMigrationInput {
                 id: String::from("002_broken"),
-                statement: String::from("CREATE TABL broken_records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+                statement: String::from(
+                    "CREATE TABL broken_records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)",
+                ),
             }],
             table_name: None,
-        }).expect_err("broken migration should fail");
+        })
+        .expect_err("broken migration should fail");
 
         assert!(error.message.contains("migration 002_broken failed"));
         assert!(error.message.contains("CREATE TABL broken_records"));
@@ -6505,24 +7896,37 @@ mod tests {
     fn jobs_and_events_remain_consistent() {
         let db_path = test_db_path("jobs-events");
         let runtime = create_runtime_state();
-        let created = handle_control_job_create(ControlJobCreateRequest {
-            db_path: db_path.clone(),
-            user_handle: String::from("alice"),
-            extension_id: String::from("third-party/example"),
-            job_type: String::from("delay"),
-            payload: Some(json!({
-                "durationMs": 0,
-                "message": "done",
-            })),
-            timeout_ms: None,
-            idempotency_key: None,
-            max_attempts: None,
-        }, &runtime).expect("job create should succeed");
-        let job_id = created["job"]["id"].as_str().expect("job id should exist").to_string();
+        let created = handle_control_job_create(
+            ControlJobCreateRequest {
+                db_path: db_path.clone(),
+                user_handle: String::from("alice"),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                payload: Some(json!({
+                    "durationMs": 0,
+                    "message": "done",
+                })),
+                timeout_ms: None,
+                idempotency_key: None,
+                max_attempts: None,
+            },
+            &runtime,
+        )
+        .expect("job create should succeed");
+        let job_id = created["job"]["id"]
+            .as_str()
+            .expect("job id should exist")
+            .to_string();
 
         let completed = wait_for_job_status(&db_path, &job_id, "completed");
         assert_eq!(completed.progress, 100);
-        assert_eq!(completed.result.as_ref().and_then(|value| value.get("message")), Some(&json!("done")));
+        assert_eq!(
+            completed
+                .result
+                .as_ref()
+                .and_then(|value| value.get("message")),
+            Some(&json!("done"))
+        );
 
         wait_for_job_event_status(&db_path, "completed");
         wait_for_active_job_count(&runtime, 0);
@@ -6541,7 +7945,8 @@ mod tests {
                 "extension:third-party/example",
                 "authority.test",
                 Some(&json!({ "index": index })),
-            ).expect("event should publish");
+            )
+            .expect("event should publish");
         }
 
         let response = handle_control_events_poll(ControlEventsPollRequest {
@@ -6551,8 +7956,15 @@ mod tests {
             after_id: Some(0),
             limit: Some(1000),
             page: None,
-        }).expect("events poll should succeed");
-        assert_eq!(response["events"].as_array().expect("events should be an array").len(), MAX_EVENT_POLL_LIMIT);
+        })
+        .expect("events poll should succeed");
+        assert_eq!(
+            response["events"]
+                .as_array()
+                .expect("events should be an array")
+                .len(),
+            MAX_EVENT_POLL_LIMIT
+        );
     }
 
     #[test]
@@ -6563,7 +7975,8 @@ mod tests {
             root_dir: root_dir.clone(),
             path: String::from("notes"),
             recursive: Some(true),
-        }).expect("mkdir should succeed");
+        })
+        .expect("mkdir should succeed");
         assert_eq!(created["entry"]["kind"], json!("directory"));
 
         let written = handle_private_file_write(PrivateFileWriteRequest {
@@ -6573,39 +7986,51 @@ mod tests {
             encoding: Some(String::from("utf8")),
             create_parents: Some(true),
             source_path: None,
-        }).expect("write should succeed");
+        })
+        .expect("write should succeed");
         assert_eq!(written["entry"]["path"], json!("/notes/hello.txt"));
 
         let listed = handle_private_file_read_dir(PrivateFileReadDirRequest {
             root_dir: root_dir.clone(),
             path: String::from("notes"),
             limit: Some(10),
-        }).expect("list should succeed");
-        assert_eq!(listed["entries"].as_array().expect("entries should be an array").len(), 1);
+        })
+        .expect("list should succeed");
+        assert_eq!(
+            listed["entries"]
+                .as_array()
+                .expect("entries should be an array")
+                .len(),
+            1
+        );
 
         let read = handle_private_file_read(PrivateFileReadRequest {
             root_dir: root_dir.clone(),
             path: String::from("notes/hello.txt"),
             encoding: Some(String::from("utf8")),
-        }).expect("read should succeed");
+        })
+        .expect("read should succeed");
         assert_eq!(read["content"], json!("hello authority"));
 
         let stat = handle_private_file_stat(PrivateFileStatRequest {
             root_dir: root_dir.clone(),
             path: String::from("notes/hello.txt"),
-        }).expect("stat should succeed");
+        })
+        .expect("stat should succeed");
         assert_eq!(stat["entry"]["kind"], json!("file"));
 
         handle_private_file_delete(PrivateFileDeleteRequest {
             root_dir: root_dir.clone(),
             path: String::from("notes/hello.txt"),
             recursive: Some(false),
-        }).expect("file delete should succeed");
+        })
+        .expect("file delete should succeed");
         handle_private_file_delete(PrivateFileDeleteRequest {
             root_dir,
             path: String::from("notes"),
             recursive: Some(false),
-        }).expect("directory delete should succeed");
+        })
+        .expect("directory delete should succeed");
     }
 
     #[test]
@@ -6618,7 +8043,8 @@ mod tests {
             encoding: Some(String::from("utf8")),
             create_parents: Some(true),
             source_path: None,
-        }).expect_err("escape path should fail");
+        })
+        .expect_err("escape path should fail");
         assert!(error.message.contains("escape"));
     }
 
@@ -6641,7 +8067,8 @@ mod tests {
             encoding: None,
             content_type: Some(String::from("application/octet-stream")),
             source_path: Some(source_path.to_string_lossy().into_owned()),
-        }).expect("blob import should succeed");
+        })
+        .expect("blob import should succeed");
         assert_eq!(created["size"], json!(17));
 
         let fetched = handle_storage_blob_get(StorageBlobGetRequest {
@@ -6650,9 +8077,15 @@ mod tests {
             extension_id: String::from("third-party/example"),
             blob_dir,
             id: String::from("hello.bin"),
-        }).expect("blob get should succeed");
+        })
+        .expect("blob get should succeed");
         let content = fetched["content"].as_str().expect("content should exist");
-        assert_eq!(BASE64_STANDARD.decode(content).expect("blob content should decode"), b"hello staged blob");
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(content)
+                .expect("blob content should decode"),
+            b"hello staged blob"
+        );
     }
 
     #[test]
@@ -6670,14 +8103,16 @@ mod tests {
             encoding: None,
             create_parents: Some(true),
             source_path: Some(source_path.to_string_lossy().into_owned()),
-        }).expect("private file import should succeed");
+        })
+        .expect("private file import should succeed");
         assert_eq!(written["entry"]["path"], json!("/notes/imported.txt"));
 
         let read = handle_private_file_read(PrivateFileReadRequest {
             root_dir,
             path: String::from("notes/imported.txt"),
             encoding: Some(String::from("utf8")),
-        }).expect("private file read should succeed");
+        })
+        .expect("private file read should succeed");
         assert_eq!(read["content"], json!("hello staged file"));
     }
 
@@ -6700,7 +8135,8 @@ mod tests {
             encoding: None,
             content_type: Some(String::from("application/octet-stream")),
             source_path: Some(source_path.to_string_lossy().into_owned()),
-        }).expect("blob import should succeed");
+        })
+        .expect("blob import should succeed");
 
         let opened = handle_storage_blob_open_read(StorageBlobGetRequest {
             db_path,
@@ -6708,8 +8144,11 @@ mod tests {
             extension_id: String::from("third-party/example"),
             blob_dir,
             id: String::from("hello.bin"),
-        }).expect("blob open read should succeed");
-        let opened_path = opened["sourcePath"].as_str().expect("source path should exist");
+        })
+        .expect("blob open read should succeed");
+        let opened_path = opened["sourcePath"]
+            .as_str()
+            .expect("source path should exist");
         assert!(opened_path.ends_with("hello.bin.bin"));
     }
 
@@ -6728,15 +8167,22 @@ mod tests {
             encoding: None,
             create_parents: Some(true),
             source_path: Some(source_path.to_string_lossy().into_owned()),
-        }).expect("private file import should succeed");
+        })
+        .expect("private file import should succeed");
 
         let opened = handle_private_file_open_read(PrivateFileReadRequest {
             root_dir,
             path: String::from("notes/imported.txt"),
             encoding: None,
-        }).expect("private file open read should succeed");
-        let opened_path = opened["sourcePath"].as_str().expect("source path should exist");
-        assert!(opened_path.ends_with("notes\\imported.txt") || opened_path.ends_with("notes/imported.txt"));
+        })
+        .expect("private file open read should succeed");
+        let opened_path = opened["sourcePath"]
+            .as_str()
+            .expect("source path should exist");
+        assert!(
+            opened_path.ends_with("notes\\imported.txt")
+                || opened_path.ends_with("notes/imported.txt")
+        );
     }
 
     #[test]
@@ -6756,7 +8202,8 @@ mod tests {
                     payload: json!({ "name": "bad-dim" }),
                 },
             ],
-        }).expect("bulk upsert should return partial result");
+        })
+        .expect("bulk upsert should return partial result");
 
         assert_eq!(response["totalCount"], json!(2));
         assert_eq!(response["successCount"], json!(1));
@@ -6781,7 +8228,8 @@ mod tests {
                     payload: json!({ "name": "beta" }),
                 },
             ],
-        }).expect("bulk upsert should succeed");
+        })
+        .expect("bulk upsert should succeed");
 
         handle_trivium_bulk_link(TriviumBulkLinkRequest {
             open: test_trivium_open_request(db_path.clone(), 2),
@@ -6791,15 +8239,18 @@ mod tests {
                 label: Some(String::from("related")),
                 weight: Some(1.0),
             }],
-        }).expect("bulk link should succeed");
+        })
+        .expect("bulk link should succeed");
 
         handle_trivium_flush(TriviumFlushRequest {
             open: test_trivium_open_request(db_path.clone(), 2),
-        }).expect("flush should succeed");
+        })
+        .expect("flush should succeed");
 
         let stat = handle_trivium_stat(TriviumStatRequest {
             open: test_trivium_open_request(db_path.clone(), 2),
-        }).expect("stat should succeed");
+        })
+        .expect("stat should succeed");
         assert_eq!(stat["nodeCount"], json!(2));
         assert_eq!(stat["edgeCount"], json!(1));
         assert_eq!(stat["vectorDim"], json!(2));
@@ -6807,17 +8258,20 @@ mod tests {
         handle_trivium_bulk_delete(TriviumBulkDeleteRequest {
             open: test_trivium_open_request(db_path.clone(), 2),
             items: vec![TriviumBulkDeleteItem { id: 1 }],
-        }).expect("bulk delete should succeed");
+        })
+        .expect("bulk delete should succeed");
 
         let fetched = handle_trivium_get(TriviumGetRequest {
             open: test_trivium_open_request(db_path.clone(), 2),
             id: 1,
-        }).expect("get should succeed");
+        })
+        .expect("get should succeed");
         assert!(fetched["node"].is_null());
 
         let stat_after_delete = handle_trivium_stat(TriviumStatRequest {
             open: test_trivium_open_request(db_path, 2),
-        }).expect("stat after delete should succeed");
+        })
+        .expect("stat after delete should succeed");
         assert_eq!(stat_after_delete["nodeCount"], json!(1));
         assert_eq!(stat_after_delete["edgeCount"], json!(0));
     }
@@ -6826,7 +8280,8 @@ mod tests {
     fn http_fetch_open_writes_response_to_staged_file() {
         let _local_guard = allow_local_http_fetch_targets();
         let response_body = vec![0x41; 300 * 1024];
-        let (url, handle) = spawn_test_http_server(response_body.clone(), "application/octet-stream", None);
+        let (url, handle) =
+            spawn_test_http_server(response_body.clone(), "application/octet-stream", None);
         let root_dir = test_private_root("http-fetch-open-response");
         fs::create_dir_all(&root_dir).expect("response root should exist");
         let response_path = Path::new(&root_dir).join("response.bin");
@@ -6840,11 +8295,15 @@ mod tests {
             body_encoding: None,
             body_source_path: None,
             response_path: response_path.to_string_lossy().into_owned(),
-        }).expect("http fetch open should succeed");
+        })
+        .expect("http fetch open should succeed");
 
         assert_eq!(opened["bodyEncoding"], json!("base64"));
         assert_eq!(opened["sizeBytes"], json!(response_body.len()));
-        assert_eq!(fs::read(&response_path).expect("response file should read"), response_body);
+        assert_eq!(
+            fs::read(&response_path).expect("response file should read"),
+            response_body
+        );
         handle.join().expect("http server should stop");
     }
 
@@ -6860,25 +8319,35 @@ mod tests {
         let root_dir = test_private_root("http-fetch-open-request");
         fs::create_dir_all(&root_dir).expect("request root should exist");
         let body_source_path = Path::new(&root_dir).join("request.bin");
-        fs::write(&body_source_path, b"payload via source path").expect("request body should write");
+        fs::write(&body_source_path, b"payload via source path")
+            .expect("request body should write");
         let response_path = Path::new(&root_dir).join("response.txt");
         fs::write(&response_path, b"").expect("response file should exist");
 
         let opened = handle_http_fetch_open(CoreHttpFetchOpenRequest {
             url,
             method: Some(String::from("POST")),
-            headers: Some(HashMap::from([(String::from("content-type"), String::from("application/octet-stream"))])),
+            headers: Some(HashMap::from([(
+                String::from("content-type"),
+                String::from("application/octet-stream"),
+            )])),
             body: None,
             body_encoding: None,
             body_source_path: Some(body_source_path.to_string_lossy().into_owned()),
             response_path: response_path.to_string_lossy().into_owned(),
-        }).expect("http fetch open with source path should succeed");
+        })
+        .expect("http fetch open with source path should succeed");
 
         assert_eq!(opened["bodyEncoding"], json!("utf8"));
-        assert_eq!(fs::read(&response_path).expect("response file should read"), b"ok");
+        assert_eq!(
+            fs::read(&response_path).expect("response file should read"),
+            b"ok"
+        );
         handle.join().expect("http server should stop");
 
-        let request = captured_request.lock().expect("request capture should lock");
+        let request = captured_request
+            .lock()
+            .expect("request capture should lock");
         assert!(String::from_utf8_lossy(&request).contains("payload via source path"));
     }
 
@@ -6891,7 +8360,8 @@ mod tests {
             headers: None,
             body: None,
             body_encoding: None,
-        }).expect_err("localhost fetch should be denied");
+        })
+        .expect_err("localhost fetch should be denied");
         assert_eq!(response.status_code, 403);
         assert!(response.message.contains("http_fetch_ssrf_denied"));
     }
@@ -6923,12 +8393,17 @@ mod tests {
         loop {
             let connection = open_connection(db_path).expect("database should open");
             ensure_control_schema(&connection).expect("schema should initialize");
-            if let Some(job) = fetch_control_job(&connection, "alice", job_id).expect("job lookup should succeed") {
+            if let Some(job) =
+                fetch_control_job(&connection, "alice", job_id).expect("job lookup should succeed")
+            {
                 if job.status == expected_status {
                     return job;
                 }
             }
-            assert!(started.elapsed() < Duration::from_secs(5), "job did not reach expected status");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "job did not reach expected status"
+            );
             thread::sleep(Duration::from_millis(25));
         }
     }
@@ -6943,7 +8418,8 @@ mod tests {
                 after_id: Some(0),
                 limit: Some(50),
                 page: None,
-            }).expect("events poll should succeed");
+            })
+            .expect("events poll should succeed");
             if events["events"]
                 .as_array()
                 .expect("events should be an array")
@@ -6952,7 +8428,10 @@ mod tests {
             {
                 return;
             }
-            assert!(started.elapsed() < Duration::from_secs(5), "job event did not reach expected status");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "job event did not reach expected status"
+            );
             thread::sleep(Duration::from_millis(25));
         }
     }
@@ -6963,7 +8442,10 @@ mod tests {
             if active_job_count(runtime) == expected_count {
                 return;
             }
-            assert!(started.elapsed() < Duration::from_secs(5), "active job count did not reach expected value");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "active job count did not reach expected value"
+            );
             thread::sleep(Duration::from_millis(25));
         }
     }
@@ -6972,55 +8454,82 @@ mod tests {
     fn job_idempotency_key_deduplicates() {
         let db_path = test_db_path("job-idempotency");
         let runtime = create_runtime_state();
-        let first = handle_control_job_create(ControlJobCreateRequest {
-            db_path: db_path.clone(),
-            user_handle: String::from("alice"),
-            extension_id: String::from("third-party/example"),
-            job_type: String::from("delay"),
-            payload: Some(json!({ "durationMs": 0, "message": "first" })),
-            timeout_ms: None,
-            idempotency_key: Some(String::from("unique-key-1")),
-            max_attempts: None,
-        }, &runtime).expect("first job create should succeed");
+        let first = handle_control_job_create(
+            ControlJobCreateRequest {
+                db_path: db_path.clone(),
+                user_handle: String::from("alice"),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                payload: Some(json!({ "durationMs": 0, "message": "first" })),
+                timeout_ms: None,
+                idempotency_key: Some(String::from("unique-key-1")),
+                max_attempts: None,
+            },
+            &runtime,
+        )
+        .expect("first job create should succeed");
         let first_id = first["job"]["id"].as_str().unwrap().to_string();
 
-        let second = handle_control_job_create(ControlJobCreateRequest {
-            db_path: db_path.clone(),
-            user_handle: String::from("alice"),
-            extension_id: String::from("third-party/example"),
-            job_type: String::from("delay"),
-            payload: Some(json!({ "durationMs": 0, "message": "second" })),
-            timeout_ms: None,
-            idempotency_key: Some(String::from("unique-key-1")),
-            max_attempts: None,
-        }, &runtime).expect("second job create should succeed");
+        let second = handle_control_job_create(
+            ControlJobCreateRequest {
+                db_path: db_path.clone(),
+                user_handle: String::from("alice"),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                payload: Some(json!({ "durationMs": 0, "message": "second" })),
+                timeout_ms: None,
+                idempotency_key: Some(String::from("unique-key-1")),
+                max_attempts: None,
+            },
+            &runtime,
+        )
+        .expect("second job create should succeed");
         let second_id = second["job"]["id"].as_str().unwrap().to_string();
 
-        assert_eq!(first_id, second_id, "idempotency key should return existing job");
+        assert_eq!(
+            first_id, second_id,
+            "idempotency key should return existing job"
+        );
     }
 
     #[test]
     fn job_timeout_marks_failed() {
         let db_path = test_db_path("job-timeout");
         let runtime = create_runtime_state();
-        let created = handle_control_job_create(ControlJobCreateRequest {
-            db_path: db_path.clone(),
-            user_handle: String::from("alice"),
-            extension_id: String::from("third-party/example"),
-            job_type: String::from("delay"),
-            payload: Some(json!({
-                "durationMs": 200,
-                "message": "timeout",
-            })),
-            timeout_ms: Some(50),
-            idempotency_key: None,
-            max_attempts: Some(1),
-        }, &runtime).expect("timed job create should succeed");
-        let job_id = created["job"]["id"].as_str().expect("job id should exist").to_string();
+        let created = handle_control_job_create(
+            ControlJobCreateRequest {
+                db_path: db_path.clone(),
+                user_handle: String::from("alice"),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                payload: Some(json!({
+                    "durationMs": 200,
+                    "message": "timeout",
+                })),
+                timeout_ms: Some(50),
+                idempotency_key: None,
+                max_attempts: Some(1),
+            },
+            &runtime,
+        )
+        .expect("timed job create should succeed");
+        let job_id = created["job"]["id"]
+            .as_str()
+            .expect("job id should exist")
+            .to_string();
 
         let failed = wait_for_job_status(&db_path, &job_id, "failed");
         assert_eq!(failed.error.as_deref(), Some("job_timeout"));
         assert!(failed.finished_at.is_some());
+        let history = failed
+            .attempt_history
+            .expect("failed job should include attempt history");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].attempt, 1);
+        assert!(matches!(history[0].event, JobAttemptEvent::Started));
+        assert_eq!(history[1].attempt, 1);
+        assert!(matches!(history[1].event, JobAttemptEvent::Failed));
+        assert_eq!(history[1].error.as_deref(), Some("job_timeout"));
         wait_for_active_job_count(&runtime, 0);
     }
 
@@ -7028,25 +8537,51 @@ mod tests {
     fn job_retries_then_completes() {
         let db_path = test_db_path("job-retry");
         let runtime = create_runtime_state();
-        let created = handle_control_job_create(ControlJobCreateRequest {
-            db_path: db_path.clone(),
-            user_handle: String::from("alice"),
-            extension_id: String::from("third-party/example"),
-            job_type: String::from("delay"),
-            payload: Some(json!({
-                "durationMs": 0,
-                "message": "retry-ok",
-                "failAttempts": 1,
-            })),
-            timeout_ms: None,
-            idempotency_key: None,
-            max_attempts: Some(2),
-        }, &runtime).expect("retry job create should succeed");
-        let job_id = created["job"]["id"].as_str().expect("job id should exist").to_string();
+        let created = handle_control_job_create(
+            ControlJobCreateRequest {
+                db_path: db_path.clone(),
+                user_handle: String::from("alice"),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                payload: Some(json!({
+                    "durationMs": 0,
+                    "message": "retry-ok",
+                    "failAttempts": 1,
+                })),
+                timeout_ms: None,
+                idempotency_key: None,
+                max_attempts: Some(2),
+            },
+            &runtime,
+        )
+        .expect("retry job create should succeed");
+        let job_id = created["job"]["id"]
+            .as_str()
+            .expect("job id should exist")
+            .to_string();
 
         let completed = wait_for_job_status(&db_path, &job_id, "completed");
         assert_eq!(completed.attempt, 2);
-        assert_eq!(completed.result.as_ref().and_then(|value| value.get("message")), Some(&json!("retry-ok")));
+        assert_eq!(
+            completed
+                .result
+                .as_ref()
+                .and_then(|value| value.get("message")),
+            Some(&json!("retry-ok"))
+        );
+        let history = completed
+            .attempt_history
+            .expect("completed retry job should include attempt history");
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].attempt, 1);
+        assert!(matches!(history[0].event, JobAttemptEvent::Started));
+        assert_eq!(history[1].attempt, 1);
+        assert!(matches!(history[1].event, JobAttemptEvent::RetryScheduled));
+        assert_eq!(history[1].backoff_ms, Some(job_retry_backoff_ms(1) as i64));
+        assert_eq!(history[2].attempt, 2);
+        assert!(matches!(history[2].event, JobAttemptEvent::Started));
+        assert_eq!(history[3].attempt, 2);
+        assert!(matches!(history[3].event, JobAttemptEvent::Completed));
         wait_for_active_job_count(&runtime, 0);
     }
 
@@ -7079,33 +8614,60 @@ mod tests {
                 attempt: 1,
                 max_attempts: Some(2),
                 cancel_requested_at: None,
+                attempt_history: None,
             },
-        }).expect("stale job upsert should succeed");
+        })
+        .expect("stale job upsert should succeed");
 
         let runtime = create_runtime_state();
-        let listed = handle_control_jobs_list(ControlJobsListRequest {
-            db_path: db_path.clone(),
-            user_handle: String::from("alice"),
-            extension_id: None,
-            page: None,
-        }, &runtime).expect("listing jobs should succeed");
+        let listed = handle_control_jobs_list(
+            ControlJobsListRequest {
+                db_path: db_path.clone(),
+                user_handle: String::from("alice"),
+                extension_id: None,
+                page: None,
+            },
+            &runtime,
+        )
+        .expect("listing jobs should succeed");
 
         let jobs = listed["jobs"].as_array().expect("jobs should be an array");
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0]["status"], json!("failed"));
         assert_eq!(jobs[0]["error"], json!("job_recovery_required"));
-        assert_eq!(jobs[0]["summary"], json!("Recovered stale job after runtime restart"));
+        assert_eq!(
+            jobs[0]["summary"],
+            json!("Recovered stale job after runtime restart")
+        );
+        assert_eq!(jobs[0]["attemptHistory"][0]["event"], json!("recovered"));
+        assert_eq!(jobs[0]["attemptHistory"][0]["attempt"], json!(1));
+
+        let recovered = wait_for_job_status(&db_path, "job-stale-1", "failed");
+        let history = recovered
+            .attempt_history
+            .expect("recovered job should include attempt history");
+        assert_eq!(history.len(), 1);
+        assert!(matches!(history[0].event, JobAttemptEvent::Recovered));
+        assert_eq!(history[0].error.as_deref(), Some("job_recovery_required"));
     }
 
     fn test_db_path(name: &str) -> String {
-        let path = env::temp_dir()
-            .join(format!("authority-core-test-{}-{}-{}.sqlite", name, process::id(), current_unix_millis()));
+        let path = env::temp_dir().join(format!(
+            "authority-core-test-{}-{}-{}.sqlite",
+            name,
+            process::id(),
+            current_unix_millis()
+        ));
         path.to_string_lossy().into_owned()
     }
 
     fn test_trivium_path(name: &str) -> String {
-        let path = env::temp_dir()
-            .join(format!("authority-core-trivium-{}-{}-{}.tdb", name, process::id(), current_unix_millis()));
+        let path = env::temp_dir().join(format!(
+            "authority-core-trivium-{}-{}-{}.tdb",
+            name,
+            process::id(),
+            current_unix_millis()
+        ));
         path.to_string_lossy().into_owned()
     }
 
@@ -7120,8 +8682,12 @@ mod tests {
     }
 
     fn test_private_root(name: &str) -> String {
-        let path = env::temp_dir()
-            .join(format!("authority-core-private-{}-{}-{}", name, process::id(), current_unix_millis()));
+        let path = env::temp_dir().join(format!(
+            "authority-core-private-{}-{}-{}",
+            name,
+            process::id(),
+            current_unix_millis()
+        ));
         path.to_string_lossy().into_owned()
     }
 
@@ -7131,7 +8697,9 @@ mod tests {
         captured_request: Option<Arc<Mutex<Vec<u8>>>>,
     ) -> (String, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-        let address = listener.local_addr().expect("listener should expose address");
+        let address = listener
+            .local_addr()
+            .expect("listener should expose address");
         let content_type = content_type.to_string();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("server should accept connection");
@@ -7156,7 +8724,9 @@ mod tests {
             }
 
             if let Some(captured_request) = captured_request {
-                let mut target = captured_request.lock().expect("captured request should lock");
+                let mut target = captured_request
+                    .lock()
+                    .expect("captured request should lock");
                 *target = request;
             }
 

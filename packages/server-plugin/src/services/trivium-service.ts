@@ -19,10 +19,13 @@ import type {
     TriviumDeleteRequest,
     TriviumDeleteOrphanMappingsRequest,
     TriviumDeleteOrphanMappingsResponse,
+    TriviumDType,
+    TriviumDatabaseRecord,
     TriviumFilterWhereRequest,
     TriviumFilterWhereResponse,
     TriviumFlushRequest,
     TriviumGetRequest,
+    TriviumListDatabasesResponse,
     TriviumListMappingsRequest,
     TriviumListMappingsResponse,
     TriviumMappingIntegrityIssue,
@@ -45,6 +48,8 @@ import type {
     TriviumSearchRequest,
     TriviumStatRequest,
     TriviumStatResponse,
+    TriviumStorageMode,
+    TriviumSyncMode,
     TriviumUpsertRequest,
     TriviumUpsertResponse,
 } from '@stdo/shared-types';
@@ -56,10 +61,21 @@ import { CoreService } from './core-service.js';
 const EXTERNAL_IDS_TABLE = 'authority_trivium_external_ids';
 const META_TABLE = 'authority_trivium_meta';
 const LAST_FLUSH_META_KEY = 'last_flush_at';
+const DATABASE_DIM_META_KEY = 'database_dim';
+const DATABASE_DTYPE_META_KEY = 'database_dtype';
+const DATABASE_SYNC_MODE_META_KEY = 'database_sync_mode';
+const DATABASE_STORAGE_MODE_META_KEY = 'database_storage_mode';
 const DEFAULT_CURSOR_PAGE_LIMIT = 50;
 const MAX_CURSOR_PAGE_LIMIT = 500;
 const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
 const DEFAULT_ORPHAN_DELETE_LIMIT = 100;
+
+interface TriviumDatabaseConfigMeta {
+    dim: number | null;
+    dtype: TriviumDType | null;
+    syncMode: TriviumSyncMode | null;
+    storageMode: TriviumStorageMode | null;
+}
 
 interface ResolvedReference extends TriviumResolvedNodeReference {
     createdMapping: boolean;
@@ -89,6 +105,26 @@ export class TriviumService {
     private readonly schemaReady = new Map<string, Promise<void>>();
 
     constructor(private readonly core: CoreService) {}
+
+    async listDatabases(user: UserContext, extensionId: string): Promise<TriviumListDatabasesResponse> {
+        const paths = getUserAuthorityPaths(user);
+        const directory = path.join(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
+        if (!fs.existsSync(directory)) {
+            return { databases: [] };
+        }
+
+        const databases = await Promise.all(fs.readdirSync(directory, { withFileTypes: true })
+            .filter(entry => entry.isFile() && entry.name.endsWith('.tdb'))
+            .map(async entry => {
+                const database = entry.name.slice(0, -'.tdb'.length);
+                const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+                const meta = await this.readDatabaseConfigMeta(mappingDbPath);
+                return buildTriviumDatabaseRecord(dbPath, entry.name, meta);
+            }));
+
+        databases.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+        return { databases };
+    }
 
     async resolveId(user: UserContext, extensionId: string, request: TriviumResolveIdRequest): Promise<TriviumResolveIdResponse> {
         const database = getTriviumDatabaseName(request.database);
@@ -182,6 +218,7 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.ensureSchema(mappingDbPath);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
 
         const failures: TriviumBulkFailure[] = [];
         const prepared: IndexedCoreUpsertItem[] = [];
@@ -426,12 +463,18 @@ export class TriviumService {
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.core.flushTrivium(dbPath, { ...request, database });
         await this.ensureSchema(mappingDbPath);
+        if (fs.existsSync(dbPath)) {
+            await this.rememberDatabaseConfig(mappingDbPath, request);
+        }
         await this.writeMetaValue(mappingDbPath, LAST_FLUSH_META_KEY, new Date().toISOString());
     }
 
     async stat(user: UserContext, extensionId: string, request: TriviumStatRequest = {}): Promise<TriviumStatResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        if (fs.existsSync(dbPath)) {
+            await this.rememberDatabaseConfig(mappingDbPath, request);
+        }
         const stat = await this.core.statTrivium(dbPath, { ...request, database });
         const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
         const mappingCount = await this.countMappings(mappingDbPath);
@@ -898,6 +941,42 @@ export class TriviumService {
         });
     }
 
+    private async rememberDatabaseConfig(
+        mappingDbPath: string,
+        request: { dim?: number; dtype?: TriviumDType; syncMode?: TriviumSyncMode; storageMode?: TriviumStorageMode },
+    ): Promise<void> {
+        await this.ensureSchema(mappingDbPath);
+        const writes: Promise<void>[] = [];
+        if (request.dim !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_DIM_META_KEY, String(request.dim)));
+        }
+        if (request.dtype !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_DTYPE_META_KEY, request.dtype));
+        }
+        if (request.syncMode !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_SYNC_MODE_META_KEY, request.syncMode));
+        }
+        if (request.storageMode !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_STORAGE_MODE_META_KEY, request.storageMode));
+        }
+        await Promise.all(writes);
+    }
+
+    private async readDatabaseConfigMeta(mappingDbPath: string): Promise<TriviumDatabaseConfigMeta> {
+        const [dim, dtype, syncMode, storageMode] = await Promise.all([
+            this.readMetaValue(mappingDbPath, DATABASE_DIM_META_KEY),
+            this.readMetaValue(mappingDbPath, DATABASE_DTYPE_META_KEY),
+            this.readMetaValue(mappingDbPath, DATABASE_SYNC_MODE_META_KEY),
+            this.readMetaValue(mappingDbPath, DATABASE_STORAGE_MODE_META_KEY),
+        ]);
+        return {
+            dim: parseOptionalPositiveInteger(dim),
+            dtype: parseOptionalTriviumDType(dtype),
+            syncMode: parseOptionalTriviumSyncMode(syncMode),
+            storageMode: parseOptionalTriviumStorageMode(storageMode),
+        };
+    }
+
     private async enrichSearchHits(mappingDbPath: string, hits: TriviumSearchHit[]): Promise<TriviumSearchHit[]> {
         const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, hits.map(hit => hit.id));
         return hits.map(hit => ({
@@ -942,6 +1021,54 @@ function getTriviumDatabaseName(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 
+function buildTriviumDatabaseRecord(
+    filePath: string,
+    entryName: string,
+    meta: TriviumDatabaseConfigMeta,
+): TriviumDatabaseRecord {
+    const mainStats = fs.statSync(filePath);
+    const walPath = `${filePath}.wal`;
+    const vecPath = `${filePath}.vec`;
+    const walStats = fs.existsSync(walPath) ? fs.statSync(walPath) : null;
+    const vecStats = fs.existsSync(vecPath) ? fs.statSync(vecPath) : null;
+    const timestamps = [mainStats, walStats, vecStats]
+        .filter((value): value is fs.Stats => value !== null)
+        .map(stats => stats.mtime.toISOString())
+        .sort((left, right) => left.localeCompare(right));
+
+    return {
+        name: entryName.slice(0, -'.tdb'.length),
+        fileName: entryName,
+        dim: readTriviumDimension(filePath) ?? meta.dim,
+        dtype: meta.dtype,
+        syncMode: meta.syncMode,
+        storageMode: meta.storageMode ?? (vecStats ? 'mmap' : 'rom'),
+        sizeBytes: mainStats.size,
+        walSizeBytes: walStats?.size ?? 0,
+        vecSizeBytes: vecStats?.size ?? 0,
+        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
+        updatedAt: timestamps.at(-1) ?? null,
+    };
+}
+
+function readTriviumDimension(filePath: string): number | null {
+    try {
+        const handle = fs.openSync(filePath, 'r');
+        try {
+            const header = Buffer.alloc(10);
+            const bytesRead = fs.readSync(handle, header, 0, 10, 0);
+            if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
+                return null;
+            }
+            return header.readUInt32LE(6);
+        } finally {
+            fs.closeSync(handle);
+        }
+    } catch {
+        return null;
+    }
+}
+
 function getTriviumNamespace(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
@@ -975,6 +1102,26 @@ function getNonNegativeInteger(value: unknown): number {
         }
     }
     return 0;
+}
+
+function parseOptionalPositiveInteger(value: string | null): number | null {
+    if (!value) {
+        return null;
+    }
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseOptionalTriviumDType(value: string | null): TriviumDType | null {
+    return value === 'f32' || value === 'f16' || value === 'u64' ? value : null;
+}
+
+function parseOptionalTriviumSyncMode(value: string | null): TriviumSyncMode | null {
+    return value === 'full' || value === 'normal' || value === 'off' ? value : null;
+}
+
+function parseOptionalTriviumStorageMode(value: string | null): TriviumStorageMode | null {
+    return value === 'mmap' || value === 'rom' ? value : null;
 }
 
 function getBoundedPositiveInteger(value: unknown, defaultValue: number, maxValue: number, label: string): number {

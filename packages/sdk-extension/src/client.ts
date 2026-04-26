@@ -104,6 +104,42 @@ export interface AuthorityPermissionRequest extends PermissionEvaluateRequest {
     promptTitle?: string;
 }
 
+export type AuthorityPermissionErrorDecision = Exclude<PermissionEvaluateResponse['decision'], 'granted'>;
+export type AuthorityPermissionErrorCode = 'permission_not_granted' | 'permission_denied' | 'permission_blocked';
+
+export interface AuthorityPermissionErrorDetails {
+    code: AuthorityPermissionErrorCode;
+    decision: AuthorityPermissionErrorDecision;
+    key: string;
+    riskLevel: PermissionEvaluateResponse['riskLevel'];
+    target: string;
+    resource: PermissionResource;
+}
+
+export class AuthorityPermissionError extends Error {
+    readonly code: AuthorityPermissionErrorCode;
+    readonly decision: AuthorityPermissionErrorDecision;
+    readonly key: string;
+    readonly riskLevel: PermissionEvaluateResponse['riskLevel'];
+    readonly target: string;
+    readonly resource: PermissionResource;
+
+    constructor(message: string, public readonly details: AuthorityPermissionErrorDetails) {
+        super(message);
+        this.name = 'AuthorityPermissionError';
+        this.code = details.code;
+        this.decision = details.decision;
+        this.key = details.key;
+        this.riskLevel = details.riskLevel;
+        this.target = details.target;
+        this.resource = details.resource;
+    }
+}
+
+export function isAuthorityPermissionError(error: unknown): error is AuthorityPermissionError {
+    return error instanceof AuthorityPermissionError;
+}
+
 function isTerminalJobStatus(status: JobRecord['status']): boolean {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
@@ -1530,7 +1566,14 @@ export class AuthorityClient {
                 void openSecurityCenter({ focusExtensionId: this.config.extensionId });
             }
 
-            throw new Error(message);
+            throw new AuthorityPermissionError(message, {
+                code: getAuthorityPermissionErrorCode(resolved.decision),
+                decision: resolved.decision,
+                key: resolved.key,
+                riskLevel: resolved.riskLevel,
+                target: resolved.target,
+                resource: resolved.resource,
+            });
         }
 
         return resolved;
@@ -2350,6 +2393,18 @@ function getPermissionFailureMessage(
     }
 
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
+}
+
+function getAuthorityPermissionErrorCode(decision: AuthorityPermissionErrorDecision): AuthorityPermissionErrorCode {
+    if (decision === 'denied') {
+        return 'permission_denied';
+    }
+
+    if (decision === 'blocked') {
+        return 'permission_blocked';
+    }
+
+    return 'permission_not_granted';
 }
 
 function getPermissionResourceLabel(resource: PermissionResource): string {

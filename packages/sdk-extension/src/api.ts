@@ -1,4 +1,5 @@
 import { getRequestHeaders } from '/script.js';
+import type { AuthorityErrorCode, AuthorityErrorPayload } from '@stdo/shared-types';
 
 export const AUTHORITY_API_BASE = '/api/plugins/authority';
 export const AUTHORITY_EXTENSION_NAME = 'third-party/st-authority-sdk';
@@ -15,6 +16,9 @@ export interface AuthorityRequestOptions {
 }
 
 export class AuthorityApiError extends Error {
+    readonly code: AuthorityErrorCode | undefined;
+    readonly details: AuthorityErrorPayload['details'] | undefined;
+
     constructor(
         message: string,
         public readonly status: number,
@@ -22,6 +26,10 @@ export class AuthorityApiError extends Error {
     ) {
         super(message);
         this.name = 'AuthorityApiError';
+        if (isAuthorityErrorPayload(payload)) {
+            this.code = payload.code;
+            this.details = payload.details;
+        }
     }
 }
 
@@ -101,4 +109,11 @@ function getErrorMessage(payload: unknown, fallback: string): string {
     }
 
     return fallback || '权限中心请求失败';
+}
+
+function isAuthorityErrorPayload(payload: unknown): payload is AuthorityErrorPayload {
+    return typeof payload === 'object'
+        && payload !== null
+        && 'error' in payload
+        && typeof (payload as { error?: unknown }).error === 'string';
 }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+    AuthorityErrorPayload,
     AuthorityProbeResponse,
     AuthorityInitConfig,
     BlobRecord,
@@ -13,6 +14,7 @@ import type {
     HttpFetchOpenRequest,
     JobListRequest,
     PermissionEvaluateRequest,
+    PermissionResource,
     PermissionResolveRequest,
     PrivateFileDeleteRequest,
     PrivateFileTransferCommitRequest,
@@ -85,7 +87,7 @@ import {
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
-import { asErrorMessage, getSessionToken, getUserContext, normalizeHostname, sanitizeFileSegment } from './utils.js';
+import { asErrorMessage, buildPermissionDescriptor, getSessionToken, getUserContext, normalizeHostname, sanitizeFileSegment } from './utils.js';
 
 type RouterLike = {
     get(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
@@ -98,10 +100,12 @@ function ok(res: AuthorityResponse, data: unknown): void {
 
 function fail(runtime: AuthorityRuntime, req: AuthorityRequest, res: AuthorityResponse, extensionId: string, error: unknown): void {
     const message = asErrorMessage(error);
+    const permissionErrorPayload = buildPermissionErrorPayload(message);
     try {
         const user = getUserContext(req);
-        if (message.startsWith('Permission not granted:')) {
+        if (permissionErrorPayload) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
+                ...permissionErrorPayload.details,
                 message,
             }).catch(() => undefined);
         } else {
@@ -110,7 +114,47 @@ function fail(runtime: AuthorityRuntime, req: AuthorityRequest, res: AuthorityRe
     } catch {
         // ignore errors raised before auth is available
     }
+    if (permissionErrorPayload) {
+        res.status(403).json(permissionErrorPayload);
+        return;
+    }
     res.status(400).json({ error: message });
+}
+
+function buildPermissionErrorPayload(message: string): AuthorityErrorPayload | null {
+    const match = /^Permission not granted: ([a-z.]+)(?: for (.+))?$/.exec(message);
+    if (!match) {
+        return null;
+    }
+
+    const resource = match[1]?.trim();
+    if (!resource || !isPermissionResource(resource)) {
+        return null;
+    }
+
+    const target = match[2]?.trim();
+    const descriptor = buildPermissionDescriptor(resource, target);
+    return {
+        error: message,
+        code: 'permission_not_granted',
+        details: {
+            resource: descriptor.resource,
+            target: descriptor.target,
+            key: descriptor.key,
+            riskLevel: descriptor.riskLevel,
+        },
+    };
+}
+
+function isPermissionResource(value: string): value is PermissionResource {
+    return value === 'storage.kv'
+        || value === 'storage.blob'
+        || value === 'fs.private'
+        || value === 'sql.private'
+        || value === 'trivium.private'
+        || value === 'http.fetch'
+        || value === 'jobs.background'
+        || value === 'events.stream';
 }
 
 function parseAdminUpdateAction(value: unknown): AdminUpdateAction {
@@ -288,63 +332,12 @@ function resolvePrivateTriviumDatabasePath(user: ReturnType<typeof getUserContex
     );
 }
 
-function readTriviumDimension(filePath: string): number | null {
-    try {
-        const handle = fs.openSync(filePath, 'r');
-        try {
-            const header = Buffer.alloc(10);
-            const bytesRead = fs.readSync(handle, header, 0, 10, 0);
-            if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
-                return null;
-            }
-            return header.readUInt32LE(6);
-        } finally {
-            fs.closeSync(handle);
-        }
-    } catch {
-        return null;
-    }
-}
-
-function buildTriviumDatabaseRecord(filePath: string, entryName: string): TriviumDatabaseRecord {
-    const mainStats = fs.statSync(filePath);
-    const walPath = `${filePath}.wal`;
-    const vecPath = `${filePath}.vec`;
-    const walStats = fs.existsSync(walPath) ? fs.statSync(walPath) : null;
-    const vecStats = fs.existsSync(vecPath) ? fs.statSync(vecPath) : null;
-    const storageMode = vecStats ? 'mmap' : 'rom';
-    const timestamps = [mainStats, walStats, vecStats]
-        .filter((value): value is fs.Stats => value !== null)
-        .map(stats => stats.mtime.toISOString())
-        .sort((left, right) => left.localeCompare(right));
-
-    return {
-        name: entryName.slice(0, -'.tdb'.length),
-        fileName: entryName,
-        dim: readTriviumDimension(filePath),
-        dtype: null,
-        syncMode: null,
-        storageMode,
-        sizeBytes: mainStats.size,
-        walSizeBytes: walStats?.size ?? 0,
-        vecSizeBytes: vecStats?.size ?? 0,
-        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
-        updatedAt: timestamps.at(-1) ?? null,
-    };
-}
-
-function listPrivateTriviumDatabases(user: ReturnType<typeof getUserContext>, extensionId: string): TriviumListDatabasesResponse {
-    const databaseDir = resolvePrivateTriviumDatabaseDir(user, extensionId);
-    if (!fs.existsSync(databaseDir)) {
-        return { databases: [] };
-    }
-
-    const databases = fs.readdirSync(databaseDir, { withFileTypes: true })
-        .filter(entry => entry.isFile() && entry.name.endsWith('.tdb'))
-        .map(entry => buildTriviumDatabaseRecord(path.join(databaseDir, entry.name), entry.name))
-        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
-
-    return { databases };
+async function listPrivateTriviumDatabases(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    extensionId: string,
+): Promise<TriviumListDatabasesResponse> {
+    return await runtime.trivium.listDatabases(user, extensionId);
 }
 
 function listPrivateSqlDatabases(user: ReturnType<typeof getUserContext>, extensionId: string): SqlListDatabasesResponse {
@@ -401,7 +394,7 @@ async function buildExtensionStorageSummary(
     user: ReturnType<typeof getUserContext>,
     extensionId: string,
     sqlDatabases = listPrivateSqlDatabases(user, extensionId).databases,
-    triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases,
+    triviumDatabases?: TriviumDatabaseRecord[],
 ): Promise<{
     kvEntries: number;
     blobCount: number;
@@ -419,9 +412,10 @@ async function buildExtensionStorageSummary(
         runtime.storage.listBlobs(user, extensionId),
         runtime.files.getUsageSummary(user, extensionId),
     ]);
+    const resolvedTriviumDatabases = triviumDatabases ?? (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
     const blobSummary = summarizeBlobRecords(blobs);
     const sqlDatabaseSummary = summarizeDatabases(sqlDatabases);
-    const triviumDatabaseSummary = summarizeTriviumDatabases(triviumDatabases);
+    const triviumDatabaseSummary = summarizeTriviumDatabases(resolvedTriviumDatabases);
 
     return {
         kvEntries: Object.keys(kvEntries).length,
@@ -556,7 +550,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async extension => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 const sqlDatabases = listPrivateSqlDatabases(user, extension.id).databases;
-                const triviumDatabases = listPrivateTriviumDatabases(user, extension.id).databases;
+                const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extension.id)).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
@@ -580,7 +574,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             }
 
             const databases = listPrivateSqlDatabases(user, extensionId).databases;
-            const triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases;
+            const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
             const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
             const jobsPage = await runtime.jobs.listPage(user, extensionId);
 
@@ -1881,7 +1875,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: trivium.private');
             }
 
-            const result = listPrivateTriviumDatabases(user, session.extension.id);
+            const result = await listPrivateTriviumDatabases(runtime, user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium list databases', {
                 count: result.databases.length,
             });

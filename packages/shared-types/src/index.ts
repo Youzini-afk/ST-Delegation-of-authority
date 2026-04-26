@@ -14,11 +14,25 @@ export type PermissionStatus = 'granted' | 'denied' | 'prompt' | 'blocked';
 export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type GrantScope = 'session' | 'persistent' | 'policy';
+export type AuthorityErrorCode = 'permission_not_granted' | 'permission_denied' | 'permission_blocked';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type PrivateFileKind = 'file' | 'directory';
 export type PrivateFileEncoding = 'utf8' | 'base64';
 export type HttpBodyEncoding = 'utf8' | 'base64';
 export type DataTransferResource = 'storage.blob' | 'fs.private' | 'http.fetch';
+
+export interface AuthorityPermissionErrorPayloadDetails {
+    resource: PermissionResource;
+    target: string;
+    key: string;
+    riskLevel: RiskLevel;
+}
+
+export interface AuthorityErrorPayload {
+    error: string;
+    code?: AuthorityErrorCode;
+    details?: Record<string, unknown> | AuthorityPermissionErrorPayloadDetails;
+}
 
 export interface DeclaredPermissions {
     storage?: {
@@ -748,6 +762,17 @@ export interface BlobOpenReadTransferResponse {
 
 export type BlobOpenReadResponse = BlobOpenReadInlineResponse | BlobOpenReadTransferResponse;
 
+export type JobAttemptEvent = 'started' | 'retryScheduled' | 'completed' | 'failed' | 'cancelled' | 'recovered';
+
+export interface JobAttemptRecord {
+    attempt: number;
+    event: JobAttemptEvent;
+    timestamp: string;
+    summary?: string;
+    error?: string;
+    backoffMs?: number;
+}
+
 export interface JobRecord {
     id: string;
     extensionId: string;
@@ -765,6 +790,7 @@ export interface JobRecord {
     attempt?: number;
     maxAttempts?: number;
     cancelRequestedAt?: string;
+    attemptHistory?: JobAttemptRecord[];
 }
 
 export interface JobListRequest {

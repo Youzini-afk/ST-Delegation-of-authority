@@ -228,6 +228,44 @@ describe('TriviumService', () => {
         expect(integrityStat.orphanMappingCount).toBe(1);
     });
 
+    it('lists Trivium databases with persisted dim and dtype diagnostics', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            dim: 3,
+            dtype: 'f16',
+            syncMode: 'off',
+            storageMode: 'mmap',
+            items: [
+                { externalId: 'alpha', vector: [1, 0, 0], payload: { name: 'alpha' } },
+            ],
+        });
+
+        const dbPath = path.join(
+            getUserAuthorityPaths(user).triviumPrivateDir,
+            sanitizeFileSegment('third-party/ext-a'),
+            'graph.tdb',
+        );
+        const header = Buffer.alloc(10);
+        header.write('TVDB', 0, 'utf8');
+        header.writeUInt32LE(3, 6);
+        fs.writeFileSync(dbPath, header);
+        fs.writeFileSync(`${dbPath}.vec`, Buffer.from([0]));
+
+        const listed = await trivium.listDatabases(user, 'third-party/ext-a');
+        expect(listed.databases).toHaveLength(1);
+        expect(listed.databases[0]).toMatchObject({
+            name: 'graph',
+            dim: 3,
+            dtype: 'f16',
+            syncMode: 'off',
+            storageMode: 'mmap',
+        });
+    });
+
     it('checks mapping integrity and deletes orphan mappings without deleting live nodes', async () => {
         const user = createUser(dirs);
         const core = createMockCore();

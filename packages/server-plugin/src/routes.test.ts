@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerRoutes } from './routes.js';
 import type { AuthorityRuntime } from './runtime.js';
 
@@ -56,5 +56,74 @@ describe('registerRoutes', () => {
             '/fs/private/stat',
             '/admin/update',
         ]));
+    });
+
+    it('returns structured permission payloads for unauthorized storage routes', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({
+                    extension: {
+                        id: 'third-party/ext-a',
+                    },
+                }),
+            },
+            permissions: {
+                authorize: vi.fn().mockResolvedValue(false),
+            },
+            audit: {
+                logPermission: vi.fn().mockResolvedValue(undefined),
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const handler = posts.get('/storage/kv/get');
+        expect(handler).toBeTypeOf('function');
+
+        const response = {
+            status: vi.fn(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+        response.status.mockReturnValue(response);
+
+        await handler?.({
+            user: {
+                profile: {
+                    handle: 'alice',
+                    admin: false,
+                },
+                directories: {
+                    root: 'C:/users/alice',
+                },
+            },
+            body: { key: 'demo' },
+            headers: {},
+        }, response);
+
+        expect(response.status).toHaveBeenCalledWith(403);
+        expect(response.json).toHaveBeenCalledWith({
+            error: 'Permission not granted: storage.kv',
+            code: 'permission_not_granted',
+            details: {
+                resource: 'storage.kv',
+                target: '*',
+                key: 'storage.kv:*',
+                riskLevel: 'low',
+            },
+        });
     });
 });
