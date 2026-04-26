@@ -52,7 +52,7 @@ import type {
     TriviumUpdatePayloadRequest,
     TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
-import { DATA_TRANSFER_INLINE_THRESHOLD_BYTES } from './constants.js';
+import { AUTHORITY_DATA_FOLDER, DATA_TRANSFER_INLINE_THRESHOLD_BYTES } from './constants.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
@@ -71,7 +71,13 @@ function fail(runtime: AuthorityRuntime, req: AuthorityRequest, res: AuthorityRe
     const message = asErrorMessage(error);
     try {
         const user = getUserContext(req);
-        void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
+        if (message.startsWith('Permission not granted:')) {
+            void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
+                message,
+            }).catch(() => undefined);
+        } else {
+            void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
+        }
     } catch {
         // ignore errors raised before auth is available
     }
@@ -272,8 +278,9 @@ async function buildExtensionStorageSummary(
 
 export function registerRoutes(router: RouterLike, runtime = createAuthorityRuntime()): AuthorityRuntime {
 
-    router.post('/probe', async (_req, res) => {
+    router.post('/probe', async (req, res) => {
         await runtime.core.refreshHealth();
+        const user = getUserContext(req);
         const install = runtime.install.getStatus();
         const core = runtime.core.getStatus();
         ok(res, {
@@ -292,6 +299,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             coreMessage: install.coreMessage,
             installStatus: install.installStatus,
             installMessage: install.installMessage,
+            storageRoot: path.join(user.rootDir, AUTHORITY_DATA_FOLDER, 'storage'),
             core,
         });
     });
@@ -328,7 +336,16 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         try {
             const user = getUserContext(req);
             const session = await runtime.sessions.assertSession(getSessionToken(req), user);
-            ok(res, await runtime.permissions.evaluate(user, session, req.body as PermissionEvaluateRequest));
+            const evaluation = await runtime.permissions.evaluate(user, session, req.body as PermissionEvaluateRequest);
+            if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
+                await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
+                    key: evaluation.key,
+                    resource: evaluation.resource,
+                    target: evaluation.target,
+                    decision: evaluation.decision,
+                });
+            }
+            ok(res, evaluation);
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -340,7 +357,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const session = await runtime.sessions.assertSession(getSessionToken(req), user);
             const payload = req.body as PermissionResolveRequest;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
-            await runtime.audit.logPermission(user, session.extension.id, 'Permission resolved', {
+            await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
                 key: grant.key,
                 status: grant.status,
                 scope: grant.scope,
@@ -383,13 +400,16 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
             const databases = listPrivateSqlDatabases(user, extensionId).databases;
             const triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases;
+            const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
+            const jobsPage = await runtime.jobs.listPage(user, extensionId);
 
             ok(res, {
                 extension,
                 grants: await runtime.permissions.listPersistentGrants(user, extensionId),
                 policies: await runtime.permissions.getPolicyEntries(user, extensionId),
-                activity: await runtime.audit.getRecentActivity(user, extensionId),
-                jobs: await runtime.jobs.list(user, extensionId),
+                activity,
+                jobs: jobsPage.jobs,
+                jobsPage: jobsPage.page,
                 databases,
                 triviumDatabases,
                 storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),

@@ -79,7 +79,7 @@ const DEFAULT_POLICY_STATUS = {
     'jobs.background': 'prompt',
     'events.stream': 'prompt',
 };
-const BUILTIN_JOB_TYPES = ['delay'];
+const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'];
 
 
 /***/ },
@@ -192,7 +192,14 @@ function fail(runtime, req, res, extensionId, error) {
     const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error);
     try {
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-        void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
+        if (message.startsWith('Permission not granted:')) {
+            void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
+                message,
+            }).catch(() => undefined);
+        }
+        else {
+            void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
+        }
     }
     catch {
         // ignore errors raised before auth is available
@@ -348,8 +355,9 @@ async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatab
     };
 }
 function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_3__.createAuthorityRuntime)()) {
-    router.post('/probe', async (_req, res) => {
+    router.post('/probe', async (req, res) => {
         await runtime.core.refreshHealth();
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
         const install = runtime.install.getStatus();
         const core = runtime.core.getStatus();
         ok(res, {
@@ -368,6 +376,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             coreMessage: install.coreMessage,
             installStatus: install.installStatus,
             installMessage: install.installMessage,
+            storageRoot: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(user.rootDir, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_DATA_FOLDER, 'storage'),
             core,
         });
     });
@@ -399,7 +408,16 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            ok(res, await runtime.permissions.evaluate(user, session, req.body));
+            const evaluation = await runtime.permissions.evaluate(user, session, req.body);
+            if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
+                await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
+                    key: evaluation.key,
+                    resource: evaluation.resource,
+                    target: evaluation.target,
+                    decision: evaluation.decision,
+                });
+            }
+            ok(res, evaluation);
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -411,7 +429,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
-            await runtime.audit.logPermission(user, session.extension.id, 'Permission resolved', {
+            await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
                 key: grant.key,
                 status: grant.status,
                 scope: grant.scope,
@@ -453,12 +471,15 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             }
             const databases = listPrivateSqlDatabases(user, extensionId).databases;
             const triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases;
+            const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
+            const jobsPage = await runtime.jobs.listPage(user, extensionId);
             ok(res, {
                 extension,
                 grants: await runtime.permissions.listPersistentGrants(user, extensionId),
                 policies: await runtime.permissions.getPolicyEntries(user, extensionId),
-                activity: await runtime.audit.getRecentActivity(user, extensionId),
-                jobs: await runtime.jobs.list(user, extensionId),
+                activity,
+                jobs: jobsPage.jobs,
+                jobsPage: jobsPage.page,
                 databases,
                 triviumDatabases,
                 storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),
@@ -1952,7 +1973,25 @@ class AuditService {
             ...(details ? { details } : {}),
         });
     }
+    async logWarning(user, extensionId, message, details) {
+        await this.log(user, {
+            timestamp: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+            kind: 'warning',
+            extensionId,
+            message,
+            ...(details ? { details } : {}),
+        });
+    }
     async getRecentActivity(user, extensionId) {
+        const response = await this.getRecentActivityPage(user, extensionId);
+        return {
+            permissions: response.permissions,
+            usage: response.usage,
+            errors: response.errors,
+            warnings: response.warnings,
+        };
+    }
+    async getRecentActivityPage(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
         return await this.core.getRecentControlAudit(paths.controlDbFile, {
             userHandle: user.handle,
@@ -2572,11 +2611,15 @@ class CoreService {
         return await this.request('/v1/http/fetch-open', request);
     }
     async listControlJobs(dbPath, request) {
+        const response = await this.listControlJobsPage(dbPath, request);
+        return response.jobs;
+    }
+    async listControlJobsPage(dbPath, request) {
         const response = await this.request('/v1/control/jobs/list', {
             dbPath,
             ...request,
         });
-        return response.jobs;
+        return response;
     }
     async getControlJob(dbPath, request) {
         const response = await this.request('/v1/control/jobs/get', {
@@ -3680,8 +3723,12 @@ class JobService {
         this.core = core;
     }
     async list(user, extensionId) {
+        const response = await this.listPage(user, extensionId);
+        return response.jobs;
+    }
+    async listPage(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        return await this.core.listControlJobs(paths.controlDbFile, {
+        return await this.core.listControlJobsPage(paths.controlDbFile, {
             userHandle: user.handle,
             ...(extensionId ? { extensionId } : {}),
         });
@@ -3760,6 +3807,10 @@ class PermissionService {
     }
     async evaluate(user, session, request) {
         const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.buildPermissionDescriptor)(request.resource, request.target);
+        const declarationDecision = this.getDeclarationDecision(session.declaredPermissions, descriptor);
+        if (declarationDecision) {
+            return declarationDecision;
+        }
         const policy = await this.getPolicyGrant(user, session.extension.id, descriptor.key);
         if (policy) {
             return {
@@ -3866,6 +3917,73 @@ class PermissionService {
             userHandle: user.handle,
             extensionId,
             key,
+        });
+    }
+    getDeclarationDecision(declaredPermissions, descriptor) {
+        if (!this.hasDeclaredPermissions(declaredPermissions)) {
+            return null;
+        }
+        if (this.isDeclaredPermissionAllowed(declaredPermissions, descriptor.resource, descriptor.target)) {
+            return null;
+        }
+        return {
+            decision: 'blocked',
+            key: descriptor.key,
+            riskLevel: descriptor.riskLevel,
+            target: descriptor.target,
+            resource: descriptor.resource,
+        };
+    }
+    hasDeclaredPermissions(declaredPermissions) {
+        return Boolean(declaredPermissions.storage?.kv
+            || declaredPermissions.storage?.blob
+            || declaredPermissions.fs?.private
+            || declaredPermissions.sql?.private
+            || declaredPermissions.trivium?.private
+            || declaredPermissions.http?.allow?.length
+            || declaredPermissions.jobs?.background
+            || declaredPermissions.events?.channels);
+    }
+    isDeclaredPermissionAllowed(declaredPermissions, resource, target) {
+        switch (resource) {
+            case 'storage.kv':
+                return declaredPermissions.storage?.kv === true;
+            case 'storage.blob':
+                return declaredPermissions.storage?.blob === true;
+            case 'fs.private':
+                return declaredPermissions.fs?.private === true;
+            case 'sql.private':
+                return this.matchesDeclaredTarget(declaredPermissions.sql?.private, resource, target);
+            case 'trivium.private':
+                return this.matchesDeclaredTarget(declaredPermissions.trivium?.private, resource, target);
+            case 'http.fetch':
+                return this.matchesDeclaredTarget(declaredPermissions.http?.allow, resource, target);
+            case 'jobs.background':
+                return this.matchesDeclaredTarget(declaredPermissions.jobs?.background, resource, target);
+            case 'events.stream':
+                return this.matchesDeclaredTarget(declaredPermissions.events?.channels, resource, target);
+            default:
+                return false;
+        }
+    }
+    matchesDeclaredTarget(declared, resource, target) {
+        if (declared === true) {
+            return true;
+        }
+        if (!Array.isArray(declared) || declared.length === 0) {
+            return false;
+        }
+        const normalizedTarget = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.normalizePermissionTarget)(resource, target);
+        return declared.some(candidate => {
+            const normalizedCandidate = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.normalizePermissionTarget)(resource, candidate);
+            if (normalizedCandidate === '*' || normalizedCandidate === normalizedTarget) {
+                return true;
+            }
+            if (resource === 'http.fetch' && normalizedCandidate.startsWith('*.')) {
+                const suffix = normalizedCandidate.slice(1);
+                return normalizedTarget.endsWith(suffix) && normalizedTarget.length > suffix.length;
+            }
+            return false;
         });
     }
     async writePersistentGrant(user, extensionId, grant) {
@@ -4889,9 +5007,13 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   atomicWriteJson: () => (/* binding */ atomicWriteJson),
 /* harmony export */   buildPermissionDescriptor: () => (/* binding */ buildPermissionDescriptor),
 /* harmony export */   ensureDir: () => (/* binding */ ensureDir),
+/* harmony export */   getHttpFetchNetworkClass: () => (/* binding */ getHttpFetchNetworkClass),
 /* harmony export */   getSessionToken: () => (/* binding */ getSessionToken),
 /* harmony export */   getUserContext: () => (/* binding */ getUserContext),
+/* harmony export */   isRestrictedHttpFetchTarget: () => (/* binding */ isRestrictedHttpFetchTarget),
 /* harmony export */   normalizeHostname: () => (/* binding */ normalizeHostname),
+/* harmony export */   normalizeHttpFetchTarget: () => (/* binding */ normalizeHttpFetchTarget),
+/* harmony export */   normalizePermissionTarget: () => (/* binding */ normalizePermissionTarget),
 /* harmony export */   nowIso: () => (/* binding */ nowIso),
 /* harmony export */   randomToken: () => (/* binding */ randomToken),
 /* harmony export */   readJsonFile: () => (/* binding */ readJsonFile),
@@ -4902,9 +5024,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:net */ "node:net");
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_net__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
+
 
 
 
@@ -4927,7 +5052,7 @@ function ensureDir(dirPath) {
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(dirPath, { recursive: true });
 }
 function atomicWriteJson(filePath, value) {
-    ensureDir(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+    ensureDir(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
     const tempPath = `${filePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf8');
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
@@ -4952,11 +5077,11 @@ function getUserContext(request) {
     };
 }
 function getSessionToken(request) {
-    const headerValue = request.headers[_constants_js__WEBPACK_IMPORTED_MODULE_3__.SESSION_HEADER];
+    const headerValue = request.headers[_constants_js__WEBPACK_IMPORTED_MODULE_4__.SESSION_HEADER];
     if (typeof headerValue === 'string' && headerValue.trim()) {
         return headerValue.trim();
     }
-    const queryValue = request.query?.[_constants_js__WEBPACK_IMPORTED_MODULE_3__.SESSION_QUERY];
+    const queryValue = request.query?.[_constants_js__WEBPACK_IMPORTED_MODULE_4__.SESSION_QUERY];
     if (typeof queryValue === 'string' && queryValue.trim()) {
         return queryValue.trim();
     }
@@ -4964,18 +5089,103 @@ function getSessionToken(request) {
 }
 function normalizeHostname(input) {
     const url = new URL(input);
-    return url.hostname.toLowerCase();
+    return stripTrailingDot(url.hostname.toLowerCase());
+}
+function normalizeHttpFetchTarget(input) {
+    const trimmed = input.trim();
+    if (!trimmed) {
+        return '*';
+    }
+    if (looksLikeAbsoluteUrl(trimmed)) {
+        return normalizeHostname(trimmed);
+    }
+    return stripTrailingDot(trimmed.toLowerCase());
+}
+function normalizePermissionTarget(resource, target) {
+    const trimmedTarget = typeof target === 'string' ? target.trim() : '';
+    switch (resource) {
+        case 'storage.kv':
+        case 'storage.blob':
+        case 'fs.private':
+            return '*';
+        case 'sql.private':
+        case 'trivium.private':
+            return trimmedTarget || 'default';
+        case 'http.fetch':
+            return normalizeHttpFetchTarget(trimmedTarget);
+        case 'jobs.background':
+        case 'events.stream':
+            return trimmedTarget || '*';
+        default:
+            return trimmedTarget || '*';
+    }
+}
+function getHttpFetchNetworkClass(target) {
+    const normalized = normalizeHttpFetchTarget(target);
+    if (normalized === '*' || !normalized) {
+        return 'hostname';
+    }
+    if (normalized === 'localhost' || normalized.endsWith('.localhost')) {
+        return 'localhost';
+    }
+    const ipVersion = node_net__WEBPACK_IMPORTED_MODULE_2___default().isIP(normalized);
+    if (ipVersion === 4) {
+        const octets = normalized.split('.').map(segment => Number(segment));
+        const first = octets[0] ?? -1;
+        const second = octets[1] ?? -1;
+        if (first === 0) {
+            return 'unspecified';
+        }
+        if (first === 127) {
+            return 'loopback';
+        }
+        if (first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168)) {
+            return 'private';
+        }
+        if (first === 169 && second === 254) {
+            return 'link-local';
+        }
+        if (first >= 224 && first <= 239) {
+            return 'multicast';
+        }
+        return 'public';
+    }
+    if (ipVersion === 6) {
+        const lowered = normalized.toLowerCase();
+        if (lowered === '::') {
+            return 'unspecified';
+        }
+        if (lowered === '::1') {
+            return 'loopback';
+        }
+        if (lowered.startsWith('fe8:') || lowered.startsWith('fe9:') || lowered.startsWith('fea:') || lowered.startsWith('feb:')) {
+            return 'link-local';
+        }
+        if (lowered.startsWith('fc') || lowered.startsWith('fd')) {
+            return 'private';
+        }
+        if (lowered.startsWith('ff')) {
+            return 'multicast';
+        }
+        return 'public';
+    }
+    return 'hostname';
+}
+function isRestrictedHttpFetchTarget(target) {
+    return getHttpFetchNetworkClass(target) !== 'hostname' && getHttpFetchNetworkClass(target) !== 'public';
 }
 function buildPermissionDescriptor(resource, target) {
-    if (!_constants_js__WEBPACK_IMPORTED_MODULE_3__.SUPPORTED_RESOURCES.includes(resource)) {
+    if (!_constants_js__WEBPACK_IMPORTED_MODULE_4__.SUPPORTED_RESOURCES.includes(resource)) {
         throw new Error(`Unsupported resource: ${resource}`);
     }
-    const normalizedTarget = target && target.trim() ? target.trim() : '*';
+    const normalizedTarget = normalizePermissionTarget(resource, target);
     return {
         key: `${resource}:${normalizedTarget}`,
         resource,
         target: normalizedTarget,
-        riskLevel: _constants_js__WEBPACK_IMPORTED_MODULE_3__.RESOURCE_RISK[resource],
+        riskLevel: resource === 'http.fetch' && isRestrictedHttpFetchTarget(normalizedTarget)
+            ? 'high'
+            : _constants_js__WEBPACK_IMPORTED_MODULE_4__.RESOURCE_RISK[resource],
     };
 }
 function asErrorMessage(error) {
@@ -4983,6 +5193,12 @@ function asErrorMessage(error) {
         return error.message;
     }
     return String(error);
+}
+function stripTrailingDot(value) {
+    return value.replace(/\.+$/, '');
+}
+function looksLikeAbsoluteUrl(value) {
+    return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
 }
 
 

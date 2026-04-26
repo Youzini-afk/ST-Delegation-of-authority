@@ -96,6 +96,12 @@ function getDefaultReason(resource: PermissionResource): string {
     if (resource === 'trivium.private') {
         return '该扩展请求访问它自己的私有记忆数据库，用于存储和检索长期语义记忆、向量和图谱关系。';
     }
+    if (resource === 'http.fetch') {
+        return '该扩展请求访问外部网络地址。平台会默认阻止本机、私网和不安全重定向目标。';
+    }
+    if (resource === 'jobs.background') {
+        return '该扩展请求在服务端创建后台任务，用于异步执行较慢或批量的工作流。';
+    }
     return '该扩展请求使用一项受治理的服务端能力。';
 }
 

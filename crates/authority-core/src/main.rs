@@ -1,7 +1,10 @@
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Json;
 use axum::extract::Request;
@@ -19,10 +22,13 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::io::Read;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
@@ -56,20 +62,33 @@ const MAX_JOB_ATTEMPTS: i64 = 5;
 const MAX_JOB_TIMEOUT_MS: i64 = 5 * 60 * 1000;
 const JOB_RETRY_BACKOFF_BASE_MS: u64 = 250;
 const JOB_RETRY_BACKOFF_MAX_MS: u64 = 5_000;
+const MAX_HTTP_REDIRECTS: usize = 5;
+const SLOW_SQL_LOG_MS: u128 = 250;
+const SLOW_TRIVIUM_LOG_MS: u128 = 250;
+const SLOW_JOB_LOG_MS: u128 = 1_000;
+
+#[cfg(test)]
+static HTTP_FETCH_ALLOW_LOCAL_TARGETS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static HTTP_FETCH_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 struct RuntimeState {
     job_controls: Mutex<HashMap<String, Arc<AtomicBool>>>,
     job_queue: JobQueue,
     queued_job_count: AtomicU64,
+    queued_request_count: AtomicU64,
     request_count: AtomicU64,
     error_count: AtomicU64,
     current_concurrency: AtomicU64,
     concurrency_semaphore: Semaphore,
+    last_error: Mutex<Option<String>>,
 }
 
 struct Config {
     token: String,
     version: String,
+    build_hash: Option<String>,
+    platform: String,
     api_version: String,
     started_at: String,
     runtime: Arc<RuntimeState>,
@@ -105,6 +124,22 @@ impl IntoResponse for ApiError {
     }
 }
 
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CursorPageRequest {
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CursorPageInfo {
+    next_cursor: Option<String>,
+    limit: usize,
+    has_more: bool,
+    total_count: usize,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SqlRequest {
@@ -112,6 +147,7 @@ struct SqlRequest {
     statement: String,
     #[serde(default)]
     params: Vec<JsonValue>,
+    page: Option<CursorPageRequest>,
 }
 
 #[derive(Default, Deserialize)]
@@ -159,6 +195,8 @@ struct SqlQueryResult {
     columns: Vec<String>,
     rows: Vec<JsonMap<String, JsonValue>>,
     row_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<CursorPageInfo>,
 }
 
 #[derive(Serialize)]
@@ -399,6 +437,7 @@ struct TriviumFilterWhereRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
     condition: JsonValue,
+    page: Option<CursorPageRequest>,
 }
 
 #[derive(Deserialize)]
@@ -407,6 +446,7 @@ struct TriviumQueryRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
     cypher: String,
+    page: Option<CursorPageRequest>,
 }
 
 #[derive(Deserialize)]
@@ -524,12 +564,16 @@ struct TriviumNeighborsResponse {
 #[serde(rename_all = "camelCase")]
 struct TriviumFilterWhereResponse {
     nodes: Vec<TriviumNodeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<CursorPageInfo>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TriviumQueryResponse {
     rows: Vec<HashMap<String, TriviumNodeView>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<CursorPageInfo>,
 }
 
 #[derive(Serialize)]
@@ -660,6 +704,7 @@ struct ControlAuditRecentRequest {
     user_handle: String,
     extension_id: String,
     limit: Option<usize>,
+    page: Option<CursorPageRequest>,
 }
 
 #[derive(Deserialize)]
@@ -725,6 +770,7 @@ struct ControlJobsListRequest {
     db_path: String,
     user_handle: String,
     extension_id: Option<String>,
+    page: Option<CursorPageRequest>,
 }
 
 #[derive(Deserialize)]
@@ -848,6 +894,7 @@ struct ControlEventsPollRequest {
     channel: String,
     after_id: Option<i64>,
     limit: Option<usize>,
+    page: Option<CursorPageRequest>,
 }
 
 #[derive(Deserialize)]
@@ -1157,6 +1204,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or(8173);
     let token = env::var("AUTHORITY_CORE_TOKEN").unwrap_or_default();
     let version = env::var("AUTHORITY_CORE_VERSION").unwrap_or_else(|_| String::from("0.0.0-dev"));
+    let build_hash = env::var("AUTHORITY_CORE_BUILD_HASH").ok().filter(|value| !value.trim().is_empty());
+    let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
     let api_version = env::var("AUTHORITY_CORE_API_VERSION").unwrap_or_else(|_| String::from("authority-core/v1"));
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -1166,6 +1215,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let config = Arc::new(Config {
         token,
         version,
+        build_hash,
+        platform,
         api_version,
         started_at,
         runtime,
@@ -1265,10 +1316,12 @@ fn create_runtime_state() -> Arc<RuntimeState> {
             available: Condvar::new(),
         },
         queued_job_count: AtomicU64::new(0),
+        queued_request_count: AtomicU64::new(0),
         request_count: AtomicU64::new(0),
         error_count: AtomicU64::new(0),
         current_concurrency: AtomicU64::new(0),
         concurrency_semaphore: Semaphore::new(MAX_CONCURRENCY),
+        last_error: Mutex::new(None),
     });
     spawn_job_workers(&runtime);
     runtime
@@ -1297,6 +1350,11 @@ fn enqueue_job_dispatch(runtime: &Arc<RuntimeState>, dispatch: JobDispatch) -> R
         message: String::from("internal_error: job queue lock poisoned"),
     })?;
     if state.items.len() >= MAX_JOB_QUEUE_SIZE {
+        set_runtime_last_error(runtime, "job_queue_full");
+        emit_runtime_event("warning", "job_queue_full", json!({
+            "maxJobQueueSize": MAX_JOB_QUEUE_SIZE,
+            "queuedJobCount": runtime.queued_job_count.load(Ordering::SeqCst),
+        }));
         return Err(ApiError {
             status_code: 503,
             message: String::from("job_queue_full"),
@@ -1333,6 +1391,12 @@ fn process_job_dispatch(dispatch: JobDispatch, runtime: &Arc<RuntimeState>) {
         Ok(job) => job,
         Err(error) => {
             let _ = mark_job_failed(&dispatch.db_path, &dispatch.user_handle, &dispatch.job, &error.message);
+            set_runtime_last_error(runtime, error.message.clone());
+            emit_runtime_event("error", "job_dispatch_fetch_failed", json!({
+                "jobId": dispatch.job.id,
+                "jobType": dispatch.job.job_type,
+                "message": error.message,
+            }));
             return;
         }
     };
@@ -1346,9 +1410,38 @@ fn process_job_dispatch(dispatch: JobDispatch, runtime: &Arc<RuntimeState>) {
         controls.insert(key.clone(), Arc::clone(&control));
     }
 
+    let started = Instant::now();
     let run_result = run_job_dispatch(&dispatch, Arc::clone(&control));
     if let Err(error) = run_result {
         let _ = mark_job_failed(&dispatch.db_path, &dispatch.user_handle, &dispatch.job, &error.message);
+        set_runtime_last_error(runtime, error.message.clone());
+        emit_runtime_event("error", "job_failed", json!({
+            "jobId": dispatch.job.id,
+            "jobType": dispatch.job.job_type,
+            "message": error.message,
+        }));
+    } else {
+        emit_if_slow("job_slow", started.elapsed(), SLOW_JOB_LOG_MS, json!({
+            "jobId": dispatch.job.id,
+            "jobType": dispatch.job.job_type,
+        }));
+        if started.elapsed().as_millis() >= SLOW_JOB_LOG_MS as u128 {
+            if let Ok(connection) = open_connection(&dispatch.db_path) {
+                let _ = ensure_control_schema(&connection);
+                let _ = append_control_audit_record(
+                    &connection,
+                    &dispatch.user_handle,
+                    &dispatch.job.extension_id,
+                    "warning",
+                    "Slow job",
+                    Some(json!({
+                        "jobId": dispatch.job.id,
+                        "jobType": dispatch.job.job_type,
+                        "elapsedMs": started.elapsed().as_millis() as u64,
+                    })),
+                );
+            }
+        }
     }
 
     if let Ok(mut controls) = runtime.job_controls.lock() {
@@ -1414,6 +1507,9 @@ fn fetch_job_for_dispatch(dispatch: &JobDispatch) -> Result<ControlJobRecord, Ap
 fn resolve_job_runner(job_type: &str) -> Option<JobRunner> {
     match job_type {
         "delay" => Some(run_delay_job),
+        "sql.backup" => Some(run_sql_backup_job),
+        "trivium.flush" => Some(run_trivium_flush_job),
+        "fs.import-jsonl" => Some(run_fs_import_jsonl_job),
         _ => None,
     }
 }
@@ -1423,6 +1519,8 @@ async fn health_handler(State(config): State<Arc<Config>>) -> Json<JsonValue> {
         "name": "authority-core",
         "apiVersion": config.api_version,
         "version": config.version,
+        "buildHash": config.build_hash,
+        "platform": config.platform,
         "pid": process::id(),
         "startedAt": config.started_at,
         "uptimeMs": runtime_uptime_ms(&config.started_at),
@@ -1430,9 +1528,13 @@ async fn health_handler(State(config): State<Arc<Config>>) -> Json<JsonValue> {
         "errorCount": config.runtime.error_count.load(Ordering::SeqCst),
         "activeJobCount": active_job_count(&config.runtime),
         "queuedJobCount": config.runtime.queued_job_count.load(Ordering::SeqCst),
+        "queuedRequestCount": config.runtime.queued_request_count.load(Ordering::SeqCst),
         "runtimeMode": "async",
         "maxConcurrency": MAX_CONCURRENCY,
         "currentConcurrency": config.runtime.current_concurrency.load(Ordering::SeqCst),
+        "workerCount": JOB_WORKER_CONCURRENCY,
+        "lastError": runtime_last_error(&config.runtime),
+        "jobRegistrySummary": job_registry_summary_json(),
         "jobWorkerConcurrency": JOB_WORKER_CONCURRENCY,
         "maxJobQueueSize": MAX_JOB_QUEUE_SIZE,
         "timeoutMs": REQUEST_TIMEOUT_SECS * 1000,
@@ -1458,6 +1560,10 @@ async fn auth_middleware(
             .and_then(|value| value.to_str().ok());
         if token_header != Some(config.token.as_str()) {
             config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
+            set_runtime_last_error(&config.runtime, "unauthorized");
+            emit_runtime_event("error", "auth_failed", json!({
+                "reason": "unauthorized",
+            }));
             return Err(ApiError { status_code: 401, message: String::from("unauthorized") });
         }
     }
@@ -1470,9 +1576,17 @@ async fn concurrency_guard(
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    config.runtime.queued_request_count.fetch_add(1, Ordering::SeqCst);
     let permit = config.runtime.concurrency_semaphore.try_acquire();
+    config.runtime.queued_request_count.fetch_sub(1, Ordering::SeqCst);
     if permit.is_err() {
         config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
+        set_runtime_last_error(&config.runtime, "concurrency_limit_exceeded");
+        emit_runtime_event("warning", "queue_full", json!({
+            "reason": "concurrency_limit_exceeded",
+            "maxConcurrency": MAX_CONCURRENCY,
+            "currentConcurrency": config.runtime.current_concurrency.load(Ordering::SeqCst),
+        }));
         return Err(ApiError { status_code: 503, message: String::from("concurrency_limit_exceeded") });
     }
     config.runtime.current_concurrency.fetch_add(1, Ordering::SeqCst);
@@ -1570,8 +1684,15 @@ where
 }
 
 fn handle_sql_query(request: SqlRequest) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
     let connection = open_connection(&request.db_path)?;
-    let result = run_query(&connection, &request.statement, &request.params)?;
+    let mut result = run_query(&connection, &request.statement, &request.params)?;
+    let (rows, page) = slice_vec_page(result.rows, request.page.as_ref(), 100, 1000)?;
+    result.rows = rows;
+    result.page = page;
+    emit_if_slow("sql_query_slow", started.elapsed(), SLOW_SQL_LOG_MS, json!({
+        "statement": request.statement,
+    }));
     Ok(serde_json::to_value(result).expect("sql query result should serialize"))
 }
 
@@ -1981,6 +2102,7 @@ fn handle_trivium_neighbors(request: TriviumNeighborsRequest) -> Result<JsonValu
 }
 
 fn handle_trivium_search(request: TriviumSearchRequest) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
     let TriviumSearchRequest { open, vector, top_k, expand_depth, min_score } = request;
     let top_k = top_k.unwrap_or(5);
     let expand_depth = expand_depth.unwrap_or(0);
@@ -1991,10 +2113,17 @@ fn handle_trivium_search(request: TriviumSearchRequest) -> Result<JsonValue, Api
         TriviumDTypeTag::U64 => open_trivium_u64(&open)?.search(&vector.iter().map(|&value| value as u64).collect::<Vec<_>>(), top_k, expand_depth, min_score).map_err(to_trivium_error)?,
     };
     let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
+    emit_if_slow("trivium_slow_search", started.elapsed(), SLOW_TRIVIUM_LOG_MS, json!({
+        "dbPath": open.db_path,
+        "mode": "vector",
+        "topK": top_k,
+        "hitCount": hits.len(),
+    }));
     Ok(json!({ "hits": hits }))
 }
 
 fn handle_trivium_search_advanced(request: TriviumSearchAdvancedRequest) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
     if let Some(value) = request.query_text.as_deref() {
         validate_non_empty("queryText", value)?;
     }
@@ -2013,10 +2142,17 @@ fn handle_trivium_search_advanced(request: TriviumSearchAdvancedRequest) -> Resu
             .map_err(to_trivium_error)?,
     };
     let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
+    emit_if_slow("trivium_slow_search", started.elapsed(), SLOW_TRIVIUM_LOG_MS, json!({
+        "dbPath": request.open.db_path,
+        "mode": "advanced",
+        "topK": request.top_k.unwrap_or(5),
+        "hitCount": hits.len(),
+    }));
     Ok(json!({ "hits": hits }))
 }
 
 fn handle_trivium_search_hybrid(request: TriviumSearchHybridRequest) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
     validate_non_empty("queryText", &request.query_text)?;
 
     let config = build_trivium_hybrid_search_config(&request)?;
@@ -2032,6 +2168,12 @@ fn handle_trivium_search_hybrid(request: TriviumSearchHybridRequest) -> Result<J
             .map_err(to_trivium_error)?,
     };
     let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
+    emit_if_slow("trivium_slow_search", started.elapsed(), SLOW_TRIVIUM_LOG_MS, json!({
+        "dbPath": request.open.db_path,
+        "mode": "hybrid",
+        "topK": request.top_k.unwrap_or(5),
+        "hitCount": hits.len(),
+    }));
     Ok(json!({ "hits": hits }))
 }
 
@@ -2054,8 +2196,9 @@ fn handle_trivium_filter_where(request: TriviumFilterWhereRequest) -> Result<Jso
             .map(|node| map_trivium_node(node, |value| value as f64))
             .collect(),
     };
+    let (nodes, page) = slice_vec_page(nodes, request.page.as_ref(), 100, 1000)?;
 
-    Ok(serde_json::to_value(TriviumFilterWhereResponse { nodes }).expect("trivium filter where response should serialize"))
+    Ok(serde_json::to_value(TriviumFilterWhereResponse { nodes, page }).expect("trivium filter where response should serialize"))
 }
 
 fn handle_trivium_query(request: TriviumQueryRequest) -> Result<JsonValue, ApiError> {
@@ -2075,8 +2218,9 @@ fn handle_trivium_query(request: TriviumQueryRequest) -> Result<JsonValue, ApiEr
             |value| value as f64,
         ),
     };
+    let (rows, page) = slice_vec_page(rows, request.page.as_ref(), 100, 1000)?;
 
-    Ok(serde_json::to_value(TriviumQueryResponse { rows }).expect("trivium query response should serialize"))
+    Ok(serde_json::to_value(TriviumQueryResponse { rows, page }).expect("trivium query response should serialize"))
 }
 
 fn handle_trivium_index_text(request: TriviumIndexTextRequest) -> Result<JsonValue, ApiError> {
@@ -2370,22 +2514,7 @@ fn handle_control_audit_log(request: ControlAuditLogRequest) -> Result<JsonValue
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let details = match &request.record.details {
-        Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
-        None => None,
-    };
-    connection.execute(
-        "INSERT INTO authority_audit (user_handle, timestamp, kind, extension_id, message, details)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            &request.user_handle,
-            &request.record.timestamp,
-            &request.record.kind,
-            &request.record.extension_id,
-            &request.record.message,
-            &details,
-        ],
-    ).map_err(to_sql_error)?;
+    insert_control_audit_record(&connection, &request.user_handle, &request.record)?;
     Ok(json!({ "ok": true }))
 }
 
@@ -2395,14 +2524,50 @@ fn handle_control_audit_recent(request: ControlAuditRecentRequest) -> Result<Jso
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let limit = request.limit.unwrap_or(50).clamp(1, 500);
-    let permissions = fetch_recent_audit_records(&connection, &request.user_handle, &request.extension_id, "permission", limit)?;
-    let usage = fetch_recent_audit_records(&connection, &request.user_handle, &request.extension_id, "usage", limit)?;
-    let errors = fetch_recent_audit_records(&connection, &request.user_handle, &request.extension_id, "error", limit)?;
+    let (audit_offset, audit_limit) = normalize_offset_page_request(request.page.as_ref(), request.limit, 50, 500)?;
+    let (permissions, permissions_page) = fetch_recent_audit_records_page(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        "permission",
+        audit_offset,
+        audit_limit,
+    )?;
+    let (usage, usage_page) = fetch_recent_audit_records_page(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        "usage",
+        audit_offset,
+        audit_limit,
+    )?;
+    let (errors, errors_page) = fetch_recent_audit_records_page(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        "error",
+        audit_offset,
+        audit_limit,
+    )?;
+    let (warnings, warnings_page) = fetch_recent_audit_records_page(
+        &connection,
+        &request.user_handle,
+        &request.extension_id,
+        "warning",
+        audit_offset,
+        audit_limit,
+    )?;
     Ok(json!({
         "permissions": permissions,
         "usage": usage,
         "errors": errors,
+        "warnings": warnings,
+        "pages": {
+            "permissions": permissions_page,
+            "usage": usage_page,
+            "errors": errors_page,
+            "warnings": warnings_page,
+        }
     }))
 }
 
@@ -2539,8 +2704,15 @@ fn handle_control_jobs_list(request: ControlJobsListRequest) -> Result<JsonValue
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    let jobs = fetch_control_jobs(&connection, &request.user_handle, request.extension_id.as_deref())?;
-    Ok(json!({ "jobs": jobs }))
+    let (job_offset, job_limit) = normalize_offset_page_request(request.page.as_ref(), None, 50, 500)?;
+    let (jobs, page) = fetch_control_jobs_page(
+        &connection,
+        &request.user_handle,
+        request.extension_id.as_deref(),
+        job_offset,
+        job_limit,
+    )?;
+    Ok(json!({ "jobs": jobs, "page": page }))
 }
 
 fn handle_control_job_get(request: ControlJobGetRequest) -> Result<JsonValue, ApiError> {
@@ -3290,6 +3462,18 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
             "authority.job",
             Some(&serde_json::to_value(&rejected).map_err(to_json_error)?),
         )?;
+        append_control_audit_record(
+            &connection,
+            &request.user_handle,
+            &request.extension_id,
+            "warning",
+            "Job queue full",
+            Some(json!({
+                "jobId": rejected.id,
+                "jobType": rejected.job_type,
+                "message": error.message,
+            })),
+        )?;
         return Err(error);
     }
 
@@ -3353,14 +3537,105 @@ fn handle_control_events_poll(request: ControlEventsPollRequest) -> Result<JsonV
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
-    if let Some(after_id) = request.after_id {
-        let limit = request.limit.unwrap_or(50).min(MAX_EVENT_POLL_LIMIT);
-        let events = fetch_control_events(&connection, &request.user_handle, &request.channel, after_id, limit)?;
+    let limit = request
+        .page
+        .as_ref()
+        .and_then(|page| page.limit)
+        .or(request.limit)
+        .unwrap_or(50)
+        .clamp(1, MAX_EVENT_POLL_LIMIT);
+    let after_id = match request.after_id {
+        Some(value) => Some(value),
+        None => parse_event_cursor(request.page.as_ref().and_then(|page| page.cursor.as_deref()))?,
+    };
+    if let Some(after_id) = after_id {
+        let total_count = count_control_events(&connection, &request.user_handle, &request.channel)?;
+        let (events, has_more) = fetch_control_events_page(
+            &connection,
+            &request.user_handle,
+            &request.channel,
+            after_id,
+            limit,
+        )?;
         let cursor = events.last().map(|event| event.id).unwrap_or(after_id);
-        Ok(json!({ "events": events, "cursor": cursor }))
+        let page = CursorPageInfo {
+            next_cursor: if has_more { Some(cursor.to_string()) } else { None },
+            limit,
+            has_more,
+            total_count,
+        };
+        Ok(json!({ "events": events, "cursor": cursor, "page": page }))
     } else {
         let cursor = fetch_latest_control_event_id(&connection, &request.user_handle, &request.channel)?;
-        Ok(json!({ "events": [], "cursor": cursor }))
+        let page = CursorPageInfo {
+            next_cursor: None,
+            limit,
+            has_more: false,
+            total_count: count_control_events(&connection, &request.user_handle, &request.channel)?,
+        };
+        Ok(json!({ "events": [], "cursor": cursor, "page": page }))
+    }
+}
+
+fn normalize_offset_page_request(
+    page: Option<&CursorPageRequest>,
+    legacy_limit: Option<usize>,
+    default_limit: usize,
+    max_limit: usize,
+) -> Result<(usize, usize), ApiError> {
+    let limit = page
+        .and_then(|value| value.limit)
+        .or(legacy_limit)
+        .unwrap_or(default_limit)
+        .clamp(1, max_limit);
+    let offset = parse_offset_cursor(page.and_then(|value| value.cursor.as_deref()))?;
+    Ok((offset, limit))
+}
+
+fn parse_offset_cursor(cursor: Option<&str>) -> Result<usize, ApiError> {
+    match cursor {
+        Some(value) if !value.is_empty() => value.parse::<usize>().map_err(|_| ApiError {
+            status_code: 400,
+            message: String::from("invalid_page_cursor"),
+        }),
+        _ => Ok(0),
+    }
+}
+
+fn parse_event_cursor(cursor: Option<&str>) -> Result<Option<i64>, ApiError> {
+    match cursor {
+        Some(value) if !value.is_empty() => value.parse::<i64>().map(Some).map_err(|_| ApiError {
+            status_code: 400,
+            message: String::from("invalid_event_cursor"),
+        }),
+        _ => Ok(None),
+    }
+}
+
+fn build_offset_page_info(offset: usize, limit: usize, total_count: usize) -> CursorPageInfo {
+    let next_offset = offset.saturating_add(limit);
+    CursorPageInfo {
+        next_cursor: if next_offset < total_count { Some(next_offset.to_string()) } else { None },
+        limit,
+        has_more: next_offset < total_count,
+        total_count,
+    }
+}
+
+fn slice_vec_page<T>(
+    items: Vec<T>,
+    page: Option<&CursorPageRequest>,
+    default_limit: usize,
+    max_limit: usize,
+) -> Result<(Vec<T>, Option<CursorPageInfo>), ApiError> {
+    match page {
+        Some(page_request) => {
+            let total_count = items.len();
+            let (offset, limit) = normalize_offset_page_request(Some(page_request), None, default_limit, max_limit)?;
+            let paged = items.into_iter().skip(offset).take(limit).collect();
+            Ok((paged, Some(build_offset_page_info(offset, limit, total_count))))
+        }
+        None => Ok((items, None)),
     }
 }
 
@@ -3428,6 +3703,7 @@ fn run_query(connection: &Connection, statement_text: &str, params: &[JsonValue]
         columns,
         row_count: result_rows.len(),
         rows: result_rows,
+        page: None,
     })
 }
 
@@ -3984,7 +4260,7 @@ fn fetch_control_session(connection: &Connection, user_handle: &str, session_tok
 
 fn control_extension_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlExtensionRecord> {
     let declared_permissions_text: String = row.get(6)?;
-    let declared_permissions = serde_json::from_str(&declared_permissions_text).unwrap_or_else(|_| json!({}));
+    let declared_permissions = serde_json::from_str(&declared_permissions_text).unwrap_or_default();
     Ok(ControlExtensionRecord {
         id: row.get(0)?,
         install_type: row.get(1)?,
@@ -4019,24 +4295,6 @@ fn control_session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Control
     })
 }
 
-fn fetch_recent_audit_records(connection: &Connection, user_handle: &str, extension_id: &str, kind: &str, limit: usize) -> Result<Vec<ControlAuditRecord>, ApiError> {
-    let mut statement = connection.prepare(
-        "SELECT timestamp, kind, extension_id, message, details
-         FROM authority_audit
-         WHERE user_handle = ?1 AND extension_id = ?2 AND kind = ?3
-         ORDER BY timestamp DESC, id DESC
-         LIMIT ?4",
-    ).map_err(to_sql_error)?;
-    let rows = statement
-        .query_map(params![user_handle, extension_id, kind, limit as i64], control_audit_from_row)
-        .map_err(to_sql_error)?;
-    let mut records = Vec::new();
-    for row in rows {
-        records.push(row.map_err(to_sql_error)?);
-    }
-    Ok(records)
-}
-
 fn control_audit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlAuditRecord> {
     let details_text: Option<String> = row.get(4)?;
     let details = details_text.and_then(|value| serde_json::from_str(&value).ok());
@@ -4047,6 +4305,53 @@ fn control_audit_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlAu
         message: row.get(3)?,
         details,
     })
+}
+
+fn fetch_recent_audit_records_page(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+    kind: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<ControlAuditRecord>, CursorPageInfo), ApiError> {
+    let total_count = count_recent_audit_records(connection, user_handle, extension_id, kind)?;
+    let mut statement = connection.prepare(
+        "SELECT timestamp, kind, extension_id, message, details
+         FROM authority_audit
+         WHERE user_handle = ?1 AND extension_id = ?2 AND kind = ?3
+         ORDER BY timestamp DESC, id DESC
+         LIMIT ?4 OFFSET ?5",
+    ).map_err(to_sql_error)?;
+    let rows = statement
+        .query_map(
+            params![user_handle, extension_id, kind, limit as i64, offset as i64],
+            control_audit_from_row,
+        )
+        .map_err(to_sql_error)?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(to_sql_error)?);
+    }
+    Ok((records, build_offset_page_info(offset, limit, total_count)))
+}
+
+fn count_recent_audit_records(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+    kind: &str,
+) -> Result<usize, ApiError> {
+    let total = connection
+        .query_row(
+            "SELECT COUNT(*)
+             FROM authority_audit
+             WHERE user_handle = ?1 AND extension_id = ?2 AND kind = ?3",
+            params![user_handle, extension_id, kind],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(to_sql_error)?;
+    Ok(total.max(0) as usize)
 }
 
 fn fetch_control_grants(connection: &Connection, user_handle: &str, extension_id: &str) -> Result<Vec<ControlGrantRecord>, ApiError> {
@@ -4134,17 +4439,64 @@ fn default_control_policies_document() -> ControlPoliciesDocument {
     }
 }
 
-fn fetch_control_jobs(connection: &Connection, user_handle: &str, extension_id: Option<&str>) -> Result<Vec<ControlJobRecord>, ApiError> {
+fn insert_control_audit_record(connection: &Connection, user_handle: &str, record: &ControlAuditRecordInput) -> Result<(), ApiError> {
+    let details = match &record.details {
+        Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
+        None => None,
+    };
+    connection.execute(
+        "INSERT INTO authority_audit (user_handle, timestamp, kind, extension_id, message, details)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            user_handle,
+            &record.timestamp,
+            &record.kind,
+            &record.extension_id,
+            &record.message,
+            &details,
+        ],
+    ).map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn append_control_audit_record(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: &str,
+    kind: &str,
+    message: &str,
+    details: Option<JsonValue>,
+) -> Result<(), ApiError> {
+    let record = ControlAuditRecordInput {
+        timestamp: current_timestamp_iso(),
+        kind: kind.to_string(),
+        extension_id: extension_id.to_string(),
+        message: message.to_string(),
+        details,
+    };
+    validate_audit_record(&record)?;
+    insert_control_audit_record(connection, user_handle, &record)
+}
+
+fn fetch_control_jobs_page(
+    connection: &Connection,
+    user_handle: &str,
+    extension_id: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<ControlJobRecord>, CursorPageInfo), ApiError> {
+    let total_count = count_control_jobs(connection, user_handle, extension_id)?;
     let mut jobs = Vec::new();
     if let Some(extension_id) = extension_id {
         let mut statement = connection.prepare(
             "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
              FROM authority_jobs
              WHERE user_handle = ?1 AND extension_id = ?2
-             ORDER BY updated_at DESC, id DESC",
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?3 OFFSET ?4",
         ).map_err(to_sql_error)?;
         let rows = statement
-            .query_map(params![user_handle, extension_id], control_job_from_row)
+            .query_map(params![user_handle, extension_id, limit as i64, offset as i64], control_job_from_row)
             .map_err(to_sql_error)?;
         for row in rows {
             jobs.push(row.map_err(to_sql_error)?);
@@ -4154,16 +4506,38 @@ fn fetch_control_jobs(connection: &Connection, user_handle: &str, extension_id: 
             "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
              FROM authority_jobs
              WHERE user_handle = ?1
-             ORDER BY updated_at DESC, id DESC",
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?2 OFFSET ?3",
         ).map_err(to_sql_error)?;
         let rows = statement
-            .query_map(params![user_handle], control_job_from_row)
+            .query_map(params![user_handle, limit as i64, offset as i64], control_job_from_row)
             .map_err(to_sql_error)?;
         for row in rows {
             jobs.push(row.map_err(to_sql_error)?);
         }
     }
-    Ok(jobs)
+    Ok((jobs, build_offset_page_info(offset, limit, total_count)))
+}
+
+fn count_control_jobs(connection: &Connection, user_handle: &str, extension_id: Option<&str>) -> Result<usize, ApiError> {
+    let total = if let Some(extension_id) = extension_id {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM authority_jobs WHERE user_handle = ?1 AND extension_id = ?2",
+                params![user_handle, extension_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(to_sql_error)?
+    } else {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM authority_jobs WHERE user_handle = ?1",
+                params![user_handle],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(to_sql_error)?
+    };
+    Ok(total.max(0) as usize)
 }
 
 fn fetch_control_job(connection: &Connection, user_handle: &str, job_id: &str) -> Result<Option<ControlJobRecord>, ApiError> {
@@ -4322,7 +4696,13 @@ fn publish_control_event(
     Ok(())
 }
 
-fn fetch_control_events(connection: &Connection, user_handle: &str, channel: &str, after_id: i64, limit: usize) -> Result<Vec<ControlEventRecord>, ApiError> {
+fn fetch_control_events_page(
+    connection: &Connection,
+    user_handle: &str,
+    channel: &str,
+    after_id: i64,
+    limit: usize,
+) -> Result<(Vec<ControlEventRecord>, bool), ApiError> {
     let mut statement = connection.prepare(
         "SELECT id, created_at, extension_id, channel, name, payload
          FROM authority_events
@@ -4331,13 +4711,28 @@ fn fetch_control_events(connection: &Connection, user_handle: &str, channel: &st
          LIMIT ?4",
     ).map_err(to_sql_error)?;
     let rows = statement
-        .query_map(params![user_handle, channel, after_id, limit as i64], control_event_from_row)
+        .query_map(params![user_handle, channel, after_id, (limit.saturating_add(1)) as i64], control_event_from_row)
         .map_err(to_sql_error)?;
     let mut records = Vec::new();
     for row in rows {
         records.push(row.map_err(to_sql_error)?);
     }
-    Ok(records)
+    let has_more = records.len() > limit;
+    if has_more {
+        records.truncate(limit);
+    }
+    Ok((records, has_more))
+}
+
+fn count_control_events(connection: &Connection, user_handle: &str, channel: &str) -> Result<usize, ApiError> {
+    let total = connection
+        .query_row(
+            "SELECT COUNT(*) FROM authority_events WHERE user_handle = ?1 AND channel = ?2",
+            params![user_handle, channel],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(to_sql_error)?;
+    Ok(total.max(0) as usize)
 }
 
 fn fetch_latest_control_event_id(connection: &Connection, user_handle: &str, channel: &str) -> Result<i64, ApiError> {
@@ -4433,32 +4828,16 @@ fn run_delay_job(
     ensure_control_schema(&connection)?;
     let duration_ms = job_duration_ms(job);
     let started = Instant::now();
-    let mut running = fetch_control_job(&connection, user_handle, &job.id)?
-        .unwrap_or_else(|| job.clone());
+    let running = mark_job_running(
+        &connection,
+        user_handle,
+        job,
+        attempt,
+        format!("Running delay job for {}ms (attempt {})", duration_ms, attempt),
+    )?;
     if running.status == "cancelled" {
         return Ok(());
     }
-
-    let running_timestamp = current_timestamp_iso();
-    running.status = String::from("running");
-    running.updated_at = running_timestamp.clone();
-    if running.started_at.is_none() {
-        running.started_at = Some(running_timestamp);
-    }
-    running.finished_at = None;
-    running.attempt = attempt;
-    running.error = None;
-    running.summary = Some(format!("Running delay job for {}ms (attempt {})", duration_ms, attempt));
-    save_control_job_record(&connection, user_handle, &running)?;
-    let running_payload = serde_json::to_value(&running).map_err(to_json_error)?;
-    publish_control_event(
-        &connection,
-        user_handle,
-        Some(&running.extension_id),
-        &running.channel,
-        "authority.job",
-        Some(&running_payload),
-    )?;
 
     if job_should_fail_attempt(&running, attempt) {
         return Err(ApiError {
@@ -4478,14 +4857,7 @@ fn run_delay_job(
         }
 
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        if let Some(timeout_ms) = timeout_ms {
-            if elapsed_ms >= timeout_ms {
-                return Err(ApiError {
-                    status_code: 408,
-                    message: String::from("job_timeout"),
-                });
-            }
-        }
+        ensure_job_within_timeout(&started, timeout_ms)?;
         let progress = if duration_ms == 0 {
             100_i64
         } else {
@@ -4494,27 +4866,15 @@ fn run_delay_job(
 
         if progress >= 100 {
             let message = job_message(job);
-            let completed = ControlJobRecord {
-                status: String::from("completed"),
-                progress: 100,
-                updated_at: current_timestamp_iso(),
-                finished_at: Some(current_timestamp_iso()),
-                summary: Some(message.clone()),
-                result: Some(json!({
-                    "elapsedMs": duration_ms,
-                    "message": message,
-                })),
-                ..current
-            };
-            save_control_job_record(&connection, user_handle, &completed)?;
-            let payload = serde_json::to_value(&completed).map_err(to_json_error)?;
-            publish_control_event(
+            mark_job_completed(
                 &connection,
                 user_handle,
-                Some(&completed.extension_id),
-                &completed.channel,
-                "authority.job",
-                Some(&payload),
+                current,
+                message.clone(),
+                json!({
+                    "elapsedMs": duration_ms,
+                    "message": message,
+                }),
             )?;
             return Ok(());
         }
@@ -4535,6 +4895,281 @@ fn run_delay_job(
             Some(&payload),
         )?;
     }
+}
+
+fn run_sql_backup_job(
+    db_path: &str,
+    user_handle: &str,
+    job: &ControlJobRecord,
+    control: Arc<AtomicBool>,
+    timeout_ms: Option<u64>,
+    attempt: i64,
+) -> Result<(), ApiError> {
+    let connection = open_connection(db_path)?;
+    ensure_control_schema(&connection)?;
+    let database = job_database_name(job);
+    let running = mark_job_running(
+        &connection,
+        user_handle,
+        job,
+        attempt,
+        format!("Backing up SQL database {} (attempt {})", database, attempt),
+    )?;
+    if running.status == "cancelled" || control.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let started = Instant::now();
+    let source_path = private_sql_database_path_from_control_db(db_path, &running.extension_id, &database)?;
+    if !source_path.exists() {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("sql_backup_source_missing: {database}"),
+        });
+    }
+    let backup_dir = source_path.parent().unwrap_or_else(|| Path::new(db_path)).join("__backup__");
+    fs::create_dir_all(&backup_dir).map_err(to_internal_error)?;
+    let target_name = job_payload_string(job, "targetName")
+        .unwrap_or_else(|| format!("{}-backup-{}", database, sanitize_file_segment(&current_timestamp_iso())));
+    let target_file_name = if target_name.ends_with(".sqlite") {
+        sanitize_file_segment(&target_name)
+    } else {
+        format!("{}.sqlite", sanitize_file_segment(&target_name))
+    };
+    let target_path = backup_dir.join(target_file_name);
+    fs::copy(&source_path, &target_path).map_err(to_internal_error)?;
+    ensure_job_within_timeout(&started, timeout_ms)?;
+    if control.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let current = match fetch_control_job(&connection, user_handle, &job.id)? {
+        Some(current) if current.status != "cancelled" => current,
+        _ => return Ok(()),
+    };
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    mark_job_completed(
+        &connection,
+        user_handle,
+        current,
+        String::from("SQL backup completed"),
+        json!({
+            "database": database,
+            "backupPath": target_path.to_string_lossy(),
+            "sizeBytes": metadata.len(),
+        }),
+    )
+}
+
+fn run_trivium_flush_job(
+    db_path: &str,
+    user_handle: &str,
+    job: &ControlJobRecord,
+    control: Arc<AtomicBool>,
+    timeout_ms: Option<u64>,
+    attempt: i64,
+) -> Result<(), ApiError> {
+    let connection = open_connection(db_path)?;
+    ensure_control_schema(&connection)?;
+    let database = job_database_name(job);
+    let running = mark_job_running(
+        &connection,
+        user_handle,
+        job,
+        attempt,
+        format!("Flushing Trivium database {} (attempt {})", database, attempt),
+    )?;
+    if running.status == "cancelled" || control.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let started = Instant::now();
+    let request = TriviumFlushRequest {
+        open: TriviumOpenRequest {
+            db_path: private_trivium_database_path_from_control_db(db_path, &running.extension_id, &database)?
+                .to_string_lossy()
+                .into_owned(),
+            dim: None,
+            dtype: job_payload_string(job, "dtype"),
+            sync_mode: job_payload_string(job, "syncMode"),
+            storage_mode: job_payload_string(job, "storageMode"),
+        },
+    };
+    handle_trivium_flush(request)?;
+    ensure_job_within_timeout(&started, timeout_ms)?;
+    if control.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let current = match fetch_control_job(&connection, user_handle, &job.id)? {
+        Some(current) if current.status != "cancelled" => current,
+        _ => return Ok(()),
+    };
+    mark_job_completed(
+        &connection,
+        user_handle,
+        current,
+        String::from("Trivium flush completed"),
+        json!({
+            "database": database,
+        }),
+    )
+}
+
+fn run_fs_import_jsonl_job(
+    db_path: &str,
+    user_handle: &str,
+    job: &ControlJobRecord,
+    control: Arc<AtomicBool>,
+    timeout_ms: Option<u64>,
+    attempt: i64,
+) -> Result<(), ApiError> {
+    let connection = open_connection(db_path)?;
+    ensure_control_schema(&connection)?;
+    let blob_id = require_job_payload_string(job, "blobId")?;
+    let target_path_value = require_job_payload_string(job, "targetPath")?;
+    let running = mark_job_running(
+        &connection,
+        user_handle,
+        job,
+        attempt,
+        format!("Importing JSONL into {} (attempt {})", target_path_value, attempt),
+    )?;
+    if running.status == "cancelled" || control.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let started = Instant::now();
+    let blob_dir = authority_blob_dir_from_control_db(db_path)?;
+    let source_path = blob_binary_path(&blob_dir.to_string_lossy(), &running.extension_id, &blob_id);
+    if !source_path.exists() {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("fs_import_jsonl_blob_missing: {blob_id}"),
+        });
+    }
+    let bytes = fs::read(&source_path).map_err(to_internal_error)?;
+    let content = String::from_utf8(bytes).map_err(|_| ApiError {
+        status_code: 400,
+        message: String::from("fs_import_jsonl_requires_utf8"),
+    })?;
+    let mut line_count = 0usize;
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        serde_json::from_str::<JsonValue>(line).map_err(|error| ApiError {
+            status_code: 400,
+            message: format!("invalid_jsonl_line_{}: {}", index + 1, error),
+        })?;
+        line_count += 1;
+    }
+
+    let files_root = private_files_root_dir_from_control_db(db_path, &running.extension_id)?;
+    fs::create_dir_all(&files_root).map_err(to_internal_error)?;
+    let (target_path, virtual_path) = resolve_private_path(&files_root, &target_path_value)?;
+    ensure_private_path_components_safe(&files_root, &virtual_path)?;
+    if virtual_path == "/" {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("targetPath must not resolve to root"),
+        });
+    }
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent).map_err(to_internal_error)?;
+    }
+    fs::write(&target_path, content.as_bytes()).map_err(to_internal_error)?;
+    ensure_job_within_timeout(&started, timeout_ms)?;
+    if control.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let current = match fetch_control_job(&connection, user_handle, &job.id)? {
+        Some(current) if current.status != "cancelled" => current,
+        _ => return Ok(()),
+    };
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    let entry = build_private_file_entry(&files_root, &target_path, &metadata)?;
+    mark_job_completed(
+        &connection,
+        user_handle,
+        current,
+        String::from("JSONL import completed"),
+        json!({
+            "blobId": blob_id,
+            "targetPath": virtual_path,
+            "lineCount": line_count,
+            "entry": entry,
+        }),
+    )
+}
+
+fn mark_job_running(
+    connection: &Connection,
+    user_handle: &str,
+    job: &ControlJobRecord,
+    attempt: i64,
+    summary: String,
+) -> Result<ControlJobRecord, ApiError> {
+    let mut running = fetch_control_job(connection, user_handle, &job.id)?
+        .unwrap_or_else(|| job.clone());
+    if running.status == "cancelled" {
+        return Ok(running);
+    }
+    let running_timestamp = current_timestamp_iso();
+    running.status = String::from("running");
+    running.updated_at = running_timestamp.clone();
+    if running.started_at.is_none() {
+        running.started_at = Some(running_timestamp);
+    }
+    running.finished_at = None;
+    running.attempt = attempt;
+    running.error = None;
+    running.summary = Some(summary);
+    save_control_job_record(connection, user_handle, &running)?;
+    publish_job_record(connection, user_handle, &running)?;
+    Ok(running)
+}
+
+fn mark_job_completed(
+    connection: &Connection,
+    user_handle: &str,
+    current: ControlJobRecord,
+    summary: String,
+    result: JsonValue,
+) -> Result<(), ApiError> {
+    let completed = ControlJobRecord {
+        status: String::from("completed"),
+        progress: 100,
+        updated_at: current_timestamp_iso(),
+        finished_at: Some(current_timestamp_iso()),
+        summary: Some(summary),
+        result: Some(result),
+        ..current
+    };
+    save_control_job_record(connection, user_handle, &completed)?;
+    publish_job_record(connection, user_handle, &completed)
+}
+
+fn publish_job_record(connection: &Connection, user_handle: &str, job: &ControlJobRecord) -> Result<(), ApiError> {
+    let payload = serde_json::to_value(job).map_err(to_json_error)?;
+    publish_control_event(
+        connection,
+        user_handle,
+        Some(&job.extension_id),
+        &job.channel,
+        "authority.job",
+        Some(&payload),
+    )
+}
+
+fn ensure_job_within_timeout(started: &Instant, timeout_ms: Option<u64>) -> Result<(), ApiError> {
+    if let Some(timeout_ms) = timeout_ms {
+        if started.elapsed().as_millis() as u64 >= timeout_ms {
+            return Err(ApiError {
+                status_code: 408,
+                message: String::from("job_timeout"),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn mark_job_failed(db_path: &str, user_handle: &str, job: &ControlJobRecord, message: &str) -> Result<(), ApiError> {
@@ -4560,6 +5195,25 @@ fn mark_job_failed(db_path: &str, user_handle: &str, job: &ControlJobRecord, mes
         &failed.channel,
         "authority.job",
         Some(&payload),
+    )?;
+    let (audit_kind, audit_message) = if message == "job_timeout" {
+        ("error", "Job timed out")
+    } else {
+        ("error", "Job failed")
+    };
+    append_control_audit_record(
+        &connection,
+        user_handle,
+        &failed.extension_id,
+        audit_kind,
+        audit_message,
+        Some(json!({
+            "jobId": failed.id,
+            "jobType": failed.job_type,
+            "message": message,
+            "attempt": failed.attempt,
+            "maxAttempts": failed.max_attempts,
+        })),
     )?;
     Ok(())
 }
@@ -4599,6 +5253,20 @@ fn mark_job_retry_scheduled(
         "authority.job",
         Some(&payload),
     )?;
+    append_control_audit_record(
+        &connection,
+        user_handle,
+        &queued.extension_id,
+        "warning",
+        "Job retry scheduled",
+        Some(json!({
+            "jobId": queued.id,
+            "jobType": queued.job_type,
+            "attempt": attempt,
+            "backoffMs": backoff_ms,
+            "message": message,
+        })),
+    )?;
     Ok(())
 }
 
@@ -4630,29 +5298,68 @@ fn execute_http_fetch(
     headers: Option<&HashMap<String, String>>,
     body: Option<&[u8]>,
 ) -> Result<(ureq::Response, String), ApiError> {
-    let hostname = normalize_hostname(url)?;
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(30))
-        .build();
-    let mut operation = agent.request(method.unwrap_or("GET"), url);
-    if let Some(headers) = headers {
-        for (name, value) in headers {
-            operation = operation.set(name, value);
+    let mut current_url = url.to_string();
+    let mut current_method = method.unwrap_or("GET").to_string();
+    let mut current_body = body.map(|value| value.to_vec());
+
+    for redirect_index in 0..=MAX_HTTP_REDIRECTS {
+        let parsed_url = validate_http_fetch_url(&current_url)?;
+        let hostname = normalize_hostname(parsed_url.as_str())?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(30))
+            .redirects(0)
+            .build();
+        let mut operation = agent.request(&current_method, parsed_url.as_str());
+        if let Some(headers) = headers {
+            for (name, value) in headers {
+                operation = operation.set(name, value);
+            }
         }
+
+        let response = match current_body.as_deref() {
+            Some(payload) => operation.send_bytes(payload),
+            None => operation.call(),
+        };
+
+        let response = match response {
+            Ok(response) => response,
+            Err(ureq::Error::Status(_, response)) => response,
+            Err(error) => {
+                return Err(ApiError {
+                    status_code: 400,
+                    message: format!("http_fetch_failed: {error}"),
+                });
+            }
+        };
+
+        if is_http_redirect_status(response.status()) {
+            if redirect_index >= MAX_HTTP_REDIRECTS {
+                return Err(ApiError {
+                    status_code: 400,
+                    message: String::from("http_fetch_too_many_redirects"),
+                });
+            }
+            let location = response.header("location").ok_or_else(|| ApiError {
+                status_code: 400,
+                message: String::from("http_fetch_redirect_missing_location"),
+            })?;
+            let next_url = resolve_http_fetch_redirect_url(&parsed_url, location)?;
+            let next_method = redirect_http_method(response.status(), &current_method);
+            if next_method == "GET" && !current_method.eq_ignore_ascii_case("GET") && !current_method.eq_ignore_ascii_case("HEAD") {
+                current_body = None;
+            }
+            current_method = next_method;
+            current_url = next_url.to_string();
+            continue;
+        }
+
+        return Ok((response, hostname));
     }
 
-    let response = match body {
-        Some(body) => operation.send_bytes(body),
-        None => operation.call(),
-    };
-    match response {
-        Ok(response) => Ok((response, hostname)),
-        Err(ureq::Error::Status(_, response)) => Ok((response, hostname)),
-        Err(error) => Err(ApiError {
-            status_code: 400,
-            message: format!("http_fetch_failed: {error}"),
-        }),
-    }
+    Err(ApiError {
+        status_code: 400,
+        message: String::from("http_fetch_too_many_redirects"),
+    })
 }
 
 fn read_http_fetch_response(response: ureq::Response, max_bytes: usize) -> Result<FetchedHttpResponse, ApiError> {
@@ -4696,6 +5403,46 @@ fn blob_binary_path(blob_dir: &str, extension_id: &str, blob_id: &str) -> PathBu
     Path::new(blob_dir)
         .join(sanitize_file_segment(extension_id))
         .join(format!("{}.bin", sanitize_file_segment(blob_id)))
+}
+
+fn authority_base_dir_from_control_db(db_path: &str) -> Result<PathBuf, ApiError> {
+    let control_path = Path::new(db_path);
+    control_path
+        .parent()
+        .and_then(|state_dir| state_dir.parent())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| ApiError {
+            status_code: 400,
+            message: String::from("invalid_control_db_path"),
+        })
+}
+
+fn authority_blob_dir_from_control_db(db_path: &str) -> Result<PathBuf, ApiError> {
+    Ok(authority_base_dir_from_control_db(db_path)?.join("storage").join("blobs"))
+}
+
+fn private_sql_database_path_from_control_db(db_path: &str, extension_id: &str, database: &str) -> Result<PathBuf, ApiError> {
+    Ok(authority_base_dir_from_control_db(db_path)?
+        .join("sql")
+        .join("private")
+        .join(sanitize_file_segment(extension_id))
+        .join(format!("{}.sqlite", sanitize_file_segment(database))))
+}
+
+fn private_trivium_database_path_from_control_db(db_path: &str, extension_id: &str, database: &str) -> Result<PathBuf, ApiError> {
+    Ok(authority_base_dir_from_control_db(db_path)?
+        .join("storage")
+        .join("trivium")
+        .join("private")
+        .join(sanitize_file_segment(extension_id))
+        .join(format!("{}.tdb", sanitize_file_segment(database))))
+}
+
+fn private_files_root_dir_from_control_db(db_path: &str, extension_id: &str) -> Result<PathBuf, ApiError> {
+    Ok(authority_base_dir_from_control_db(db_path)?
+        .join("storage")
+        .join("files")
+        .join(sanitize_file_segment(extension_id)))
 }
 
 fn validate_source_file_path(source_path: &str) -> Result<u64, ApiError> {
@@ -4878,7 +5625,147 @@ fn normalize_hostname(value: &str) -> Result<String, ApiError> {
         status_code: 400,
         message: String::from("missing_url_hostname"),
     })?;
-    Ok(hostname.to_ascii_lowercase())
+    Ok(hostname.trim_end_matches('.').to_ascii_lowercase())
+}
+
+fn validate_http_fetch_url(value: &str) -> Result<Url, ApiError> {
+    let url = Url::parse(value).map_err(|error| ApiError {
+        status_code: 400,
+        message: format!("invalid_url: {error}"),
+    })?;
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("http_fetch_invalid_scheme: {scheme}"),
+            });
+        }
+    }
+    let hostname = url.host_str().ok_or_else(|| ApiError {
+        status_code: 400,
+        message: String::from("missing_url_hostname"),
+    })?;
+    let port = url.port_or_known_default().ok_or_else(|| ApiError {
+        status_code: 400,
+        message: String::from("http_fetch_invalid_port"),
+    })?;
+    validate_http_fetch_host(hostname, port)?;
+    Ok(url)
+}
+
+fn validate_http_fetch_host(hostname: &str, port: u16) -> Result<(), ApiError> {
+    let normalized = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("missing_url_hostname"),
+        });
+    }
+    if normalized == "localhost" || normalized.ends_with(".localhost") {
+        emit_runtime_event("warning", "ssrf_denied", json!({
+            "host": normalized,
+            "reason": "localhost",
+        }));
+        return Err(ApiError {
+            status_code: 403,
+            message: format!("http_fetch_ssrf_denied: localhost: {normalized}"),
+        });
+    }
+    if let Ok(ip) = normalized.parse::<IpAddr>() {
+        return validate_http_fetch_ip(ip, &normalized);
+    }
+
+    let mut resolved_any = false;
+    let mut seen = HashSet::new();
+    for address in (normalized.as_str(), port).to_socket_addrs().map_err(|error| ApiError {
+        status_code: 400,
+        message: format!("http_fetch_dns_resolution_failed: {error}"),
+    })? {
+        resolved_any = true;
+        let ip = address.ip();
+        if seen.insert(ip) {
+            validate_http_fetch_ip(ip, &normalized)?;
+        }
+    }
+
+    if !resolved_any {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("http_fetch_dns_resolution_failed: no_addresses_for_{normalized}"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_http_fetch_ip(ip: IpAddr, hostname: &str) -> Result<(), ApiError> {
+    if local_http_fetch_targets_allowed() {
+        return Ok(());
+    }
+    let denied_reason = match ip {
+        IpAddr::V4(value) if value.is_loopback() => Some("loopback"),
+        IpAddr::V4(value) if value.is_private() => Some("private"),
+        IpAddr::V4(value) if value.is_link_local() => Some("link_local"),
+        IpAddr::V4(value) if value.is_unspecified() => Some("unspecified"),
+        IpAddr::V4(value) if value.is_multicast() => Some("multicast"),
+        IpAddr::V6(value) if value.is_loopback() => Some("loopback"),
+        IpAddr::V6(value) if value.is_unspecified() => Some("unspecified"),
+        IpAddr::V6(value) if value.is_multicast() => Some("multicast"),
+        IpAddr::V6(value) if (value.segments()[0] & 0xffc0) == 0xfe80 => Some("link_local"),
+        IpAddr::V6(value) if (value.segments()[0] & 0xfe00) == 0xfc00 => Some("private"),
+        _ => None,
+    };
+    if let Some(reason) = denied_reason {
+        emit_runtime_event("warning", "ssrf_denied", json!({
+            "host": hostname,
+            "ip": ip.to_string(),
+            "reason": reason,
+        }));
+        return Err(ApiError {
+            status_code: 403,
+            message: format!("http_fetch_ssrf_denied: {reason}: {ip}"),
+        });
+    }
+    Ok(())
+}
+
+fn resolve_http_fetch_redirect_url(current: &Url, location: &str) -> Result<Url, ApiError> {
+    let next = current.join(location).map_err(|error| ApiError {
+        status_code: 400,
+        message: format!("http_fetch_redirect_invalid_location: {error}"),
+    })?;
+    validate_http_fetch_url(next.as_str())?;
+    Ok(next)
+}
+
+fn is_http_redirect_status(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+fn redirect_http_method(status: u16, current_method: &str) -> String {
+    match status {
+        307 | 308 => current_method.to_string(),
+        301 | 302 | 303 => {
+            if current_method.eq_ignore_ascii_case("HEAD") {
+                String::from("HEAD")
+            } else {
+                String::from("GET")
+            }
+        }
+        _ => current_method.to_string(),
+    }
+}
+
+fn local_http_fetch_targets_allowed() -> bool {
+    #[cfg(test)]
+    {
+        return HTTP_FETCH_ALLOW_LOCAL_TARGETS.load(Ordering::SeqCst);
+    }
+
+    #[cfg(not(test))]
+    {
+        false
+    }
 }
 
 fn is_textual_content_type(content_type: &str) -> bool {
@@ -4908,6 +5795,25 @@ fn job_duration_ms(job: &ControlJobRecord) -> u64 {
         .and_then(|payload| payload.get("durationMs"))
         .and_then(|value| value.as_u64().or_else(|| value.as_i64().and_then(|signed| u64::try_from(signed).ok())))
         .unwrap_or(3000)
+}
+
+fn job_database_name(job: &ControlJobRecord) -> String {
+    job_payload_string(job, "database").unwrap_or_else(|| String::from("default"))
+}
+
+fn job_payload_string(job: &ControlJobRecord, key: &str) -> Option<String> {
+    job.payload
+        .as_ref()
+        .and_then(|payload| payload.get(key))
+        .and_then(JsonValue::as_str)
+        .map(ToString::to_string)
+}
+
+fn require_job_payload_string(job: &ControlJobRecord, key: &str) -> Result<String, ApiError> {
+    job_payload_string(job, key).ok_or_else(|| ApiError {
+        status_code: 400,
+        message: format!("job payload missing string field: {key}"),
+    })
 }
 
 fn job_should_fail_attempt(job: &ControlJobRecord, attempt: i64) -> bool {
@@ -5098,7 +6004,7 @@ fn validate_audit_record(record: &ControlAuditRecordInput) -> Result<(), ApiErro
     validate_non_empty("record.extensionId", &record.extension_id)?;
     validate_non_empty("record.message", &record.message)?;
     match record.kind.as_str() {
-        "permission" | "usage" | "error" => Ok(()),
+        "permission" | "usage" | "error" | "warning" => Ok(()),
         value => Err(ApiError {
             status_code: 400,
             message: format!("unsupported audit kind: {value}"),
@@ -5229,10 +6135,56 @@ fn active_job_count(runtime: &RuntimeState) -> usize {
         .unwrap_or(0)
 }
 
+fn runtime_last_error(runtime: &RuntimeState) -> Option<String> {
+    runtime
+        .last_error
+        .lock()
+        .ok()
+        .and_then(|value| (*value).clone())
+}
+
+fn set_runtime_last_error(runtime: &RuntimeState, message: impl Into<String>) {
+    if let Ok(mut value) = runtime.last_error.lock() {
+        *value = Some(message.into());
+    }
+}
+
 fn current_timestamp_iso() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| current_timestamp_millis())
+}
+
+fn emit_runtime_event(level: &str, event: &str, details: JsonValue) {
+    let mut payload = JsonMap::new();
+    payload.insert(String::from("timestamp"), JsonValue::String(current_timestamp_iso()));
+    payload.insert(String::from("level"), JsonValue::String(level.to_string()));
+    payload.insert(String::from("event"), JsonValue::String(event.to_string()));
+    if let JsonValue::Object(fields) = details {
+        for (key, value) in fields {
+            payload.insert(key, value);
+        }
+    }
+    eprintln!("{}", JsonValue::Object(payload));
+}
+
+fn emit_if_slow(event: &str, elapsed: Duration, threshold_ms: u128, details: JsonValue) {
+    if elapsed.as_millis() < threshold_ms {
+        return;
+    }
+    let mut payload = match details {
+        JsonValue::Object(map) => map,
+        _ => JsonMap::new(),
+    };
+    payload.insert(String::from("elapsedMs"), JsonValue::Number(serde_json::Number::from(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))));
+    emit_runtime_event("warning", event, JsonValue::Object(payload));
+}
+
+fn job_registry_summary_json() -> JsonValue {
+    json!({
+        "registered": 4,
+        "jobTypes": ["delay", "sql.backup", "trivium.flush", "fs.import-jsonl"],
+    })
 }
 
 fn system_time_to_iso(value: SystemTime) -> Option<String> {
@@ -5246,6 +6198,33 @@ mod tests {
     use super::*;
     use std::io::Write as _;
     use std::net::TcpListener;
+
+    struct LocalHttpFetchGuard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for LocalHttpFetchGuard {
+        fn drop(&mut self) {
+            HTTP_FETCH_ALLOW_LOCAL_TARGETS.store(false, Ordering::SeqCst);
+        }
+    }
+
+    fn configure_local_http_fetch_targets(allow_local: bool) -> LocalHttpFetchGuard {
+        let guard = HTTP_FETCH_TEST_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("http fetch test mutex should lock");
+        HTTP_FETCH_ALLOW_LOCAL_TARGETS.store(allow_local, Ordering::SeqCst);
+        LocalHttpFetchGuard { _guard: guard }
+    }
+
+    fn allow_local_http_fetch_targets() -> LocalHttpFetchGuard {
+        configure_local_http_fetch_targets(true)
+    }
+
+    fn deny_local_http_fetch_targets() -> LocalHttpFetchGuard {
+        configure_local_http_fetch_targets(false)
+    }
 
     #[test]
     fn sql_transaction_rolls_back_on_error() {
@@ -5360,6 +6339,7 @@ mod tests {
             channel: String::from("extension:third-party/example"),
             after_id: Some(0),
             limit: Some(1000),
+            page: None,
         }).expect("events poll should succeed");
         assert_eq!(response["events"].as_array().expect("events should be an array").len(), MAX_EVENT_POLL_LIMIT);
     }
@@ -5633,6 +6613,7 @@ mod tests {
 
     #[test]
     fn http_fetch_open_writes_response_to_staged_file() {
+        let _local_guard = allow_local_http_fetch_targets();
         let response_body = vec![0x41; 300 * 1024];
         let (url, handle) = spawn_test_http_server(response_body.clone(), "application/octet-stream", None);
         let root_dir = test_private_root("http-fetch-open-response");
@@ -5658,6 +6639,7 @@ mod tests {
 
     #[test]
     fn http_fetch_open_supports_body_source_path() {
+        let _local_guard = allow_local_http_fetch_targets();
         let captured_request = Arc::new(Mutex::new(Vec::new()));
         let (url, handle) = spawn_test_http_server(
             b"ok".to_vec(),
@@ -5687,6 +6669,30 @@ mod tests {
 
         let request = captured_request.lock().expect("request capture should lock");
         assert!(String::from_utf8_lossy(&request).contains("payload via source path"));
+    }
+
+    #[test]
+    fn http_fetch_rejects_localhost_by_default() {
+        let _local_guard = deny_local_http_fetch_targets();
+        let response = handle_http_fetch(CoreHttpFetchRequest {
+            url: String::from("http://127.0.0.1:8173/health"),
+            method: Some(String::from("GET")),
+            headers: None,
+            body: None,
+            body_encoding: None,
+        }).expect_err("localhost fetch should be denied");
+        assert_eq!(response.status_code, 403);
+        assert!(response.message.contains("http_fetch_ssrf_denied"));
+    }
+
+    #[test]
+    fn http_fetch_redirect_validation_rejects_private_targets() {
+        let _local_guard = deny_local_http_fetch_targets();
+        let current = Url::parse("https://api.example.com/data").expect("url should parse");
+        let error = resolve_http_fetch_redirect_url(&current, "http://127.0.0.1/internal")
+            .expect_err("redirect to localhost should be denied");
+        assert_eq!(error.status_code, 403);
+        assert!(error.message.contains("http_fetch_ssrf_denied"));
     }
 
     #[test]
@@ -5725,6 +6731,7 @@ mod tests {
                 channel: String::from("extension:third-party/example"),
                 after_id: Some(0),
                 limit: Some(50),
+                page: None,
             }).expect("events poll should succeed");
             if events["events"]
                 .as_array()

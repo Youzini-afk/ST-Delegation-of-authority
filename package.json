@@ -10,6 +10,7 @@
   "scripts": {
     "build": "npm run build --workspace @stdo/shared-types && npm run build:core && npm run build --workspace @stdo/server-plugin && npm run build --workspace @stdo/sdk-extension && npm run build --workspace @stdo/example-extension",
     "build:core": "node ./scripts/build-core.mjs",
+    "bench:core": "node ./scripts/benchmark-core.mjs",
     "typecheck": "tsc -b",
     "test": "vitest run && cargo test --manifest-path crates/authority-core/Cargo.toml",
     "sync:installable": "npm run typecheck && npm run build && npm test && node ./scripts/installable.mjs sync",

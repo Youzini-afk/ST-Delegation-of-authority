@@ -349,6 +349,9 @@ class SecurityCenterView {
         if (this.state.probe?.core.lastError) {
             alerts.push({ tone: 'error', title: '后台服务错误', message: getSystemMessageLabel(this.state.probe.core.lastError) });
         }
+        if (this.state.probe?.core.health?.lastError) {
+            alerts.push({ tone: 'warning', title: '后台服务最近错误', message: getSystemMessageLabel(this.state.probe.core.health.lastError) });
+        }
         status.innerHTML = renderAlertStack(alerts);
     }
     renderTabs() {
@@ -380,7 +383,7 @@ class SecurityCenterView {
             const detail = this.state.details.get(extension.id);
             const declared = getDeclaredPermissionLabels(extension.declaredPermissions);
             const risk = getExtensionRiskLevel(extension);
-            const errorCount = detail?.activity.errors.length ?? 0;
+            const errorCount = (detail?.activity.errors.length ?? 0) + (detail?.activity.warnings.length ?? 0);
             const item = document.createElement('button');
             item.type = 'button';
             item.className = 'authority-extension-item';
@@ -395,7 +398,7 @@ class SecurityCenterView {
                     <span class="authority-pill authority-pill--granted">允许 ${extension.grantedCount}</span>
                     <span class="authority-pill authority-pill--denied">拒绝 ${extension.deniedCount}</span>
                     <span class="authority-pill authority-pill--prompt">声明 ${declared.length}</span>
-                    ${errorCount > 0 ? `<span class="authority-pill authority-pill--error">错误 ${errorCount}</span>` : ''}
+                    ${errorCount > 0 ? `<span class="authority-pill authority-pill--error">异常 ${errorCount}</span>` : ''}
                 </span>
             `;
             item.classList.toggle('authority-extension-item--active', extension.id === this.state.selectedExtensionId);
@@ -450,12 +453,40 @@ class SecurityCenterView {
                                 <strong>${escapeHtml(core?.version ?? MISSING_TEXT)}</strong>
                             </div>
                             <div>
+                                <span>构建标识</span>
+                                <strong>${escapeHtml(core?.health?.buildHash ?? this.state.probe?.coreBinarySha256 ?? MISSING_TEXT)}</strong>
+                            </div>
+                            <div>
+                                <span>数据根目录</span>
+                                <strong>${escapeHtml(this.state.probe?.storageRoot ?? MISSING_TEXT)}</strong>
+                            </div>
+                            <div>
                                 <span>处理请求</span>
                                 <strong>${escapeHtml(core?.health ? String(core.health.requestCount) : MISSING_TEXT)}</strong>
                             </div>
                             <div>
                                 <span>累计错误</span>
                                 <strong>${escapeHtml(core?.health ? String(core.health.errorCount) : MISSING_TEXT)}</strong>
+                            </div>
+                            <div>
+                                <span>当前并发</span>
+                                <strong>${escapeHtml(core?.health ? `${core.health.currentConcurrency} / ${core.health.maxConcurrency}` : MISSING_TEXT)}</strong>
+                            </div>
+                            <div>
+                                <span>请求排队</span>
+                                <strong>${escapeHtml(core?.health ? String(core.health.queuedRequestCount) : MISSING_TEXT)}</strong>
+                            </div>
+                            <div>
+                                <span>任务排队</span>
+                                <strong>${escapeHtml(core?.health ? String(core.health.queuedJobCount) : MISSING_TEXT)}</strong>
+                            </div>
+                            <div>
+                                <span>Worker 数量</span>
+                                <strong>${escapeHtml(core?.health ? String(core.health.workerCount) : MISSING_TEXT)}</strong>
+                            </div>
+                            <div>
+                                <span>Job Registry</span>
+                                <strong>${escapeHtml(core?.health ? `${core.health.jobRegistrySummary.registered} / ${core.health.jobRegistrySummary.jobTypes.join(', ')}` : MISSING_TEXT)}</strong>
                             </div>
                         </div>
                     </section>
@@ -465,6 +496,9 @@ class SecurityCenterView {
                             ${renderMetricTile('拒绝 / 封锁', String(deniedCount), '用户拒绝或管理员封锁', deniedCount > 0 ? 'warning' : 'neutral')}
                             ${renderMetricTile('策略覆盖', String(overview.totalPolicyCount), '默认与扩展覆盖', 'neutral')}
                             ${renderMetricTile('活跃任务', String(overview.activeJobs.length), '排队中 / 执行中', overview.activeJobs.length > 0 ? 'runtime' : 'neutral')}
+                            ${renderMetricTile('失败任务', String(overview.failedJobs.length), '失败 / 取消的后台任务', overview.failedJobs.length > 0 ? 'warning' : 'neutral')}
+                            ${renderMetricTile('权限拒绝', String(overview.recentPermissionDenials.length), '最近被拒绝的权限请求', overview.recentPermissionDenials.length > 0 ? 'warning' : 'neutral')}
+                            ${renderMetricTile('最近告警', String(overview.recentWarnings.length), '队列压力 / 慢任务 / 重试线索', overview.recentWarnings.length > 0 ? 'warning' : 'neutral')}
                             ${renderMetricTile('最近错误', String(overview.recentErrors.length), '需要排查的异常', overview.recentErrors.length > 0 ? 'error' : 'neutral')}
                         </div>`)}
                     ${this.renderOverviewCollapsibleSection('capabilityMatrix', 'authority-section-block', '能力矩阵', '当前可由权限中心管理的系统能力', renderCapabilityMatrix(RESOURCE_OPTIONS))}
@@ -509,6 +543,33 @@ class SecurityCenterView {
                     <section class="authority-card">
                         <div class="authority-section-heading">
                             <div>
+                                <h3>最近权限拒绝</h3>
+                                <div class="authority-muted">被拒绝或封锁的权限请求</div>
+                            </div>
+                        </div>
+                        ${renderActivityLogRows(overview.recentPermissionDenials.slice(0, 5), '暂无权限拒绝记录。')}
+                    </section>
+                    <section class="authority-card">
+                        <div class="authority-section-heading">
+                            <div>
+                                <h3>最近失败任务</h3>
+                                <div class="authority-muted">失败或取消的后台任务</div>
+                            </div>
+                        </div>
+                        ${renderJobTable(overview.failedJobs.slice(0, 5), '暂无失败任务。')}
+                    </section>
+                    <section class="authority-card">
+                        <div class="authority-section-heading">
+                            <div>
+                                <h3>最近告警</h3>
+                                <div class="authority-muted">队列压力、慢任务与重试线索</div>
+                            </div>
+                        </div>
+                        ${renderActivityLogRows(overview.recentWarnings.slice(0, 5), '暂无运行告警记录。')}
+                    </section>
+                    <section class="authority-card">
+                        <div class="authority-section-heading">
+                            <div>
                                 <h3>最近错误</h3>
                                 <div class="authority-muted">需要优先排查的异常</div>
                             </div>
@@ -533,6 +594,7 @@ class SecurityCenterView {
         const denied = detail.grants.filter(item => item.status === 'denied' || item.status === 'blocked');
         const permissions = [...detail.activity.permissions].sort(sortByTimestampDesc).slice(0, 10);
         const usage = [...detail.activity.usage].sort(sortByTimestampDesc).slice(0, 10);
+        const warnings = [...detail.activity.warnings].sort(sortByTimestampDesc).slice(0, 10);
         const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
         const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
         const databases = [...detail.databases].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -630,6 +692,15 @@ class SecurityCenterView {
                     <div class="authority-log-panel">
                         <div class="authority-section-heading">
                             <div>
+                                <h3>最近告警</h3>
+                                <div class="authority-muted">队列压力、慢任务与重试记录</div>
+                            </div>
+                        </div>
+                        ${renderActivityLogRows(warnings, '暂无运行告警记录。')}
+                    </div>
+                    <div class="authority-log-panel">
+                        <div class="authority-section-heading">
+                            <div>
                                 <h3>最近错误</h3>
                                 <div class="authority-muted">需要排查的内部异常</div>
                             </div>
@@ -671,9 +742,13 @@ class SecurityCenterView {
             return;
         }
         const items = [...this.state.details.values()]
-            .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors])
+            .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors, ...detail.activity.warnings])
             .sort(sortByTimestampDesc)
             .slice(0, 80);
+        const warnings = [...this.state.details.values()]
+            .flatMap(detail => detail.activity.warnings)
+            .sort(sortByTimestampDesc)
+            .slice(0, 40);
         const errors = [...this.state.details.values()]
             .flatMap(detail => detail.activity.errors)
             .sort(sortByTimestampDesc)
@@ -696,6 +771,15 @@ class SecurityCenterView {
                             </div>
                         </div>
                         ${renderActivityLogRows(items, '暂无活动记录。')}
+                    </section>
+                    <section class="authority-log-panel">
+                        <div class="authority-section-heading">
+                            <div>
+                                <h3>运行告警</h3>
+                                <div class="authority-muted">慢任务、队列压力与重试线索</div>
+                            </div>
+                        </div>
+                        ${renderActivityLogRows(warnings, '暂无告警记录。')}
                     </section>
                     <section class="authority-log-panel">
                         <div class="authority-section-heading">

@@ -53,4 +53,4 @@ export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus>
     'events.stream': 'prompt',
 };
 
-export const BUILTIN_JOB_TYPES = ['delay'] as const;
+export const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'] as const;

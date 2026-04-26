@@ -19,6 +19,8 @@ export interface OverviewModel {
     activeJobs: JobRecord[];
     failedJobs: JobRecord[];
     recentErrors: ActivityRecord[];
+    recentWarnings: ActivityRecord[];
+    recentPermissionDenials: ActivityRecord[];
     recentActivity: ActivityRecord[];
 }
 
@@ -36,8 +38,17 @@ export function buildOverviewModel(state: SecurityCenterState): OverviewModel {
         .flatMap(detail => detail.activity.errors)
         .sort(sortByTimestampDesc)
         .slice(0, 8);
+    const recentWarnings = allDetails
+        .flatMap(detail => detail.activity.warnings)
+        .sort(sortByTimestampDesc)
+        .slice(0, 8);
+    const recentPermissionDenials = allDetails
+        .flatMap(detail => detail.activity.permissions)
+        .filter(item => item.message === 'Permission denied')
+        .sort(sortByTimestampDesc)
+        .slice(0, 8);
     const recentActivity = allDetails
-        .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors])
+        .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors, ...detail.activity.warnings])
         .sort(sortByTimestampDesc)
         .slice(0, 8);
 
@@ -52,6 +63,8 @@ export function buildOverviewModel(state: SecurityCenterState): OverviewModel {
         activeJobs,
         failedJobs,
         recentErrors,
+        recentWarnings,
+        recentPermissionDenials,
         recentActivity,
     };
 }

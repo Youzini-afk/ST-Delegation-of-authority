@@ -1,5 +1,6 @@
 import type {
     ControlExtensionRecord,
+    CursorPageInfo,
     PrivateFileUsageSummary,
     SessionInitResponse,
     SqlDatabaseRecord,
@@ -15,7 +16,7 @@ export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
 
 export interface ActivityRecord {
     timestamp: string;
-    kind: 'permission' | 'usage' | 'error';
+    kind: 'permission' | 'usage' | 'error' | 'warning';
     extensionId: string;
     message: string;
     details?: Record<string, unknown>;
@@ -53,6 +54,7 @@ export interface ProbeResponse {
     coreMessage: string | null;
     installStatus: string;
     installMessage: string;
+    storageRoot: string;
     core: {
         enabled: boolean;
         state: string;
@@ -65,12 +67,25 @@ export interface ProbeResponse {
             name: string;
             apiVersion: string;
             version: string;
+            buildHash: string | null;
+            platform: string;
             pid: number;
             startedAt: string;
             uptimeMs: number;
             requestCount: number;
             errorCount: number;
             activeJobCount: number;
+            queuedJobCount: number;
+            queuedRequestCount: number;
+            maxConcurrency: number;
+            currentConcurrency: number;
+            workerCount: number;
+            lastError: string | null;
+            jobRegistrySummary: {
+                registered: number;
+                jobTypes: string[];
+            };
+            timeoutMs: number;
             limits: {
                 maxRequestBytes: number;
                 maxKvValueBytes: number;
@@ -129,8 +144,16 @@ export interface ExtensionDetailResponse {
         permissions: ActivityRecord[];
         usage: ActivityRecord[];
         errors: ActivityRecord[];
+        warnings: ActivityRecord[];
+        pages: {
+            permissions: CursorPageInfo;
+            usage: CursorPageInfo;
+            errors: CursorPageInfo;
+            warnings: CursorPageInfo;
+        };
     };
     jobs: JobRecord[];
+    jobsPage: CursorPageInfo;
     databases: SqlDatabaseRecord[];
     triviumDatabases: TriviumDatabaseRecord[];
     storage: ExtensionStorageSummary;

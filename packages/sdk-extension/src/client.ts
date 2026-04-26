@@ -1391,7 +1391,7 @@ function getPermissionFailureMessage(
     }
 
     if (decision === 'blocked') {
-        return `${displayName} 对 ${resourceLabel} 的请求被管理员策略封锁。`;
+        return `${displayName} 对 ${resourceLabel} 的请求被平台安全规则或管理员策略封锁。`;
     }
 
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;

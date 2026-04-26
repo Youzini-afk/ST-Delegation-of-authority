@@ -37,7 +37,27 @@ export class AuditService {
         });
     }
 
-    async getRecentActivity(user: UserContext, extensionId: string): Promise<{ permissions: ActivityRecord[]; usage: ActivityRecord[]; errors: ActivityRecord[] }> {
+    async logWarning(user: UserContext, extensionId: string, message: string, details?: Record<string, unknown>): Promise<void> {
+        await this.log(user, {
+            timestamp: nowIso(),
+            kind: 'warning',
+            extensionId,
+            message,
+            ...(details ? { details } : {}),
+        });
+    }
+
+    async getRecentActivity(user: UserContext, extensionId: string): Promise<{ permissions: ActivityRecord[]; usage: ActivityRecord[]; errors: ActivityRecord[]; warnings: ActivityRecord[] }> {
+        const response = await this.getRecentActivityPage(user, extensionId);
+        return {
+            permissions: response.permissions,
+            usage: response.usage,
+            errors: response.errors,
+            warnings: response.warnings,
+        };
+    }
+
+    async getRecentActivityPage(user: UserContext, extensionId: string) {
         const paths = getUserAuthorityPaths(user);
         return await this.core.getRecentControlAudit(paths.controlDbFile, {
             userHandle: user.handle,

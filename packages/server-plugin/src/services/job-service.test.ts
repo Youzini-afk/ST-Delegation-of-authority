@@ -48,6 +48,20 @@ function createMockCore(): CoreService {
                 .filter(job => !request.extensionId || job.extensionId === request.extensionId)
                 .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         },
+        async listControlJobsPage(_dbPath: string, request: { extensionId?: string }) {
+            const items = [...jobs.values()]
+                .filter(job => !request.extensionId || job.extensionId === request.extensionId)
+                .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+            return {
+                jobs: items,
+                page: {
+                    nextCursor: null,
+                    limit: items.length,
+                    hasMore: false,
+                    totalCount: items.length,
+                },
+            };
+        },
         async getControlJob(_dbPath: string, request: { jobId: string }) {
             return jobs.get(request.jobId) ?? null;
         },

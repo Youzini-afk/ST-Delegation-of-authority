@@ -147,7 +147,19 @@ export interface ControlExtensionResponse {
     extension: ControlExtensionRecord | null;
 }
 
-export type ControlAuditKind = 'permission' | 'usage' | 'error';
+export type ControlAuditKind = 'permission' | 'usage' | 'error' | 'warning';
+
+export interface CursorPageRequest {
+    cursor?: string;
+    limit?: number;
+}
+
+export interface CursorPageInfo {
+    nextCursor: string | null;
+    limit: number;
+    hasMore: boolean;
+    totalCount: number;
+}
 
 export interface ControlAuditRecord {
     timestamp: string;
@@ -166,12 +178,20 @@ export interface ControlAuditRecentRequest {
     userHandle: string;
     extensionId: string;
     limit?: number;
+    page?: CursorPageRequest;
 }
 
 export interface ControlAuditRecentResponse {
     permissions: ControlAuditRecord[];
     usage: ControlAuditRecord[];
     errors: ControlAuditRecord[];
+    warnings: ControlAuditRecord[];
+    pages: {
+        permissions: CursorPageInfo;
+        usage: CursorPageInfo;
+        errors: CursorPageInfo;
+        warnings: CursorPageInfo;
+    };
 }
 
 export interface ControlGrantRecord extends AuthorityGrant {
@@ -237,6 +257,7 @@ export interface ControlJobRecord extends JobRecord {
 export interface ControlJobsListRequest {
     userHandle: string;
     extensionId?: string;
+    page?: CursorPageRequest;
 }
 
 export interface ControlJobGetRequest {
@@ -267,6 +288,7 @@ export interface ControlJobUpsertRequest {
 
 export interface ControlJobsListResponse {
     jobs: ControlJobRecord[];
+    page: CursorPageInfo;
 }
 
 export interface ControlJobResponse {
@@ -471,11 +493,13 @@ export interface ControlEventsPollRequest {
     channel: string;
     afterId?: number;
     limit?: number;
+    page?: CursorPageRequest;
 }
 
 export interface ControlEventsPollResponse {
     events: ControlEventRecord[];
     cursor: number;
+    page: CursorPageInfo;
 }
 
 export interface PermissionEvaluateRequest {
@@ -610,6 +634,7 @@ export interface SqlQueryRequest {
     database?: string;
     statement: string;
     params?: SqlValue[];
+    page?: CursorPageRequest;
 }
 
 export interface SqlExecRequest {
@@ -634,6 +659,7 @@ export interface SqlQueryResult {
     columns: string[];
     rows: Record<string, SqlValue>[];
     rowCount: number;
+    page?: CursorPageInfo;
 }
 
 export interface SqlExecResult {
@@ -872,10 +898,12 @@ export interface TriviumSearchHybridRequest extends TriviumOpenOptions {
 
 export interface TriviumFilterWhereRequest extends TriviumOpenOptions {
     condition: TriviumFilterCondition;
+    page?: CursorPageRequest;
 }
 
 export interface TriviumQueryRequest extends TriviumOpenOptions {
     cypher: string;
+    page?: CursorPageRequest;
 }
 
 export interface TriviumIndexTextRequest extends TriviumOpenOptions {
@@ -992,12 +1020,14 @@ export interface TriviumBulkUpsertResponse extends TriviumBulkMutationResponse {
 
 export interface TriviumFilterWhereResponse {
     nodes: TriviumNodeView[];
+    page?: CursorPageInfo;
 }
 
 export type TriviumQueryRow = Record<string, TriviumNodeView>;
 
 export interface TriviumQueryResponse {
     rows: TriviumQueryRow[];
+    page?: CursorPageInfo;
 }
 
 export interface TriviumDatabaseRecord {

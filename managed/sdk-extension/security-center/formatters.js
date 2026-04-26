@@ -36,6 +36,9 @@ export function getInstallStatusLabel(status) {
 export function getJobTypeLabel(type) {
     switch (type) {
         case 'delay': return '延时任务';
+        case 'sql.backup': return 'SQL 备份';
+        case 'trivium.flush': return 'Trivium 刷盘';
+        case 'fs.import-jsonl': return 'JSONL 导入';
         default: return type;
     }
 }
@@ -43,6 +46,8 @@ export function getActivityMessageLabel(message) {
     switch (message) {
         case 'Session initialized': return '已建立会话';
         case 'Permission resolved': return '已保存权限决定';
+        case 'Permission granted': return '已允许权限请求';
+        case 'Permission denied': return '权限请求被拒绝';
         case 'Persistent grants reset': return '已重置持久授权';
         case 'KV set': return '已写入键值数据';
         case 'Blob stored': return '已保存文件';
@@ -61,12 +66,39 @@ export function getActivityMessageLabel(message) {
         case 'HTTP fetch': return '已发起网络请求';
         case 'Job created': return '已创建后台任务';
         case 'Job cancelled': return '已取消后台任务';
+        case 'Job queue full': return '后台任务队列已满';
+        case 'Job retry scheduled': return '后台任务已安排重试';
+        case 'Job failed': return '后台任务执行失败';
+        case 'Job timed out': return '后台任务执行超时';
+        case 'Slow job': return '后台任务执行偏慢';
         case 'Policies updated': return '已更新策略';
         case 'Cancelled by user': return '用户已取消';
         default: return message;
     }
 }
 export function getSystemMessageLabel(message) {
+    if (message.startsWith('http_fetch_ssrf_denied: ')) {
+        const detail = message.slice('http_fetch_ssrf_denied: '.length);
+        return `网络访问被 SSRF 防护拒绝：${detail}`;
+    }
+    if (message.startsWith('http_fetch_invalid_scheme: ')) {
+        return '网络访问仅允许 http / https 协议。';
+    }
+    if (message === 'http_fetch_too_many_redirects') {
+        return '网络访问重定向次数过多，已被中止。';
+    }
+    if (message === 'http_fetch_redirect_missing_location') {
+        return '网络访问返回了缺少 Location 的重定向响应。';
+    }
+    if (message.startsWith('http_fetch_redirect_invalid_location: ')) {
+        return '网络访问的重定向地址无效。';
+    }
+    if (message.startsWith('http_fetch_dns_resolution_failed: ')) {
+        return '网络访问目标主机解析失败。';
+    }
+    if (message === 'job_timeout') {
+        return '后台任务执行超时。';
+    }
     if (message === 'Authority SDK deployment has not run yet.') {
         return '权限中心组件还没有部署。';
     }
@@ -189,6 +221,7 @@ export function getActivityKindLabel(kind) {
     switch (kind) {
         case 'permission': return '权限申请';
         case 'usage': return '能力使用';
+        case 'warning': return '告警';
         case 'error': return '错误';
         default: return '未分类';
     }

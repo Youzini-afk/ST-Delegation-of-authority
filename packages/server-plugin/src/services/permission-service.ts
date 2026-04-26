@@ -1,6 +1,7 @@
 import type {
     AuthorityGrant,
     AuthorityPolicyEntry,
+    DeclaredPermissions,
     PermissionDecision,
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
@@ -9,12 +10,13 @@ import { DEFAULT_POLICY_STATUS } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type {
     SessionGrantState,
+    PermissionDescriptor,
     SessionRecord,
     StoredGrantEntry,
     StoredPolicyEntry,
     UserContext,
 } from '../types.js';
-import { buildPermissionDescriptor, nowIso } from '../utils.js';
+import { buildPermissionDescriptor, normalizePermissionTarget, nowIso } from '../utils.js';
 import { CoreService } from './core-service.js';
 import { PolicyService } from './policy-service.js';
 
@@ -38,6 +40,11 @@ export class PermissionService {
 
     async evaluate(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest): Promise<PermissionEvaluateResponse> {
         const descriptor = buildPermissionDescriptor(request.resource, request.target);
+        const declarationDecision = this.getDeclarationDecision(session.declaredPermissions, descriptor);
+        if (declarationDecision) {
+            return declarationDecision;
+        }
+
         const policy = await this.getPolicyGrant(user, session.extension.id, descriptor.key);
         if (policy) {
             return {
@@ -154,6 +161,91 @@ export class PermissionService {
             userHandle: user.handle,
             extensionId,
             key,
+        });
+    }
+
+    private getDeclarationDecision(
+        declaredPermissions: DeclaredPermissions,
+        descriptor: PermissionDescriptor,
+    ): PermissionEvaluateResponse | null {
+        if (!this.hasDeclaredPermissions(declaredPermissions)) {
+            return null;
+        }
+        if (this.isDeclaredPermissionAllowed(declaredPermissions, descriptor.resource, descriptor.target)) {
+            return null;
+        }
+        return {
+            decision: 'blocked',
+            key: descriptor.key,
+            riskLevel: descriptor.riskLevel,
+            target: descriptor.target,
+            resource: descriptor.resource,
+        };
+    }
+
+    private hasDeclaredPermissions(declaredPermissions: DeclaredPermissions): boolean {
+        return Boolean(
+            declaredPermissions.storage?.kv
+            || declaredPermissions.storage?.blob
+            || declaredPermissions.fs?.private
+            || declaredPermissions.sql?.private
+            || declaredPermissions.trivium?.private
+            || declaredPermissions.http?.allow?.length
+            || declaredPermissions.jobs?.background
+            || declaredPermissions.events?.channels,
+        );
+    }
+
+    private isDeclaredPermissionAllowed(
+        declaredPermissions: DeclaredPermissions,
+        resource: PermissionEvaluateRequest['resource'],
+        target: string,
+    ): boolean {
+        switch (resource) {
+            case 'storage.kv':
+                return declaredPermissions.storage?.kv === true;
+            case 'storage.blob':
+                return declaredPermissions.storage?.blob === true;
+            case 'fs.private':
+                return declaredPermissions.fs?.private === true;
+            case 'sql.private':
+                return this.matchesDeclaredTarget(declaredPermissions.sql?.private, resource, target);
+            case 'trivium.private':
+                return this.matchesDeclaredTarget(declaredPermissions.trivium?.private, resource, target);
+            case 'http.fetch':
+                return this.matchesDeclaredTarget(declaredPermissions.http?.allow, resource, target);
+            case 'jobs.background':
+                return this.matchesDeclaredTarget(declaredPermissions.jobs?.background, resource, target);
+            case 'events.stream':
+                return this.matchesDeclaredTarget(declaredPermissions.events?.channels, resource, target);
+            default:
+                return false;
+        }
+    }
+
+    private matchesDeclaredTarget(
+        declared: boolean | string[] | undefined,
+        resource: PermissionEvaluateRequest['resource'],
+        target: string,
+    ): boolean {
+        if (declared === true) {
+            return true;
+        }
+        if (!Array.isArray(declared) || declared.length === 0) {
+            return false;
+        }
+
+        const normalizedTarget = normalizePermissionTarget(resource, target);
+        return declared.some(candidate => {
+            const normalizedCandidate = normalizePermissionTarget(resource, candidate);
+            if (normalizedCandidate === '*' || normalizedCandidate === normalizedTarget) {
+                return true;
+            }
+            if (resource === 'http.fetch' && normalizedCandidate.startsWith('*.')) {
+                const suffix = normalizedCandidate.slice(1);
+                return normalizedTarget.endsWith(suffix) && normalizedTarget.length > suffix.length;
+            }
+            return false;
         });
     }
 

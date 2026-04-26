@@ -794,11 +794,16 @@ export class CoreService {
     }
 
     async listControlJobs(dbPath: string, request: ControlJobsListRequest): Promise<ControlJobRecord[]> {
+        const response = await this.listControlJobsPage(dbPath, request);
+        return response.jobs;
+    }
+
+    async listControlJobsPage(dbPath: string, request: ControlJobsListRequest): Promise<ControlJobsListResponse> {
         const response = await this.request<ControlJobsListResponse>('/v1/control/jobs/list', {
             dbPath,
             ...request,
         });
-        return response.jobs;
+        return response;
     }
 
     async getControlJob(dbPath: string, request: ControlJobGetRequest): Promise<ControlJobRecord | null> {

@@ -14,8 +14,13 @@ export class JobService {
     constructor(private readonly core: CoreService) {}
 
     async list(user: UserContext, extensionId?: string): Promise<StoredJobRecord[]> {
+        const response = await this.listPage(user, extensionId);
+        return response.jobs;
+    }
+
+    async listPage(user: UserContext, extensionId?: string) {
         const paths = getUserAuthorityPaths(user);
-        return await this.core.listControlJobs(paths.controlDbFile, {
+        return await this.core.listControlJobsPage(paths.controlDbFile, {
             userHandle: user.handle,
             ...(extensionId ? { extensionId } : {}),
         });

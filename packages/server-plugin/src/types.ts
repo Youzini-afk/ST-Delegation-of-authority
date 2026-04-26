@@ -94,7 +94,7 @@ export interface UserContext {
 
 export interface ActivityRecord {
     timestamp: string;
-    kind: 'permission' | 'usage' | 'error';
+    kind: 'permission' | 'usage' | 'error' | 'warning';
     extensionId: string;
     message: string;
     details?: Record<string, unknown>;
@@ -196,15 +196,25 @@ export interface AuthorityCoreHealthSnapshot {
     name: string;
     apiVersion: string;
     version: string;
+    buildHash: string | null;
+    platform: string;
     pid: number;
     startedAt: string;
     uptimeMs: number;
     requestCount: number;
     errorCount: number;
     activeJobCount: number;
+    queuedJobCount: number;
+    queuedRequestCount: number;
     runtimeMode: string;
     maxConcurrency: number;
     currentConcurrency: number;
+    workerCount: number;
+    lastError: string | null;
+    jobRegistrySummary: {
+        registered: number;
+        jobTypes: string[];
+    };
     timeoutMs: number;
     limits: {
         maxRequestBytes: number;

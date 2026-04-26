@@ -86,6 +86,34 @@ describe('PermissionService', () => {
 
         expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'api.example.com' })).decision).toBe('blocked');
     });
+
+    it('blocks undeclared job types when the extension declares scoped background jobs', async () => {
+        const user = createUser(false);
+        const session = createSession(user, {
+            jobs: {
+                background: ['delay'],
+            },
+        });
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        expect((await permissions.evaluate(user, session, { resource: 'jobs.background', target: 'delay' })).decision).toBe('prompt');
+        expect((await permissions.evaluate(user, session, { resource: 'jobs.background', target: 'reindex' })).decision).toBe('blocked');
+    });
+
+    it('matches wildcard declared HTTP hosts', async () => {
+        const user = createUser(false);
+        const session = createSession(user, {
+            http: {
+                allow: ['*.example.com'],
+            },
+        });
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'api.example.com' })).decision).toBe('prompt');
+        expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'example.com' })).decision).toBe('blocked');
+    });
 });
 
 function createMockCore(): CoreService {
@@ -147,7 +175,7 @@ function createUser(isAdmin: boolean): UserContext {
     };
 }
 
-function createSession(user: UserContext): SessionRecord {
+function createSession(user: UserContext, declaredPermissions: SessionRecord['declaredPermissions'] = {}): SessionRecord {
     return {
         token: 'session-token',
         createdAt: new Date().toISOString(),
@@ -160,7 +188,7 @@ function createSession(user: UserContext): SessionRecord {
             version: '0.1.0',
             firstSeenAt: new Date().toISOString(),
         },
-        declaredPermissions: {},
+        declaredPermissions,
         sessionGrants: new Map(),
     };
 }
