@@ -309,6 +309,95 @@ describe('AuthorityClient', () => {
         })).rejects.toThrow('Authority job job-2 did not complete within 1ms');
     });
 
+    it('aggregates paged SQL query results through sql.pageAll', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const onPage = vi.fn();
+        const query = vi.fn()
+            .mockResolvedValueOnce({
+                kind: 'query',
+                columns: ['id'],
+                rows: [{ id: 1 }, { id: 2 }],
+                rowCount: 2,
+                page: { nextCursor: '2', limit: 2, hasMore: true, totalCount: 3 },
+            })
+            .mockResolvedValueOnce({
+                kind: 'query',
+                columns: ['id'],
+                rows: [{ id: 3 }],
+                rowCount: 1,
+                page: { nextCursor: null, limit: 2, hasMore: false, totalCount: 3 },
+            });
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+        });
+        Object.assign(client.sql as object, { query });
+
+        const result = await client.sql.pageAll({
+            database: 'graph',
+            statement: 'SELECT id FROM notes ORDER BY id',
+        }, {
+            pageSize: 2,
+            onPage,
+        });
+
+        expect(result.rows).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+        expect(result.rowCount).toBe(3);
+        expect(query).toHaveBeenNthCalledWith(1, {
+            database: 'graph',
+            statement: 'SELECT id FROM notes ORDER BY id',
+            page: { limit: 2 },
+        });
+        expect(query).toHaveBeenNthCalledWith(2, {
+            database: 'graph',
+            statement: 'SELECT id FROM notes ORDER BY id',
+            page: { cursor: '2', limit: 2 },
+        });
+        expect(onPage).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops sql.pageAll when maxPages is exceeded', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const query = vi.fn().mockResolvedValue({
+            kind: 'query',
+            columns: ['id'],
+            rows: [{ id: 1 }],
+            rowCount: 1,
+            page: { nextCursor: '1', limit: 1, hasMore: true, totalCount: 2 },
+        });
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+        });
+        Object.assign(client.sql as object, { query });
+
+        await expect(client.sql.pageAll({
+            database: 'graph',
+            statement: 'SELECT id FROM notes ORDER BY id',
+        }, {
+            pageSize: 1,
+            maxPages: 1,
+        })).rejects.toThrow('Authority sql.pageAll exceeded maxPages=1');
+    });
+
     it('routes resolveMany and listMappingsPage through the new Trivium endpoints', async () => {
         const { AuthorityClient } = await import('./client.js');
 

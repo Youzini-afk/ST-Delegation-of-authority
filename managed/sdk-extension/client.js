@@ -22,6 +22,24 @@ function getOptionalJobWaitTimeout(value) {
     }
     throw new Error('Authority job timeoutMs must be a positive safe integer');
 }
+function getSqlPageAllPageSize(value) {
+    if (value == null) {
+        return 100;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority sql.pageAll pageSize must be a positive safe integer');
+}
+function getOptionalMaxPages(value) {
+    if (value == null) {
+        return null;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority sql.pageAll maxPages must be a positive safe integer');
+}
 function throwIfAborted(signal) {
     if (signal?.aborted) {
         throw new Error('Authority job wait aborted');
@@ -210,6 +228,57 @@ export class AuthorityClient {
                         database,
                     },
                 });
+            },
+            pageAll: async (input, options = {}) => {
+                await this.requireFeature('sql.queryPage', 'Authority 当前版本尚未提供 SQL 分页查询能力');
+                const pageSize = getSqlPageAllPageSize(options.pageSize ?? input.page?.limit);
+                const maxPages = getOptionalMaxPages(options.maxPages);
+                const rows = [];
+                let columns = null;
+                let pageCount = 0;
+                let cursor = input.page?.cursor ?? null;
+                let lastPageInfo;
+                while (true) {
+                    if (maxPages != null && pageCount >= maxPages) {
+                        throw new Error(`Authority sql.pageAll exceeded maxPages=${maxPages}`);
+                    }
+                    const page = await this.sql.query({
+                        ...input,
+                        page: {
+                            ...(cursor ? { cursor } : {}),
+                            limit: pageSize,
+                        },
+                    });
+                    pageCount += 1;
+                    await options.onPage?.(page);
+                    if (!columns) {
+                        columns = [...page.columns];
+                    }
+                    else if (JSON.stringify(columns) !== JSON.stringify(page.columns)) {
+                        throw new Error('Authority sql.pageAll encountered inconsistent columns across pages');
+                    }
+                    rows.push(...page.rows);
+                    lastPageInfo = page.page;
+                    if (!page.page?.hasMore || !page.page.nextCursor) {
+                        return {
+                            kind: 'query',
+                            columns: columns ?? [],
+                            rows,
+                            rowCount: rows.length,
+                            ...(lastPageInfo
+                                ? {
+                                    page: {
+                                        nextCursor: null,
+                                        limit: lastPageInfo.limit,
+                                        hasMore: false,
+                                        totalCount: lastPageInfo.totalCount,
+                                    },
+                                }
+                                : {}),
+                        };
+                    }
+                    cursor = page.page.nextCursor;
+                }
             },
             exec: async (input) => {
                 const database = getSqlDatabaseName(input.database);

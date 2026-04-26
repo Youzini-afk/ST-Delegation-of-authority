@@ -125,6 +125,26 @@ function getOptionalJobWaitTimeout(value: unknown): number | null {
     throw new Error('Authority job timeoutMs must be a positive safe integer');
 }
 
+function getSqlPageAllPageSize(value: unknown): number {
+    if (value == null) {
+        return 100;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority sql.pageAll pageSize must be a positive safe integer');
+}
+
+function getOptionalMaxPages(value: unknown): number | null {
+    if (value == null) {
+        return null;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority sql.pageAll maxPages must be a positive safe integer');
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
     if (signal?.aborted) {
         throw new Error('Authority job wait aborted');
@@ -168,6 +188,12 @@ export interface JobWaitForCompletionOptions {
     timeoutMs?: number;
     signal?: AbortSignal;
     onProgress?: (job: JobRecord) => void | Promise<void>;
+}
+
+export interface SqlPageAllOptions {
+    pageSize?: number;
+    maxPages?: number;
+    onPage?: (page: SqlQueryResult) => void | Promise<void>;
 }
 
 export interface AuthorityHttpRequest {
@@ -327,6 +353,7 @@ export class AuthorityClient {
 
     readonly sql: {
         query: (input: SqlQueryRequest) => Promise<SqlQueryResult>;
+        pageAll: (input: SqlQueryRequest, options?: SqlPageAllOptions) => Promise<SqlQueryResult>;
         exec: (input: SqlExecRequest) => Promise<SqlExecResult>;
         batch: (input: SqlBatchRequest) => Promise<SqlBatchResponse>;
         transaction: (input: SqlTransactionRequest) => Promise<SqlTransactionResponse>;
@@ -542,6 +569,61 @@ export class AuthorityClient {
                         database,
                     },
                 });
+            },
+            pageAll: async (input, options = {}) => {
+                await this.requireFeature('sql.queryPage', 'Authority 当前版本尚未提供 SQL 分页查询能力');
+                const pageSize = getSqlPageAllPageSize(options.pageSize ?? input.page?.limit);
+                const maxPages = getOptionalMaxPages(options.maxPages);
+                const rows: SqlQueryResult['rows'] = [];
+                let columns: SqlQueryResult['columns'] | null = null;
+                let pageCount = 0;
+                let cursor = input.page?.cursor ?? null;
+                let lastPageInfo: SqlQueryResult['page'] | undefined;
+
+                while (true) {
+                    if (maxPages != null && pageCount >= maxPages) {
+                        throw new Error(`Authority sql.pageAll exceeded maxPages=${maxPages}`);
+                    }
+
+                    const page = await this.sql.query({
+                        ...input,
+                        page: {
+                            ...(cursor ? { cursor } : {}),
+                            limit: pageSize,
+                        },
+                    });
+                    pageCount += 1;
+                    await options.onPage?.(page);
+
+                    if (!columns) {
+                        columns = [...page.columns];
+                    } else if (JSON.stringify(columns) !== JSON.stringify(page.columns)) {
+                        throw new Error('Authority sql.pageAll encountered inconsistent columns across pages');
+                    }
+
+                    rows.push(...page.rows);
+                    lastPageInfo = page.page;
+                    if (!page.page?.hasMore || !page.page.nextCursor) {
+                        return {
+                            kind: 'query',
+                            columns: columns ?? [],
+                            rows,
+                            rowCount: rows.length,
+                            ...(lastPageInfo
+                                ? {
+                                    page: {
+                                        nextCursor: null,
+                                        limit: lastPageInfo.limit,
+                                        hasMore: false,
+                                        totalCount: lastPageInfo.totalCount,
+                                    },
+                                }
+                                : {}),
+                        };
+                    }
+
+                    cursor = page.page.nextCursor;
+                }
             },
             exec: async input => {
                 const database = getSqlDatabaseName(input.database);
