@@ -1,6 +1,53 @@
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt } from './permission-prompt.js';
 import { openSecurityCenter } from './security-center.js';
+function isTerminalJobStatus(status) {
+    return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+function getJobWaitPollInterval(value) {
+    if (value == null) {
+        return 1000;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority job pollIntervalMs must be a positive safe integer');
+}
+function getOptionalJobWaitTimeout(value) {
+    if (value == null) {
+        return null;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority job timeoutMs must be a positive safe integer');
+}
+function throwIfAborted(signal) {
+    if (signal?.aborted) {
+        throw new Error('Authority job wait aborted');
+    }
+}
+function waitForDelay(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new Error('Authority job wait aborted'));
+            return;
+        }
+        const timer = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timer);
+            cleanup();
+            reject(new Error('Authority job wait aborted'));
+        };
+        const cleanup = () => {
+            signal?.removeEventListener('abort', onAbort);
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
 const SDK_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
 const DEFAULT_TRIVIUM_CHUNK_ITEMS = 128;
 const DEFAULT_TRIVIUM_CHUNK_BYTES = 256 * 1024;
@@ -765,6 +812,23 @@ export class AuthorityClient {
                 return await this.requestWithSession(`/jobs/${encodeURIComponent(id)}/cancel`, {
                     method: 'POST',
                 });
+            },
+            waitForCompletion: async (id, options = {}) => {
+                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
+                const timeoutMs = getOptionalJobWaitTimeout(options.timeoutMs);
+                const startedAt = Date.now();
+                while (true) {
+                    throwIfAborted(options.signal);
+                    const job = await this.jobs.get(id);
+                    await options.onProgress?.(job);
+                    if (isTerminalJobStatus(job.status)) {
+                        return job;
+                    }
+                    if (timeoutMs != null && Date.now() - startedAt >= timeoutMs) {
+                        throw new Error(`Authority job ${id} did not complete within ${timeoutMs}ms`);
+                    }
+                    await waitForDelay(pollIntervalMs, options.signal);
+                }
             },
         };
         this.events = {

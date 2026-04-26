@@ -245,6 +245,70 @@ describe('AuthorityClient', () => {
         }));
     });
 
+    it('waits for background jobs to reach a terminal status', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const jobs = [
+            { id: 'job-1', extensionId: 'third-party/ext-a', type: 'delay', status: 'queued', createdAt: 't1', updatedAt: 't1', progress: 0 },
+            { id: 'job-1', extensionId: 'third-party/ext-a', type: 'delay', status: 'running', createdAt: 't1', updatedAt: 't2', progress: 50 },
+            { id: 'job-1', extensionId: 'third-party/ext-a', type: 'delay', status: 'completed', createdAt: 't1', updatedAt: 't3', progress: 100 },
+        ] as const;
+        let index = 0;
+        const requestWithSession = vi.fn(async () => jobs[Math.min(index++, jobs.length - 1)]);
+        const onProgress = vi.fn();
+
+        Object.assign(client as object, {
+            requestWithSession,
+        });
+
+        const result = await client.jobs.waitForCompletion('job-1', {
+            pollIntervalMs: 1,
+            onProgress,
+        });
+
+        expect(result.status).toBe('completed');
+        expect(requestWithSession).toHaveBeenCalledTimes(3);
+        expect(onProgress).toHaveBeenCalledTimes(3);
+        expect(onProgress.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ status: 'running', progress: 50 }));
+    });
+
+    it('times out when background job does not complete in time', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        Object.assign(client as object, {
+            requestWithSession: vi.fn(async () => ({
+                id: 'job-2',
+                extensionId: 'third-party/ext-a',
+                type: 'delay',
+                status: 'running',
+                createdAt: 't1',
+                updatedAt: 't2',
+                progress: 10,
+            })),
+        });
+
+        await expect(client.jobs.waitForCompletion('job-2', {
+            pollIntervalMs: 1,
+            timeoutMs: 1,
+        })).rejects.toThrow('Authority job job-2 did not complete within 1ms');
+    });
+
     it('routes resolveMany and listMappingsPage through the new Trivium endpoints', async () => {
         const { AuthorityClient } = await import('./client.js');
 

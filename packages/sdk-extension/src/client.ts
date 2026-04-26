@@ -101,10 +101,73 @@ export interface AuthorityPermissionRequest extends PermissionEvaluateRequest {
     promptTitle?: string;
 }
 
+function isTerminalJobStatus(status: JobRecord['status']): boolean {
+    return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function getJobWaitPollInterval(value: unknown): number {
+    if (value == null) {
+        return 1000;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority job pollIntervalMs must be a positive safe integer');
+}
+
+function getOptionalJobWaitTimeout(value: unknown): number | null {
+    if (value == null) {
+        return null;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error('Authority job timeoutMs must be a positive safe integer');
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+    if (signal?.aborted) {
+        throw new Error('Authority job wait aborted');
+    }
+}
+
+function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new Error('Authority job wait aborted'));
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, ms);
+
+        const onAbort = () => {
+            clearTimeout(timer);
+            cleanup();
+            reject(new Error('Authority job wait aborted'));
+        };
+
+        const cleanup = () => {
+            signal?.removeEventListener('abort', onAbort);
+        };
+
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
 export interface JobCreateOptions {
     timeoutMs?: number;
     idempotencyKey?: string;
     maxAttempts?: number;
+}
+
+export interface JobWaitForCompletionOptions {
+    pollIntervalMs?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onProgress?: (job: JobRecord) => void | Promise<void>;
 }
 
 export interface AuthorityHttpRequest {
@@ -321,6 +384,7 @@ export class AuthorityClient {
         get: (id: string) => Promise<JobRecord>;
         list: () => Promise<JobRecord[]>;
         cancel: (id: string) => Promise<JobRecord>;
+        waitForCompletion: (id: string, options?: JobWaitForCompletionOptions) => Promise<JobRecord>;
     };
 
     readonly events: {
@@ -1083,6 +1147,24 @@ export class AuthorityClient {
                 return await this.requestWithSession<JobRecord>(`/jobs/${encodeURIComponent(id)}/cancel`, {
                     method: 'POST',
                 });
+            },
+            waitForCompletion: async (id, options = {}) => {
+                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
+                const timeoutMs = getOptionalJobWaitTimeout(options.timeoutMs);
+                const startedAt = Date.now();
+
+                while (true) {
+                    throwIfAborted(options.signal);
+                    const job = await this.jobs.get(id);
+                    await options.onProgress?.(job);
+                    if (isTerminalJobStatus(job.status)) {
+                        return job;
+                    }
+                    if (timeoutMs != null && Date.now() - startedAt >= timeoutMs) {
+                        throw new Error(`Authority job ${id} did not complete within ${timeoutMs}ms`);
+                    }
+                    await waitForDelay(pollIntervalMs, options.signal);
+                }
             },
         };
 
