@@ -48,6 +48,7 @@ const MAX_HTTP_BODY_BYTES: usize = MAX_BLOB_BYTES;
 const MAX_HTTP_RESPONSE_BYTES: usize = MAX_BLOB_BYTES;
 const MAX_EVENT_POLL_LIMIT: usize = 200;
 const MAX_PRIVATE_READ_DIR_LIMIT: usize = 200;
+const MAX_TRIVIUM_BULK_ITEMS: usize = 2000;
 const JOB_PROGRESS_INTERVAL_MS: u64 = 250;
 const JOB_WORKER_CONCURRENCY: usize = 4;
 const MAX_JOB_QUEUE_SIZE: usize = 256;
@@ -215,6 +216,22 @@ struct TriviumInsertWithIdRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TriviumBulkUpsertItem {
+    id: u64,
+    vector: Vec<f64>,
+    payload: JsonValue,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkUpsertRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    items: Vec<TriviumBulkUpsertItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TriviumGetRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
@@ -260,11 +277,57 @@ struct TriviumLinkRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TriviumBulkLinkItem {
+    src: u64,
+    dst: u64,
+    label: Option<String>,
+    weight: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkLinkRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    items: Vec<TriviumBulkLinkItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TriviumUnlinkRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
     src: u64,
     dst: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkUnlinkItem {
+    src: u64,
+    dst: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkUnlinkRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    items: Vec<TriviumBulkUnlinkItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkDeleteItem {
+    id: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkDeleteRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    items: Vec<TriviumBulkDeleteItem>,
 }
 
 #[derive(Deserialize)]
@@ -393,6 +456,40 @@ struct TriviumInsertResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TriviumBulkFailure {
+    index: usize,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkMutationResponse {
+    total_count: usize,
+    success_count: usize,
+    failure_count: usize,
+    failures: Vec<TriviumBulkFailure>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkUpsertResponseItem {
+    index: usize,
+    id: u64,
+    action: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumBulkUpsertResponse {
+    total_count: usize,
+    success_count: usize,
+    failure_count: usize,
+    failures: Vec<TriviumBulkFailure>,
+    items: Vec<TriviumBulkUpsertResponseItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TriviumEdgeView {
     target_id: u64,
     label: String,
@@ -458,6 +555,13 @@ struct TriviumStatResponse {
     file_path: String,
     exists: bool,
     node_count: usize,
+    edge_count: usize,
+    text_index_count: Option<usize>,
+    last_flush_at: Option<String>,
+    vector_dim: Option<usize>,
+    database_size: u64,
+    wal_size: u64,
+    vec_size: u64,
     estimated_memory_bytes: usize,
     #[serde(flatten)]
     record: TriviumDatabaseRecord,
@@ -1093,12 +1197,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/sql/migrate", post(v1_sql_migrate))
         .route("/trivium/insert", post(v1_trivium_insert))
         .route("/trivium/insert-with-id", post(v1_trivium_insert_with_id))
+        .route("/trivium/bulk-upsert", post(v1_trivium_bulk_upsert))
         .route("/trivium/get", post(v1_trivium_get))
         .route("/trivium/update-payload", post(v1_trivium_update_payload))
         .route("/trivium/update-vector", post(v1_trivium_update_vector))
         .route("/trivium/delete", post(v1_trivium_delete))
+        .route("/trivium/bulk-delete", post(v1_trivium_bulk_delete))
         .route("/trivium/link", post(v1_trivium_link))
+        .route("/trivium/bulk-link", post(v1_trivium_bulk_link))
         .route("/trivium/unlink", post(v1_trivium_unlink))
+        .route("/trivium/bulk-unlink", post(v1_trivium_bulk_unlink))
         .route("/trivium/neighbors", post(v1_trivium_neighbors))
         .route("/trivium/search", post(v1_trivium_search))
         .route("/trivium/search-advanced", post(v1_trivium_search_advanced))
@@ -1399,12 +1507,16 @@ async fn v1_sql_transaction(State(_config): State<Arc<Config>>, Json(body): Json
 async fn v1_sql_migrate(State(_config): State<Arc<Config>>, Json(body): Json<SqlMigrateRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_migrate).await }
 async fn v1_trivium_insert(State(_config): State<Arc<Config>>, Json(body): Json<TriviumInsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_insert).await }
 async fn v1_trivium_insert_with_id(State(_config): State<Arc<Config>>, Json(body): Json<TriviumInsertWithIdRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_insert_with_id).await }
+async fn v1_trivium_bulk_upsert(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkUpsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_upsert).await }
 async fn v1_trivium_get(State(_config): State<Arc<Config>>, Json(body): Json<TriviumGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_get).await }
 async fn v1_trivium_update_payload(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUpdatePayloadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_update_payload).await }
 async fn v1_trivium_update_vector(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUpdateVectorRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_update_vector).await }
 async fn v1_trivium_delete(State(_config): State<Arc<Config>>, Json(body): Json<TriviumDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_delete).await }
+async fn v1_trivium_bulk_delete(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_delete).await }
 async fn v1_trivium_link(State(_config): State<Arc<Config>>, Json(body): Json<TriviumLinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_link).await }
+async fn v1_trivium_bulk_link(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkLinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_link).await }
 async fn v1_trivium_unlink(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUnlinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_unlink).await }
+async fn v1_trivium_bulk_unlink(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBulkUnlinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_bulk_unlink).await }
 async fn v1_trivium_neighbors(State(_config): State<Arc<Config>>, Json(body): Json<TriviumNeighborsRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_neighbors).await }
 async fn v1_trivium_search(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search).await }
 async fn v1_trivium_search_advanced(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchAdvancedRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search_advanced).await }
@@ -1579,6 +1691,93 @@ fn handle_trivium_insert_with_id(request: TriviumInsertWithIdRequest) -> Result<
     Ok(json!({ "ok": true }))
 }
 
+fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonValue, ApiError> {
+    validate_trivium_bulk_item_count(request.items.len())?;
+    let total_count = request.items.len();
+    if total_count == 0 {
+        return Ok(serde_json::to_value(TriviumBulkUpsertResponse {
+            total_count,
+            success_count: 0,
+            failure_count: 0,
+            failures: Vec::new(),
+            items: Vec::new(),
+        }).expect("trivium bulk upsert response should serialize"));
+    }
+
+    let mut failures = Vec::new();
+    let mut items = Vec::new();
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                let exists = db.contains(item.id);
+                let vector = item.vector.iter().map(|&value| value as f32).collect::<Vec<_>>();
+                let result = if exists {
+                    db.update_vector(item.id, &vector).and_then(|_| db.update_payload(item.id, item.payload))
+                } else {
+                    db.insert_with_id(item.id, &vector, item.payload).map(|_| ())
+                };
+                match result {
+                    Ok(()) => items.push(TriviumBulkUpsertResponseItem {
+                        index,
+                        id: item.id,
+                        action: String::from(if exists { "updated" } else { "inserted" }),
+                    }),
+                    Err(error) => failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message }),
+                }
+            }
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                let exists = db.contains(item.id);
+                let vector = item.vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>();
+                let result = if exists {
+                    db.update_vector(item.id, &vector).and_then(|_| db.update_payload(item.id, item.payload))
+                } else {
+                    db.insert_with_id(item.id, &vector, item.payload).map(|_| ())
+                };
+                match result {
+                    Ok(()) => items.push(TriviumBulkUpsertResponseItem {
+                        index,
+                        id: item.id,
+                        action: String::from(if exists { "updated" } else { "inserted" }),
+                    }),
+                    Err(error) => failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message }),
+                }
+            }
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                let exists = db.contains(item.id);
+                let vector = item.vector.iter().map(|&value| value as u64).collect::<Vec<_>>();
+                let result = if exists {
+                    db.update_vector(item.id, &vector).and_then(|_| db.update_payload(item.id, item.payload))
+                } else {
+                    db.insert_with_id(item.id, &vector, item.payload).map(|_| ())
+                };
+                match result {
+                    Ok(()) => items.push(TriviumBulkUpsertResponseItem {
+                        index,
+                        id: item.id,
+                        action: String::from(if exists { "updated" } else { "inserted" }),
+                    }),
+                    Err(error) => failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message }),
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::to_value(TriviumBulkUpsertResponse {
+        total_count,
+        success_count: items.len(),
+        failure_count: failures.len(),
+        failures,
+        items,
+    }).expect("trivium bulk upsert response should serialize"))
+}
+
 fn handle_trivium_get(request: TriviumGetRequest) -> Result<JsonValue, ApiError> {
     let TriviumGetRequest { open, id } = request;
     let node = match parse_trivium_dtype(open.dtype.as_deref())? {
@@ -1597,6 +1796,45 @@ fn handle_trivium_update_payload(request: TriviumUpdatePayloadRequest) -> Result
         TriviumDTypeTag::U64 => open_trivium_u64(&open)?.update_payload(id, payload).map_err(to_trivium_error)?,
     }
     Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_bulk_unlink(request: TriviumBulkUnlinkRequest) -> Result<JsonValue, ApiError> {
+    validate_trivium_bulk_item_count(request.items.len())?;
+    let total_count = request.items.len();
+    let mut failures = Vec::new();
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                if let Err(error) = db.unlink(item.src, item.dst) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                if let Err(error) = db.unlink(item.src, item.dst) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                if let Err(error) = db.unlink(item.src, item.dst) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::to_value(TriviumBulkMutationResponse {
+        total_count,
+        success_count: total_count.saturating_sub(failures.len()),
+        failure_count: failures.len(),
+        failures,
+    }).expect("trivium bulk unlink response should serialize"))
 }
 
 fn handle_trivium_update_vector(request: TriviumUpdateVectorRequest) -> Result<JsonValue, ApiError> {
@@ -1625,6 +1863,45 @@ fn handle_trivium_delete(request: TriviumDeleteRequest) -> Result<JsonValue, Api
     Ok(json!({ "ok": true }))
 }
 
+fn handle_trivium_bulk_delete(request: TriviumBulkDeleteRequest) -> Result<JsonValue, ApiError> {
+    validate_trivium_bulk_item_count(request.items.len())?;
+    let total_count = request.items.len();
+    let mut failures = Vec::new();
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                if let Err(error) = db.delete(item.id) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                if let Err(error) = db.delete(item.id) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                if let Err(error) = db.delete(item.id) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::to_value(TriviumBulkMutationResponse {
+        total_count,
+        success_count: total_count.saturating_sub(failures.len()),
+        failure_count: failures.len(),
+        failures,
+    }).expect("trivium bulk delete response should serialize"))
+}
+
 fn handle_trivium_link(request: TriviumLinkRequest) -> Result<JsonValue, ApiError> {
     let TriviumLinkRequest { open, src, dst, label, weight } = request;
     let label = label.unwrap_or_else(|| String::from("related"));
@@ -1635,6 +1912,51 @@ fn handle_trivium_link(request: TriviumLinkRequest) -> Result<JsonValue, ApiErro
         TriviumDTypeTag::U64 => open_trivium_u64(&open)?.link(src, dst, &label, weight).map_err(to_trivium_error)?,
     }
     Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_bulk_link(request: TriviumBulkLinkRequest) -> Result<JsonValue, ApiError> {
+    validate_trivium_bulk_item_count(request.items.len())?;
+    let total_count = request.items.len();
+    let mut failures = Vec::new();
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                let label = item.label.unwrap_or_else(|| String::from("related"));
+                let weight = item.weight.unwrap_or(1.0) as f32;
+                if let Err(error) = db.link(item.src, item.dst, &label, weight) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                let label = item.label.unwrap_or_else(|| String::from("related"));
+                let weight = item.weight.unwrap_or(1.0) as f32;
+                if let Err(error) = db.link(item.src, item.dst, &label, weight) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&request.open)?;
+            for (index, item) in request.items.into_iter().enumerate() {
+                let label = item.label.unwrap_or_else(|| String::from("related"));
+                let weight = item.weight.unwrap_or(1.0) as f32;
+                if let Err(error) = db.link(item.src, item.dst, &label, weight) {
+                    failures.push(TriviumBulkFailure { index, message: to_trivium_error(error).message });
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::to_value(TriviumBulkMutationResponse {
+        total_count,
+        success_count: total_count.saturating_sub(failures.len()),
+        failure_count: failures.len(),
+        failures,
+    }).expect("trivium bulk link response should serialize"))
 }
 
 fn handle_trivium_unlink(request: TriviumUnlinkRequest) -> Result<JsonValue, ApiError> {
@@ -1869,24 +2191,34 @@ fn handle_trivium_stat(request: TriviumStatRequest) -> Result<JsonValue, ApiErro
             file_path: open.db_path,
             exists: false,
             node_count: 0,
+            edge_count: 0,
+            text_index_count: None,
+            last_flush_at: None,
+            vector_dim: record.dim,
+            database_size: record.size_bytes,
+            wal_size: record.wal_size_bytes,
+            vec_size: record.vec_size_bytes,
             estimated_memory_bytes: 0,
             record,
         };
         return Ok(serde_json::to_value(response).expect("trivium stat response should serialize"));
     }
 
-    let (node_count, estimated_memory_bytes) = match dtype {
+    let (node_count, edge_count, estimated_memory_bytes) = match dtype {
         TriviumDTypeTag::F32 => {
             let db = open_trivium_f32(&open)?;
-            (db.node_count(), db.estimated_memory())
+            let edge_count = db.all_node_ids().into_iter().map(|id| db.get_edges(id).len()).sum();
+            (db.node_count(), edge_count, db.estimated_memory())
         }
         TriviumDTypeTag::F16 => {
             let db = open_trivium_f16(&open)?;
-            (db.node_count(), db.estimated_memory())
+            let edge_count = db.all_node_ids().into_iter().map(|id| db.get_edges(id).len()).sum();
+            (db.node_count(), edge_count, db.estimated_memory())
         }
         TriviumDTypeTag::U64 => {
             let db = open_trivium_u64(&open)?;
-            (db.node_count(), db.estimated_memory())
+            let edge_count = db.all_node_ids().into_iter().map(|id| db.get_edges(id).len()).sum();
+            (db.node_count(), edge_count, db.estimated_memory())
         }
     };
     record.dim = detected_dim.or(record.dim);
@@ -1896,6 +2228,13 @@ fn handle_trivium_stat(request: TriviumStatRequest) -> Result<JsonValue, ApiErro
         file_path: open.db_path,
         exists: true,
         node_count,
+        edge_count,
+        text_index_count: None,
+        last_flush_at: None,
+        vector_dim: record.dim,
+        database_size: record.size_bytes,
+        wal_size: record.wal_size_bytes,
+        vec_size: record.vec_size_bytes,
         estimated_memory_bytes,
         record,
     };
@@ -4707,6 +5046,16 @@ fn validate_non_empty(field_name: &str, value: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn validate_trivium_bulk_item_count(count: usize) -> Result<(), ApiError> {
+    if count <= MAX_TRIVIUM_BULK_ITEMS {
+        return Ok(());
+    }
+    Err(ApiError {
+        status_code: 400,
+        message: format!("trivium bulk item count exceeds {}", MAX_TRIVIUM_BULK_ITEMS),
+    })
+}
+
 fn validate_supported_job_type(field_name: &str, value: &str) -> Result<(), ApiError> {
     if resolve_job_runner(value).is_some() {
         return Ok(());
@@ -5200,6 +5549,89 @@ mod tests {
     }
 
     #[test]
+    fn trivium_bulk_upsert_reports_partial_failures() {
+        let db_path = test_trivium_path("bulk-upsert-failures");
+        let response = handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path, 2),
+            items: vec![
+                TriviumBulkUpsertItem {
+                    id: 1,
+                    vector: vec![1.0, 0.0],
+                    payload: json!({ "name": "alpha" }),
+                },
+                TriviumBulkUpsertItem {
+                    id: 2,
+                    vector: vec![1.0],
+                    payload: json!({ "name": "bad-dim" }),
+                },
+            ],
+        }).expect("bulk upsert should return partial result");
+
+        assert_eq!(response["totalCount"], json!(2));
+        assert_eq!(response["successCount"], json!(1));
+        assert_eq!(response["failureCount"], json!(1));
+        assert_eq!(response["failures"][0]["index"], json!(1));
+    }
+
+    #[test]
+    fn trivium_bulk_stat_tracks_edge_count() {
+        let db_path = test_trivium_path("bulk-stat-edge-count");
+        handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![
+                TriviumBulkUpsertItem {
+                    id: 1,
+                    vector: vec![1.0, 0.0],
+                    payload: json!({ "name": "alpha" }),
+                },
+                TriviumBulkUpsertItem {
+                    id: 2,
+                    vector: vec![0.0, 1.0],
+                    payload: json!({ "name": "beta" }),
+                },
+            ],
+        }).expect("bulk upsert should succeed");
+
+        handle_trivium_bulk_link(TriviumBulkLinkRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![TriviumBulkLinkItem {
+                src: 1,
+                dst: 2,
+                label: Some(String::from("related")),
+                weight: Some(1.0),
+            }],
+        }).expect("bulk link should succeed");
+
+        handle_trivium_flush(TriviumFlushRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+        }).expect("flush should succeed");
+
+        let stat = handle_trivium_stat(TriviumStatRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+        }).expect("stat should succeed");
+        assert_eq!(stat["nodeCount"], json!(2));
+        assert_eq!(stat["edgeCount"], json!(1));
+        assert_eq!(stat["vectorDim"], json!(2));
+
+        handle_trivium_bulk_delete(TriviumBulkDeleteRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![TriviumBulkDeleteItem { id: 1 }],
+        }).expect("bulk delete should succeed");
+
+        let fetched = handle_trivium_get(TriviumGetRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            id: 1,
+        }).expect("get should succeed");
+        assert!(fetched["node"].is_null());
+
+        let stat_after_delete = handle_trivium_stat(TriviumStatRequest {
+            open: test_trivium_open_request(db_path, 2),
+        }).expect("stat after delete should succeed");
+        assert_eq!(stat_after_delete["nodeCount"], json!(1));
+        assert_eq!(stat_after_delete["edgeCount"], json!(0));
+    }
+
+    #[test]
     fn http_fetch_open_writes_response_to_staged_file() {
         let response_body = vec![0x41; 300 * 1024];
         let (url, handle) = spawn_test_http_server(response_body.clone(), "application/octet-stream", None);
@@ -5404,6 +5836,22 @@ mod tests {
         let path = env::temp_dir()
             .join(format!("authority-core-test-{}-{}-{}.sqlite", name, process::id(), current_unix_millis()));
         path.to_string_lossy().into_owned()
+    }
+
+    fn test_trivium_path(name: &str) -> String {
+        let path = env::temp_dir()
+            .join(format!("authority-core-trivium-{}-{}-{}.tdb", name, process::id(), current_unix_millis()));
+        path.to_string_lossy().into_owned()
+    }
+
+    fn test_trivium_open_request(db_path: String, dim: usize) -> TriviumOpenRequest {
+        TriviumOpenRequest {
+            db_path,
+            dim: Some(dim),
+            dtype: Some(String::from("f32")),
+            sync_mode: None,
+            storage_mode: None,
+        }
     }
 
     fn test_private_root(name: &str) -> String {

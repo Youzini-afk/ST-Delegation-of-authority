@@ -11,6 +11,7 @@ import { PolicyService } from './services/policy-service.js';
 import { PrivateFsService } from './services/private-fs-service.js';
 import { SessionService } from './services/session-service.js';
 import { StorageService } from './services/storage-service.js';
+import { TriviumService } from './services/trivium-service.js';
 
 export interface AuthorityRuntime {
     events: SseBroker;
@@ -26,6 +27,7 @@ export interface AuthorityRuntime {
     files: PrivateFsService;
     http: HttpService;
     jobs: JobService;
+    trivium: TriviumService;
 }
 
 export function createAuthorityRuntime(): AuthorityRuntime {
@@ -42,6 +44,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const files = new PrivateFsService(core);
     const http = new HttpService(core);
     const jobs = new JobService(core);
+    const trivium = new TriviumService(core);
 
     return {
         events,
@@ -57,5 +60,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         files,
         http,
         jobs,
+        trivium,
     };
 }

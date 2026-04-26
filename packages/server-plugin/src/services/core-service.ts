@@ -76,8 +76,14 @@ import type {
     SqlQueryResult,
     SqlTransactionRequest,
     SqlTransactionResponse,
+    ControlTriviumBulkDeleteRequest,
+    ControlTriviumBulkLinkRequest,
+    ControlTriviumBulkUnlinkRequest,
+    ControlTriviumBulkUpsertRequest,
+    ControlTriviumBulkUpsertResponse,
     TriviumDeleteRequest,
     TriviumBuildTextIndexRequest,
+    TriviumBulkMutationResponse,
     TriviumFilterWhereRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
@@ -392,6 +398,13 @@ export class CoreService {
         });
     }
 
+    async bulkUpsertTrivium(dbPath: string, request: ControlTriviumBulkUpsertRequest): Promise<ControlTriviumBulkUpsertResponse> {
+        return await this.request('/v1/trivium/bulk-upsert', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
+        });
+    }
+
     async getTrivium(dbPath: string, request: TriviumGetRequest): Promise<TriviumNodeView | null> {
         const response = await this.request<{ node: TriviumNodeView | null }>('/v1/trivium/get', {
             ...buildTriviumOpenPayload(dbPath, request),
@@ -433,11 +446,32 @@ export class CoreService {
         });
     }
 
+    async bulkLinkTrivium(dbPath: string, request: ControlTriviumBulkLinkRequest): Promise<TriviumBulkMutationResponse> {
+        return await this.request('/v1/trivium/bulk-link', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
+        });
+    }
+
     async unlinkTrivium(dbPath: string, request: TriviumUnlinkRequest): Promise<void> {
         await this.request('/v1/trivium/unlink', {
             ...buildTriviumOpenPayload(dbPath, request),
             src: request.src,
             dst: request.dst,
+        });
+    }
+
+    async bulkUnlinkTrivium(dbPath: string, request: ControlTriviumBulkUnlinkRequest): Promise<TriviumBulkMutationResponse> {
+        return await this.request('/v1/trivium/bulk-unlink', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
+        });
+    }
+
+    async bulkDeleteTrivium(dbPath: string, request: ControlTriviumBulkDeleteRequest): Promise<TriviumBulkMutationResponse> {
+        return await this.request('/v1/trivium/bulk-delete', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
         });
     }
 

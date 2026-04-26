@@ -699,14 +699,30 @@ export interface TriviumOpenOptions {
     storageMode?: TriviumStorageMode;
 }
 
+export interface TriviumNodeReference {
+    id?: number;
+    externalId?: string;
+    namespace?: string;
+}
+
+export interface TriviumResolvedNodeReference {
+    id: number;
+    externalId: string | null;
+    namespace: string | null;
+}
+
 export interface TriviumEdgeView {
     targetId: number;
+    targetExternalId?: string | null;
+    targetNamespace?: string | null;
     label: string;
     weight: number;
 }
 
 export interface TriviumNodeView {
     id: number;
+    externalId?: string | null;
+    namespace?: string | null;
     vector: number[];
     payload: unknown;
     edges: TriviumEdgeView[];
@@ -715,6 +731,8 @@ export interface TriviumNodeView {
 
 export interface TriviumSearchHit {
     id: number;
+    externalId?: string | null;
+    namespace?: string | null;
     score: number;
     payload: unknown;
 }
@@ -758,6 +776,49 @@ export interface TriviumLinkRequest extends TriviumOpenOptions {
 export interface TriviumUnlinkRequest extends TriviumOpenOptions {
     src: number;
     dst: number;
+}
+
+export interface TriviumResolveIdRequest extends TriviumOpenOptions {
+    externalId: string;
+    namespace?: string;
+}
+
+export interface TriviumUpsertRequest extends TriviumOpenOptions, TriviumNodeReference {
+    vector: number[];
+    payload: unknown;
+}
+
+export interface TriviumBulkUpsertItem extends TriviumNodeReference {
+    vector: number[];
+    payload: unknown;
+}
+
+export interface TriviumBulkUpsertRequest extends TriviumOpenOptions {
+    items: TriviumBulkUpsertItem[];
+}
+
+export interface TriviumBulkLinkItem {
+    src: TriviumNodeReference;
+    dst: TriviumNodeReference;
+    label?: string;
+    weight?: number;
+}
+
+export interface TriviumBulkLinkRequest extends TriviumOpenOptions {
+    items: TriviumBulkLinkItem[];
+}
+
+export interface TriviumBulkUnlinkItem {
+    src: TriviumNodeReference;
+    dst: TriviumNodeReference;
+}
+
+export interface TriviumBulkUnlinkRequest extends TriviumOpenOptions {
+    items: TriviumBulkUnlinkItem[];
+}
+
+export interface TriviumBulkDeleteRequest extends TriviumOpenOptions {
+    items: TriviumNodeReference[];
 }
 
 export interface TriviumNeighborsRequest extends TriviumOpenOptions {
@@ -833,12 +894,100 @@ export interface TriviumFlushRequest extends TriviumOpenOptions {}
 
 export interface TriviumStatRequest extends TriviumOpenOptions {}
 
+export interface ControlTriviumBulkUpsertItem {
+    id: number;
+    vector: number[];
+    payload: unknown;
+}
+
+export interface ControlTriviumBulkUpsertRequest extends TriviumOpenOptions {
+    items: ControlTriviumBulkUpsertItem[];
+}
+
+export interface ControlTriviumBulkLinkItem {
+    src: number;
+    dst: number;
+    label?: string;
+    weight?: number;
+}
+
+export interface ControlTriviumBulkLinkRequest extends TriviumOpenOptions {
+    items: ControlTriviumBulkLinkItem[];
+}
+
+export interface ControlTriviumBulkUnlinkItem {
+    src: number;
+    dst: number;
+}
+
+export interface ControlTriviumBulkUnlinkRequest extends TriviumOpenOptions {
+    items: ControlTriviumBulkUnlinkItem[];
+}
+
+export interface ControlTriviumBulkDeleteItem {
+    id: number;
+}
+
+export interface ControlTriviumBulkDeleteRequest extends TriviumOpenOptions {
+    items: ControlTriviumBulkDeleteItem[];
+}
+
 export interface TriviumInsertResponse {
     id: number;
 }
 
+export interface TriviumResolveIdResponse {
+    id: number | null;
+    externalId: string;
+    namespace: string;
+}
+
+export type TriviumUpsertAction = 'inserted' | 'updated';
+
+export interface TriviumUpsertResponse {
+    id: number;
+    action: TriviumUpsertAction;
+    externalId: string | null;
+    namespace: string | null;
+}
+
 export interface TriviumNeighborsResponse {
     ids: number[];
+    nodes?: TriviumResolvedNodeReference[];
+}
+
+export interface TriviumBulkFailure {
+    index: number;
+    message: string;
+}
+
+export interface TriviumBulkMutationResponse {
+    totalCount: number;
+    successCount: number;
+    failureCount: number;
+    failures: TriviumBulkFailure[];
+}
+
+export interface ControlTriviumBulkUpsertResponseItem {
+    index: number;
+    id: number;
+    action: TriviumUpsertAction;
+}
+
+export interface ControlTriviumBulkUpsertResponse extends TriviumBulkMutationResponse {
+    items: ControlTriviumBulkUpsertResponseItem[];
+}
+
+export interface TriviumBulkUpsertResponseItem {
+    index: number;
+    id: number;
+    action: TriviumUpsertAction;
+    externalId: string | null;
+    namespace: string | null;
+}
+
+export interface TriviumBulkUpsertResponse extends TriviumBulkMutationResponse {
+    items: TriviumBulkUpsertResponseItem[];
 }
 
 export interface TriviumFilterWhereResponse {
@@ -874,6 +1023,13 @@ export interface TriviumStatResponse extends TriviumDatabaseRecord {
     filePath: string;
     exists: boolean;
     nodeCount: number;
+    edgeCount: number;
+    textIndexCount: number | null;
+    lastFlushAt: string | null;
+    vectorDim: number | null;
+    databaseSize: number;
+    walSize: number;
+    vecSize: number;
     estimatedMemoryBytes: number;
 }
 

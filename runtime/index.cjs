@@ -1034,6 +1034,73 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'trivium.private', error);
         }
     });
+    router.post('/trivium/resolve-id', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.resolveId(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium resolve id', {
+                database,
+                externalId: result.externalId,
+                namespace: result.namespace,
+                id: result.id,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/upsert', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.upsert(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium upsert', {
+                database,
+                id: result.id,
+                action: result.action,
+                externalId: result.externalId,
+                namespace: result.namespace,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/bulk-upsert', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.bulkUpsert(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium bulk upsert', {
+                database,
+                totalCount: result.totalCount,
+                successCount: result.successCount,
+                failureCount: result.failureCount,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
     router.post('/trivium/get', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -1043,11 +1110,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const node = await runtime.core.getTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const node = await runtime.trivium.get(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium get', {
                 database,
                 id: payload.id,
@@ -1115,16 +1178,34 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.deleteTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.delete(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium delete', {
                 database,
                 id: payload.id,
             });
             ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/bulk-delete', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.bulkDelete(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium bulk delete', {
+                database,
+                totalCount: result.totalCount,
+                successCount: result.successCount,
+                failureCount: result.failureCount,
+            });
+            ok(res, result);
         }
         catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
@@ -1155,6 +1236,28 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'trivium.private', error);
         }
     });
+    router.post('/trivium/bulk-link', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.bulkLink(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium bulk link', {
+                database,
+                totalCount: result.totalCount,
+                successCount: result.successCount,
+                failureCount: result.failureCount,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
     router.post('/trivium/unlink', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -1180,6 +1283,28 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'trivium.private', error);
         }
     });
+    router.post('/trivium/bulk-unlink', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.bulkUnlink(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium bulk unlink', {
+                database,
+                totalCount: result.totalCount,
+                successCount: result.successCount,
+                failureCount: result.failureCount,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
     router.post('/trivium/neighbors', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -1189,11 +1314,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.neighborsTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const result = await runtime.trivium.neighbors(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium neighbors', {
                 database,
                 id: payload.id,
@@ -1214,11 +1335,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const hits = await runtime.core.searchTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const hits = await runtime.trivium.search(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium search', {
                 database,
                 topK: payload.topK ?? 5,
@@ -1239,11 +1356,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const hits = await runtime.core.searchAdvancedTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const hits = await runtime.trivium.searchAdvanced(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium advanced search', {
                 database,
                 topK: payload.topK ?? 5,
@@ -1264,11 +1377,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const hits = await runtime.core.searchHybridTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const hits = await runtime.trivium.searchHybrid(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium hybrid search', {
                 database,
                 topK: payload.topK ?? 5,
@@ -1289,11 +1398,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const nodes = await runtime.core.filterWhereTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const nodes = await runtime.trivium.filterWhere(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium filter where', {
                 database,
                 count: nodes.length,
@@ -1313,11 +1418,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const rows = await runtime.core.queryTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const rows = await runtime.trivium.query(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium query', {
                 database,
                 rowCount: rows.length,
@@ -1408,11 +1509,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.flushTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.flush(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium flush', {
                 database,
             });
@@ -1431,11 +1528,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.statTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const result = await runtime.trivium.stat(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
                 database,
                 nodeCount: result.nodeCount,
@@ -1760,6 +1853,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
 /* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
 /* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -1787,6 +1882,7 @@ function createAuthorityRuntime() {
     const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_10__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_5__.HttpService(core);
     const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_7__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_13__.TriviumService(core);
     return {
         events,
         audit,
@@ -1801,6 +1897,7 @@ function createAuthorityRuntime() {
         files,
         http,
         jobs,
+        trivium,
     };
 }
 
@@ -2136,6 +2233,12 @@ class CoreService {
             payload: request.payload,
         });
     }
+    async bulkUpsertTrivium(dbPath, request) {
+        return await this.request('/v1/trivium/bulk-upsert', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
+        });
+    }
     async getTrivium(dbPath, request) {
         const response = await this.request('/v1/trivium/get', {
             ...buildTriviumOpenPayload(dbPath, request),
@@ -2172,11 +2275,29 @@ class CoreService {
             weight: request.weight,
         });
     }
+    async bulkLinkTrivium(dbPath, request) {
+        return await this.request('/v1/trivium/bulk-link', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
+        });
+    }
     async unlinkTrivium(dbPath, request) {
         await this.request('/v1/trivium/unlink', {
             ...buildTriviumOpenPayload(dbPath, request),
             src: request.src,
             dst: request.dst,
+        });
+    }
+    async bulkUnlinkTrivium(dbPath, request) {
+        return await this.request('/v1/trivium/bulk-unlink', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
+        });
+    }
+    async bulkDeleteTrivium(dbPath, request) {
+        return await this.request('/v1/trivium/bulk-delete', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            items: request.items,
         });
     }
     async neighborsTrivium(dbPath, request) {
@@ -4166,6 +4287,547 @@ class StorageService {
     getKvDbPath(kvDir, extensionId) {
         return node_path__WEBPACK_IMPORTED_MODULE_0___default().join(kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(extensionId)}.sqlite`);
     }
+}
+
+
+/***/ },
+
+/***/ "./src/services/trivium-service.ts"
+/*!*****************************************!*\
+  !*** ./src/services/trivium-service.ts ***!
+  \*****************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   TriviumService: () => (/* binding */ TriviumService)
+/* harmony export */ });
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+const EXTERNAL_IDS_TABLE = 'authority_trivium_external_ids';
+const META_TABLE = 'authority_trivium_meta';
+const LAST_FLUSH_META_KEY = 'last_flush_at';
+class TriviumService {
+    core;
+    schemaReady = new Map();
+    constructor(core) {
+        this.core = core;
+    }
+    async resolveId(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const namespace = getTriviumNamespace(request.namespace);
+        const externalId = getRequiredExternalId(request.externalId);
+        const mapping = await this.fetchMappingByExternal(this.getMappingDbPath(user, extensionId, database), externalId, namespace);
+        return {
+            id: mapping?.id ?? null,
+            externalId,
+            namespace,
+        };
+    }
+    async upsert(user, extensionId, request) {
+        const response = await this.bulkUpsert(user, extensionId, {
+            ...request,
+            items: [
+                {
+                    ...(request.id === undefined ? {} : { id: request.id }),
+                    ...(request.externalId === undefined ? {} : { externalId: request.externalId }),
+                    ...(request.namespace === undefined ? {} : { namespace: request.namespace }),
+                    vector: request.vector,
+                    payload: request.payload,
+                },
+            ],
+        });
+        if (response.items.length > 0) {
+            const item = response.items[0];
+            return {
+                id: item.id,
+                action: item.action,
+                externalId: item.externalId,
+                namespace: item.namespace,
+            };
+        }
+        throw new Error(response.failures[0]?.message ?? 'Trivium upsert failed');
+    }
+    async bulkUpsert(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.ensureSchema(mappingDbPath);
+        const failures = [];
+        const prepared = [];
+        for (const [index, item] of request.items.entries()) {
+            try {
+                const mapping = await this.resolveReference(mappingDbPath, item, true);
+                prepared.push({
+                    originalIndex: index,
+                    mapping,
+                    request: {
+                        id: mapping.id,
+                        vector: item.vector,
+                        payload: item.payload,
+                    },
+                });
+            }
+            catch (error) {
+                failures.push({ index, message: (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.asErrorMessage)(error) });
+            }
+        }
+        let successItems = [];
+        if (prepared.length > 0) {
+            const coreResponse = await this.core.bulkUpsertTrivium(dbPath, {
+                ...request,
+                database,
+                items: prepared.map(item => item.request),
+            });
+            const failedPreparedIndexes = new Set(coreResponse.failures.map(item => item.index));
+            const cleanupIds = prepared
+                .filter((item, index) => item.mapping.createdMapping && failedPreparedIndexes.has(index))
+                .map(item => item.mapping.id);
+            if (cleanupIds.length > 0) {
+                await this.deleteMappingsByInternalIds(mappingDbPath, cleanupIds);
+            }
+            failures.push(...coreResponse.failures.map(item => ({
+                index: prepared[item.index]?.originalIndex ?? item.index,
+                message: item.message,
+            })));
+            successItems = coreResponse.items
+                .map(item => {
+                const preparedItem = prepared[item.index];
+                if (!preparedItem) {
+                    return null;
+                }
+                return {
+                    index: preparedItem.originalIndex,
+                    id: item.id,
+                    action: item.action,
+                    externalId: preparedItem.mapping.externalId,
+                    namespace: preparedItem.mapping.namespace,
+                };
+            })
+                .filter((item) => item !== null)
+                .sort((left, right) => left.index - right.index);
+        }
+        return {
+            totalCount: request.items.length,
+            successCount: successItems.length,
+            failureCount: failures.length,
+            failures: failures.sort((left, right) => left.index - right.index),
+            items: successItems,
+        };
+    }
+    async bulkLink(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const failures = [];
+        const prepared = [];
+        for (const [index, item] of request.items.entries()) {
+            try {
+                const src = await this.resolveReference(mappingDbPath, item.src, false);
+                const dst = await this.resolveReference(mappingDbPath, item.dst, false);
+                prepared.push({
+                    originalIndex: index,
+                    request: {
+                        src: src.id,
+                        dst: dst.id,
+                        ...(item.label === undefined ? {} : { label: item.label }),
+                        ...(item.weight === undefined ? {} : { weight: item.weight }),
+                    },
+                });
+            }
+            catch (error) {
+                failures.push({ index, message: (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.asErrorMessage)(error) });
+            }
+        }
+        return await this.runBulkMutation(prepared, failures, request.items.length, items => this.core.bulkLinkTrivium(dbPath, {
+            ...request,
+            database,
+            items,
+        }));
+    }
+    async bulkUnlink(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const failures = [];
+        const prepared = [];
+        for (const [index, item] of request.items.entries()) {
+            try {
+                const src = await this.resolveReference(mappingDbPath, item.src, false);
+                const dst = await this.resolveReference(mappingDbPath, item.dst, false);
+                prepared.push({
+                    originalIndex: index,
+                    request: {
+                        src: src.id,
+                        dst: dst.id,
+                    },
+                });
+            }
+            catch (error) {
+                failures.push({ index, message: (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.asErrorMessage)(error) });
+            }
+        }
+        return await this.runBulkMutation(prepared, failures, request.items.length, items => this.core.bulkUnlinkTrivium(dbPath, {
+            ...request,
+            database,
+            items,
+        }));
+    }
+    async bulkDelete(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const failures = [];
+        const prepared = [];
+        for (const [index, item] of request.items.entries()) {
+            try {
+                const resolved = await this.resolveReference(mappingDbPath, item, false);
+                prepared.push({
+                    originalIndex: index,
+                    id: resolved.id,
+                    request: { id: resolved.id },
+                });
+            }
+            catch (error) {
+                failures.push({ index, message: (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.asErrorMessage)(error) });
+            }
+        }
+        const response = await this.runBulkMutation(prepared, failures, request.items.length, items => this.core.bulkDeleteTrivium(dbPath, {
+            ...request,
+            database,
+            items,
+        }));
+        const failedOriginalIndexes = new Set(response.failures.map(item => item.index));
+        const deletedIds = prepared
+            .filter(item => !failedOriginalIndexes.has(item.originalIndex))
+            .map(item => item.id);
+        if (deletedIds.length > 0) {
+            await this.deleteMappingsByInternalIds(mappingDbPath, deletedIds);
+        }
+        return response;
+    }
+    async delete(user, extensionId, request) {
+        const response = await this.bulkDelete(user, extensionId, {
+            ...request,
+            items: [{ id: request.id }],
+        });
+        if (response.failureCount > 0) {
+            throw new Error(response.failures[0]?.message ?? 'Trivium delete failed');
+        }
+    }
+    async get(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const node = await this.core.getTrivium(dbPath, { ...request, database });
+        if (!node) {
+            return null;
+        }
+        const [enriched] = await this.enrichNodes(mappingDbPath, [node]);
+        return enriched ?? node;
+    }
+    async neighbors(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const response = await this.core.neighborsTrivium(dbPath, { ...request, database });
+        return {
+            ...response,
+            nodes: await this.resolveMappingsByInternalIds(mappingDbPath, response.ids),
+        };
+    }
+    async search(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        return await this.enrichSearchHits(mappingDbPath, await this.core.searchTrivium(dbPath, { ...request, database }));
+    }
+    async searchAdvanced(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        return await this.enrichSearchHits(mappingDbPath, await this.core.searchAdvancedTrivium(dbPath, { ...request, database }));
+    }
+    async searchHybrid(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        return await this.enrichSearchHits(mappingDbPath, await this.core.searchHybridTrivium(dbPath, { ...request, database }));
+    }
+    async filterWhere(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        return await this.enrichNodes(mappingDbPath, await this.core.filterWhereTrivium(dbPath, { ...request, database }));
+    }
+    async query(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        return await this.enrichRows(mappingDbPath, await this.core.queryTrivium(dbPath, { ...request, database }));
+    }
+    async flush(user, extensionId, request = {}) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.core.flushTrivium(dbPath, { ...request, database });
+        await this.ensureSchema(mappingDbPath);
+        await this.writeMetaValue(mappingDbPath, LAST_FLUSH_META_KEY, new Date().toISOString());
+    }
+    async stat(user, extensionId, request = {}) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const stat = await this.core.statTrivium(dbPath, { ...request, database });
+        const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
+        return {
+            ...stat,
+            lastFlushAt,
+        };
+    }
+    async ensureSchema(mappingDbPath) {
+        const existing = this.schemaReady.get(mappingDbPath);
+        if (existing) {
+            await existing;
+            return;
+        }
+        const schemaPromise = this.core.migrateSql(mappingDbPath, {
+            migrations: [{
+                    id: '001_authority_trivium_mapping',
+                    statement: `CREATE TABLE IF NOT EXISTS ${EXTERNAL_IDS_TABLE} (
+                    internal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    namespace TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (namespace, external_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_${EXTERNAL_IDS_TABLE}_external ON ${EXTERNAL_IDS_TABLE}(namespace, external_id);
+                CREATE INDEX IF NOT EXISTS idx_${EXTERNAL_IDS_TABLE}_internal ON ${EXTERNAL_IDS_TABLE}(internal_id);
+                CREATE TABLE IF NOT EXISTS ${META_TABLE} (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );`,
+                }],
+        }).then(() => undefined);
+        this.schemaReady.set(mappingDbPath, schemaPromise);
+        try {
+            await schemaPromise;
+        }
+        catch (error) {
+            this.schemaReady.delete(mappingDbPath);
+            throw error;
+        }
+    }
+    resolvePaths(user, extensionId, database) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.getUserAuthorityPaths)(user);
+        const directory = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
+        return {
+            dbPath: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(directory, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(database)}.tdb`),
+            mappingDbPath: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(directory, '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(database)}.sqlite`),
+        };
+    }
+    getMappingDbPath(user, extensionId, database) {
+        return this.resolvePaths(user, extensionId, database).mappingDbPath;
+    }
+    async runBulkMutation(prepared, failures, totalCount, execute) {
+        if (prepared.length > 0) {
+            const coreResponse = await execute(prepared.map(item => item.request));
+            failures.push(...coreResponse.failures.map(item => ({
+                index: prepared[item.index]?.originalIndex ?? item.index,
+                message: item.message,
+            })));
+            return {
+                totalCount,
+                successCount: prepared.length - coreResponse.failureCount,
+                failureCount: failures.length,
+                failures: failures.sort((left, right) => left.index - right.index),
+            };
+        }
+        return {
+            totalCount,
+            successCount: 0,
+            failureCount: failures.length,
+            failures: failures.sort((left, right) => left.index - right.index),
+        };
+    }
+    async resolveReference(mappingDbPath, reference, allowCreate) {
+        const externalId = reference.externalId?.trim() ? reference.externalId.trim() : null;
+        const hasId = reference.id != null;
+        if (!hasId && !externalId) {
+            throw new Error('Trivium reference must include id or externalId');
+        }
+        if (externalId === null) {
+            return {
+                id: getRequiredNumericId(reference.id),
+                externalId: null,
+                namespace: null,
+                createdMapping: false,
+            };
+        }
+        const namespace = getTriviumNamespace(reference.namespace);
+        await this.ensureSchema(mappingDbPath);
+        const existing = await this.fetchMappingByExternal(mappingDbPath, externalId, namespace);
+        if (existing) {
+            if (hasId && existing.id !== getRequiredNumericId(reference.id)) {
+                throw new Error(`Trivium externalId ${namespace}:${externalId} is already mapped to ${existing.id}`);
+            }
+            return { ...existing, createdMapping: false };
+        }
+        if (!allowCreate) {
+            throw new Error(`Trivium externalId ${namespace}:${externalId} is not mapped`);
+        }
+        const explicitId = hasId ? getRequiredNumericId(reference.id) : null;
+        try {
+            if (explicitId != null) {
+                await this.insertMappingWithId(mappingDbPath, explicitId, externalId, namespace);
+                return { id: explicitId, externalId, namespace, createdMapping: true };
+            }
+            const id = await this.insertMappingAuto(mappingDbPath, externalId, namespace);
+            return { id, externalId, namespace, createdMapping: true };
+        }
+        catch (error) {
+            const raced = await this.fetchMappingByExternal(mappingDbPath, externalId, namespace);
+            if (raced) {
+                if (explicitId != null && raced.id !== explicitId) {
+                    throw new Error(`Trivium externalId ${namespace}:${externalId} is already mapped to ${raced.id}`);
+                }
+                return { ...raced, createdMapping: false };
+            }
+            throw new Error(`Failed to create Trivium externalId mapping: ${(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.asErrorMessage)(error)}`);
+        }
+    }
+    async fetchMappingByExternal(mappingDbPath, externalId, namespace) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return null;
+        }
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace FROM ${EXTERNAL_IDS_TABLE} WHERE namespace = ?1 AND external_id = ?2 LIMIT 1`,
+            params: [namespace, externalId],
+        });
+        const [row] = result.rows;
+        return row ? readResolvedReference(row) : null;
+    }
+    async resolveMappingsByInternalIds(mappingDbPath, ids) {
+        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, ids);
+        return ids.map(id => mappings.get(id) ?? { id, externalId: null, namespace: null });
+    }
+    async fetchMappingsByInternalIds(mappingDbPath, ids) {
+        const uniqueIds = [...new Set(ids.filter(value => Number.isSafeInteger(value) && value > 0))];
+        if (uniqueIds.length === 0 || !node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return new Map();
+        }
+        const statement = `SELECT internal_id AS internalId, external_id AS externalId, namespace FROM ${EXTERNAL_IDS_TABLE} WHERE internal_id IN (${uniqueIds.map((_, index) => `?${index + 1}`).join(', ')})`;
+        const result = await this.core.querySql(mappingDbPath, {
+            statement,
+            params: uniqueIds,
+        });
+        return new Map(result.rows.map(row => {
+            const resolved = readResolvedReference(row);
+            return [resolved.id, resolved];
+        }));
+    }
+    async insertMappingAuto(mappingDbPath, externalId, namespace) {
+        const timestamp = new Date().toISOString();
+        const result = await this.core.execSql(mappingDbPath, {
+            statement: `INSERT INTO ${EXTERNAL_IDS_TABLE} (namespace, external_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)`,
+            params: [namespace, externalId, timestamp, timestamp],
+        });
+        return getRequiredNumericId(result.lastInsertRowid, 'lastInsertRowid');
+    }
+    async insertMappingWithId(mappingDbPath, id, externalId, namespace) {
+        const timestamp = new Date().toISOString();
+        await this.core.execSql(mappingDbPath, {
+            statement: `INSERT INTO ${EXTERNAL_IDS_TABLE} (internal_id, namespace, external_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)`,
+            params: [id, namespace, externalId, timestamp, timestamp],
+        });
+    }
+    async deleteMappingsByInternalIds(mappingDbPath, ids) {
+        const uniqueIds = [...new Set(ids.filter(value => Number.isSafeInteger(value) && value > 0))];
+        if (uniqueIds.length === 0 || !node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return;
+        }
+        await this.core.execSql(mappingDbPath, {
+            statement: `DELETE FROM ${EXTERNAL_IDS_TABLE} WHERE internal_id IN (${uniqueIds.map((_, index) => `?${index + 1}`).join(', ')})`,
+            params: uniqueIds,
+        });
+    }
+    async readMetaValue(mappingDbPath, key) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return null;
+        }
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT value FROM ${META_TABLE} WHERE key = ?1 LIMIT 1`,
+            params: [key],
+        });
+        const [row] = result.rows;
+        return typeof row?.value === 'string' ? row.value : null;
+    }
+    async writeMetaValue(mappingDbPath, key, value) {
+        const timestamp = new Date().toISOString();
+        await this.core.execSql(mappingDbPath, {
+            statement: `INSERT INTO ${META_TABLE} (key, value, updated_at) VALUES (?1, ?2, ?3)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+            params: [key, value, timestamp],
+        });
+    }
+    async enrichSearchHits(mappingDbPath, hits) {
+        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, hits.map(hit => hit.id));
+        return hits.map(hit => ({
+            ...hit,
+            externalId: mappings.get(hit.id)?.externalId ?? null,
+            namespace: mappings.get(hit.id)?.namespace ?? null,
+        }));
+    }
+    async enrichNodes(mappingDbPath, nodes) {
+        const ids = nodes.flatMap(node => [node.id, ...node.edges.map(edge => edge.targetId)]);
+        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, ids);
+        return nodes.map(node => ({
+            ...node,
+            externalId: mappings.get(node.id)?.externalId ?? null,
+            namespace: mappings.get(node.id)?.namespace ?? null,
+            edges: node.edges.map(edge => ({
+                ...edge,
+                targetExternalId: mappings.get(edge.targetId)?.externalId ?? null,
+                targetNamespace: mappings.get(edge.targetId)?.namespace ?? null,
+            })),
+        }));
+    }
+    async enrichRows(mappingDbPath, rows) {
+        const ids = rows.flatMap(row => Object.values(row).flatMap(node => [node.id, ...node.edges.map(edge => edge.targetId)]));
+        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, ids);
+        return rows.map(row => Object.fromEntries(Object.entries(row).map(([key, node]) => [key, {
+                ...node,
+                externalId: mappings.get(node.id)?.externalId ?? null,
+                namespace: mappings.get(node.id)?.namespace ?? null,
+                edges: node.edges.map(edge => ({
+                    ...edge,
+                    targetExternalId: mappings.get(edge.targetId)?.externalId ?? null,
+                    targetNamespace: mappings.get(edge.targetId)?.namespace ?? null,
+                })),
+            }])));
+    }
+}
+function getTriviumDatabaseName(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+function getTriviumNamespace(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+function getRequiredExternalId(value) {
+    if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+    }
+    throw new Error('Trivium externalId must not be empty');
+}
+function getRequiredNumericId(value, label = 'id') {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return value;
+    }
+    throw new Error(`Trivium ${label} must be a positive safe integer`);
+}
+function readResolvedReference(row) {
+    return {
+        id: getRequiredNumericId(row.internalId, 'internalId'),
+        externalId: typeof row.externalId === 'string' ? row.externalId : null,
+        namespace: typeof row.namespace === 'string' ? row.namespace : null,
+    };
 }
 
 

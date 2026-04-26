@@ -38,6 +38,12 @@ import type {
     SqlQueryResult,
     SqlTransactionRequest,
     SqlTransactionResponse,
+    TriviumBulkDeleteRequest,
+    TriviumBulkLinkRequest,
+    TriviumBulkMutationResponse,
+    TriviumBulkUnlinkRequest,
+    TriviumBulkUpsertRequest,
+    TriviumBulkUpsertResponse,
     TriviumBuildTextIndexRequest,
     TriviumDeleteRequest,
     TriviumFilterWhereRequest,
@@ -55,6 +61,8 @@ import type {
     TriviumNodeView,
     TriviumQueryRequest,
     TriviumQueryRow,
+    TriviumResolveIdRequest,
+    TriviumResolveIdResponse,
     TriviumSearchHit,
     TriviumSearchAdvancedRequest,
     TriviumSearchHybridRequest,
@@ -62,6 +70,8 @@ import type {
     TriviumStatRequest,
     TriviumStatResponse,
     TriviumUnlinkRequest,
+    TriviumUpsertRequest,
+    TriviumUpsertResponse,
     TriviumUpdatePayloadRequest,
     TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
@@ -153,12 +163,18 @@ export class AuthorityClient {
     readonly trivium: {
         insert: (input: TriviumInsertRequest) => Promise<TriviumInsertResponse>;
         insertWithId: (input: TriviumInsertWithIdRequest) => Promise<void>;
+        resolveId: (input: TriviumResolveIdRequest) => Promise<TriviumResolveIdResponse>;
+        upsert: (input: TriviumUpsertRequest) => Promise<TriviumUpsertResponse>;
+        bulkUpsert: (input: TriviumBulkUpsertRequest) => Promise<TriviumBulkUpsertResponse>;
         get: (input: TriviumGetRequest) => Promise<TriviumNodeView | null>;
         updatePayload: (input: TriviumUpdatePayloadRequest) => Promise<void>;
         updateVector: (input: TriviumUpdateVectorRequest) => Promise<void>;
         delete: (input: TriviumDeleteRequest) => Promise<void>;
+        bulkDelete: (input: TriviumBulkDeleteRequest) => Promise<TriviumBulkMutationResponse>;
         link: (input: TriviumLinkRequest) => Promise<void>;
+        bulkLink: (input: TriviumBulkLinkRequest) => Promise<TriviumBulkMutationResponse>;
         unlink: (input: TriviumUnlinkRequest) => Promise<void>;
+        bulkUnlink: (input: TriviumBulkUnlinkRequest) => Promise<TriviumBulkMutationResponse>;
         neighbors: (input: TriviumNeighborsRequest) => Promise<TriviumNeighborsResponse>;
         search: (input: TriviumSearchRequest) => Promise<TriviumSearchHit[]>;
         searchAdvanced: (input: TriviumSearchAdvancedRequest) => Promise<TriviumSearchHit[]>;
@@ -438,6 +454,51 @@ export class AuthorityClient {
                     },
                 });
             },
+            resolveId: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `解析 Trivium externalId（${database}）`,
+                });
+                return await this.requestWithSession<TriviumResolveIdResponse>('/trivium/resolve-id', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            upsert: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `写入或更新 Trivium 节点（${database}）`,
+                });
+                return await this.requestWithSession<TriviumUpsertResponse>('/trivium/upsert', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            bulkUpsert: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `批量写入或更新 Trivium 节点（${database}）`,
+                });
+                return await this.requestWithSession<TriviumBulkUpsertResponse>('/trivium/bulk-upsert', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             get: async input => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
@@ -499,6 +560,21 @@ export class AuthorityClient {
                     },
                 });
             },
+            bulkDelete: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `批量删除 Trivium 节点（${database}）`,
+                });
+                return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-delete', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             link: async input => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
@@ -514,6 +590,21 @@ export class AuthorityClient {
                     },
                 });
             },
+            bulkLink: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `批量建立 Trivium 图边（${database}）`,
+                });
+                return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-link', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             unlink: async input => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
@@ -522,6 +613,21 @@ export class AuthorityClient {
                     reason: `删除 Trivium 图边 ${input.src} -> ${input.dst}（${database}）`,
                 });
                 await this.requestWithSession('/trivium/unlink', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            bulkUnlink: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `批量删除 Trivium 图边（${database}）`,
+                });
+                return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-unlink', {
                     method: 'POST',
                     body: {
                         ...input,
