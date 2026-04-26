@@ -40,12 +40,14 @@ import type {
     SqlQueryResult,
     SqlTransactionRequest,
     SqlTransactionResponse,
+    TriviumBulkFailure,
     TriviumBulkDeleteRequest,
     TriviumBulkLinkRequest,
     TriviumBulkMutationResponse,
     TriviumBulkUnlinkRequest,
     TriviumBulkUpsertRequest,
     TriviumBulkUpsertResponse,
+    TriviumBulkUpsertResponseItem,
     TriviumBuildTextIndexRequest,
     TriviumDeleteRequest,
     TriviumFilterWhereRequest,
@@ -143,12 +145,81 @@ export type AuthorityFeaturePath =
     | 'diagnostics.jobsPage'
     | 'diagnostics.benchmarkCore';
 
+export interface AuthorityChunkSplitOptions {
+    maxItemsPerChunk?: number;
+    maxBytesPerChunk?: number;
+}
+
+export interface AuthorityChunk<T> {
+    chunkIndex: number;
+    itemOffset: number;
+    itemCount: number;
+    estimatedBytes: number;
+    items: T[];
+}
+
+export interface AuthorityChunkedMutationChunkResult<Response extends TriviumBulkMutationResponse = TriviumBulkMutationResponse> {
+    chunkIndex: number;
+    itemOffset: number;
+    itemCount: number;
+    estimatedBytes: number;
+    elapsedMs: number;
+    successCount: number;
+    failureCount: number;
+    response?: Response;
+    error?: string;
+}
+
+export interface AuthorityChunkedFailure extends TriviumBulkFailure {
+    globalIndex: number;
+    chunkIndex: number;
+    chunkItemIndex: number;
+    itemOffset: number;
+    kind: 'item' | 'chunk';
+}
+
+export interface AuthorityChunkedTriviumProgress<Response extends TriviumBulkMutationResponse = TriviumBulkMutationResponse> {
+    totalChunks: number;
+    completedChunks: number;
+    totalItems: number;
+    completedItems: number;
+    successCount: number;
+    failureCount: number;
+    elapsedMs: number;
+    lastChunk: AuthorityChunkedMutationChunkResult<Response>;
+}
+
+export interface AuthorityChunkedTriviumOptions<Response extends TriviumBulkMutationResponse = TriviumBulkMutationResponse> extends AuthorityChunkSplitOptions {
+    continueOnChunkError?: boolean;
+    onProgress?: (progress: AuthorityChunkedTriviumProgress<Response>) => void | Promise<void>;
+}
+
+export interface AuthorityChunkedTriviumMutationResult<Response extends TriviumBulkMutationResponse = TriviumBulkMutationResponse> extends TriviumBulkMutationResponse {
+    chunkCount: number;
+    elapsedMs: number;
+    chunks: AuthorityChunkedMutationChunkResult<Response>[];
+    failures: AuthorityChunkedFailure[];
+}
+
+export interface AuthorityChunkedTriviumUpsertResponseItem extends TriviumBulkUpsertResponseItem {
+    globalIndex: number;
+    chunkIndex: number;
+    chunkItemIndex: number;
+}
+
+export interface AuthorityChunkedTriviumUpsertResult extends AuthorityChunkedTriviumMutationResult<TriviumBulkUpsertResponse> {
+    items: AuthorityChunkedTriviumUpsertResponseItem[];
+}
+
 interface SessionRequestOptions {
     method?: 'GET' | 'POST';
     body?: unknown;
 }
 
 const SDK_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
+const DEFAULT_TRIVIUM_CHUNK_ITEMS = 128;
+const DEFAULT_TRIVIUM_CHUNK_BYTES = 256 * 1024;
+const UTF8_ENCODER = new TextEncoder();
 
 export class AuthorityClient {
     readonly storage: {
@@ -190,15 +261,19 @@ export class AuthorityClient {
         resolveId: (input: TriviumResolveIdRequest) => Promise<TriviumResolveIdResponse>;
         upsert: (input: TriviumUpsertRequest) => Promise<TriviumUpsertResponse>;
         bulkUpsert: (input: TriviumBulkUpsertRequest) => Promise<TriviumBulkUpsertResponse>;
+        bulkUpsertChunked: (input: TriviumBulkUpsertRequest, options?: AuthorityChunkedTriviumOptions<TriviumBulkUpsertResponse>) => Promise<AuthorityChunkedTriviumUpsertResult>;
         get: (input: TriviumGetRequest) => Promise<TriviumNodeView | null>;
         updatePayload: (input: TriviumUpdatePayloadRequest) => Promise<void>;
         updateVector: (input: TriviumUpdateVectorRequest) => Promise<void>;
         delete: (input: TriviumDeleteRequest) => Promise<void>;
         bulkDelete: (input: TriviumBulkDeleteRequest) => Promise<TriviumBulkMutationResponse>;
+        bulkDeleteChunked: (input: TriviumBulkDeleteRequest, options?: AuthorityChunkedTriviumOptions) => Promise<AuthorityChunkedTriviumMutationResult>;
         link: (input: TriviumLinkRequest) => Promise<void>;
         bulkLink: (input: TriviumBulkLinkRequest) => Promise<TriviumBulkMutationResponse>;
+        bulkLinkChunked: (input: TriviumBulkLinkRequest, options?: AuthorityChunkedTriviumOptions) => Promise<AuthorityChunkedTriviumMutationResult>;
         unlink: (input: TriviumUnlinkRequest) => Promise<void>;
         bulkUnlink: (input: TriviumBulkUnlinkRequest) => Promise<TriviumBulkMutationResponse>;
+        bulkUnlinkChunked: (input: TriviumBulkUnlinkRequest, options?: AuthorityChunkedTriviumOptions) => Promise<AuthorityChunkedTriviumMutationResult>;
         neighbors: (input: TriviumNeighborsRequest) => Promise<TriviumNeighborsResponse>;
         search: (input: TriviumSearchRequest) => Promise<TriviumSearchHit[]>;
         searchAdvanced: (input: TriviumSearchAdvancedRequest) => Promise<TriviumSearchHit[]>;
@@ -514,18 +589,19 @@ export class AuthorityClient {
             },
             bulkUpsert: async input => {
                 const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量写入能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `批量写入或更新 Trivium 节点（${database}）`,
                 });
-                return await this.requestWithSession<TriviumBulkUpsertResponse>('/trivium/bulk-upsert', {
-                    method: 'POST',
-                    body: {
-                        ...input,
-                        database,
-                    },
+                return await this.bulkUpsertTriviumRequest({
+                    ...input,
+                    database,
                 });
+            },
+            bulkUpsertChunked: async (input, options) => {
+                return await this.bulkUpsertTriviumChunked(input, options);
             },
             get: async input => {
                 const database = getTriviumDatabaseName(input.database);
@@ -590,18 +666,19 @@ export class AuthorityClient {
             },
             bulkDelete: async input => {
                 const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量删除能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `批量删除 Trivium 节点（${database}）`,
                 });
-                return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-delete', {
-                    method: 'POST',
-                    body: {
-                        ...input,
-                        database,
-                    },
+                return await this.bulkDeleteTriviumRequest({
+                    ...input,
+                    database,
                 });
+            },
+            bulkDeleteChunked: async (input, options) => {
+                return await this.bulkDeleteTriviumChunked(input, options);
             },
             link: async input => {
                 const database = getTriviumDatabaseName(input.database);
@@ -620,18 +697,19 @@ export class AuthorityClient {
             },
             bulkLink: async input => {
                 const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量建边能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `批量建立 Trivium 图边（${database}）`,
                 });
-                return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-link', {
-                    method: 'POST',
-                    body: {
-                        ...input,
-                        database,
-                    },
+                return await this.bulkLinkTriviumRequest({
+                    ...input,
+                    database,
                 });
+            },
+            bulkLinkChunked: async (input, options) => {
+                return await this.bulkLinkTriviumChunked(input, options);
             },
             unlink: async input => {
                 const database = getTriviumDatabaseName(input.database);
@@ -650,18 +728,19 @@ export class AuthorityClient {
             },
             bulkUnlink: async input => {
                 const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 批量删边能力');
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
                     reason: `批量删除 Trivium 图边（${database}）`,
                 });
-                return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-unlink', {
-                    method: 'POST',
-                    body: {
-                        ...input,
-                        database,
-                    },
+                return await this.bulkUnlinkTriviumRequest({
+                    ...input,
+                    database,
                 });
+            },
+            bulkUnlinkChunked: async (input, options) => {
+                return await this.bulkUnlinkTriviumChunked(input, options);
             },
             neighbors: async input => {
                 const database = getTriviumDatabaseName(input.database);
@@ -1145,6 +1224,261 @@ export class AuthorityClient {
         return await this.probePromise;
     }
 
+    private async bulkUpsertTriviumRequest(input: TriviumBulkUpsertRequest): Promise<TriviumBulkUpsertResponse> {
+        return await this.requestWithSession<TriviumBulkUpsertResponse>('/trivium/bulk-upsert', {
+            method: 'POST',
+            body: input,
+        });
+    }
+
+    private async bulkDeleteTriviumRequest(input: TriviumBulkDeleteRequest): Promise<TriviumBulkMutationResponse> {
+        return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-delete', {
+            method: 'POST',
+            body: input,
+        });
+    }
+
+    private async bulkLinkTriviumRequest(input: TriviumBulkLinkRequest): Promise<TriviumBulkMutationResponse> {
+        return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-link', {
+            method: 'POST',
+            body: input,
+        });
+    }
+
+    private async bulkUnlinkTriviumRequest(input: TriviumBulkUnlinkRequest): Promise<TriviumBulkMutationResponse> {
+        return await this.requestWithSession<TriviumBulkMutationResponse>('/trivium/bulk-unlink', {
+            method: 'POST',
+            body: input,
+        });
+    }
+
+    private async bulkUpsertTriviumChunked(
+        input: TriviumBulkUpsertRequest,
+        options: AuthorityChunkedTriviumOptions<TriviumBulkUpsertResponse> = {},
+    ): Promise<AuthorityChunkedTriviumUpsertResult> {
+        const database = getTriviumDatabaseName(input.database);
+        await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 分块批量写入能力');
+        await this.ensurePermission({
+            resource: 'trivium.private',
+            target: database,
+            reason: `分块批量写入或更新 Trivium 节点（${database}）`,
+        });
+
+        const result = await this.runTriviumChunkedMutation(
+            {
+                ...input,
+                database,
+            },
+            options,
+            async chunkInput => await this.bulkUpsertTriviumRequest(chunkInput),
+        );
+
+        const items = result.chunks.flatMap(chunk => {
+            const response = chunk.response;
+            if (!response) {
+                return [];
+            }
+
+            return response.items.map(item => {
+                const globalIndex = chunk.itemOffset + item.index;
+                return {
+                    ...item,
+                    index: globalIndex,
+                    globalIndex,
+                    chunkIndex: chunk.chunkIndex,
+                    chunkItemIndex: item.index,
+                };
+            });
+        });
+
+        return {
+            ...result,
+            items,
+        };
+    }
+
+    private async bulkDeleteTriviumChunked(
+        input: TriviumBulkDeleteRequest,
+        options: AuthorityChunkedTriviumOptions = {},
+    ): Promise<AuthorityChunkedTriviumMutationResult> {
+        const database = getTriviumDatabaseName(input.database);
+        await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 分块批量删除能力');
+        await this.ensurePermission({
+            resource: 'trivium.private',
+            target: database,
+            reason: `分块批量删除 Trivium 节点（${database}）`,
+        });
+
+        return await this.runTriviumChunkedMutation(
+            {
+                ...input,
+                database,
+            },
+            options,
+            async chunkInput => await this.bulkDeleteTriviumRequest(chunkInput),
+        );
+    }
+
+    private async bulkLinkTriviumChunked(
+        input: TriviumBulkLinkRequest,
+        options: AuthorityChunkedTriviumOptions = {},
+    ): Promise<AuthorityChunkedTriviumMutationResult> {
+        const database = getTriviumDatabaseName(input.database);
+        await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 分块批量建边能力');
+        await this.ensurePermission({
+            resource: 'trivium.private',
+            target: database,
+            reason: `分块批量建立 Trivium 图边（${database}）`,
+        });
+
+        return await this.runTriviumChunkedMutation(
+            {
+                ...input,
+                database,
+            },
+            options,
+            async chunkInput => await this.bulkLinkTriviumRequest(chunkInput),
+        );
+    }
+
+    private async bulkUnlinkTriviumChunked(
+        input: TriviumBulkUnlinkRequest,
+        options: AuthorityChunkedTriviumOptions = {},
+    ): Promise<AuthorityChunkedTriviumMutationResult> {
+        const database = getTriviumDatabaseName(input.database);
+        await this.requireFeature('trivium.bulkMutations', 'Authority 当前版本尚未提供 Trivium 分块批量删边能力');
+        await this.ensurePermission({
+            resource: 'trivium.private',
+            target: database,
+            reason: `分块批量删除 Trivium 图边（${database}）`,
+        });
+
+        return await this.runTriviumChunkedMutation(
+            {
+                ...input,
+                database,
+            },
+            options,
+            async chunkInput => await this.bulkUnlinkTriviumRequest(chunkInput),
+        );
+    }
+
+    private async runTriviumChunkedMutation<Input extends { items: Item[] }, Response extends TriviumBulkMutationResponse, Item>(
+        input: Input,
+        options: AuthorityChunkedTriviumOptions<Response>,
+        execute: (chunkInput: Input) => Promise<Response>,
+    ): Promise<AuthorityChunkedTriviumMutationResult<Response>> {
+        const chunks = splitAuthorityItemsIntoChunks(input.items, options);
+        const startedAt = Date.now();
+        const results: AuthorityChunkedMutationChunkResult<Response>[] = [];
+        const failures: AuthorityChunkedFailure[] = [];
+        let successCount = 0;
+        let failureCount = 0;
+        let completedItems = 0;
+
+        for (const chunk of chunks) {
+            const chunkStartedAt = Date.now();
+            try {
+                const response = await execute({
+                    ...input,
+                    items: chunk.items,
+                });
+                const normalizedFailures = response.failures.map(failure => {
+                    const globalIndex = chunk.itemOffset + failure.index;
+                    return {
+                        index: globalIndex,
+                        globalIndex,
+                        chunkIndex: chunk.chunkIndex,
+                        chunkItemIndex: failure.index,
+                        itemOffset: chunk.itemOffset,
+                        kind: 'item' as const,
+                        message: failure.message,
+                    };
+                });
+                const chunkResult: AuthorityChunkedMutationChunkResult<Response> = {
+                    chunkIndex: chunk.chunkIndex,
+                    itemOffset: chunk.itemOffset,
+                    itemCount: chunk.itemCount,
+                    estimatedBytes: chunk.estimatedBytes,
+                    elapsedMs: Date.now() - chunkStartedAt,
+                    successCount: response.successCount,
+                    failureCount: response.failureCount,
+                    response,
+                };
+                results.push(chunkResult);
+                failures.push(...normalizedFailures);
+                successCount += response.successCount;
+                failureCount += response.failureCount;
+                completedItems += chunk.itemCount;
+                if (options.onProgress) {
+                    await options.onProgress({
+                        totalChunks: chunks.length,
+                        completedChunks: results.length,
+                        totalItems: input.items.length,
+                        completedItems,
+                        successCount,
+                        failureCount,
+                        elapsedMs: Date.now() - startedAt,
+                        lastChunk: chunkResult,
+                    });
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                const chunkFailures = chunk.items.map((_, index) => {
+                    const globalIndex = chunk.itemOffset + index;
+                    return {
+                        index: globalIndex,
+                        globalIndex,
+                        chunkIndex: chunk.chunkIndex,
+                        chunkItemIndex: index,
+                        itemOffset: chunk.itemOffset,
+                        kind: 'chunk' as const,
+                        message,
+                    };
+                });
+                const chunkResult: AuthorityChunkedMutationChunkResult<Response> = {
+                    chunkIndex: chunk.chunkIndex,
+                    itemOffset: chunk.itemOffset,
+                    itemCount: chunk.itemCount,
+                    estimatedBytes: chunk.estimatedBytes,
+                    elapsedMs: Date.now() - chunkStartedAt,
+                    successCount: 0,
+                    failureCount: chunk.itemCount,
+                    error: message,
+                };
+                results.push(chunkResult);
+                failures.push(...chunkFailures);
+                failureCount += chunk.itemCount;
+                completedItems += chunk.itemCount;
+                if (options.onProgress) {
+                    await options.onProgress({
+                        totalChunks: chunks.length,
+                        completedChunks: results.length,
+                        totalItems: input.items.length,
+                        completedItems,
+                        successCount,
+                        failureCount,
+                        elapsedMs: Date.now() - startedAt,
+                        lastChunk: chunkResult,
+                    });
+                }
+                if (options.continueOnChunkError === false) {
+                    throw new Error(`${message} (chunk ${chunk.chunkIndex + 1}/${chunks.length})`);
+                }
+            }
+        }
+
+        return {
+            totalCount: input.items.length,
+            successCount,
+            failureCount,
+            failures,
+            chunkCount: chunks.length,
+            elapsedMs: Date.now() - startedAt,
+            chunks: results,
+        };
+    }
+
     private async requestWithSession<T>(path: string, options: SessionRequestOptions = {}, retried = false): Promise<T> {
         const session = await this.ensureInitialized();
 
@@ -1449,6 +1783,55 @@ function cloneAuthorityProbe(probe: AuthorityProbeResponse): AuthorityProbeRespo
     return JSON.parse(JSON.stringify(probe)) as AuthorityProbeResponse;
 }
 
+export function splitAuthorityItemsIntoChunks<T>(items: T[], options: AuthorityChunkSplitOptions = {}): AuthorityChunk<T>[] {
+    const maxItemsPerChunk = normalizePositiveInteger(options.maxItemsPerChunk, DEFAULT_TRIVIUM_CHUNK_ITEMS, 'maxItemsPerChunk');
+    const maxBytesPerChunk = normalizePositiveInteger(options.maxBytesPerChunk, DEFAULT_TRIVIUM_CHUNK_BYTES, 'maxBytesPerChunk');
+    if (items.length === 0) {
+        return [];
+    }
+
+    const chunks: AuthorityChunk<T>[] = [];
+    let current: T[] = [];
+    let currentBytes = 2;
+    let itemOffset = 0;
+
+    for (const item of items) {
+        const itemBytes = estimateJsonBytes(item);
+        if (itemBytes + 2 > maxBytesPerChunk) {
+            throw new Error(`Chunk item exceeds maxBytesPerChunk (${itemBytes} > ${maxBytesPerChunk})`);
+        }
+
+        const nextBytes = current.length === 0 ? currentBytes + itemBytes : currentBytes + itemBytes + 1;
+        if (current.length > 0 && (current.length >= maxItemsPerChunk || nextBytes > maxBytesPerChunk)) {
+            chunks.push({
+                chunkIndex: chunks.length,
+                itemOffset,
+                itemCount: current.length,
+                estimatedBytes: currentBytes,
+                items: current,
+            });
+            itemOffset += current.length;
+            current = [];
+            currentBytes = 2;
+        }
+
+        current.push(item);
+        currentBytes = current.length === 1 ? 2 + itemBytes : currentBytes + itemBytes + 1;
+    }
+
+    if (current.length > 0) {
+        chunks.push({
+            chunkIndex: chunks.length,
+            itemOffset,
+            itemCount: current.length,
+            estimatedBytes: currentBytes,
+            items: current,
+        });
+    }
+
+    return chunks;
+}
+
 function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items: T[]): Record<PermissionResource, T[]> {
     const result = {
         'storage.kv': [],
@@ -1505,6 +1888,20 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
         case 'diagnostics.benchmarkCore':
             return features.diagnostics.benchmarkCore;
     }
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number, label: string): number {
+    if (value === undefined) {
+        return fallback;
+    }
+    if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`${label} must be a positive integer`);
+    }
+    return value;
+}
+
+function estimateJsonBytes(value: unknown): number {
+    return UTF8_ENCODER.encode(JSON.stringify(value)).length;
 }
 
 function safeParse(value: string): unknown {

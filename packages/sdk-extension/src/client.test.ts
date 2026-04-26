@@ -57,6 +57,150 @@ describe('AuthorityClient', () => {
         await expect(client.trivium.queryPage({ cypher: 'MATCH (n) RETURN n' })).rejects.toThrow('Authority 当前版本尚未提供 Trivium 图查询分页能力');
         expect(authorityRequestMock).toHaveBeenCalledWith('/probe', { method: 'POST' });
     });
+
+    it('splits items by item count and estimated JSON bytes', async () => {
+        const { splitAuthorityItemsIntoChunks } = await import('./client.js');
+
+        const chunks = splitAuthorityItemsIntoChunks([
+            { id: 'a', text: '1234567890' },
+            { id: 'b', text: '1234567890' },
+            { id: 'c', text: '1234567890' },
+        ], {
+            maxItemsPerChunk: 2,
+            maxBytesPerChunk: 80,
+        });
+
+        expect(chunks).toHaveLength(2);
+        expect(chunks[0]?.itemOffset).toBe(0);
+        expect(chunks[0]?.itemCount).toBe(2);
+        expect(chunks[1]?.itemOffset).toBe(2);
+        expect(chunks[1]?.itemCount).toBe(1);
+    });
+
+    it('aggregates chunked Trivium bulk upsert progress and global failure indexes', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const privateClient = client as unknown as {
+            requireFeature: ReturnType<typeof vi.fn>;
+            ensurePermission: ReturnType<typeof vi.fn>;
+            bulkUpsertTriviumRequest: ReturnType<typeof vi.fn>;
+        };
+        privateClient.requireFeature = vi.fn().mockResolvedValue(undefined);
+        privateClient.ensurePermission = vi.fn().mockResolvedValue(undefined);
+        privateClient.bulkUpsertTriviumRequest = vi.fn()
+            .mockResolvedValueOnce({
+                totalCount: 2,
+                successCount: 1,
+                failureCount: 1,
+                failures: [{ index: 1, message: 'duplicate externalId' }],
+                items: [{ index: 0, id: 101, action: 'inserted', externalId: 'n1', namespace: 'default' }],
+            })
+            .mockResolvedValueOnce({
+                totalCount: 1,
+                successCount: 1,
+                failureCount: 0,
+                failures: [],
+                items: [{ index: 0, id: 103, action: 'updated', externalId: 'n3', namespace: 'default' }],
+            });
+
+        const progress: Array<{ completedChunks: number; completedItems: number; failureCount: number }> = [];
+        const result = await client.trivium.bulkUpsertChunked({
+            database: 'graph',
+            items: [
+                { externalId: 'n1', vector: [1], payload: { name: 'one' } },
+                { externalId: 'n2', vector: [2], payload: { name: 'two' } },
+                { externalId: 'n3', vector: [3], payload: { name: 'three' } },
+            ],
+        }, {
+            maxItemsPerChunk: 2,
+            onProgress(update) {
+                progress.push({
+                    completedChunks: update.completedChunks,
+                    completedItems: update.completedItems,
+                    failureCount: update.failureCount,
+                });
+            },
+        });
+
+        expect(privateClient.bulkUpsertTriviumRequest).toHaveBeenCalledTimes(2);
+        expect(result.chunkCount).toBe(2);
+        expect(result.successCount).toBe(2);
+        expect(result.failureCount).toBe(1);
+        expect(result.failures).toEqual([
+            expect.objectContaining({
+                index: 1,
+                globalIndex: 1,
+                chunkIndex: 0,
+                chunkItemIndex: 1,
+                kind: 'item',
+                message: 'duplicate externalId',
+            }),
+        ]);
+        expect(result.items).toEqual([
+            expect.objectContaining({ id: 101, index: 0, globalIndex: 0, chunkIndex: 0, chunkItemIndex: 0 }),
+            expect.objectContaining({ id: 103, index: 2, globalIndex: 2, chunkIndex: 1, chunkItemIndex: 0 }),
+        ]);
+        expect(progress).toEqual([
+            { completedChunks: 1, completedItems: 2, failureCount: 1 },
+            { completedChunks: 2, completedItems: 3, failureCount: 1 },
+        ]);
+    });
+
+    it('continues after chunk-level Trivium bulk failures when configured', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const privateClient = client as unknown as {
+            requireFeature: ReturnType<typeof vi.fn>;
+            ensurePermission: ReturnType<typeof vi.fn>;
+            bulkDeleteTriviumRequest: ReturnType<typeof vi.fn>;
+        };
+        privateClient.requireFeature = vi.fn().mockResolvedValue(undefined);
+        privateClient.ensurePermission = vi.fn().mockResolvedValue(undefined);
+        privateClient.bulkDeleteTriviumRequest = vi.fn()
+            .mockRejectedValueOnce(new Error('chunk request timeout'))
+            .mockResolvedValueOnce({
+                totalCount: 1,
+                successCount: 1,
+                failureCount: 0,
+                failures: [],
+            });
+
+        const result = await client.trivium.bulkDeleteChunked({
+            database: 'graph',
+            items: [
+                { externalId: 'n1' },
+                { externalId: 'n2' },
+                { externalId: 'n3' },
+            ],
+        }, {
+            maxItemsPerChunk: 2,
+            continueOnChunkError: true,
+        });
+
+        expect(privateClient.bulkDeleteTriviumRequest).toHaveBeenCalledTimes(2);
+        expect(result.successCount).toBe(1);
+        expect(result.failureCount).toBe(2);
+        expect(result.failures).toEqual([
+            expect.objectContaining({ globalIndex: 0, chunkIndex: 0, kind: 'chunk', message: 'chunk request timeout' }),
+            expect.objectContaining({ globalIndex: 1, chunkIndex: 0, kind: 'chunk', message: 'chunk request timeout' }),
+        ]);
+    });
 });
 
 function buildProbe(overrides: Partial<AuthorityFeatureFlags['trivium']> = {}): AuthorityProbeResponse {
