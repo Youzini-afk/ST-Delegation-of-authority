@@ -1430,6 +1430,11 @@
   padding-bottom: 12px;
 }
 
+.authority-page-header > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .authority-page-header h2,
 .authority-dossier-title h2 {
   font-size: 1.24rem;
@@ -1448,9 +1453,90 @@
 .authority-settings-row__control {
   align-items: center;
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+  min-width: fit-content;
+}
+
+.authority-page-actions--updates {
+  align-content: flex-start;
+  align-items: stretch;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(142px, max-content));
+  justify-content: end;
+  min-width: min(100%, 292px);
+}
+
+.authority-back-button {
+  align-items: center;
+  background: rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--authority-outline);
+  border-radius: 6px;
+  color: var(--authority-text);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  font-weight: 700;
+  justify-content: center;
+  line-height: 1;
+  min-height: 30px;
+  min-width: 86px;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.authority-back-button:hover {
+  background: rgba(124, 109, 255, 0.22);
+  border-color: rgba(124, 109, 255, 0.5);
+  color: #ffffff;
+}
+
+.authority-action-button {
+  align-items: center;
+  background: rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--authority-outline);
+  border-radius: 6px;
+  color: var(--authority-text);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  font-weight: 700;
+  justify-content: center;
+  line-height: 1;
+  min-height: 32px;
+  min-width: 96px;
+  padding: 8px 12px;
+  white-space: nowrap;
+  word-break: keep-all;
+  writing-mode: horizontal-tb;
+}
+
+.authority-action-button--wide {
+  min-width: 142px;
+}
+
+.authority-action-button:hover {
+  background: rgba(124, 109, 255, 0.22);
+  border-color: rgba(124, 109, 255, 0.5);
+  color: #ffffff;
+}
+
+.authority-action-button--primary {
+  background: linear-gradient(135deg, var(--authority-primary), var(--authority-primary-strong));
+  border-color: transparent;
+  color: #1e0061;
+  font-weight: 800;
+}
+
+.authority-action-button--primary:hover {
+  background: linear-gradient(135deg, var(--authority-primary-strong), var(--authority-runtime));
+  border-color: transparent;
+  color: #14003d;
 }
 
 .authority-diagnostics-grid {

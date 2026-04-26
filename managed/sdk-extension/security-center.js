@@ -543,7 +543,6 @@ class SecurityCenterView {
         container.innerHTML = `
             <div class="authority-page-stack authority-page-stack--detail">
                 <div class="authority-page-header authority-page-header--detail">
-                    <button type="button" class="menu_button" data-tab="overview">返回总览</button>
                     <div class="authority-dossier-title">
                         <div class="authority-eyebrow">扩展详情</div>
                         <h2>${escapeHtml(detail.extension.displayName)}</h2>
@@ -553,6 +552,7 @@ class SecurityCenterView {
                         <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
                         <span class="authority-pill authority-pill--medium">${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</span>
                         <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
+                        <button type="button" class="authority-back-button" data-tab="overview">返回总览</button>
                     </div>
                 </div>
                 <div class="authority-detail-metrics">
@@ -567,7 +567,7 @@ class SecurityCenterView {
                             <h3>运行档案</h3>
                             <div class="authority-muted">扩展接入时间、最近活跃与数据使用</div>
                         </div>
-                        <button type="button" class="menu_button authority-primary-action" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
+                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
                     </div>
                     <div class="authority-kv-grid">
                         <div><strong>首次见到</strong><div>${escapeHtml(formatDate(detail.extension.firstSeenAt))}</div></div>
@@ -735,8 +735,8 @@ class SecurityCenterView {
                         <p>管理员策略会覆盖扩展请求与用户授权，请谨慎设置高风险能力。</p>
                     </div>
                     <div class="authority-page-actions">
-                        <button type="button" class="menu_button" data-action="add-policy-row">新增覆盖规则</button>
-                        <button type="button" class="menu_button authority-primary-action" data-action="save-policies">保存策略</button>
+                        <button type="button" class="authority-action-button" data-action="add-policy-row">新增覆盖规则</button>
+                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="save-policies">保存策略</button>
                     </div>
                 </div>
                 <section class="authority-card authority-card--flat">
@@ -818,15 +818,15 @@ class SecurityCenterView {
         const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端插件';
         container.innerHTML = `
             <div class="authority-page-stack">
-                <div class="authority-page-header">
+                <div class="authority-page-header authority-page-header--updates">
                     <div>
                         <div class="authority-eyebrow">更新管理</div>
                         <h2>服务端插件与前端插件更新</h2>
                         <p>手动拉取 Authority 服务端插件最新提交，或重新部署它携带的前端 SDK 扩展。</p>
                     </div>
-                    <div class="authority-page-actions">
-                        <button type="button" class="menu_button authority-primary-action" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
-                        <button type="button" class="menu_button" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
+                    <div class="authority-page-actions authority-page-actions--updates">
+                        <button type="button" class="authority-action-button authority-action-button--primary authority-action-button--wide" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
                     </div>
                 </div>
                 <section class="authority-card authority-card--flat">
