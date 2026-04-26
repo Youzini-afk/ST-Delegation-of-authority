@@ -75,6 +75,7 @@ static HTTP_FETCH_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 struct RuntimeState {
     job_controls: Mutex<HashMap<String, Arc<AtomicBool>>>,
     job_queue: JobQueue,
+    started_at_iso: String,
     queued_job_count: AtomicU64,
     queued_request_count: AtomicU64,
     request_count: AtomicU64,
@@ -1315,6 +1316,7 @@ fn create_runtime_state() -> Arc<RuntimeState> {
             }),
             available: Condvar::new(),
         },
+        started_at_iso: current_timestamp_iso(),
         queued_job_count: AtomicU64::new(0),
         queued_request_count: AtomicU64::new(0),
         request_count: AtomicU64::new(0),
@@ -1504,6 +1506,88 @@ fn fetch_job_for_dispatch(dispatch: &JobDispatch) -> Result<ControlJobRecord, Ap
         .unwrap_or_else(|| dispatch.job.clone()))
 }
 
+fn recover_stale_jobs(connection: &Connection, user_handle: &str, runtime: &Arc<RuntimeState>) -> Result<usize, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
+         FROM authority_jobs
+         WHERE user_handle = ?1 AND status IN ('queued', 'running')
+         ORDER BY updated_at ASC, id ASC",
+    ).map_err(to_sql_error)?;
+    let rows = statement
+        .query_map(params![user_handle], control_job_from_row)
+        .map_err(to_sql_error)?;
+
+    let mut recovered = 0usize;
+    for row in rows {
+        let job = row.map_err(to_sql_error)?;
+        if !should_recover_stale_job(runtime, user_handle, &job)? {
+            continue;
+        }
+
+        let previous_status = job.status.clone();
+        let timestamp = current_timestamp_iso();
+        let recovered_job = ControlJobRecord {
+            status: String::from("failed"),
+            updated_at: timestamp.clone(),
+            finished_at: Some(timestamp),
+            summary: Some(String::from("Recovered stale job after runtime restart")),
+            error: Some(String::from("job_recovery_required")),
+            result: None,
+            ..job
+        };
+        save_control_job_record(connection, user_handle, &recovered_job)?;
+        publish_job_record(connection, user_handle, &recovered_job)?;
+        append_control_audit_record(
+            connection,
+            user_handle,
+            &recovered_job.extension_id,
+            "warning",
+            "Recovered stale job",
+            Some(json!({
+                "jobId": recovered_job.id,
+                "jobType": recovered_job.job_type,
+                "previousStatus": previous_status,
+                "message": "job_recovery_required",
+            })),
+        )?;
+        recovered += 1;
+    }
+
+    Ok(recovered)
+}
+
+fn should_recover_stale_job(runtime: &Arc<RuntimeState>, user_handle: &str, job: &ControlJobRecord) -> Result<bool, ApiError> {
+    if !matches!(job.status.as_str(), "queued" | "running") {
+        return Ok(false);
+    }
+    if !timestamp_is_before(&job.updated_at, &runtime.started_at_iso) {
+        return Ok(false);
+    }
+
+    let key = job_control_key(user_handle, &job.id);
+    if runtime
+        .job_controls
+        .lock()
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("internal_error: job control lock poisoned"),
+        })?
+        .contains_key(&key)
+    {
+        return Ok(false);
+    }
+
+    let queue_state = runtime.job_queue.state.lock().map_err(|_| ApiError {
+        status_code: 500,
+        message: String::from("internal_error: job queue lock poisoned"),
+    })?;
+    Ok(!queue_state.items.iter().any(|dispatch| dispatch.user_handle == user_handle && dispatch.job.id == job.id))
+}
+
+fn timestamp_is_before(left: &str, right: &str) -> bool {
+    left < right
+}
+
 fn resolve_job_runner(job_type: &str) -> Option<JobRunner> {
     match job_type {
         "delay" => Some(run_delay_job),
@@ -1654,8 +1738,18 @@ async fn v1_control_grant_upsert(State(_config): State<Arc<Config>>, Json(body):
 async fn v1_control_grants_reset(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantResetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grants_reset).await }
 async fn v1_control_policies_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlPoliciesRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_policies_get).await }
 async fn v1_control_policies_save(State(_config): State<Arc<Config>>, Json(body): Json<ControlPoliciesSaveRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_policies_save).await }
-async fn v1_control_jobs_list(State(_config): State<Arc<Config>>, Json(body): Json<ControlJobsListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_jobs_list).await }
-async fn v1_control_job_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlJobGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_job_get).await }
+async fn v1_control_jobs_list(State(config): State<Arc<Config>>, Json(body): Json<ControlJobsListRequest>) -> Result<Json<JsonValue>, ApiError> {
+    let runtime = config.runtime.clone();
+    let result = tokio::task::spawn_blocking(move || handle_control_jobs_list(body, &runtime)).await
+        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    result.map(Json)
+}
+async fn v1_control_job_get(State(config): State<Arc<Config>>, Json(body): Json<ControlJobGetRequest>) -> Result<Json<JsonValue>, ApiError> {
+    let runtime = config.runtime.clone();
+    let result = tokio::task::spawn_blocking(move || handle_control_job_get(body, &runtime)).await
+        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    result.map(Json)
+}
 async fn v1_control_job_upsert(State(_config): State<Arc<Config>>, Json(body): Json<ControlJobUpsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_job_upsert).await }
 async fn v1_control_events_poll(State(_config): State<Arc<Config>>, Json(body): Json<ControlEventsPollRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_events_poll).await }
 
@@ -2701,11 +2795,12 @@ fn handle_control_policies_save(request: ControlPoliciesSaveRequest) -> Result<J
     Ok(serde_json::to_value(document).expect("control policies document should serialize"))
 }
 
-fn handle_control_jobs_list(request: ControlJobsListRequest) -> Result<JsonValue, ApiError> {
+fn handle_control_jobs_list(request: ControlJobsListRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
+    recover_stale_jobs(&connection, &request.user_handle, runtime)?;
     let (job_offset, job_limit) = normalize_offset_page_request(request.page.as_ref(), None, 50, 500)?;
     let (jobs, page) = fetch_control_jobs_page(
         &connection,
@@ -2717,12 +2812,13 @@ fn handle_control_jobs_list(request: ControlJobsListRequest) -> Result<JsonValue
     Ok(json!({ "jobs": jobs, "page": page }))
 }
 
-fn handle_control_job_get(request: ControlJobGetRequest) -> Result<JsonValue, ApiError> {
+fn handle_control_job_get(request: ControlJobGetRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
     validate_non_empty("jobId", &request.job_id)?;
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
+    recover_stale_jobs(&connection, &request.user_handle, runtime)?;
     let job = fetch_control_job(&connection, &request.user_handle, &request.job_id)?;
     Ok(json!({ "job": job }))
 }
@@ -3389,6 +3485,7 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
+    recover_stale_jobs(&connection, &request.user_handle, runtime)?;
 
     if let Some(key) = &request.idempotency_key {
         let mut statement = connection.prepare(
@@ -3489,6 +3586,7 @@ fn handle_control_job_cancel(request: ControlJobCancelRequest, runtime: &Arc<Run
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
+    recover_stale_jobs(&connection, &request.user_handle, runtime)?;
     let job = fetch_control_job(&connection, &request.user_handle, &request.job_id)?
         .ok_or_else(|| ApiError {
             status_code: 400,
@@ -6950,6 +7048,53 @@ mod tests {
         assert_eq!(completed.attempt, 2);
         assert_eq!(completed.result.as_ref().and_then(|value| value.get("message")), Some(&json!("retry-ok")));
         wait_for_active_job_count(&runtime, 0);
+    }
+
+    #[test]
+    fn stale_jobs_are_recovered_when_listing_jobs_after_restart() {
+        let db_path = test_db_path("job-recovery");
+        let connection = open_connection(&db_path).expect("database should open");
+        ensure_control_schema(&connection).expect("control schema should exist");
+        let stale_timestamp = String::from("2000-01-01T00:00:00Z");
+        handle_control_job_upsert(ControlJobUpsertRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            job: ControlJobRecord {
+                id: String::from("job-stale-1"),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                status: String::from("running"),
+                created_at: stale_timestamp.clone(),
+                updated_at: stale_timestamp.clone(),
+                progress: 42,
+                summary: Some(String::from("Running before restart")),
+                error: None,
+                payload: Some(json!({ "durationMs": 1000 })),
+                result: None,
+                channel: String::from("extension:third-party/example"),
+                started_at: Some(stale_timestamp.clone()),
+                finished_at: None,
+                timeout_ms: None,
+                idempotency_key: None,
+                attempt: 1,
+                max_attempts: Some(2),
+                cancel_requested_at: None,
+            },
+        }).expect("stale job upsert should succeed");
+
+        let runtime = create_runtime_state();
+        let listed = handle_control_jobs_list(ControlJobsListRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: None,
+            page: None,
+        }, &runtime).expect("listing jobs should succeed");
+
+        let jobs = listed["jobs"].as_array().expect("jobs should be an array");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0]["status"], json!("failed"));
+        assert_eq!(jobs[0]["error"], json!("job_recovery_required"));
+        assert_eq!(jobs[0]["summary"], json!("Recovered stale job after runtime restart"));
     }
 
     fn test_db_path(name: &str) -> String {
