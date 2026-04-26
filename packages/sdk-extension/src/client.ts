@@ -191,6 +191,14 @@ function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
     });
 }
 
+function stringifyJsonValue(value: unknown, label: string, space?: string | number): string {
+    const serialized = JSON.stringify(value, null, space);
+    if (typeof serialized !== 'string') {
+        throw new Error(`${label} could not serialize value to JSON`);
+    }
+    return serialized;
+}
+
 export interface JobCreateOptions {
     timeoutMs?: number;
     idempotencyKey?: string;
@@ -208,6 +216,17 @@ export interface JobSubscribeOptions {
     pollIntervalMs?: number;
     emitCurrent?: boolean;
     onUpdate?: (job: JobRecord) => void | Promise<void>;
+}
+
+export interface BlobPutJsonRequest {
+    name: string;
+    value: unknown;
+    contentType?: string;
+    space?: string | number;
+}
+
+export interface PrivateFileWriteJsonOptions extends Omit<PrivateFileWriteRequest, 'path' | 'content' | 'encoding'> {
+    space?: string | number;
 }
 
 export interface SqlPageAllOptions {
@@ -356,6 +375,7 @@ export class AuthorityClient {
         };
         blob: {
             put: (input: BlobPutRequest) => Promise<BlobRecord>;
+            putJsonLarge: (input: BlobPutJsonRequest) => Promise<BlobRecord>;
             get: (id: string) => Promise<BlobGetResponse>;
             delete: (id: string) => Promise<void>;
             list: () => Promise<BlobRecord[]>;
@@ -366,6 +386,7 @@ export class AuthorityClient {
         mkdir: (path: string, options?: { recursive?: boolean }) => Promise<PrivateFileEntry>;
         readDir: (path?: string, options?: Omit<PrivateFileReadDirRequest, 'path'>) => Promise<PrivateFileEntry[]>;
         writeFile: (path: string, content: string, options?: Omit<PrivateFileWriteRequest, 'path' | 'content'>) => Promise<PrivateFileEntry>;
+        writeJson: (path: string, value: unknown, options?: PrivateFileWriteJsonOptions) => Promise<PrivateFileEntry>;
         readFile: (path: string, options?: Omit<PrivateFileReadRequest, 'path'>) => Promise<PrivateFileReadResponse>;
         delete: (path: string, options?: Omit<PrivateFileDeleteRequest, 'path'>) => Promise<void>;
         stat: (path: string) => Promise<PrivateFileEntry>;
@@ -491,6 +512,14 @@ export class AuthorityClient {
                         body: input,
                     });
                 },
+                putJsonLarge: async input => {
+                    return await this.storage.blob.put({
+                        name: input.name,
+                        content: stringifyJsonValue(input.value, 'Authority blob.putJsonLarge', input.space),
+                        encoding: 'utf8',
+                        contentType: input.contentType ?? 'application/json',
+                    });
+                },
                 get: async id => {
                     await this.ensurePermission({ resource: 'storage.blob', reason: `读取 Blob ${id}` });
                     return await this.getBlobWithTransfer(id);
@@ -551,6 +580,12 @@ export class AuthorityClient {
                     },
                 });
                 return response.entry;
+            },
+            writeJson: async (path, value, options = {}) => {
+                return await this.fs.writeFile(path, stringifyJsonValue(value, 'Authority fs.writeJson', options.space), {
+                    encoding: 'utf8',
+                    ...(options.createParents !== undefined ? { createParents: options.createParents } : {}),
+                });
             },
             readFile: async (path, options = {}) => {
                 await this.ensurePermission({ resource: 'fs.private', reason: `读取私有文件 ${path}` });

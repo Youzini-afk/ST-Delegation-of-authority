@@ -75,6 +75,13 @@ function waitForDelay(ms, signal) {
         signal?.addEventListener('abort', onAbort, { once: true });
     });
 }
+function stringifyJsonValue(value, label, space) {
+    const serialized = JSON.stringify(value, null, space);
+    if (typeof serialized !== 'string') {
+        throw new Error(`${label} could not serialize value to JSON`);
+    }
+    return serialized;
+}
 const SDK_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
 const DEFAULT_TRIVIUM_CHUNK_ITEMS = 128;
 const DEFAULT_TRIVIUM_CHUNK_BYTES = 256 * 1024;
@@ -139,6 +146,14 @@ export class AuthorityClient {
                         body: input,
                     });
                 },
+                putJsonLarge: async (input) => {
+                    return await this.storage.blob.put({
+                        name: input.name,
+                        content: stringifyJsonValue(input.value, 'Authority blob.putJsonLarge', input.space),
+                        encoding: 'utf8',
+                        contentType: input.contentType ?? 'application/json',
+                    });
+                },
                 get: async (id) => {
                     await this.ensurePermission({ resource: 'storage.blob', reason: `读取 Blob ${id}` });
                     return await this.getBlobWithTransfer(id);
@@ -198,6 +213,12 @@ export class AuthorityClient {
                     },
                 });
                 return response.entry;
+            },
+            writeJson: async (path, value, options = {}) => {
+                return await this.fs.writeFile(path, stringifyJsonValue(value, 'Authority fs.writeJson', options.space), {
+                    encoding: 'utf8',
+                    ...(options.createParents !== undefined ? { createParents: options.createParents } : {}),
+                });
             },
             readFile: async (path, options = {}) => {
                 await this.ensurePermission({ resource: 'fs.private', reason: `读取私有文件 ${path}` });

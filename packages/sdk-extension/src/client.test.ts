@@ -377,6 +377,56 @@ describe('AuthorityClient', () => {
         }
     });
 
+    it('serializes JSON through fs.writeJson helper', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const writeFile = vi.fn(async () => ({ name: 'config.json', path: '/config.json', kind: 'file', size: 2, updatedAt: 't1' }));
+        Object.assign(client.fs as object, { writeFile });
+
+        await client.fs.writeJson('/config.json', { enabled: true }, { createParents: true, space: 2 });
+
+        expect(writeFile).toHaveBeenCalledWith('/config.json', '{\n  "enabled": true\n}', {
+            createParents: true,
+            encoding: 'utf8',
+        });
+    });
+
+    it('serializes JSON through blob.putJsonLarge helper', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const put = vi.fn(async () => ({ id: 'blob-1', name: 'payload.json', contentType: 'application/json', sizeBytes: 2, createdAt: 't1' }));
+        Object.assign(client.storage.blob as object, { put });
+
+        await client.storage.blob.putJsonLarge({
+            name: 'payload.json',
+            value: { ok: true },
+            space: 2,
+        });
+
+        expect(put).toHaveBeenCalledWith({
+            name: 'payload.json',
+            content: '{\n  "ok": true\n}',
+            encoding: 'utf8',
+            contentType: 'application/json',
+        });
+    });
+
     it('routes jobs.listPage through the paged jobs endpoint', async () => {
         const { AuthorityClient } = await import('./client.js');
 
