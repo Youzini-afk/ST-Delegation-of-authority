@@ -224,6 +224,22 @@ export class AuthorityClient {
                     },
                 });
             },
+            listMigrationsPage: async (input = {}) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.requireFeature('sql.migrations', 'Authority 当前版本尚未提供 SQL migration introspection 能力');
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `列出 SQL 迁移记录 ${database}`,
+                });
+                return await this.requestWithSession('/sql/list-migrations', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             listDatabases: async () => {
                 await this.ensurePermission({
                     resource: 'sql.private',

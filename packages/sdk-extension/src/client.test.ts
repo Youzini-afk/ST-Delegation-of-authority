@@ -301,6 +301,45 @@ describe('AuthorityClient', () => {
             },
         });
     });
+
+    it('routes sql.listMigrationsPage through the SQL migration listing endpoint', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async () => ({
+            tableName: '_authority_migrations',
+            migrations: [{ id: '001_init', appliedAt: '2026-04-26T00:00:00.000Z' }],
+            page: { nextCursor: null, limit: 10, hasMore: false, totalCount: 1 },
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const result = await client.sql.listMigrationsPage({
+            database: 'graph',
+            page: { limit: 10 },
+        });
+
+        expect(result.tableName).toBe('_authority_migrations');
+        expect(result.migrations).toEqual([{ id: '001_init', appliedAt: '2026-04-26T00:00:00.000Z' }]);
+        expect(requestWithSession).toHaveBeenCalledWith('/sql/list-migrations', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+                page: { limit: 10 },
+            },
+        });
+    });
 });
 
 function buildProbe(overrides: Partial<AuthorityFeatureFlags['trivium']> = {}): AuthorityProbeResponse {

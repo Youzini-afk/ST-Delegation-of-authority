@@ -32,6 +32,8 @@ import type {
     SqlBatchRequest,
     SqlBatchResponse,
     SqlListDatabasesResponse,
+    SqlListMigrationsRequest,
+    SqlListMigrationsResponse,
     SqlMigrateRequest,
     SqlMigrateResponse,
     SqlExecRequest,
@@ -258,6 +260,7 @@ export class AuthorityClient {
         batch: (input: SqlBatchRequest) => Promise<SqlBatchResponse>;
         transaction: (input: SqlTransactionRequest) => Promise<SqlTransactionResponse>;
         migrate: (input: SqlMigrateRequest) => Promise<SqlMigrateResponse>;
+        listMigrationsPage: (input?: SqlListMigrationsRequest) => Promise<SqlListMigrationsResponse>;
         listDatabases: () => Promise<SqlListDatabasesResponse>;
     };
 
@@ -518,6 +521,22 @@ export class AuthorityClient {
                     reason: `迁移 SQL 数据库 ${database}`,
                 });
                 return await this.requestWithSession<SqlMigrateResponse>('/sql/migrate', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            listMigrationsPage: async (input = {}) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.requireFeature('sql.migrations', 'Authority 当前版本尚未提供 SQL migration introspection 能力');
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `列出 SQL 迁移记录 ${database}`,
+                });
+                return await this.requestWithSession<SqlListMigrationsResponse>('/sql/list-migrations', {
                     method: 'POST',
                     body: {
                         ...input,

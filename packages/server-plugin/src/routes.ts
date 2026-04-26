@@ -5,6 +5,8 @@ import type {
     AuthorityInitConfig,
     BlobRecord,
     BlobTransferCommitRequest,
+    CursorPageInfo,
+    CursorPageRequest,
     DataTransferAppendRequest,
     DataTransferInitRequest,
     DataTransferReadRequest,
@@ -22,7 +24,10 @@ import type {
     SqlBatchRequest,
     SqlExecRequest,
     SqlListDatabasesResponse,
+    SqlListMigrationsRequest,
+    SqlListMigrationsResponse,
     SqlMigrateRequest,
+    SqlMigrationRecord,
     SqlQueryRequest,
     SqlTransactionRequest,
     TriviumBulkDeleteRequest,
@@ -108,6 +113,43 @@ function getSqlDatabaseName(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 
+function getSqlMigrationTableName(value: unknown): string {
+    const candidate = typeof value === 'string' && value.trim() ? value.trim() : '_authority_migrations';
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate)) {
+        throw new Error('SQL migration tableName must be a valid identifier');
+    }
+    return candidate;
+}
+
+function buildEmptySqlCursorPage(page: CursorPageRequest): CursorPageInfo {
+    const limit = Number.isInteger(page.limit) && Number(page.limit) > 0
+        ? Math.min(Number(page.limit), 1000)
+        : 100;
+    const cursor = page.cursor?.trim();
+    if (cursor) {
+        const offset = Number(cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            throw new Error('invalid_page_cursor');
+        }
+    }
+    return {
+        nextCursor: null,
+        limit,
+        hasMore: false,
+        totalCount: 0,
+    };
+}
+
+function readSqlMigrationRecord(row: Record<string, unknown>): SqlMigrationRecord {
+    if (typeof row.id !== 'string' || !row.id.trim()) {
+        throw new Error('SQL migration row is missing id');
+    }
+    return {
+        id: row.id,
+        appliedAt: typeof row.appliedAt === 'string' ? row.appliedAt : '',
+    };
+}
+
 function resolvePrivateSqlDatabaseDir(user: ReturnType<typeof getUserContext>, extensionId: string): string {
     const paths = getUserAuthorityPaths(user);
     return path.join(paths.sqlPrivateDir, sanitizeFileSegment(extensionId));
@@ -118,6 +160,42 @@ function resolvePrivateSqlDatabasePath(user: ReturnType<typeof getUserContext>, 
         resolvePrivateSqlDatabaseDir(user, extensionId),
         `${sanitizeFileSegment(databaseName)}.sqlite`,
     );
+}
+
+async function sqlMigrationTableExists(runtime: AuthorityRuntime, dbPath: string, tableName: string): Promise<boolean> {
+    const result = await runtime.core.querySql(dbPath, {
+        statement: 'SELECT name FROM sqlite_master WHERE type = ?1 AND name = ?2 LIMIT 1',
+        params: ['table', tableName],
+    });
+    return result.rows.length > 0;
+}
+
+async function listSqlMigrationsPage(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    extensionId: string,
+    request: SqlListMigrationsRequest,
+): Promise<SqlListMigrationsResponse> {
+    const database = getSqlDatabaseName(request.database);
+    const tableName = getSqlMigrationTableName(request.tableName);
+    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
+    if (!fs.existsSync(dbPath) || !await sqlMigrationTableExists(runtime, dbPath, tableName)) {
+        return {
+            tableName,
+            migrations: [],
+            ...(request.page ? { page: buildEmptySqlCursorPage(request.page) } : {}),
+        };
+    }
+
+    const result = await runtime.core.querySql(dbPath, {
+        statement: `SELECT id, applied_at AS appliedAt FROM ${tableName} ORDER BY applied_at ASC, id ASC`,
+        ...(request.page ? { page: request.page } : {}),
+    });
+    return {
+        tableName,
+        migrations: result.rows.map(row => readSqlMigrationRecord(row)),
+        ...(result.page ? { page: result.page } : {}),
+    };
 }
 
 function getTriviumDatabaseName(value: unknown): string {
@@ -990,6 +1068,29 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 database,
                 migrations: Array.isArray(payload.migrations) ? payload.migrations.length : 0,
                 tableName: payload.tableName ?? '_authority_migrations',
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.post('/sql/list-migrations', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as SqlListMigrationsRequest;
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+
+            const result = await listSqlMigrationsPage(runtime, user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL list migrations', {
+                database,
+                tableName: result.tableName,
+                count: result.migrations.length,
+                limit: result.page?.limit ?? null,
             });
             ok(res, result);
         } catch (error) {

@@ -40,6 +40,7 @@ describe('registerRoutes', () => {
             '/fs/private/write-file-transfer',
             '/fs/private/read-file',
             '/fs/private/open-read',
+            '/sql/list-migrations',
             '/trivium/resolve-id',
             '/trivium/upsert',
             '/trivium/bulk-upsert',

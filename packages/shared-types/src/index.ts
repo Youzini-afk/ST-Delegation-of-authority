@@ -822,6 +822,23 @@ export interface SqlMigrateResponse {
     latestId: string | null;
 }
 
+export interface SqlMigrationRecord {
+    id: string;
+    appliedAt: string;
+}
+
+export interface SqlListMigrationsRequest {
+    database?: string;
+    tableName?: string;
+    page?: CursorPageRequest;
+}
+
+export interface SqlListMigrationsResponse {
+    tableName: string;
+    migrations: SqlMigrationRecord[];
+    page?: CursorPageInfo;
+}
+
 export interface SqlDatabaseRecord {
     name: string;
     fileName: string;
