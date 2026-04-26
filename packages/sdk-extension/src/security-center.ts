@@ -10,8 +10,8 @@ import {
     renderActivityLogRows,
     renderAlertStack,
     renderCapabilityMatrix,
+    renderDatabaseAssetSections,
     renderDatabaseGroupTable,
-    renderDatabaseTable,
     renderGrantSettingsRows,
     renderJobTable,
     renderMetricTile,
@@ -467,7 +467,7 @@ class SecurityCenterView {
         const grants = [...this.state.details.values()].flatMap(detail => detail.grants);
         const grantedCount = grants.filter(grant => grant.status === 'granted').length;
         const deniedCount = grants.filter(grant => grant.status === 'denied' || grant.status === 'blocked').length;
-        const databaseCount = overview.databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+        const databaseCount = overview.databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
 
         container.innerHTML = `
             <div class="authority-overview-layout">
@@ -614,12 +614,14 @@ class SecurityCenterView {
         const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
         const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
         const databases = [...detail.databases].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const triviumDatabases = [...detail.triviumDatabases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const storage = detail.storage;
         const risk = getExtensionRiskLevel(detail.extension);
+        const databaseCount = detail.databases.length + detail.triviumDatabases.length;
 
         container.innerHTML = `
-            <div class="authority-detail-dossier">
-                <header class="authority-dossier-header">
+            <div class="authority-page-stack authority-page-stack--detail">
+                <div class="authority-page-header authority-page-header--detail">
                     <button type="button" class="menu_button" data-tab="overview">返回总览</button>
                     <div class="authority-dossier-title">
                         <div class="authority-eyebrow">扩展详情</div>
@@ -631,11 +633,11 @@ class SecurityCenterView {
                         <span class="authority-pill authority-pill--medium">${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</span>
                         <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
                     </div>
-                </header>
+                </div>
                 <div class="authority-detail-metrics">
                     ${renderMetricTile('授权记录', String(detail.grants.length), `${granted.length} 允许 · ${denied.length} 拒绝/封锁`, detail.grants.length > 0 ? 'primary' : 'neutral')}
                     ${renderMetricTile('策略覆盖', String(detail.policies.length), '管理员覆盖规则', detail.policies.length > 0 ? 'warning' : 'neutral')}
-                    ${renderMetricTile('数据库', String(detail.databases.length), formatBytes(storage.databaseBytes), detail.databases.length > 0 ? 'runtime' : 'neutral')}
+                    ${renderMetricTile('数据库', String(databaseCount), `SQL ${detail.databases.length} · Trivium ${detail.triviumDatabases.length}`, databaseCount > 0 ? 'runtime' : 'neutral')}
                     ${renderMetricTile('后台任务', String(detail.jobs.length), `${errors.length} 条近期错误`, errors.length > 0 ? 'error' : 'neutral')}
                 </div>
                 <section class="authority-section-block">
@@ -669,10 +671,10 @@ class SecurityCenterView {
                     <div class="authority-section-heading">
                         <div>
                             <h3>数据资产</h3>
-                            <div class="authority-muted">该扩展创建的私有数据库</div>
+                            <div class="authority-muted">该扩展创建的 SQL 数据库与 Trivium 记忆库</div>
                         </div>
                     </div>
-                    ${renderDatabaseTable(databases, '该扩展还没有私有数据库。')}
+                    ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
                 </section>
                 <section class="authority-detail-grid">
                     <div class="authority-log-panel">
@@ -725,7 +727,7 @@ class SecurityCenterView {
         }
 
         const databaseGroups = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
-        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databases.length, 0);
+        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
         const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
 
         container.innerHTML = `
@@ -734,7 +736,7 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">数据资产</div>
                         <h2>扩展私有数据库</h2>
-                        <p>按扩展汇总当前用户的私有数据库文件。</p>
+                        <p>按扩展汇总当前用户的 SQL 私有数据库与 Trivium 私有记忆库。</p>
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>

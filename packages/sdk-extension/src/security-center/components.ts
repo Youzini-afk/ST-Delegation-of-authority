@@ -1,4 +1,4 @@
-import type { AuthorityGrant, AuthorityPolicyEntry, JobRecord, PermissionResource, SqlDatabaseRecord } from '@stdo/shared-types';
+import type { AuthorityGrant, AuthorityPolicyEntry, JobRecord, PermissionResource, SqlDatabaseRecord, TriviumDatabaseRecord } from '@stdo/shared-types';
 import { escapeHtml, formatDate, formatJson } from '../dom.js';
 import {
     formatBytes,
@@ -350,6 +350,101 @@ export function renderDatabaseTable(items: SqlDatabaseRecord[], emptyText: strin
     `;
 }
 
+export function renderTriviumDatabaseList(items: TriviumDatabaseRecord[], emptyText: string): string {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div class="authority-stack">
+            ${items.map(item => `
+                <div class="authority-list-card">
+                    <div>
+                        <strong>${escapeHtml(item.name)}</strong>
+                        <div class="authority-muted">${escapeHtml(item.fileName)}</div>
+                    </div>
+                    <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--runtime">${escapeHtml(item.storageMode ?? '未知模式')}</span>
+                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
+                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt ?? undefined))}</span>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+export function renderTriviumDatabaseTable(items: TriviumDatabaseRecord[], emptyText: string): string {
+    if (items.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+
+    return `
+        <div class="authority-table-wrap">
+            <table class="authority-data-table">
+                <thead>
+                    <tr>
+                        <th>记忆库</th>
+                        <th>文件</th>
+                        <th>维度 / 类型</th>
+                        <th>存储</th>
+                        <th>体积</th>
+                        <th>更新时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${items.map(item => `
+                        <tr>
+                            <td><strong>${escapeHtml(item.name)}</strong></td>
+                            <td>${escapeHtml(item.fileName)}</td>
+                            <td>${escapeHtml(item.dim ? `${item.dim} · ${item.dtype ?? '未知类型'}` : item.dtype ?? '未记录')}</td>
+                            <td>${escapeHtml(item.storageMode ?? '未记录')}</td>
+                            <td>${escapeHtml(formatBytes(item.totalSizeBytes))}</td>
+                            <td>${escapeHtml(formatDate(item.updatedAt ?? undefined))}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+export function renderDatabaseAssetSections(databases: SqlDatabaseRecord[], triviumDatabases: TriviumDatabaseRecord[], emptyText: string): string {
+    if (databases.length === 0 && triviumDatabases.length === 0) {
+        return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
+    }
+
+    return `
+        <div class="authority-stack">
+            <section class="authority-card authority-card--flat">
+                <div class="authority-card__header">
+                    <div>
+                        <h3>SQL 私有数据库</h3>
+                        <div class="authority-muted">传统结构化数据库文件</div>
+                    </div>
+                    <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--prompt">${databases.length} 个</span>
+                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(databases.reduce((sum, item) => sum + item.sizeBytes, 0)))}</span>
+                    </div>
+                </div>
+                ${renderDatabaseTable(databases, '当前没有 SQL 私有数据库。')}
+            </section>
+            <section class="authority-card authority-card--flat">
+                <div class="authority-card__header">
+                    <div>
+                        <h3>Trivium 私有记忆库</h3>
+                        <div class="authority-muted">向量 / 图谱 / 文本混合检索数据库</div>
+                    </div>
+                    <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--runtime">${triviumDatabases.length} 个</span>
+                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(triviumDatabases.reduce((sum, item) => sum + item.totalSizeBytes, 0)))}</span>
+                    </div>
+                </div>
+                ${renderTriviumDatabaseTable(triviumDatabases, '当前没有 Trivium 私有记忆库。')}
+            </section>
+        </div>
+    `;
+}
+
 export function renderDatabaseGroupList(items: DatabaseGroupSummary[], emptyText: string): string {
     if (items.length === 0) {
         return `<div class="authority-empty">${escapeHtml(emptyText)}</div>`;
@@ -364,11 +459,14 @@ export function renderDatabaseGroupList(items: DatabaseGroupSummary[], emptyText
                             <div class="authority-muted">${escapeHtml(item.extension.id)}</div>
                         </div>
                         <div class="authority-list-card__actions">
-                            <span class="authority-pill authority-pill--prompt">${item.databases.length} 个库</span>
+                            <span class="authority-pill authority-pill--prompt">${item.databaseCount} 个库</span>
                             <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
                         </div>
                     </div>
-                    ${renderDatabaseList(item.databases, '该扩展还没有私有数据库。')}
+                    <div class="authority-stack">
+                        ${renderDatabaseList(item.databases, '该扩展还没有 SQL 私有数据库。')}
+                        ${renderTriviumDatabaseList(item.triviumDatabases, '该扩展还没有 Trivium 私有记忆库。')}
+                    </div>
                 </div>
             `).join('')}
         </div>
@@ -390,11 +488,11 @@ export function renderDatabaseGroupTable(items: DatabaseGroupSummary[], emptyTex
                             <div class="authority-muted">${escapeHtml(item.extension.id)}</div>
                         </div>
                         <div class="authority-list-card__actions">
-                            <span class="authority-pill authority-pill--prompt">${item.databases.length} 个数据库</span>
+                            <span class="authority-pill authority-pill--prompt">${item.databaseCount} 个数据库</span>
                             <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
                         </div>
                     </div>
-                    ${renderDatabaseTable(item.databases, '该扩展还没有私有数据库。')}
+                    ${renderDatabaseAssetSections(item.databases, item.triviumDatabases, '该扩展还没有私有数据库。')}
                 </section>
             `).join('')}
         </div>
@@ -406,7 +504,9 @@ export function renderStorageSummary(storage: ExtensionStorageSummary): string {
         <div class="authority-storage-grid">
             ${renderStorageCard('键值条目', String(storage.kvEntries), '扩展保存的键值数据')}
             ${renderStorageCard('文件数量', String(storage.blobCount), formatBytes(storage.blobBytes))}
-            ${renderStorageCard('数据库数量', String(storage.databaseCount), formatBytes(storage.databaseBytes))}
+            ${renderStorageCard('数据库数量', String(storage.databaseCount), `总计 ${formatBytes(storage.databaseBytes)}`)}
+            ${renderStorageCard('SQL 数据库', String(storage.sqlDatabaseCount), formatBytes(storage.sqlDatabaseBytes))}
+            ${renderStorageCard('Trivium 记忆库', String(storage.triviumDatabaseCount), formatBytes(storage.triviumDatabaseBytes))}
             ${renderStorageCard('私有文件', String(storage.files.fileCount), `${storage.files.directoryCount} 个目录`)}
             ${renderStorageCard('私有文件体积', formatBytes(storage.files.totalSizeBytes), '仅统计私有文件区')}
             ${renderStorageCard('最近文件更新', storage.files.latestUpdatedAt ? formatDate(storage.files.latestUpdatedAt) : '未记录', '最后一次写入时间')}

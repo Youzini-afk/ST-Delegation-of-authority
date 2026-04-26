@@ -3,6 +3,7 @@ import type {
     PrivateFileUsageSummary,
     SessionInitResponse,
     SqlDatabaseRecord,
+    TriviumDatabaseRecord,
 } from '@stdo/shared-types';
 import type { AuthorityGrant, AuthorityPolicyEntry, JobRecord, PermissionResource, PermissionStatus } from '@stdo/shared-types';
 
@@ -31,6 +32,10 @@ export interface ExtensionStorageSummary {
     blobBytes: number;
     databaseCount: number;
     databaseBytes: number;
+    sqlDatabaseCount: number;
+    sqlDatabaseBytes: number;
+    triviumDatabaseCount: number;
+    triviumDatabaseBytes: number;
     files: PrivateFileUsageSummary;
 }
 
@@ -88,12 +93,15 @@ export interface ExtensionDetailResponse {
     };
     jobs: JobRecord[];
     databases: SqlDatabaseRecord[];
+    triviumDatabases: TriviumDatabaseRecord[];
     storage: ExtensionStorageSummary;
 }
 
 export interface DatabaseGroupSummary {
     extension: ExtensionSummary;
     databases: SqlDatabaseRecord[];
+    triviumDatabases: TriviumDatabaseRecord[];
+    databaseCount: number;
     totalSizeBytes: number;
     latestUpdatedAt: string | null;
 }

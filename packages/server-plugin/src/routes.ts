@@ -198,17 +198,29 @@ function summarizeDatabases(databases: SqlListDatabasesResponse['databases']): {
     };
 }
 
+function summarizeTriviumDatabases(databases: TriviumListDatabasesResponse['databases']): { count: number; totalSizeBytes: number } {
+    return {
+        count: databases.length,
+        totalSizeBytes: databases.reduce((sum, record) => sum + record.totalSizeBytes, 0),
+    };
+}
+
 async function buildExtensionStorageSummary(
     runtime: AuthorityRuntime,
     user: ReturnType<typeof getUserContext>,
     extensionId: string,
-    databases = listPrivateSqlDatabases(user, extensionId).databases,
+    sqlDatabases = listPrivateSqlDatabases(user, extensionId).databases,
+    triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases,
 ): Promise<{
     kvEntries: number;
     blobCount: number;
     blobBytes: number;
     databaseCount: number;
     databaseBytes: number;
+    sqlDatabaseCount: number;
+    sqlDatabaseBytes: number;
+    triviumDatabaseCount: number;
+    triviumDatabaseBytes: number;
     files: PrivateFileUsageSummary;
 }> {
     const [kvEntries, blobs, files] = await Promise.all([
@@ -217,14 +229,19 @@ async function buildExtensionStorageSummary(
         runtime.files.getUsageSummary(user, extensionId),
     ]);
     const blobSummary = summarizeBlobRecords(blobs);
-    const databaseSummary = summarizeDatabases(databases);
+    const sqlDatabaseSummary = summarizeDatabases(sqlDatabases);
+    const triviumDatabaseSummary = summarizeTriviumDatabases(triviumDatabases);
 
     return {
         kvEntries: Object.keys(kvEntries).length,
         blobCount: blobSummary.count,
         blobBytes: blobSummary.totalSizeBytes,
-        databaseCount: databaseSummary.count,
-        databaseBytes: databaseSummary.totalSizeBytes,
+        databaseCount: sqlDatabaseSummary.count + triviumDatabaseSummary.count,
+        databaseBytes: sqlDatabaseSummary.totalSizeBytes + triviumDatabaseSummary.totalSizeBytes,
+        sqlDatabaseCount: sqlDatabaseSummary.count,
+        sqlDatabaseBytes: sqlDatabaseSummary.totalSizeBytes,
+        triviumDatabaseCount: triviumDatabaseSummary.count,
+        triviumDatabaseBytes: triviumDatabaseSummary.totalSizeBytes,
         files,
     };
 }
@@ -316,12 +333,13 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const user = getUserContext(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async extension => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
-                const databases = listPrivateSqlDatabases(user, extension.id).databases;
+                const sqlDatabases = listPrivateSqlDatabases(user, extension.id).databases;
+                const triviumDatabases = listPrivateTriviumDatabases(user, extension.id).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
                     deniedCount: grants.filter(grant => grant.status === 'denied').length,
-                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, databases),
+                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, sqlDatabases, triviumDatabases),
                 };
             }));
             ok(res, list);
@@ -340,6 +358,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             }
 
             const databases = listPrivateSqlDatabases(user, extensionId).databases;
+            const triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases;
 
             ok(res, {
                 extension,
@@ -348,7 +367,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 activity: await runtime.audit.getRecentActivity(user, extensionId),
                 jobs: await runtime.jobs.list(user, extensionId),
                 databases,
-                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases),
+                triviumDatabases,
+                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),
             });
         } catch (error) {
             fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
