@@ -364,6 +364,7 @@ export function renderTriviumDatabaseList(items: TriviumDatabaseRecord[], emptyT
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--runtime">${escapeHtml(item.storageMode ?? '未知模式')}</span>
+                        <span class="authority-pill authority-pill--${escapeHtml(getTriviumIndexHealthTone(item))}">${escapeHtml(getTriviumIndexHealthLabel(item))}</span>
                         <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
                         <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt ?? undefined))}</span>
                     </div>
@@ -386,6 +387,7 @@ export function renderTriviumDatabaseTable(items: TriviumDatabaseRecord[], empty
                         <th>记忆库</th>
                         <th>文件</th>
                         <th>维度 / 类型</th>
+                        <th>索引健康</th>
                         <th>存储</th>
                         <th>体积</th>
                         <th>更新时间</th>
@@ -397,6 +399,10 @@ export function renderTriviumDatabaseTable(items: TriviumDatabaseRecord[], empty
                             <td><strong>${escapeHtml(item.name)}</strong></td>
                             <td>${escapeHtml(item.fileName)}</td>
                             <td>${escapeHtml(item.dim ? `${item.dim} · ${item.dtype ?? '未知类型'}` : item.dtype ?? '未记录')}</td>
+                            <td>
+                                <span class="authority-pill authority-pill--${escapeHtml(getTriviumIndexHealthTone(item))}">${escapeHtml(getTriviumIndexHealthLabel(item))}</span>
+                                <div class="authority-muted">${escapeHtml(getTriviumIndexHealthMeta(item))}</div>
+                            </td>
                             <td>${escapeHtml(item.storageMode ?? '未记录')}</td>
                             <td>${escapeHtml(formatBytes(item.totalSizeBytes))}</td>
                             <td>${escapeHtml(formatDate(item.updatedAt ?? undefined))}</td>
@@ -443,6 +449,45 @@ export function renderDatabaseAssetSections(databases: SqlDatabaseRecord[], triv
             </section>
         </div>
     `;
+}
+
+function getTriviumIndexHealthTone(item: TriviumDatabaseRecord): string {
+    switch (item.indexHealth?.status) {
+        case 'fresh':
+            return 'granted';
+        case 'stale':
+            return 'warning';
+        default:
+            return 'prompt';
+    }
+}
+
+function getTriviumIndexHealthLabel(item: TriviumDatabaseRecord): string {
+    switch (item.indexHealth?.status) {
+        case 'fresh':
+            return '索引新鲜';
+        case 'stale':
+            return '需重建';
+        default:
+            return '未建索引';
+    }
+}
+
+function getTriviumIndexHealthMeta(item: TriviumDatabaseRecord): string {
+    const health = item.indexHealth;
+    if (!health) {
+        return '暂无索引诊断';
+    }
+    if (health.reason) {
+        return health.reason;
+    }
+    if (health.lastTextRebuildAt) {
+        return `最近重建：${formatDate(health.lastTextRebuildAt)}`;
+    }
+    if (health.lastTextWriteAt) {
+        return `最近写入：${formatDate(health.lastTextWriteAt)}`;
+    }
+    return '暂无索引诊断';
 }
 
 export function renderDatabaseGroupList(items: DatabaseGroupSummary[], emptyText: string): string {

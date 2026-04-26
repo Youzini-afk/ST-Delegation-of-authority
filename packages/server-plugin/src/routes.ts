@@ -43,6 +43,7 @@ import type {
     TriviumBulkUpsertRequest,
     TriviumBuildTextIndexRequest,
     TriviumCheckMappingsIntegrityRequest,
+    TriviumCompactRequest,
     TriviumDatabaseRecord,
     TriviumDeleteRequest,
     TriviumDeleteOrphanMappingsRequest,
@@ -1207,16 +1208,12 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.insertTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const response = await runtime.trivium.insert(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert', {
                 database,
-                id: result.id,
+                id: response.id,
             });
-            ok(res, result);
+            ok(res, response);
         } catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
         }
@@ -1232,11 +1229,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.insertTriviumWithId(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.insertWithId(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert with id', {
                 database,
                 id: payload.id,
@@ -1369,11 +1362,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.updateTriviumPayload(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.updatePayload(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium update payload', {
                 database,
                 id: payload.id,
@@ -1691,11 +1680,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.indexTextTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.indexText(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium index text', {
                 database,
                 id: payload.id,
@@ -1716,11 +1701,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.indexKeywordTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.indexKeyword(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium index keyword', {
                 database,
                 id: payload.id,
@@ -1741,12 +1722,28 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.buildTextIndexTrivium(dbPath, {
-                ...payload,
+            await runtime.trivium.buildTextIndex(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium build text index', {
                 database,
             });
-            await runtime.audit.logUsage(user, session.extension.id, 'Trivium build text index', {
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/compact', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumCompactRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            await runtime.trivium.compact(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium compact', {
                 database,
             });
             ok(res, { ok: true });

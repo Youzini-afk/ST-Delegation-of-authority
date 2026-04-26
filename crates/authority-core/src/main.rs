@@ -481,6 +481,13 @@ struct TriviumBuildTextIndexRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TriviumCompactRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TriviumFlushRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
@@ -1309,6 +1316,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "/trivium/build-text-index",
             post(v1_trivium_build_text_index),
         )
+        .route("/trivium/compact", post(v1_trivium_compact))
         .route("/trivium/flush", post(v1_trivium_flush))
         .route("/trivium/stat", post(v1_trivium_stat))
         .route("/control/session/init", post(v1_control_session_init))
@@ -2072,6 +2080,12 @@ async fn v1_trivium_build_text_index(
     Json(body): Json<TriviumBuildTextIndexRequest>,
 ) -> Result<Json<JsonValue>, ApiError> {
     spawn_blocking_handler(body, handle_trivium_build_text_index).await
+}
+async fn v1_trivium_compact(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumCompactRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_compact).await
 }
 async fn v1_trivium_flush(
     State(_config): State<Arc<Config>>,
@@ -3144,6 +3158,17 @@ fn handle_trivium_build_text_index(
             let mut db = open_trivium_u64(&request.open)?;
             db.build_text_index().map_err(to_trivium_error)?;
         }
+    }
+
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_compact(request: TriviumCompactRequest) -> Result<JsonValue, ApiError> {
+    let TriviumCompactRequest { open } = request;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.compact().map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.compact().map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.compact().map_err(to_trivium_error)?,
     }
 
     Ok(json!({ "ok": true }))
@@ -8274,6 +8299,57 @@ mod tests {
         .expect("stat after delete should succeed");
         assert_eq!(stat_after_delete["nodeCount"], json!(1));
         assert_eq!(stat_after_delete["edgeCount"], json!(0));
+    }
+
+    #[test]
+    fn trivium_compact_preserves_nodes_and_edges() {
+        let db_path = test_trivium_path("compact-preserves-data");
+        handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![
+                TriviumBulkUpsertItem {
+                    id: 1,
+                    vector: vec![1.0, 0.0],
+                    payload: json!({ "name": "alpha" }),
+                },
+                TriviumBulkUpsertItem {
+                    id: 2,
+                    vector: vec![0.0, 1.0],
+                    payload: json!({ "name": "beta" }),
+                },
+            ],
+        })
+        .expect("bulk upsert should succeed");
+
+        handle_trivium_bulk_link(TriviumBulkLinkRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![TriviumBulkLinkItem {
+                src: 1,
+                dst: 2,
+                label: Some(String::from("related")),
+                weight: Some(1.0),
+            }],
+        })
+        .expect("bulk link should succeed");
+
+        handle_trivium_compact(TriviumCompactRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+        })
+        .expect("compact should succeed");
+
+        let stat = handle_trivium_stat(TriviumStatRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+        })
+        .expect("stat should succeed after compact");
+        assert_eq!(stat["nodeCount"], json!(2));
+        assert_eq!(stat["edgeCount"], json!(1));
+
+        let fetched = handle_trivium_get(TriviumGetRequest {
+            open: test_trivium_open_request(db_path, 2),
+            id: 1,
+        })
+        .expect("get should succeed after compact");
+        assert_eq!(fetched["node"]["payload"]["name"], json!("alpha"));
     }
 
     #[test]

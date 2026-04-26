@@ -58,6 +58,7 @@ import type {
     TriviumBuildTextIndexRequest,
     TriviumCheckMappingsIntegrityRequest,
     TriviumCheckMappingsIntegrityResponse,
+    TriviumCompactRequest,
     TriviumDeleteRequest,
     TriviumDeleteOrphanMappingsRequest,
     TriviumDeleteOrphanMappingsResponse,
@@ -474,6 +475,7 @@ export class AuthorityClient {
         indexText: (input: TriviumIndexTextRequest) => Promise<void>;
         indexKeyword: (input: TriviumIndexKeywordRequest) => Promise<void>;
         buildTextIndex: (input?: TriviumBuildTextIndexRequest) => Promise<void>;
+        compact: (input?: TriviumCompactRequest) => Promise<void>;
         flush: (input?: TriviumFlushRequest) => Promise<void>;
         stat: (input?: TriviumStatRequest) => Promise<TriviumStatResponse>;
         listDatabases: () => Promise<TriviumListDatabasesResponse>;
@@ -1236,6 +1238,21 @@ export class AuthorityClient {
                     reason: `构建 Trivium 文本索引 ${database}`,
                 });
                 await this.requestWithSession('/trivium/build-text-index', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            compact: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `压实 Trivium 数据库 ${database}`,
+                });
+                await this.requestWithSession('/trivium/compact', {
                     method: 'POST',
                     body: {
                         ...input,

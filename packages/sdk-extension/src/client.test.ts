@@ -771,6 +771,39 @@ describe('AuthorityClient', () => {
         });
     });
 
+    it('routes Trivium compact through the new endpoint', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn().mockResolvedValue(undefined);
+        const requestWithSession = vi.fn().mockResolvedValue({ ok: true });
+        Object.assign(client as object, {
+            ensurePermission,
+            requestWithSession,
+        });
+
+        await client.trivium.compact({ database: 'graph' });
+
+        expect(ensurePermission).toHaveBeenCalledWith({
+            resource: 'trivium.private',
+            target: 'graph',
+            reason: '压实 Trivium 数据库 graph',
+        });
+        expect(requestWithSession).toHaveBeenCalledWith('/trivium/compact', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+            },
+        });
+    });
+
     it('routes sql.listMigrationsPage through the SQL migration listing endpoint', async () => {
         const { AuthorityClient } = await import('./client.js');
 

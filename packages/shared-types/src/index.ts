@@ -1146,6 +1146,8 @@ export interface TriviumIndexKeywordRequest extends TriviumOpenOptions {
 
 export interface TriviumBuildTextIndexRequest extends TriviumOpenOptions {}
 
+export interface TriviumCompactRequest extends TriviumOpenOptions {}
+
 export interface TriviumFlushRequest extends TriviumOpenOptions {}
 
 export interface TriviumStatRequest extends TriviumOpenOptions {
@@ -1329,6 +1331,20 @@ export interface TriviumDatabaseRecord {
     vecSizeBytes: number;
     totalSizeBytes: number;
     updatedAt: string | null;
+    indexHealth: TriviumIndexHealth | null;
+}
+
+export type TriviumIndexHealthStatus = 'missing' | 'fresh' | 'stale';
+
+export interface TriviumIndexHealth {
+    status: TriviumIndexHealthStatus;
+    reason: string | null;
+    requiresRebuild: boolean;
+    staleSince: string | null;
+    lastContentMutationAt: string | null;
+    lastTextWriteAt: string | null;
+    lastTextRebuildAt: string | null;
+    lastCompactionAt: string | null;
 }
 
 export interface TriviumListDatabasesResponse {

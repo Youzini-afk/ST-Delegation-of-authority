@@ -84,6 +84,7 @@ import type {
     TriviumDeleteRequest,
     TriviumBuildTextIndexRequest,
     TriviumBulkMutationResponse,
+    TriviumCompactRequest,
     TriviumFilterWhereRequest,
     TriviumFilterWhereResponse,
     TriviumFlushRequest,
@@ -587,6 +588,10 @@ export class CoreService {
 
     async buildTextIndexTrivium(dbPath: string, request: TriviumBuildTextIndexRequest = {}): Promise<void> {
         await this.request('/v1/trivium/build-text-index', buildTriviumOpenPayload(dbPath, request));
+    }
+
+    async compactTrivium(dbPath: string, request: TriviumCompactRequest = {}): Promise<void> {
+        await this.request('/v1/trivium/compact', buildTriviumOpenPayload(dbPath, request));
     }
 
     async flushTrivium(dbPath: string, request: TriviumFlushRequest = {}): Promise<void> {

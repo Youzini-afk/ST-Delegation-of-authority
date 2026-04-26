@@ -14,8 +14,10 @@ import type {
     TriviumBulkUnlinkRequest,
     TriviumBulkUpsertRequest,
     TriviumBulkUpsertResponse,
+    TriviumBuildTextIndexRequest,
     TriviumCheckMappingsIntegrityRequest,
     TriviumCheckMappingsIntegrityResponse,
+    TriviumCompactRequest,
     TriviumDeleteRequest,
     TriviumDeleteOrphanMappingsRequest,
     TriviumDeleteOrphanMappingsResponse,
@@ -25,6 +27,12 @@ import type {
     TriviumFilterWhereResponse,
     TriviumFlushRequest,
     TriviumGetRequest,
+    TriviumIndexHealth,
+    TriviumIndexKeywordRequest,
+    TriviumIndexTextRequest,
+    TriviumInsertRequest,
+    TriviumInsertResponse,
+    TriviumInsertWithIdRequest,
     TriviumListDatabasesResponse,
     TriviumListMappingsRequest,
     TriviumListMappingsResponse,
@@ -52,6 +60,7 @@ import type {
     TriviumSyncMode,
     TriviumUpsertRequest,
     TriviumUpsertResponse,
+    TriviumUpdatePayloadRequest,
 } from '@stdo/shared-types';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
@@ -65,6 +74,11 @@ const DATABASE_DIM_META_KEY = 'database_dim';
 const DATABASE_DTYPE_META_KEY = 'database_dtype';
 const DATABASE_SYNC_MODE_META_KEY = 'database_sync_mode';
 const DATABASE_STORAGE_MODE_META_KEY = 'database_storage_mode';
+const LAST_CONTENT_MUTATION_META_KEY = 'last_content_mutation_at';
+const LAST_TEXT_INDEX_WRITE_META_KEY = 'last_text_index_write_at';
+const LAST_TEXT_INDEX_REBUILD_META_KEY = 'last_text_index_rebuild_at';
+const LAST_COMPACTION_META_KEY = 'last_compaction_at';
+const LAST_INDEX_LIFECYCLE_EVENT_META_KEY = 'last_index_lifecycle_event_at';
 const DEFAULT_CURSOR_PAGE_LIMIT = 50;
 const MAX_CURSOR_PAGE_LIMIT = 500;
 const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
@@ -75,6 +89,13 @@ interface TriviumDatabaseConfigMeta {
     dtype: TriviumDType | null;
     syncMode: TriviumSyncMode | null;
     storageMode: TriviumStorageMode | null;
+}
+
+interface TriviumIndexLifecycleMeta {
+    lastContentMutationAt: string | null;
+    lastTextWriteAt: string | null;
+    lastTextRebuildAt: string | null;
+    lastCompactionAt: string | null;
 }
 
 interface ResolvedReference extends TriviumResolvedNodeReference {
@@ -118,12 +139,71 @@ export class TriviumService {
             .map(async entry => {
                 const database = entry.name.slice(0, -'.tdb'.length);
                 const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-                const meta = await this.readDatabaseConfigMeta(mappingDbPath);
-                return buildTriviumDatabaseRecord(dbPath, entry.name, meta);
+                const [meta, indexHealth] = await Promise.all([
+                    this.readDatabaseConfigMeta(mappingDbPath),
+                    this.readIndexHealth(mappingDbPath, true),
+                ]);
+                return buildTriviumDatabaseRecord(dbPath, entry.name, meta, indexHealth);
             }));
 
         databases.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         return { databases };
+    }
+
+    async insert(user: UserContext, extensionId: string, request: TriviumInsertRequest): Promise<TriviumInsertResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        const response = await this.core.insertTrivium(dbPath, { ...request, database });
+        await this.markContentMutation(mappingDbPath);
+        return response;
+    }
+
+    async insertWithId(user: UserContext, extensionId: string, request: TriviumInsertWithIdRequest): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.insertTriviumWithId(dbPath, { ...request, database });
+        await this.markContentMutation(mappingDbPath);
+    }
+
+    async updatePayload(user: UserContext, extensionId: string, request: TriviumUpdatePayloadRequest): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.core.updateTriviumPayload(dbPath, { ...request, database });
+        await this.markContentMutation(mappingDbPath);
+    }
+
+    async indexText(user: UserContext, extensionId: string, request: TriviumIndexTextRequest): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.indexTextTrivium(dbPath, { ...request, database });
+        await this.markTextIndexWrite(mappingDbPath);
+    }
+
+    async indexKeyword(user: UserContext, extensionId: string, request: TriviumIndexKeywordRequest): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.indexKeywordTrivium(dbPath, { ...request, database });
+        await this.markTextIndexWrite(mappingDbPath);
+    }
+
+    async buildTextIndex(user: UserContext, extensionId: string, request: TriviumBuildTextIndexRequest = {}): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.buildTextIndexTrivium(dbPath, { ...request, database });
+        await this.markTextIndexRebuild(mappingDbPath);
+    }
+
+    async compact(user: UserContext, extensionId: string, request: TriviumCompactRequest = {}): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.compactTrivium(dbPath, { ...request, database });
+        await this.markCompaction(mappingDbPath);
     }
 
     async resolveId(user: UserContext, extensionId: string, request: TriviumResolveIdRequest): Promise<TriviumResolveIdResponse> {
@@ -274,6 +354,9 @@ export class TriviumService {
                 })
                 .filter((item): item is TriviumBulkUpsertResponse['items'][number] => item !== null)
                 .sort((left, right) => left.index - right.index);
+            if (successItems.length > 0) {
+                await this.markContentMutation(mappingDbPath);
+            }
         }
 
         return {
@@ -375,6 +458,7 @@ export class TriviumService {
             .map(item => item.id);
         if (deletedIds.length > 0) {
             await this.deleteMappingsByInternalIds(mappingDbPath, deletedIds);
+            await this.markContentMutation(mappingDbPath);
         }
         return response;
     }
@@ -478,6 +562,7 @@ export class TriviumService {
         const stat = await this.core.statTrivium(dbPath, { ...request, database });
         const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
         const mappingCount = await this.countMappings(mappingDbPath);
+        const indexHealth = await this.readIndexHealth(mappingDbPath, stat.exists);
         const orphanMappingCount = request.includeMappingIntegrity
             ? await this.countOrphanMappings(dbPath, mappingDbPath, database)
             : null;
@@ -486,6 +571,7 @@ export class TriviumService {
             lastFlushAt,
             mappingCount,
             orphanMappingCount,
+            indexHealth,
         };
     }
 
@@ -977,6 +1063,106 @@ export class TriviumService {
         };
     }
 
+    private async readIndexHealth(mappingDbPath: string, exists: boolean): Promise<TriviumIndexHealth | null> {
+        if (!exists) {
+            return null;
+        }
+
+        const lifecycle = await this.readIndexLifecycleMeta(mappingDbPath);
+        const requiresRebuild = lifecycle.lastContentMutationAt != null
+            && (lifecycle.lastTextRebuildAt == null || lifecycle.lastContentMutationAt > lifecycle.lastTextRebuildAt);
+        const hasIndexSignal = lifecycle.lastTextRebuildAt != null || lifecycle.lastTextWriteAt != null;
+
+        if (requiresRebuild) {
+            return {
+                status: 'stale',
+                reason: lifecycle.lastTextRebuildAt
+                    ? 'Trivium payload 数据在最近一次全文索引重建之后发生了变化'
+                    : 'Trivium 已发生内容变更，但尚未执行全文索引重建',
+                requiresRebuild: true,
+                staleSince: lifecycle.lastContentMutationAt,
+                lastContentMutationAt: lifecycle.lastContentMutationAt,
+                lastTextWriteAt: lifecycle.lastTextWriteAt,
+                lastTextRebuildAt: lifecycle.lastTextRebuildAt,
+                lastCompactionAt: lifecycle.lastCompactionAt,
+            };
+        }
+
+        if (hasIndexSignal) {
+            return {
+                status: 'fresh',
+                reason: null,
+                requiresRebuild: false,
+                staleSince: null,
+                lastContentMutationAt: lifecycle.lastContentMutationAt,
+                lastTextWriteAt: lifecycle.lastTextWriteAt,
+                lastTextRebuildAt: lifecycle.lastTextRebuildAt,
+                lastCompactionAt: lifecycle.lastCompactionAt,
+            };
+        }
+
+        return {
+            status: 'missing',
+            reason: 'Trivium 尚未建立全文索引',
+            requiresRebuild: false,
+            staleSince: null,
+            lastContentMutationAt: lifecycle.lastContentMutationAt,
+            lastTextWriteAt: lifecycle.lastTextWriteAt,
+            lastTextRebuildAt: lifecycle.lastTextRebuildAt,
+            lastCompactionAt: lifecycle.lastCompactionAt,
+        };
+    }
+
+    private async readIndexLifecycleMeta(mappingDbPath: string): Promise<TriviumIndexLifecycleMeta> {
+        const [lastContentMutationAt, lastTextWriteAt, lastTextRebuildAt, lastCompactionAt] = await Promise.all([
+            this.readMetaValue(mappingDbPath, LAST_CONTENT_MUTATION_META_KEY),
+            this.readMetaValue(mappingDbPath, LAST_TEXT_INDEX_WRITE_META_KEY),
+            this.readMetaValue(mappingDbPath, LAST_TEXT_INDEX_REBUILD_META_KEY),
+            this.readMetaValue(mappingDbPath, LAST_COMPACTION_META_KEY),
+        ]);
+        return {
+            lastContentMutationAt,
+            lastTextWriteAt,
+            lastTextRebuildAt,
+            lastCompactionAt,
+        };
+    }
+
+    private async markContentMutation(mappingDbPath: string): Promise<void> {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_CONTENT_MUTATION_META_KEY);
+    }
+
+    private async markTextIndexWrite(mappingDbPath: string): Promise<void> {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_TEXT_INDEX_WRITE_META_KEY);
+    }
+
+    private async markTextIndexRebuild(mappingDbPath: string): Promise<void> {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_TEXT_INDEX_REBUILD_META_KEY);
+    }
+
+    private async markCompaction(mappingDbPath: string): Promise<void> {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_COMPACTION_META_KEY);
+    }
+
+    private async writeMetaTimestamp(mappingDbPath: string, key: string): Promise<void> {
+        await this.ensureSchema(mappingDbPath);
+        const timestamp = await this.nextLifecycleTimestamp(mappingDbPath);
+        await Promise.all([
+            this.writeMetaValue(mappingDbPath, key, timestamp),
+            this.writeMetaValue(mappingDbPath, LAST_INDEX_LIFECYCLE_EVENT_META_KEY, timestamp),
+        ]);
+    }
+
+    private async nextLifecycleTimestamp(mappingDbPath: string): Promise<string> {
+        const current = new Date();
+        const last = await this.readMetaValue(mappingDbPath, LAST_INDEX_LIFECYCLE_EVENT_META_KEY);
+        const lastMs = last ? Date.parse(last) : Number.NaN;
+        if (Number.isFinite(lastMs) && current.getTime() <= lastMs) {
+            return new Date(lastMs + 1).toISOString();
+        }
+        return current.toISOString();
+    }
+
     private async enrichSearchHits(mappingDbPath: string, hits: TriviumSearchHit[]): Promise<TriviumSearchHit[]> {
         const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, hits.map(hit => hit.id));
         return hits.map(hit => ({
@@ -1025,6 +1211,7 @@ function buildTriviumDatabaseRecord(
     filePath: string,
     entryName: string,
     meta: TriviumDatabaseConfigMeta,
+    indexHealth: TriviumIndexHealth | null,
 ): TriviumDatabaseRecord {
     const mainStats = fs.statSync(filePath);
     const walPath = `${filePath}.wal`;
@@ -1048,6 +1235,7 @@ function buildTriviumDatabaseRecord(
         vecSizeBytes: vecStats?.size ?? 0,
         totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
         updatedAt: timestamps.at(-1) ?? null,
+        indexHealth,
     };
 }
 

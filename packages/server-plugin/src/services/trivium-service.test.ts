@@ -228,6 +228,72 @@ describe('TriviumService', () => {
         expect(integrityStat.orphanMappingCount).toBe(1);
     });
 
+    it('tracks Trivium index health across rebuild and compaction lifecycle', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha', vector: [1, 0], payload: { name: 'alpha' } },
+            ],
+        });
+
+        const staleStat = await trivium.stat(user, 'third-party/ext-a', {
+            database: 'graph',
+        });
+        expect(staleStat.indexHealth).toMatchObject({
+            status: 'stale',
+            requiresRebuild: true,
+        });
+        expect(staleStat.indexHealth?.lastContentMutationAt).toEqual(expect.any(String));
+        expect(staleStat.indexHealth?.lastTextRebuildAt).toBeNull();
+
+        await trivium.buildTextIndex(user, 'third-party/ext-a', {
+            database: 'graph',
+        });
+
+        const rebuiltStat = await trivium.stat(user, 'third-party/ext-a', {
+            database: 'graph',
+        });
+        expect(rebuiltStat.indexHealth).toMatchObject({
+            status: 'fresh',
+            requiresRebuild: false,
+        });
+        expect(rebuiltStat.indexHealth?.lastTextRebuildAt).toEqual(expect.any(String));
+
+        await trivium.compact(user, 'third-party/ext-a', {
+            database: 'graph',
+        });
+
+        const compactedStat = await trivium.stat(user, 'third-party/ext-a', {
+            database: 'graph',
+        });
+        expect(compactedStat.indexHealth?.lastCompactionAt).toEqual(expect.any(String));
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha', vector: [1, 0], payload: { name: 'alpha-v2' } },
+            ],
+        });
+
+        const restaleStat = await trivium.stat(user, 'third-party/ext-a', {
+            database: 'graph',
+        });
+        expect(restaleStat.indexHealth).toMatchObject({
+            status: 'stale',
+            requiresRebuild: true,
+        });
+
+        const listed = await trivium.listDatabases(user, 'third-party/ext-a');
+        expect(listed.databases[0]?.indexHealth).toMatchObject({
+            status: 'stale',
+            requiresRebuild: true,
+        });
+    });
+
     it('lists Trivium databases with persisted dim and dtype diagnostics', async () => {
         const user = createUser(dirs);
         const core = createMockCore();
@@ -667,6 +733,12 @@ function createMockCore(): CoreService {
                 ...(request.page ? { page: toPage(rows.length, limit, offset) } : {}),
             };
         },
+        async buildTextIndexTrivium(): Promise<void> {
+            return undefined;
+        },
+        async compactTrivium(dbPath: string): Promise<void> {
+            touch(dbPath);
+        },
         async statTrivium(dbPath: string, request: { database?: string }): Promise<TriviumStatResponse> {
             const database = String(request.database ?? 'default');
             const nodes = [...getDatabase(dbPath).values()].sort((left, right) => left.id - right.id);
@@ -682,6 +754,7 @@ function createMockCore(): CoreService {
                 vecSizeBytes: 0,
                 totalSizeBytes: 0,
                 updatedAt: null,
+                indexHealth: null,
                 database,
                 filePath: dbPath,
                 exists: databases.has(dbPath),
