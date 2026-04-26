@@ -129,6 +129,24 @@ export interface AuthorityFeatureFlags {
 export interface AuthorityJobRegistrySummary {
     registered: number;
     jobTypes: string[];
+    entries: AuthorityJobRegistryEntry[];
+}
+
+export interface AuthorityJobRegistryField {
+    name: string;
+    type: string;
+    required: boolean;
+    description: string;
+}
+
+export interface AuthorityJobRegistryEntry {
+    type: string;
+    description: string;
+    defaultTimeoutMs: number | null;
+    defaultMaxAttempts: number;
+    cancellable: boolean;
+    payloadFields: AuthorityJobRegistryField[];
+    progressFields: AuthorityJobRegistryField[];
 }
 
 export interface AuthorityProbeLimits {

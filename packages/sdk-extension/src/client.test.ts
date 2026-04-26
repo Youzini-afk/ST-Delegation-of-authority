@@ -834,6 +834,17 @@ function buildProbe(overrides: Partial<{
             registry: {
                 registered: 4,
                 jobTypes: ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'],
+                entries: [
+                    {
+                        type: 'delay',
+                        description: 'Waits for a duration and emits progress updates until completion.',
+                        defaultTimeoutMs: null,
+                        defaultMaxAttempts: 1,
+                        cancellable: true,
+                        payloadFields: [],
+                        progressFields: [],
+                    },
+                ],
             },
         },
         core: {
@@ -866,6 +877,17 @@ function buildProbe(overrides: Partial<{
                 jobRegistrySummary: {
                     registered: 4,
                     jobTypes: ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'],
+                    entries: [
+                        {
+                            type: 'delay',
+                            description: 'Waits for a duration and emits progress updates until completion.',
+                            defaultTimeoutMs: null,
+                            defaultMaxAttempts: 1,
+                            cancellable: true,
+                            payloadFields: [],
+                            progressFields: [],
+                        },
+                    ],
                 },
                 timeoutMs: 5000,
                 limits: {

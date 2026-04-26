@@ -71,6 +71,7 @@ import {
     AUTHORITY_DATA_FOLDER,
     AUTHORITY_PLUGIN_ID,
     AUTHORITY_SDK_EXTENSION_ID,
+    BUILTIN_JOB_REGISTRY_SUMMARY,
     BUILTIN_JOB_TYPES,
     DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
     DATA_TRANSFER_CHUNK_BYTES,
@@ -477,10 +478,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             },
             jobs: {
                 builtinTypes: [...BUILTIN_JOB_TYPES],
-                registry: core.health?.jobRegistrySummary ?? {
-                    registered: BUILTIN_JOB_TYPES.length,
-                    jobTypes: [...BUILTIN_JOB_TYPES],
-                },
+                registry: core.health?.jobRegistrySummary ?? BUILTIN_JOB_REGISTRY_SUMMARY,
             },
             core,
         };

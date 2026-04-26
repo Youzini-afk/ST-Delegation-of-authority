@@ -1,5 +1,6 @@
 import type {
     AuthorityGrant,
+    AuthorityJobRegistrySummary,
     AuthorityPolicyEntry,
     DeclaredPermissions,
     InstallType,
@@ -211,10 +212,7 @@ export interface AuthorityCoreHealthSnapshot {
     currentConcurrency: number;
     workerCount: number;
     lastError: string | null;
-    jobRegistrySummary: {
-        registered: number;
-        jobTypes: string[];
-    };
+    jobRegistrySummary: AuthorityJobRegistrySummary;
     timeoutMs: number;
     limits: {
         maxRequestBytes: number;
