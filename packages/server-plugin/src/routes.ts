@@ -11,6 +11,7 @@ import type {
     DataTransferInitRequest,
     DataTransferReadRequest,
     HttpFetchOpenRequest,
+    JobListRequest,
     PermissionEvaluateRequest,
     PermissionResolveRequest,
     PrivateFileDeleteRequest,
@@ -2023,6 +2024,17 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const user = getUserContext(req);
             const session = await runtime.sessions.assertSession(getSessionToken(req), user);
             ok(res, await runtime.jobs.list(user, session.extension.id));
+        } catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+
+    router.post('/jobs/list', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as JobListRequest;
+            ok(res, await runtime.jobs.listPage(user, session.extension.id, payload));
         } catch (error) {
             fail(runtime, req, res, 'jobs.background', error);
         }

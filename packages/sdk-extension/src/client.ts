@@ -17,6 +17,9 @@ import type {
     HttpFetchOpenResponse,
     HttpFetchResponse,
     JobRecord,
+    JobListRequest,
+    JobListResponse,
+    PermissionDecision,
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
     PermissionResource,
@@ -427,6 +430,7 @@ export class AuthorityClient {
         create: (type: string, payload?: Record<string, unknown>, options?: JobCreateOptions) => Promise<JobRecord>;
         get: (id: string) => Promise<JobRecord>;
         list: () => Promise<JobRecord[]>;
+        listPage: (input?: JobListRequest) => Promise<JobListResponse>;
         cancel: (id: string) => Promise<JobRecord>;
         waitForCompletion: (id: string, options?: JobWaitForCompletionOptions) => Promise<JobRecord>;
         subscribe: (id: string, options?: JobSubscribeOptions) => Promise<AuthorityEventsSubscription>;
@@ -1242,6 +1246,13 @@ export class AuthorityClient {
             },
             list: async () => {
                 return await this.requestWithSession<JobRecord[]>('/jobs');
+            },
+            listPage: async (input = {}) => {
+                await this.requireFeature('diagnostics.jobsPage', 'Authority 当前版本尚未提供后台任务分页能力');
+                return await this.requestWithSession<JobListResponse>('/jobs/list', {
+                    method: 'POST',
+                    body: input,
+                });
             },
             cancel: async id => {
                 return await this.requestWithSession<JobRecord>(`/jobs/${encodeURIComponent(id)}/cancel`, {

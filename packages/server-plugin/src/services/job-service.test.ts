@@ -38,6 +38,17 @@ describe('JobService', () => {
         expect(cancelled.status).toBe('cancelled');
         expect((await jobs.get(user, job.id))?.status).toBe('cancelled');
     });
+
+    it('forwards cursor page requests when listing jobs', async () => {
+        const user = createUser(dirs);
+        const jobs = new JobService(createMockCore());
+
+        const page = await jobs.listPage(user, 'third-party/ext-a', {
+            page: { cursor: '5', limit: 2 },
+        });
+
+        expect(page.page.limit).toBe(2);
+    });
 });
 
 function createMockCore(): CoreService {
@@ -48,15 +59,16 @@ function createMockCore(): CoreService {
                 .filter(job => !request.extensionId || job.extensionId === request.extensionId)
                 .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         },
-        async listControlJobsPage(_dbPath: string, request: { extensionId?: string }) {
+        async listControlJobsPage(_dbPath: string, request: { extensionId?: string; page?: { limit?: number } }) {
             const items = [...jobs.values()]
                 .filter(job => !request.extensionId || job.extensionId === request.extensionId)
                 .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+            const limit = request.page?.limit ?? items.length;
             return {
-                jobs: items,
+                jobs: items.slice(0, limit),
                 page: {
                     nextCursor: null,
-                    limit: items.length,
+                    limit,
                     hasMore: false,
                     totalCount: items.length,
                 },

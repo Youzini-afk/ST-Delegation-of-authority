@@ -1,4 +1,4 @@
-import type { ControlJobCreateRequest } from '@stdo/shared-types';
+import type { ControlJobCreateRequest, JobListRequest } from '@stdo/shared-types';
 import { BUILTIN_JOB_TYPES } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { StoredJobRecord, UserContext } from '../types.js';
@@ -18,11 +18,12 @@ export class JobService {
         return response.jobs;
     }
 
-    async listPage(user: UserContext, extensionId?: string) {
+    async listPage(user: UserContext, extensionId?: string, request: JobListRequest = {}) {
         const paths = getUserAuthorityPaths(user);
         return await this.core.listControlJobsPage(paths.controlDbFile, {
             userHandle: user.handle,
             ...(extensionId ? { extensionId } : {}),
+            ...(request.page ? { page: request.page } : {}),
         });
     }
 

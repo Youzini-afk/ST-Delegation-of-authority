@@ -377,6 +377,40 @@ describe('AuthorityClient', () => {
         }
     });
 
+    it('routes jobs.listPage through the paged jobs endpoint', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async () => ({
+            jobs: [{ id: 'job-4', extensionId: 'third-party/ext-a', type: 'delay', status: 'queued', createdAt: 't1', updatedAt: 't1', progress: 0 }],
+            page: { nextCursor: null, limit: 5, hasMore: false, totalCount: 1 },
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const result = await client.jobs.listPage({
+            page: { limit: 5 },
+        });
+
+        expect(result.jobs).toHaveLength(1);
+        expect(requestWithSession).toHaveBeenCalledWith('/jobs/list', {
+            method: 'POST',
+            body: {
+                page: { limit: 5 },
+            },
+        });
+    });
+
     it('aggregates paged SQL query results through sql.pageAll', async () => {
         const { AuthorityClient } = await import('./client.js');
 

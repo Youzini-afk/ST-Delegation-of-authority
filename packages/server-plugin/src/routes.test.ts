@@ -50,6 +50,7 @@ describe('registerRoutes', () => {
             '/trivium/bulk-link',
             '/trivium/bulk-unlink',
             '/trivium/bulk-delete',
+            '/jobs/list',
             '/http/fetch-open',
             '/fs/private/delete',
             '/fs/private/stat',

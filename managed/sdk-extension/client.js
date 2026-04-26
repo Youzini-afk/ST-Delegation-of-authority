@@ -886,6 +886,13 @@ export class AuthorityClient {
             list: async () => {
                 return await this.requestWithSession('/jobs');
             },
+            listPage: async (input = {}) => {
+                await this.requireFeature('diagnostics.jobsPage', 'Authority 当前版本尚未提供后台任务分页能力');
+                return await this.requestWithSession('/jobs/list', {
+                    method: 'POST',
+                    body: input,
+                });
+            },
             cancel: async (id) => {
                 return await this.requestWithSession(`/jobs/${encodeURIComponent(id)}/cancel`, {
                     method: 'POST',

@@ -749,6 +749,15 @@ export interface JobRecord {
     cancelRequestedAt?: string;
 }
 
+export interface JobListRequest {
+    page?: CursorPageRequest;
+}
+
+export interface JobListResponse {
+    jobs: JobRecord[];
+    page: CursorPageInfo;
+}
+
 export type SqlValue = string | number | boolean | null;
 export type SqlStatementMode = 'query' | 'exec';
 

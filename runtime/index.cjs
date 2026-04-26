@@ -2014,6 +2014,17 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'jobs.background', error);
         }
     });
+    router.post('/jobs/list', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            ok(res, await runtime.jobs.listPage(user, session.extension.id, payload));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
     router.get('/jobs/:id', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -4040,11 +4051,12 @@ class JobService {
         const response = await this.listPage(user, extensionId);
         return response.jobs;
     }
-    async listPage(user, extensionId) {
+    async listPage(user, extensionId, request = {}) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
         return await this.core.listControlJobsPage(paths.controlDbFile, {
             userHandle: user.handle,
             ...(extensionId ? { extensionId } : {}),
+            ...(request.page ? { page: request.page } : {}),
         });
     }
     async get(user, jobId) {
