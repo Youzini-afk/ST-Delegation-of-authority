@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+    ControlPrivateFileOpenReadResponse,
     PrivateFileDeleteRequest,
     PrivateFileEntry,
     PrivateFileMkdirRequest,
@@ -57,6 +58,13 @@ export class PrivateFsService {
 
     async readFile(user: UserContext, extensionId: string, request: PrivateFileReadRequest): Promise<PrivateFileReadResponse> {
         return await this.core.readPrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            ...request,
+        });
+    }
+
+    async openRead(user: UserContext, extensionId: string, request: PrivateFileReadRequest): Promise<ControlPrivateFileOpenReadResponse> {
+        return await this.core.openPrivateFileRead({
             rootDir: this.getRootDir(user, extensionId),
             ...request,
         });

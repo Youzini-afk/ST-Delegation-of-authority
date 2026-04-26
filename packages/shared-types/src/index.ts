@@ -309,6 +309,11 @@ export interface ControlBlobGetRequest extends ControlBlobScopeRequest {
     id: string;
 }
 
+export interface ControlBlobOpenReadResponse {
+    record: BlobRecord;
+    sourcePath: string;
+}
+
 export interface ControlBlobDeleteRequest extends ControlBlobScopeRequest {
     id: string;
 }
@@ -372,6 +377,19 @@ export interface PrivateFileReadResponse {
     encoding: PrivateFileEncoding;
 }
 
+export interface PrivateFileOpenReadInlineResponse extends PrivateFileReadResponse {
+    mode: 'inline';
+}
+
+export interface PrivateFileOpenReadTransferResponse {
+    mode: 'transfer';
+    entry: PrivateFileEntry;
+    encoding: PrivateFileEncoding;
+    transfer: DataTransferInitResponse;
+}
+
+export type PrivateFileOpenReadResponse = PrivateFileOpenReadInlineResponse | PrivateFileOpenReadTransferResponse;
+
 export interface PrivateFileListResponse {
     entries: PrivateFileEntry[];
 }
@@ -401,6 +419,11 @@ export interface ControlPrivateFileWriteRequest extends ControlPrivateFileScopeR
 
 export interface ControlPrivateFileReadRequest extends ControlPrivateFileScopeRequest {
     encoding?: PrivateFileEncoding;
+}
+
+export interface ControlPrivateFileOpenReadResponse {
+    entry: PrivateFileEntry;
+    sourcePath: string;
 }
 
 export interface ControlPrivateFileDeleteRequest extends ControlPrivateFileScopeRequest {
@@ -482,6 +505,21 @@ export interface DataTransferAppendResponse {
     updatedAt: string;
 }
 
+export interface DataTransferReadRequest {
+    offset: number;
+    limit?: number;
+}
+
+export interface DataTransferReadResponse {
+    transferId: string;
+    offset: number;
+    content: string;
+    encoding: 'base64';
+    sizeBytes: number;
+    eof: boolean;
+    updatedAt: string;
+}
+
 export interface BlobTransferCommitRequest {
     transferId: string;
     name: string;
@@ -507,6 +545,19 @@ export interface BlobGetResponse {
     content: string;
     encoding: 'base64';
 }
+
+export interface BlobOpenReadInlineResponse extends BlobGetResponse {
+    mode: 'inline';
+}
+
+export interface BlobOpenReadTransferResponse {
+    mode: 'transfer';
+    record: BlobRecord;
+    encoding: 'base64';
+    transfer: DataTransferInitResponse;
+}
+
+export type BlobOpenReadResponse = BlobOpenReadInlineResponse | BlobOpenReadTransferResponse;
 
 export interface JobRecord {
     id: string;

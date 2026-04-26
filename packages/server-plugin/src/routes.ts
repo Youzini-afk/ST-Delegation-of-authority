@@ -6,6 +6,7 @@ import type {
     BlobTransferCommitRequest,
     DataTransferAppendRequest,
     DataTransferInitRequest,
+    DataTransferReadRequest,
     PermissionEvaluateRequest,
     PermissionResolveRequest,
     PrivateFileDeleteRequest,
@@ -44,6 +45,7 @@ import type {
     TriviumUpdatePayloadRequest,
     TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
+import { DATA_TRANSFER_INLINE_THRESHOLD_BYTES } from './constants.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
@@ -489,6 +491,17 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
+    router.post('/transfers/:id/read', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as DataTransferReadRequest;
+            ok(res, await runtime.transfers.read(user, session.extension.id, String(req.params?.id ?? ''), payload));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
     router.post('/transfers/:id/discard', async (req, res) => {
         try {
             const user = getUserContext(req);
@@ -557,6 +570,39 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             }
 
             ok(res, await runtime.storage.getBlob(user, session.extension.id, String(req.body?.id ?? '')));
+        } catch (error) {
+            fail(runtime, req, res, 'storage.blob', error);
+        }
+    });
+
+    router.post('/storage/blob/open-read', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+                throw new Error('Permission not granted: storage.blob');
+            }
+
+            const blobId = String(req.body?.id ?? '');
+            const opened = await runtime.storage.openBlobRead(user, session.extension.id, blobId);
+            if (opened.record.size <= DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                ok(res, {
+                    mode: 'inline',
+                    ...(await runtime.storage.getBlob(user, session.extension.id, blobId)),
+                });
+                return;
+            }
+
+            const transfer = await runtime.transfers.openRead(user, session.extension.id, {
+                resource: 'storage.blob',
+                sourcePath: opened.sourcePath,
+            });
+            ok(res, {
+                mode: 'transfer',
+                record: opened.record,
+                encoding: 'base64',
+                transfer,
+            });
         } catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
         }
@@ -677,6 +723,42 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const result = await runtime.files.readFile(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
             ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+
+    router.post('/fs/private/open-read', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileReadRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            const opened = await runtime.files.openRead(user, session.extension.id, payload);
+            if (opened.entry.sizeBytes <= DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                const result = await runtime.files.readFile(user, session.extension.id, payload);
+                await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
+                ok(res, {
+                    mode: 'inline',
+                    ...result,
+                });
+                return;
+            }
+
+            const transfer = await runtime.transfers.openRead(user, session.extension.id, {
+                resource: 'fs.private',
+                sourcePath: opened.sourcePath,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path, via: 'transfer' });
+            ok(res, {
+                mode: 'transfer',
+                entry: opened.entry,
+                encoding: payload.encoding ?? 'utf8',
+                transfer,
+            });
         } catch (error) {
             fail(runtime, req, res, 'fs.private', error);
         }

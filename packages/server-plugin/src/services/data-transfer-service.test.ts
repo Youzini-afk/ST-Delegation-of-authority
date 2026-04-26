@@ -45,6 +45,36 @@ describe('DataTransferService', () => {
 
         expect(() => transfers.get(user, 'third-party/ext-b', initialized.transferId)).toThrow('Transfer not found');
     });
+
+    it('reads chunked payloads from existing files without deleting the source file', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+        const sourcePath = path.join(user.rootDir, 'download.bin');
+        fs.writeFileSync(sourcePath, Buffer.from('hello authority download', 'utf8'));
+
+        const opened = await transfers.openRead(user, 'third-party/ext-a', {
+            resource: 'storage.blob',
+            sourcePath,
+        });
+        expect(opened.sizeBytes).toBe(Buffer.byteLength('hello authority download'));
+
+        const first = await transfers.read(user, 'third-party/ext-a', opened.transferId, {
+            offset: 0,
+            limit: 5,
+        });
+        expect(Buffer.from(first.content, 'base64').toString('utf8')).toBe('hello');
+        expect(first.eof).toBe(false);
+
+        const second = await transfers.read(user, 'third-party/ext-a', opened.transferId, {
+            offset: 5,
+            limit: 1024,
+        });
+        expect(Buffer.from(second.content, 'base64').toString('utf8')).toBe(' authority download');
+        expect(second.eof).toBe(true);
+
+        await transfers.discard(user, 'third-party/ext-a', opened.transferId);
+        expect(fs.existsSync(sourcePath)).toBe(true);
+    });
 });
 
 function createUser(dirs: string[]): UserContext {

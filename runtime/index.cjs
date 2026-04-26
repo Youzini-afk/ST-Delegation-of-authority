@@ -175,9 +175,11 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+
 
 
 
@@ -187,9 +189,9 @@ function ok(res, data) {
     res.json(data);
 }
 function fail(runtime, req, res, extensionId, error) {
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
         void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
     }
     catch {
@@ -204,21 +206,21 @@ function getSqlDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 function resolvePrivateSqlDatabaseDir(user, extensionId) {
-    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId));
+    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
+    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
 }
 function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.sqlite`);
+    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
 }
 function getTriviumDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 function resolvePrivateTriviumDatabaseDir(user, extensionId) {
-    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId));
+    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
+    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
 }
 function resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.tdb`);
+    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
 }
 function readTriviumDimension(filePath) {
     try {
@@ -339,7 +341,7 @@ async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatab
         files,
     };
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_2__.createAuthorityRuntime)()) {
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_3__.createAuthorityRuntime)()) {
     router.post('/probe', async (_req, res) => {
         await runtime.core.refreshHealth();
         const install = runtime.install.getStatus();
@@ -365,7 +367,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/session/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const config = req.body;
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
@@ -379,8 +381,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/session/current', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id)));
         }
         catch (error) {
@@ -389,8 +391,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             ok(res, await runtime.permissions.evaluate(user, session, req.body));
         }
         catch (error) {
@@ -399,8 +401,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/resolve', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
             await runtime.audit.logPermission(user, session.extension.id, 'Permission resolved', {
@@ -417,7 +419,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 const sqlDatabases = listPrivateSqlDatabases(user, extension.id).databases;
@@ -437,7 +439,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
@@ -462,7 +464,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/extensions/:id/grants/reset', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
             await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
@@ -481,8 +483,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/kv/get', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -494,8 +496,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/kv/set', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -509,8 +511,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/kv/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -523,8 +525,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/kv/list', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -536,8 +538,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.resource !== 'storage.blob' && payload.resource !== 'fs.private') {
                 throw new Error(`Unsupported transfer resource: ${String(payload.resource)}`);
@@ -553,8 +555,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/:id/append', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             ok(res, await runtime.transfers.append(user, session.extension.id, String(req.params?.id ?? ''), payload));
         }
@@ -562,10 +564,21 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
     });
+    router.post('/transfers/:id/read', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            ok(res, await runtime.transfers.read(user, session.extension.id, String(req.params?.id ?? ''), payload));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
     router.post('/transfers/:id/discard', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             await runtime.transfers.discard(user, session.extension.id, String(req.params?.id ?? ''));
             ok(res, { ok: true });
         }
@@ -575,8 +588,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/put', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -590,8 +603,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/commit-transfer', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
@@ -608,8 +621,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/get', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -619,10 +632,41 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'storage.blob', error);
         }
     });
+    router.post('/storage/blob/open-read', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+                throw new Error('Permission not granted: storage.blob');
+            }
+            const blobId = String(req.body?.id ?? '');
+            const opened = await runtime.storage.openBlobRead(user, session.extension.id, blobId);
+            if (opened.record.size <= _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                ok(res, {
+                    mode: 'inline',
+                    ...(await runtime.storage.getBlob(user, session.extension.id, blobId)),
+                });
+                return;
+            }
+            const transfer = await runtime.transfers.openRead(user, session.extension.id, {
+                resource: 'storage.blob',
+                sourcePath: opened.sourcePath,
+            });
+            ok(res, {
+                mode: 'transfer',
+                record: opened.record,
+                encoding: 'base64',
+                transfer,
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'storage.blob', error);
+        }
+    });
     router.post('/storage/blob/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -635,8 +679,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/list', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -648,8 +692,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/mkdir', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -664,8 +708,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/read-dir', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -680,8 +724,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/write-file', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -696,8 +740,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/write-file-transfer', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -718,8 +762,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/read-file', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -732,10 +776,44 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'fs.private', error);
         }
     });
+    router.post('/fs/private/open-read', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            const opened = await runtime.files.openRead(user, session.extension.id, payload);
+            if (opened.entry.sizeBytes <= _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                const result = await runtime.files.readFile(user, session.extension.id, payload);
+                await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
+                ok(res, {
+                    mode: 'inline',
+                    ...result,
+                });
+                return;
+            }
+            const transfer = await runtime.transfers.openRead(user, session.extension.id, {
+                resource: 'fs.private',
+                sourcePath: opened.sourcePath,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path, via: 'transfer' });
+            ok(res, {
+                mode: 'transfer',
+                entry: opened.entry,
+                encoding: payload.encoding ?? 'utf8',
+                transfer,
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
     router.post('/fs/private/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -750,8 +828,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/stat', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -766,8 +844,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/sql/query', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
@@ -790,8 +868,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/sql/exec', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
@@ -814,8 +892,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/sql/batch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
@@ -838,8 +916,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/sql/transaction', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
@@ -862,8 +940,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/sql/migrate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getSqlDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
@@ -887,8 +965,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/sql/databases', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private' }, false)) {
                 throw new Error('Permission not granted: sql.private');
             }
@@ -904,8 +982,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/insert', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -928,8 +1006,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/insert-with-id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -952,8 +1030,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/get', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -976,8 +1054,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/update-payload', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1000,8 +1078,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/update-vector', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1024,8 +1102,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1048,8 +1126,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/link', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1073,8 +1151,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/unlink', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1098,8 +1176,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/neighbors', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1123,8 +1201,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/search', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1148,8 +1226,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/search-advanced', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1173,8 +1251,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/search-hybrid', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1198,8 +1276,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/filter-where', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1222,8 +1300,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/query', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1246,8 +1324,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/index-text', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1270,8 +1348,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/index-keyword', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1294,8 +1372,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/build-text-index', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1317,8 +1395,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/flush', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1340,8 +1418,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/stat', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1364,8 +1442,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/trivium/databases', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private' }, false)) {
                 throw new Error('Permission not granted: trivium.private');
             }
@@ -1381,9 +1459,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/http/fetch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
-            const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.normalizeHostname)(String(req.body?.url ?? ''));
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.normalizeHostname)(String(req.body?.url ?? ''));
             if (!await runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
                 throw new Error(`Permission not granted: http.fetch for ${hostname}`);
             }
@@ -1397,8 +1475,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/jobs/create', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const jobType = String(req.body?.type ?? '');
             if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: jobType })) {
                 throw new Error(`Permission not granted: jobs.background for ${jobType}`);
@@ -1420,8 +1498,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/jobs', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             ok(res, await runtime.jobs.list(user, session.extension.id));
         }
         catch (error) {
@@ -1430,8 +1508,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/jobs/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const job = await runtime.jobs.get(user, String(req.params?.id ?? ''));
             if (!job || job.extensionId !== session.extension.id) {
                 throw new Error('Job not found');
@@ -1444,8 +1522,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/jobs/:id/cancel', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const job = await runtime.jobs.cancel(user, session.extension.id, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, session.extension.id, 'Job cancelled', { jobId: job.id });
             ok(res, job);
@@ -1456,8 +1534,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/events/stream', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const channel = String(req.query?.channel ?? `extension:${session.extension.id}`);
             if (!await runtime.permissions.authorize(user, session, { resource: 'events.stream', target: channel })) {
                 throw new Error(`Permission not granted: events.stream for ${channel}`);
@@ -1466,7 +1544,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
             res.write(': connected\n\n');
-            const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
+            const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
             const cleanup = runtime.events.register(paths.controlDbFile, user.handle, channel, res);
             req.on?.('close', cleanup);
             req.on?.('end', cleanup);
@@ -1477,7 +1555,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1489,7 +1567,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
@@ -1500,7 +1578,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/update', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1553,9 +1631,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                         : `更新失败后后台服务状态为 ${recovery.state}。`;
                 }
                 catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(recoveryError)}`;
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(recoveryError)}`;
                 }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
             }
         }
         catch (error) {
@@ -2228,6 +2306,12 @@ class CoreService {
             ...request,
         });
     }
+    async openStorageBlobRead(dbPath, request) {
+        return await this.request('/v1/storage/blob/open-read', {
+            dbPath,
+            ...request,
+        });
+    }
     async deleteStorageBlob(dbPath, request) {
         await this.request('/v1/storage/blob/delete', {
             dbPath,
@@ -2255,6 +2339,9 @@ class CoreService {
     }
     async readPrivateFile(request) {
         return await this.request('/v1/fs/private/read-file', request);
+    }
+    async openPrivateFileRead(request) {
+        return await this.request('/v1/fs/private/open-read', request);
     }
     async deletePrivateFile(request) {
         const response = await this.request('/v1/fs/private/delete', request);
@@ -2587,12 +2674,17 @@ class DataTransferService {
             maxBytes: _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES,
             createdAt: timestamp,
             updatedAt: timestamp,
+            direction: 'upload',
+            ownedFile: true,
         };
         this.transfers.set(transferId, record);
         return toInitResponse(record);
     }
     async append(user, extensionId, transferId, request) {
         const record = this.get(user, extensionId, transferId);
+        if (record.direction !== 'upload') {
+            throw new Error('Transfer does not accept append operations');
+        }
         if (request.offset !== record.sizeBytes) {
             throw new Error(`Transfer offset mismatch: expected ${record.sizeBytes}, received ${request.offset}`);
         }
@@ -2610,6 +2702,76 @@ class DataTransferService {
             updatedAt: record.updatedAt,
         };
     }
+    async openRead(user, extensionId, request) {
+        const resource = normalizeTransferResource(request.resource);
+        const { filePath, sizeBytes } = validateReadableTransferFile(request.sourcePath);
+        if (sizeBytes > _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES) {
+            throw new Error(`Transfer exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES} bytes`);
+        }
+        const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const timestamp = new Date().toISOString();
+        const record = {
+            transferId,
+            userHandle: user.handle,
+            extensionId,
+            resource,
+            filePath,
+            sizeBytes,
+            maxBytes: sizeBytes,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            direction: 'download',
+            ownedFile: false,
+        };
+        this.transfers.set(transferId, record);
+        return toInitResponse(record);
+    }
+    async read(user, extensionId, transferId, request) {
+        const record = this.get(user, extensionId, transferId);
+        if (record.direction !== 'download') {
+            throw new Error('Transfer does not support read operations');
+        }
+        if (!Number.isInteger(request.offset) || request.offset < 0) {
+            throw new Error('Transfer offset must be a non-negative integer');
+        }
+        if (request.offset > record.sizeBytes) {
+            throw new Error(`Transfer offset exceeds size ${record.sizeBytes}`);
+        }
+        const remaining = record.sizeBytes - request.offset;
+        const requestedLimit = request.limit ?? _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES;
+        if (!Number.isInteger(requestedLimit) || requestedLimit < 0) {
+            throw new Error('Transfer limit must be a non-negative integer');
+        }
+        const limit = Math.min(requestedLimit, _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES, remaining);
+        if (limit === 0) {
+            return {
+                transferId: record.transferId,
+                offset: request.offset,
+                content: '',
+                encoding: 'base64',
+                sizeBytes: record.sizeBytes,
+                eof: true,
+                updatedAt: record.updatedAt,
+            };
+        }
+        const handle = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(record.filePath, 'r');
+        try {
+            const buffer = Buffer.alloc(limit);
+            const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readSync(handle, buffer, 0, limit, request.offset);
+            return {
+                transferId: record.transferId,
+                offset: request.offset,
+                content: buffer.subarray(0, bytesRead).toString('base64'),
+                encoding: 'base64',
+                sizeBytes: record.sizeBytes,
+                eof: request.offset + bytesRead >= record.sizeBytes,
+                updatedAt: record.updatedAt,
+            };
+        }
+        finally {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(handle);
+        }
+    }
     get(user, extensionId, transferId, resource) {
         const record = this.transfers.get(transferId);
         if (!record || record.userHandle !== user.handle || record.extensionId !== extensionId) {
@@ -2623,6 +2785,9 @@ class DataTransferService {
     async discard(user, extensionId, transferId) {
         const record = this.get(user, extensionId, transferId);
         this.transfers.delete(transferId);
+        if (!record.ownedFile) {
+            return;
+        }
         try {
             node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(record.filePath, { force: true });
         }
@@ -2660,6 +2825,29 @@ function decodeTransferChunk(content) {
     catch {
         throw new Error('Invalid transfer chunk encoding');
     }
+}
+function validateReadableTransferFile(sourcePath) {
+    const filePath = sourcePath.trim();
+    if (!filePath) {
+        throw new Error('Transfer source path is required');
+    }
+    let metadata;
+    try {
+        metadata = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(filePath);
+    }
+    catch {
+        throw new Error('Transfer source file not found');
+    }
+    if (metadata.isSymbolicLink()) {
+        throw new Error('Transfer source symlink is not allowed');
+    }
+    if (!metadata.isFile()) {
+        throw new Error('Transfer source must be a file');
+    }
+    return {
+        filePath,
+        sizeBytes: metadata.size,
+    };
 }
 function pruneEmptyTransferDirs(dirPath) {
     let current = dirPath;
@@ -3580,6 +3768,12 @@ class PrivateFsService {
             ...request,
         });
     }
+    async openRead(user, extensionId, request) {
+        return await this.core.openPrivateFileRead({
+            rootDir: this.getRootDir(user, extensionId),
+            ...request,
+        });
+    }
     async delete(user, extensionId, request) {
         await this.core.deletePrivateFile({
             rootDir: this.getRootDir(user, extensionId),
@@ -3824,6 +4018,15 @@ class StorageService {
     async getBlob(user, extensionId, blobId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
         return await this.core.getStorageBlob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
+            id: blobId,
+        });
+    }
+    async openBlobRead(user, extensionId, blobId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.openStorageBlobRead(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
             blobDir: paths.blobDir,

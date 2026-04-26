@@ -2,10 +2,13 @@ import type {
     AuthorityGrant,
     AuthorityInitConfig,
     AuthorityPolicyEntry,
+    BlobGetResponse,
+    BlobOpenReadResponse,
     BlobPutRequest,
     BlobRecord,
     BlobTransferCommitRequest,
     DataTransferInitResponse,
+    DataTransferReadResponse,
     DataTransferResource,
     DeclaredPermissions,
     JobRecord,
@@ -14,6 +17,7 @@ import type {
     PermissionResource,
     PrivateFileDeleteRequest,
     PrivateFileEntry,
+    PrivateFileOpenReadResponse,
     PrivateFileReadDirRequest,
     PrivateFileReadRequest,
     PrivateFileReadResponse,
@@ -99,12 +103,6 @@ export interface AuthorityCapabilities {
     features: SessionInitResponse['features'];
     grants: Record<PermissionResource, AuthorityGrant[]>;
     policies: Record<PermissionResource, AuthorityPolicyEntry[]>;
-}
-
-interface BlobGetResponse {
-    record: BlobRecord;
-    content: string;
-    encoding: 'base64';
 }
 
 interface SessionRequestOptions {
@@ -237,10 +235,7 @@ export class AuthorityClient {
                 },
                 get: async id => {
                     await this.ensurePermission({ resource: 'storage.blob', reason: `读取 Blob ${id}` });
-                    return await this.requestWithSession<BlobGetResponse>('/storage/blob/get', {
-                        method: 'POST',
-                        body: { id },
-                    });
+                    return await this.getBlobWithTransfer(id);
                 },
                 delete: async id => {
                     await this.ensurePermission({ resource: 'storage.blob', reason: `删除 Blob ${id}` });
@@ -301,13 +296,7 @@ export class AuthorityClient {
             },
             readFile: async (path, options = {}) => {
                 await this.ensurePermission({ resource: 'fs.private', reason: `读取私有文件 ${path}` });
-                return await this.requestWithSession<PrivateFileReadResponse>('/fs/private/read-file', {
-                    method: 'POST',
-                    body: {
-                        path,
-                        encoding: options.encoding,
-                    },
-                });
+                return await this.readPrivateFileWithTransfer(path, options);
             },
             delete: async (path, options = {}) => {
                 await this.ensurePermission({ resource: 'fs.private', reason: `删除私有路径 ${path}` });
@@ -1001,6 +990,31 @@ export class AuthorityClient {
         }
     }
 
+    private async getBlobWithTransfer(id: string): Promise<BlobGetResponse> {
+        const opened = await this.requestWithSession<BlobOpenReadResponse>('/storage/blob/open-read', {
+            method: 'POST',
+            body: { id },
+        });
+        if (opened.mode === 'inline') {
+            return {
+                record: opened.record,
+                content: opened.content,
+                encoding: opened.encoding,
+            };
+        }
+
+        try {
+            const bytes = await this.readTransferBytes(opened.transfer);
+            return {
+                record: opened.record,
+                content: bytesToBase64(bytes),
+                encoding: opened.encoding,
+            };
+        } finally {
+            await this.discardTransferQuietly(opened.transfer.transferId);
+        }
+    }
+
     private async writePrivateFileWithTransfer(
         path: string,
         bytes: Uint8Array,
@@ -1025,6 +1039,37 @@ export class AuthorityClient {
         }
     }
 
+    private async readPrivateFileWithTransfer(
+        path: string,
+        options: Omit<PrivateFileReadRequest, 'path'>,
+    ): Promise<PrivateFileReadResponse> {
+        const opened = await this.requestWithSession<PrivateFileOpenReadResponse>('/fs/private/open-read', {
+            method: 'POST',
+            body: {
+                path,
+                ...(options.encoding === undefined ? {} : { encoding: options.encoding }),
+            },
+        });
+        if (opened.mode === 'inline') {
+            return {
+                entry: opened.entry,
+                content: opened.content,
+                encoding: opened.encoding,
+            };
+        }
+
+        try {
+            const bytes = await this.readTransferBytes(opened.transfer);
+            return {
+                entry: opened.entry,
+                content: bytesToContent(bytes, opened.encoding),
+                encoding: opened.encoding,
+            };
+        } finally {
+            await this.discardTransferQuietly(opened.transfer.transferId);
+        }
+    }
+
     private async initializeTransfer(resource: DataTransferResource): Promise<DataTransferInitResponse> {
         return await this.requestWithSession<DataTransferInitResponse>('/transfers/init', {
             method: 'POST',
@@ -1046,6 +1091,34 @@ export class AuthorityClient {
             });
             offset += chunk.byteLength;
         }
+    }
+
+    private async readTransferBytes(transfer: DataTransferInitResponse): Promise<Uint8Array> {
+        if (transfer.sizeBytes <= 0) {
+            return new Uint8Array(0);
+        }
+
+        const result = new Uint8Array(transfer.sizeBytes);
+        let offset = 0;
+        while (offset < transfer.sizeBytes) {
+            const chunk = await this.requestWithSession<DataTransferReadResponse>(`/transfers/${encodeURIComponent(transfer.transferId)}/read`, {
+                method: 'POST',
+                body: {
+                    offset,
+                    limit: transfer.chunkSize,
+                },
+            });
+            const bytes = base64ToBytes(chunk.content);
+            if (bytes.byteLength === 0 && !chunk.eof) {
+                throw new Error('Transfer read stalled before EOF');
+            }
+            result.set(bytes, offset);
+            offset += bytes.byteLength;
+            if (chunk.eof) {
+                return offset === result.length ? result : result.subarray(0, offset);
+            }
+        }
+        return result;
     }
 
     private async discardTransferQuietly(transferId: string): Promise<void> {
@@ -1213,4 +1286,20 @@ function bytesToBase64(bytes: Uint8Array): string {
         segments.push(binary);
     }
     return globalThis.btoa(segments.join(''));
+}
+
+function bytesToContent(bytes: Uint8Array, encoding: 'utf8' | 'base64'): string {
+    if (encoding === 'base64') {
+        return bytesToBase64(bytes);
+    }
+    return bytesToUtf8(bytes);
+}
+
+function bytesToUtf8(bytes: Uint8Array): string {
+    try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`invalid_utf8_private_file: ${message}`);
+    }
 }

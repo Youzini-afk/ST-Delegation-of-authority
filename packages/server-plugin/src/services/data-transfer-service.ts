@@ -6,12 +6,19 @@ import type {
     DataTransferAppendResponse,
     DataTransferInitRequest,
     DataTransferInitResponse,
+    DataTransferReadRequest,
+    DataTransferReadResponse,
     DataTransferResource,
 } from '@stdo/shared-types';
 import { DATA_TRANSFER_CHUNK_BYTES, MAX_DATA_TRANSFER_BYTES } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
 import { sanitizeFileSegment } from '../utils.js';
+
+interface DataTransferOpenReadRequest {
+    resource: DataTransferResource;
+    sourcePath: string;
+}
 
 interface DataTransferRecord {
     transferId: string;
@@ -23,6 +30,8 @@ interface DataTransferRecord {
     maxBytes: number;
     createdAt: string;
     updatedAt: string;
+    direction: 'upload' | 'download';
+    ownedFile: boolean;
 }
 
 export class DataTransferService {
@@ -47,6 +56,8 @@ export class DataTransferService {
             maxBytes: MAX_DATA_TRANSFER_BYTES,
             createdAt: timestamp,
             updatedAt: timestamp,
+            direction: 'upload',
+            ownedFile: true,
         };
         this.transfers.set(transferId, record);
         return toInitResponse(record);
@@ -54,6 +65,9 @@ export class DataTransferService {
 
     async append(user: UserContext, extensionId: string, transferId: string, request: DataTransferAppendRequest): Promise<DataTransferAppendResponse> {
         const record = this.get(user, extensionId, transferId);
+        if (record.direction !== 'upload') {
+            throw new Error('Transfer does not accept append operations');
+        }
         if (request.offset !== record.sizeBytes) {
             throw new Error(`Transfer offset mismatch: expected ${record.sizeBytes}, received ${request.offset}`);
         }
@@ -73,6 +87,81 @@ export class DataTransferService {
         };
     }
 
+    async openRead(user: UserContext, extensionId: string, request: DataTransferOpenReadRequest): Promise<DataTransferInitResponse> {
+        const resource = normalizeTransferResource(request.resource);
+        const { filePath, sizeBytes } = validateReadableTransferFile(request.sourcePath);
+        if (sizeBytes > MAX_DATA_TRANSFER_BYTES) {
+            throw new Error(`Transfer exceeds ${MAX_DATA_TRANSFER_BYTES} bytes`);
+        }
+
+        const transferId = crypto.randomUUID();
+        const timestamp = new Date().toISOString();
+        const record: DataTransferRecord = {
+            transferId,
+            userHandle: user.handle,
+            extensionId,
+            resource,
+            filePath,
+            sizeBytes,
+            maxBytes: sizeBytes,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            direction: 'download',
+            ownedFile: false,
+        };
+        this.transfers.set(transferId, record);
+        return toInitResponse(record);
+    }
+
+    async read(user: UserContext, extensionId: string, transferId: string, request: DataTransferReadRequest): Promise<DataTransferReadResponse> {
+        const record = this.get(user, extensionId, transferId);
+        if (record.direction !== 'download') {
+            throw new Error('Transfer does not support read operations');
+        }
+        if (!Number.isInteger(request.offset) || request.offset < 0) {
+            throw new Error('Transfer offset must be a non-negative integer');
+        }
+        if (request.offset > record.sizeBytes) {
+            throw new Error(`Transfer offset exceeds size ${record.sizeBytes}`);
+        }
+
+        const remaining = record.sizeBytes - request.offset;
+        const requestedLimit = request.limit ?? DATA_TRANSFER_CHUNK_BYTES;
+        if (!Number.isInteger(requestedLimit) || requestedLimit < 0) {
+            throw new Error('Transfer limit must be a non-negative integer');
+        }
+
+        const limit = Math.min(requestedLimit, DATA_TRANSFER_CHUNK_BYTES, remaining);
+        if (limit === 0) {
+            return {
+                transferId: record.transferId,
+                offset: request.offset,
+                content: '',
+                encoding: 'base64',
+                sizeBytes: record.sizeBytes,
+                eof: true,
+                updatedAt: record.updatedAt,
+            };
+        }
+
+        const handle = fs.openSync(record.filePath, 'r');
+        try {
+            const buffer = Buffer.alloc(limit);
+            const bytesRead = fs.readSync(handle, buffer, 0, limit, request.offset);
+            return {
+                transferId: record.transferId,
+                offset: request.offset,
+                content: buffer.subarray(0, bytesRead).toString('base64'),
+                encoding: 'base64',
+                sizeBytes: record.sizeBytes,
+                eof: request.offset + bytesRead >= record.sizeBytes,
+                updatedAt: record.updatedAt,
+            };
+        } finally {
+            fs.closeSync(handle);
+        }
+    }
+
     get(user: UserContext, extensionId: string, transferId: string, resource?: DataTransferResource): DataTransferRecord {
         const record = this.transfers.get(transferId);
         if (!record || record.userHandle !== user.handle || record.extensionId !== extensionId) {
@@ -87,6 +176,9 @@ export class DataTransferService {
     async discard(user: UserContext, extensionId: string, transferId: string): Promise<void> {
         const record = this.get(user, extensionId, transferId);
         this.transfers.delete(transferId);
+        if (!record.ownedFile) {
+            return;
+        }
         try {
             fs.rmSync(record.filePath, { force: true });
         } finally {
@@ -131,6 +223,29 @@ function decodeTransferChunk(content: string): Buffer {
     } catch {
         throw new Error('Invalid transfer chunk encoding');
     }
+}
+
+function validateReadableTransferFile(sourcePath: string): { filePath: string; sizeBytes: number } {
+    const filePath = sourcePath.trim();
+    if (!filePath) {
+        throw new Error('Transfer source path is required');
+    }
+    let metadata: fs.Stats;
+    try {
+        metadata = fs.lstatSync(filePath);
+    } catch {
+        throw new Error('Transfer source file not found');
+    }
+    if (metadata.isSymbolicLink()) {
+        throw new Error('Transfer source symlink is not allowed');
+    }
+    if (!metadata.isFile()) {
+        throw new Error('Transfer source must be a file');
+    }
+    return {
+        filePath,
+        sizeBytes: metadata.size,
+    };
 }
 
 function pruneEmptyTransferDirs(dirPath: string): void {

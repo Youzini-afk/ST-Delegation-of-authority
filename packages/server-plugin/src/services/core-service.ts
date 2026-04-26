@@ -12,6 +12,7 @@ import type {
     ControlBlobGetRequest,
     ControlBlobListRequest,
     ControlBlobListResponse,
+    ControlBlobOpenReadResponse,
     ControlBlobPutRequest,
     ControlAuditLogRequest,
     ControlAuditRecentRequest,
@@ -49,6 +50,7 @@ import type {
     ControlPoliciesSaveRequest,
     ControlPrivateFileDeleteRequest,
     ControlPrivateFileMkdirRequest,
+    ControlPrivateFileOpenReadResponse,
     ControlPrivateFileReadDirRequest,
     ControlPrivateFileReadRequest,
     ControlPrivateFileStatRequest,
@@ -690,6 +692,13 @@ export class CoreService {
         });
     }
 
+    async openStorageBlobRead(dbPath: string, request: ControlBlobGetRequest): Promise<ControlBlobOpenReadResponse> {
+        return await this.request('/v1/storage/blob/open-read', {
+            dbPath,
+            ...request,
+        });
+    }
+
     async deleteStorageBlob(dbPath: string, request: ControlBlobDeleteRequest): Promise<void> {
         await this.request('/v1/storage/blob/delete', {
             dbPath,
@@ -722,6 +731,10 @@ export class CoreService {
 
     async readPrivateFile(request: ControlPrivateFileReadRequest): Promise<PrivateFileReadResponse> {
         return await this.request<PrivateFileReadResponse>('/v1/fs/private/read-file', request);
+    }
+
+    async openPrivateFileRead(request: ControlPrivateFileReadRequest): Promise<ControlPrivateFileOpenReadResponse> {
+        return await this.request<ControlPrivateFileOpenReadResponse>('/v1/fs/private/open-read', request);
     }
 
     async deletePrivateFile(request: ControlPrivateFileDeleteRequest): Promise<void> {

@@ -844,6 +844,13 @@ struct BlobGetResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BlobOpenReadResponse {
+    record: BlobRecord,
+    source_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ControlEventRecord {
     id: i64,
     timestamp: String,
@@ -993,6 +1000,13 @@ struct PrivateFileReadResponse {
     encoding: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateFileOpenReadResponse {
+    entry: PrivateFileEntry,
+    source_path: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let host = env::var("AUTHORITY_CORE_HOST").unwrap_or_else(|_| String::from("127.0.0.1"));
@@ -1022,12 +1036,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/storage/kv/delete", post(v1_storage_kv_delete))
         .route("/storage/kv/list", post(v1_storage_kv_list))
         .route("/storage/blob/put", post(v1_storage_blob_put))
+        .route("/storage/blob/open-read", post(v1_storage_blob_open_read))
         .route("/storage/blob/get", post(v1_storage_blob_get))
         .route("/storage/blob/delete", post(v1_storage_blob_delete))
         .route("/storage/blob/list", post(v1_storage_blob_list))
         .route("/fs/private/mkdir", post(v1_private_mkdir))
         .route("/fs/private/read-dir", post(v1_private_read_dir))
         .route("/fs/private/write-file", post(v1_private_write))
+        .route("/fs/private/open-read", post(v1_private_open_read))
         .route("/fs/private/read-file", post(v1_private_read))
         .route("/fs/private/delete", post(v1_private_delete))
         .route("/fs/private/stat", post(v1_private_stat))
@@ -1325,12 +1341,14 @@ async fn v1_storage_kv_set(State(_config): State<Arc<Config>>, Json(body): Json<
 async fn v1_storage_kv_delete(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_delete).await }
 async fn v1_storage_kv_list(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_list).await }
 async fn v1_storage_blob_put(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobPutRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_put).await }
+async fn v1_storage_blob_open_read(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_open_read).await }
 async fn v1_storage_blob_get(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_get).await }
 async fn v1_storage_blob_delete(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_delete).await }
 async fn v1_storage_blob_list(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_list).await }
 async fn v1_private_mkdir(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileMkdirRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_mkdir).await }
 async fn v1_private_read_dir(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadDirRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_read_dir).await }
 async fn v1_private_write(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileWriteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_write).await }
+async fn v1_private_open_read(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_open_read).await }
 async fn v1_private_read(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_read).await }
 async fn v1_private_delete(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_delete).await }
 async fn v1_private_stat(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileStatRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_stat).await }
@@ -2359,6 +2377,48 @@ fn handle_storage_blob_get(request: StorageBlobGetRequest) -> Result<JsonValue, 
     }).expect("blob get response should serialize"))
 }
 
+fn handle_storage_blob_open_read(request: StorageBlobGetRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("blobDir", &request.blob_dir)?;
+    validate_non_empty("id", &request.id)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    let record = fetch_blob_record(&connection, &request.user_handle, &request.extension_id, &request.id)?
+        .ok_or_else(|| ApiError {
+            status_code: 400,
+            message: String::from("Blob not found"),
+        })?;
+    let binary_path = blob_binary_path(&request.blob_dir, &request.extension_id, &record.id);
+    let metadata = fs::symlink_metadata(&binary_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return ApiError {
+                status_code: 400,
+                message: String::from("Blob not found"),
+            };
+        }
+        to_internal_error(error)
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("blob_path_symlink_not_allowed"),
+        });
+    }
+    if !metadata.is_file() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("blob_path_is_not_file"),
+        });
+    }
+
+    Ok(serde_json::to_value(BlobOpenReadResponse {
+        record,
+        source_path: binary_path.to_string_lossy().into_owned(),
+    }).expect("blob open read response should serialize"))
+}
+
 fn handle_storage_blob_delete(request: StorageBlobDeleteRequest) -> Result<JsonValue, ApiError> {
     validate_non_empty("userHandle", &request.user_handle)?;
     validate_non_empty("extensionId", &request.extension_id)?;
@@ -2568,6 +2628,32 @@ fn handle_private_file_read(request: PrivateFileReadRequest) -> Result<JsonValue
         content,
         encoding: encoding.to_string(),
     }).expect("private file read response should serialize"))
+}
+
+fn handle_private_file_open_read(request: PrivateFileReadRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("rootDir", &request.root_dir)?;
+    let root_dir = PathBuf::from(&request.root_dir);
+    let (target_path, virtual_path) = resolve_private_path(&root_dir, &request.path)?;
+    ensure_private_path_components_safe(&root_dir, &virtual_path)?;
+    if !target_path.exists() {
+        return Err(ApiError {
+            status_code: 404,
+            message: String::from("private_path_not_found"),
+        });
+    }
+
+    let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
+    if !metadata.is_file() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("private_path_is_not_file"),
+        });
+    }
+    let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
+    Ok(serde_json::to_value(PrivateFileOpenReadResponse {
+        entry,
+        source_path: target_path.to_string_lossy().into_owned(),
+    }).expect("private file open read response should serialize"))
 }
 
 fn handle_private_file_delete(request: PrivateFileDeleteRequest) -> Result<JsonValue, ApiError> {
@@ -4917,6 +5003,64 @@ mod tests {
             encoding: Some(String::from("utf8")),
         }).expect("private file read should succeed");
         assert_eq!(read["content"], json!("hello staged file"));
+    }
+
+    #[test]
+    fn storage_blob_open_read_returns_source_path() {
+        let db_path = test_db_path("blob-open-read");
+        let blob_dir = test_private_root("blob-open-read-dir");
+        let source_root = test_private_root("blob-open-read-input");
+        fs::create_dir_all(&source_root).expect("source root should exist");
+        let source_path = Path::new(&source_root).join("payload.bin");
+        fs::write(&source_path, b"hello staged blob").expect("source blob should write");
+
+        handle_storage_blob_put(StorageBlobPutRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            blob_dir: blob_dir.clone(),
+            name: String::from("hello.bin"),
+            content: String::new(),
+            encoding: None,
+            content_type: Some(String::from("application/octet-stream")),
+            source_path: Some(source_path.to_string_lossy().into_owned()),
+        }).expect("blob import should succeed");
+
+        let opened = handle_storage_blob_open_read(StorageBlobGetRequest {
+            db_path,
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            blob_dir,
+            id: String::from("hello.bin"),
+        }).expect("blob open read should succeed");
+        let opened_path = opened["sourcePath"].as_str().expect("source path should exist");
+        assert!(opened_path.ends_with("hello.bin.bin"));
+    }
+
+    #[test]
+    fn private_file_open_read_returns_source_path() {
+        let root_dir = test_private_root("private-open-read");
+        let source_root = test_private_root("private-open-read-input");
+        fs::create_dir_all(&source_root).expect("source root should exist");
+        let source_path = Path::new(&source_root).join("payload.txt");
+        fs::write(&source_path, b"hello staged file").expect("source file should write");
+
+        handle_private_file_write(PrivateFileWriteRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes/imported.txt"),
+            content: String::new(),
+            encoding: None,
+            create_parents: Some(true),
+            source_path: Some(source_path.to_string_lossy().into_owned()),
+        }).expect("private file import should succeed");
+
+        let opened = handle_private_file_open_read(PrivateFileReadRequest {
+            root_dir,
+            path: String::from("notes/imported.txt"),
+            encoding: None,
+        }).expect("private file open read should succeed");
+        let opened_path = opened["sourcePath"].as_str().expect("source path should exist");
+        assert!(opened_path.ends_with("notes\\imported.txt") || opened_path.ends_with("notes/imported.txt"));
     }
 
     #[test]

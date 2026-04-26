@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { BlobGetResponse, BlobRecord } from '@stdo/shared-types';
+import type { BlobGetResponse, BlobRecord, ControlBlobOpenReadResponse } from '@stdo/shared-types';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
 import { sanitizeFileSegment } from '../utils.js';
@@ -64,6 +64,16 @@ export class StorageService {
     async getBlob(user: UserContext, extensionId: string, blobId: string): Promise<BlobGetResponse> {
         const paths = getUserAuthorityPaths(user);
         return await this.core.getStorageBlob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
+            id: blobId,
+        });
+    }
+
+    async openBlobRead(user: UserContext, extensionId: string, blobId: string): Promise<ControlBlobOpenReadResponse> {
+        const paths = getUserAuthorityPaths(user);
+        return await this.core.openStorageBlobRead(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
             blobDir: paths.blobDir,
