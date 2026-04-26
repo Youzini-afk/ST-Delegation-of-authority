@@ -278,6 +278,22 @@ export class AuthorityClient {
                     },
                 });
             },
+            resolveMany: async (input) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.resolveMany', 'Authority 当前版本尚未提供 Trivium 批量映射解析能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `批量解析 Trivium externalId 或内部 ID（${database}）`,
+                });
+                return await this.requestWithSession('/trivium/resolve-many', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             upsert: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
@@ -540,6 +556,22 @@ export class AuthorityClient {
                     reason: `图查询 Trivium 数据库 ${database}`,
                 });
                 return await this.requestWithSession('/trivium/query', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            listMappingsPage: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.mappingPages', 'Authority 当前版本尚未提供 Trivium 映射分页能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `分页列出 Trivium externalId 映射（${database}）`,
+                });
+                return await this.requestWithSession('/trivium/list-mappings', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -1428,6 +1460,8 @@ function getFeatureAvailability(features, feature) {
             return features.sql.migrations;
         case 'trivium.resolveId':
             return features.trivium.resolveId;
+        case 'trivium.resolveMany':
+            return features.trivium.resolveMany;
         case 'trivium.upsert':
             return features.trivium.upsert;
         case 'trivium.bulkMutations':
@@ -1436,6 +1470,8 @@ function getFeatureAvailability(features, feature) {
             return features.trivium.filterWherePage;
         case 'trivium.queryPage':
             return features.trivium.queryPage;
+        case 'trivium.mappingPages':
+            return features.trivium.mappingPages;
         case 'transfers.blob':
             return features.transfers.blob;
         case 'transfers.fs':

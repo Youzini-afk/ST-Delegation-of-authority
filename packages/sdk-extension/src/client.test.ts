@@ -245,6 +245,62 @@ describe('AuthorityClient', () => {
             error: 'chunk write failed',
         }));
     });
+
+    it('routes resolveMany and listMappingsPage through the new Trivium endpoints', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async (path: string, options?: { body?: unknown }) => {
+            if (path === '/trivium/resolve-many') {
+                return {
+                    items: [{ index: 0, id: 1, externalId: 'alpha', namespace: 'default' }],
+                };
+            }
+            return {
+                mappings: [{ id: 1, externalId: 'alpha', namespace: 'default', createdAt: 'now', updatedAt: 'now' }],
+                page: { nextCursor: null, limit: 10, hasMore: false, totalCount: 1 },
+            };
+        });
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const resolved = await client.trivium.resolveMany({
+            database: 'graph',
+            items: [{ externalId: 'alpha' }],
+        });
+        const mappings = await client.trivium.listMappingsPage({
+            database: 'graph',
+            page: { limit: 10 },
+        });
+
+        expect(resolved.items[0]).toEqual({ index: 0, id: 1, externalId: 'alpha', namespace: 'default' });
+        expect(mappings.mappings[0]).toEqual({ id: 1, externalId: 'alpha', namespace: 'default', createdAt: 'now', updatedAt: 'now' });
+        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/trivium/resolve-many', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+                items: [{ externalId: 'alpha' }],
+            },
+        });
+        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/trivium/list-mappings', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+                page: { limit: 10 },
+            },
+        });
+    });
 });
 
 function buildProbe(overrides: Partial<AuthorityFeatureFlags['trivium']> = {}): AuthorityProbeResponse {
@@ -276,10 +332,12 @@ function buildProbe(overrides: Partial<AuthorityFeatureFlags['trivium']> = {}): 
             },
             trivium: {
                 resolveId: true,
+                resolveMany: true,
                 upsert: true,
                 bulkMutations: true,
                 filterWherePage: true,
                 queryPage: true,
+                mappingPages: true,
                 ...overrides,
             },
             transfers: {

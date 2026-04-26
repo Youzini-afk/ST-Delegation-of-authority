@@ -65,10 +65,12 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
         },
         trivium: {
             resolveId: true,
+            resolveMany: true,
             upsert: true,
             bulkMutations: true,
             filterWherePage: true,
             queryPage: true,
+            mappingPages: true,
         },
         transfers: {
             blob: true,

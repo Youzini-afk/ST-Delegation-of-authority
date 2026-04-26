@@ -41,9 +41,11 @@ import type {
     TriviumInsertWithIdRequest,
     TriviumLinkRequest,
     TriviumListDatabasesResponse,
+    TriviumListMappingsRequest,
     TriviumNeighborsRequest,
     TriviumQueryRequest,
     TriviumResolveIdRequest,
+    TriviumResolveManyRequest,
     TriviumSearchAdvancedRequest,
     TriviumSearchHybridRequest,
     TriviumSearchRequest,
@@ -344,7 +346,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     router.post('/session/init', async (req, res) => {
         try {
             const user = getUserContext(req);
-            const config = req.body as AuthorityInitConfig;
+            const config = (req.body ?? {}) as AuthorityInitConfig;
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
@@ -1086,6 +1088,27 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
+    router.post('/trivium/resolve-many', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumResolveManyRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const result = await runtime.trivium.resolveMany(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium resolve many', {
+                database,
+                totalCount: result.items.length,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
     router.post('/trivium/upsert', async (req, res) => {
         try {
             const user = getUserContext(req);
@@ -1584,6 +1607,29 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
                 database,
                 nodeCount: result.nodeCount,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/list-mappings', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumListMappingsRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const result = await runtime.trivium.listMappingsPage(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium list mappings', {
+                database,
+                namespace: typeof payload.namespace === 'string' && payload.namespace.trim() ? payload.namespace.trim() : null,
+                count: result.mappings.length,
+                limit: result.page?.limit ?? null,
             });
             ok(res, result);
         } catch (error) {

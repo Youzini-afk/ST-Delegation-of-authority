@@ -61,6 +61,8 @@ import type {
     TriviumInsertWithIdRequest,
     TriviumLinkRequest,
     TriviumListDatabasesResponse,
+    TriviumListMappingsRequest,
+    TriviumListMappingsResponse,
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
     TriviumNodeView,
@@ -69,8 +71,10 @@ import type {
     TriviumQueryRow,
     TriviumResolveIdRequest,
     TriviumResolveIdResponse,
-    TriviumSearchHit,
+    TriviumResolveManyRequest,
+    TriviumResolveManyResponse,
     TriviumSearchAdvancedRequest,
+    TriviumSearchHit,
     TriviumSearchHybridRequest,
     TriviumSearchRequest,
     TriviumStatRequest,
@@ -132,10 +136,12 @@ export type AuthorityFeaturePath =
     | 'sql.queryPage'
     | 'sql.migrations'
     | 'trivium.resolveId'
+    | 'trivium.resolveMany'
     | 'trivium.upsert'
     | 'trivium.bulkMutations'
     | 'trivium.filterWherePage'
     | 'trivium.queryPage'
+    | 'trivium.mappingPages'
     | 'transfers.blob'
     | 'transfers.fs'
     | 'transfers.httpFetch'
@@ -259,6 +265,7 @@ export class AuthorityClient {
         insert: (input: TriviumInsertRequest) => Promise<TriviumInsertResponse>;
         insertWithId: (input: TriviumInsertWithIdRequest) => Promise<void>;
         resolveId: (input: TriviumResolveIdRequest) => Promise<TriviumResolveIdResponse>;
+        resolveMany: (input: TriviumResolveManyRequest) => Promise<TriviumResolveManyResponse>;
         upsert: (input: TriviumUpsertRequest) => Promise<TriviumUpsertResponse>;
         bulkUpsert: (input: TriviumBulkUpsertRequest) => Promise<TriviumBulkUpsertResponse>;
         bulkUpsertChunked: (input: TriviumBulkUpsertRequest, options?: AuthorityChunkedTriviumOptions<TriviumBulkUpsertResponse>) => Promise<AuthorityChunkedTriviumUpsertResult>;
@@ -282,6 +289,7 @@ export class AuthorityClient {
         filterWherePage: (input: TriviumFilterWhereRequest) => Promise<TriviumFilterWhereResponse>;
         query: (input: TriviumQueryRequest) => Promise<TriviumQueryRow[]>;
         queryPage: (input: TriviumQueryRequest) => Promise<TriviumQueryResponse>;
+        listMappingsPage: (input?: TriviumListMappingsRequest) => Promise<TriviumListMappingsResponse>;
         indexText: (input: TriviumIndexTextRequest) => Promise<void>;
         indexKeyword: (input: TriviumIndexKeywordRequest) => Promise<void>;
         buildTextIndex: (input?: TriviumBuildTextIndexRequest) => Promise<void>;
@@ -572,6 +580,22 @@ export class AuthorityClient {
                     },
                 });
             },
+            resolveMany: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.resolveMany', 'Authority 当前版本尚未提供 Trivium 批量映射解析能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `批量解析 Trivium externalId 或内部 ID（${database}）`,
+                });
+                return await this.requestWithSession<TriviumResolveManyResponse>('/trivium/resolve-many', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             upsert: async input => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
@@ -834,6 +858,22 @@ export class AuthorityClient {
                     reason: `图查询 Trivium 数据库 ${database}`,
                 });
                 return await this.requestWithSession<TriviumQueryResponse>('/trivium/query', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            listMappingsPage: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.mappingPages', 'Authority 当前版本尚未提供 Trivium 映射分页能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `分页列出 Trivium externalId 映射（${database}）`,
+                });
+                return await this.requestWithSession<TriviumListMappingsResponse>('/trivium/list-mappings', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -1859,6 +1899,8 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
             return features.sql.migrations;
         case 'trivium.resolveId':
             return features.trivium.resolveId;
+        case 'trivium.resolveMany':
+            return features.trivium.resolveMany;
         case 'trivium.upsert':
             return features.trivium.upsert;
         case 'trivium.bulkMutations':
@@ -1867,6 +1909,8 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
             return features.trivium.filterWherePage;
         case 'trivium.queryPage':
             return features.trivium.queryPage;
+        case 'trivium.mappingPages':
+            return features.trivium.mappingPages;
         case 'transfers.blob':
             return features.transfers.blob;
         case 'transfers.fs':

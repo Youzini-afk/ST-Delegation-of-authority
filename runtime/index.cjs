@@ -91,10 +91,12 @@ function buildAuthorityFeatureFlags(isAdmin) {
         },
         trivium: {
             resolveId: true,
+            resolveMany: true,
             upsert: true,
             bulkMutations: true,
             filterWherePage: true,
             queryPage: true,
+            mappingPages: true,
         },
         transfers: {
             blob: true,
@@ -439,7 +441,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.post('/session/init', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const config = req.body;
+            const config = (req.body ?? {});
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
@@ -1133,6 +1135,26 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'trivium.private', error);
         }
     });
+    router.post('/trivium/resolve-many', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.resolveMany(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium resolve many', {
+                database,
+                totalCount: result.items.length,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
     router.post('/trivium/upsert', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -1609,6 +1631,28 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
                 database,
                 nodeCount: result.nodeCount,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/list-mappings', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.listMappingsPage(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium list mappings', {
+                database,
+                namespace: typeof payload.namespace === 'string' && payload.namespace.trim() ? payload.namespace.trim() : null,
+                count: result.mappings.length,
+                limit: result.page?.limit ?? null,
             });
             ok(res, result);
         }
@@ -4499,6 +4543,8 @@ __webpack_require__.r(__webpack_exports__);
 const EXTERNAL_IDS_TABLE = 'authority_trivium_external_ids';
 const META_TABLE = 'authority_trivium_meta';
 const LAST_FLUSH_META_KEY = 'last_flush_at';
+const DEFAULT_CURSOR_PAGE_LIMIT = 50;
+const MAX_CURSOR_PAGE_LIMIT = 500;
 class TriviumService {
     core;
     schemaReady = new Map();
@@ -4514,6 +4560,55 @@ class TriviumService {
             id: mapping?.id ?? null,
             externalId,
             namespace,
+        };
+    }
+    async resolveMany(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+        const byInternalId = await this.fetchMappingsByInternalIds(mappingDbPath, request.items.map(item => Number(item.id ?? 0)));
+        return {
+            items: await Promise.all(request.items.map(async (item, index) => {
+                const rawExternalId = typeof item.externalId === 'string' && item.externalId.trim() ? item.externalId.trim() : null;
+                if (rawExternalId) {
+                    const namespace = getTriviumNamespace(item.namespace);
+                    const mapping = await this.fetchMappingByExternal(mappingDbPath, rawExternalId, namespace);
+                    const explicitId = item.id == null ? null : Number(item.id);
+                    if (explicitId != null && Number.isSafeInteger(explicitId) && explicitId > 0 && mapping && mapping.id !== explicitId) {
+                        return {
+                            index,
+                            id: mapping.id,
+                            externalId: mapping.externalId,
+                            namespace: mapping.namespace,
+                            error: `Trivium externalId ${namespace}:${rawExternalId} is already mapped to ${mapping.id}`,
+                        };
+                    }
+                    return {
+                        index,
+                        id: mapping?.id ?? null,
+                        externalId: rawExternalId,
+                        namespace,
+                    };
+                }
+                try {
+                    const id = getRequiredNumericId(item.id);
+                    const mapping = byInternalId.get(id);
+                    return {
+                        index,
+                        id,
+                        externalId: mapping?.externalId ?? null,
+                        namespace: mapping?.namespace ?? null,
+                    };
+                }
+                catch (error) {
+                    return {
+                        index,
+                        id: null,
+                        externalId: null,
+                        namespace: null,
+                        error: (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.asErrorMessage)(error),
+                    };
+                }
+            })),
         };
     }
     async upsert(user, extensionId, request) {
@@ -4780,6 +4875,29 @@ class TriviumService {
             lastFlushAt,
         };
     }
+    async listMappingsPage(user, extensionId, request = {}) {
+        const database = getTriviumDatabaseName(request.database);
+        const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+        const namespace = getOptionalTriviumNamespace(request.namespace);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return {
+                mappings: [],
+                ...(request.page ? { page: buildEmptyCursorPage(request.page) } : {}),
+            };
+        }
+        const params = namespace ? [namespace] : [];
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace, created_at AS createdAt, updated_at AS updatedAt
+                FROM ${EXTERNAL_IDS_TABLE}${namespace ? ' WHERE namespace = ?1' : ''}
+                ORDER BY namespace ASC, external_id ASC, internal_id ASC`,
+            params,
+            ...(request.page ? { page: request.page } : {}),
+        });
+        return {
+            mappings: result.rows.map(row => readMappingRecord(row)),
+            ...(result.page ? { page: result.page } : {}),
+        };
+    }
     async ensureSchema(mappingDbPath) {
         const existing = this.schemaReady.get(mappingDbPath);
         if (existing) {
@@ -5010,6 +5128,9 @@ function getTriviumDatabaseName(value) {
 function getTriviumNamespace(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
+function getOptionalTriviumNamespace(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
 function getRequiredExternalId(value) {
     if (typeof value === 'string' && value.trim()) {
         return value.trim();
@@ -5021,6 +5142,33 @@ function getRequiredNumericId(value, label = 'id') {
         return value;
     }
     throw new Error(`Trivium ${label} must be a positive safe integer`);
+}
+function buildEmptyCursorPage(page) {
+    const limit = Number.isInteger(page.limit) && Number(page.limit) > 0
+        ? Math.min(Number(page.limit), MAX_CURSOR_PAGE_LIMIT)
+        : DEFAULT_CURSOR_PAGE_LIMIT;
+    const cursor = page.cursor?.trim();
+    if (cursor) {
+        const offset = Number(cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            throw new Error('invalid_page_cursor');
+        }
+    }
+    return {
+        nextCursor: null,
+        limit,
+        hasMore: false,
+        totalCount: 0,
+    };
+}
+function readMappingRecord(row) {
+    return {
+        id: getRequiredNumericId(row.internalId, 'internalId'),
+        externalId: getRequiredExternalId(row.externalId),
+        namespace: getTriviumNamespace(row.namespace),
+        createdAt: typeof row.createdAt === 'string' ? row.createdAt : '',
+        updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : '',
+    };
 }
 function readResolvedReference(row) {
     return {

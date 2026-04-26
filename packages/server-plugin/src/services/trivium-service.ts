@@ -5,6 +5,8 @@ import type {
     ControlTriviumBulkLinkRequest,
     ControlTriviumBulkUnlinkRequest,
     ControlTriviumBulkUpsertRequest,
+    CursorPageInfo,
+    CursorPageRequest,
     TriviumBulkDeleteRequest,
     TriviumBulkFailure,
     TriviumBulkLinkRequest,
@@ -17,6 +19,9 @@ import type {
     TriviumFilterWhereResponse,
     TriviumFlushRequest,
     TriviumGetRequest,
+    TriviumListMappingsRequest,
+    TriviumListMappingsResponse,
+    TriviumMappingRecord,
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
     TriviumNodeReference,
@@ -26,6 +31,8 @@ import type {
     TriviumQueryRow,
     TriviumResolveIdRequest,
     TriviumResolveIdResponse,
+    TriviumResolveManyRequest,
+    TriviumResolveManyResponse,
     TriviumResolvedNodeReference,
     TriviumSearchAdvancedRequest,
     TriviumSearchHit,
@@ -44,6 +51,8 @@ import { CoreService } from './core-service.js';
 const EXTERNAL_IDS_TABLE = 'authority_trivium_external_ids';
 const META_TABLE = 'authority_trivium_meta';
 const LAST_FLUSH_META_KEY = 'last_flush_at';
+const DEFAULT_CURSOR_PAGE_LIMIT = 50;
+const MAX_CURSOR_PAGE_LIMIT = 500;
 
 interface ResolvedReference extends TriviumResolvedNodeReference {
     createdMapping: boolean;
@@ -74,6 +83,57 @@ export class TriviumService {
             id: mapping?.id ?? null,
             externalId,
             namespace,
+        };
+    }
+
+    async resolveMany(user: UserContext, extensionId: string, request: TriviumResolveManyRequest): Promise<TriviumResolveManyResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+        const byInternalId = await this.fetchMappingsByInternalIds(mappingDbPath, request.items.map(item => Number(item.id ?? 0)));
+
+        return {
+            items: await Promise.all(request.items.map(async (item, index) => {
+                const rawExternalId = typeof item.externalId === 'string' && item.externalId.trim() ? item.externalId.trim() : null;
+                if (rawExternalId) {
+                    const namespace = getTriviumNamespace(item.namespace);
+                    const mapping = await this.fetchMappingByExternal(mappingDbPath, rawExternalId, namespace);
+                    const explicitId = item.id == null ? null : Number(item.id);
+                    if (explicitId != null && Number.isSafeInteger(explicitId) && explicitId > 0 && mapping && mapping.id !== explicitId) {
+                        return {
+                            index,
+                            id: mapping.id,
+                            externalId: mapping.externalId,
+                            namespace: mapping.namespace,
+                            error: `Trivium externalId ${namespace}:${rawExternalId} is already mapped to ${mapping.id}`,
+                        };
+                    }
+                    return {
+                        index,
+                        id: mapping?.id ?? null,
+                        externalId: rawExternalId,
+                        namespace,
+                    };
+                }
+
+                try {
+                    const id = getRequiredNumericId(item.id);
+                    const mapping = byInternalId.get(id);
+                    return {
+                        index,
+                        id,
+                        externalId: mapping?.externalId ?? null,
+                        namespace: mapping?.namespace ?? null,
+                    };
+                } catch (error) {
+                    return {
+                        index,
+                        id: null,
+                        externalId: null,
+                        namespace: null,
+                        error: asErrorMessage(error),
+                    };
+                }
+            })),
         };
     }
 
@@ -364,6 +424,32 @@ export class TriviumService {
         };
     }
 
+    async listMappingsPage(user: UserContext, extensionId: string, request: TriviumListMappingsRequest = {}): Promise<TriviumListMappingsResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+        const namespace = getOptionalTriviumNamespace(request.namespace);
+        if (!fs.existsSync(mappingDbPath)) {
+            return {
+                mappings: [],
+                ...(request.page ? { page: buildEmptyCursorPage(request.page) } : {}),
+            };
+        }
+
+        const params = namespace ? [namespace] : [];
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace, created_at AS createdAt, updated_at AS updatedAt
+                FROM ${EXTERNAL_IDS_TABLE}${namespace ? ' WHERE namespace = ?1' : ''}
+                ORDER BY namespace ASC, external_id ASC, internal_id ASC`,
+            params,
+            ...(request.page ? { page: request.page } : {}),
+        });
+
+        return {
+            mappings: result.rows.map(row => readMappingRecord(row)),
+            ...(result.page ? { page: result.page } : {}),
+        };
+    }
+
     private async ensureSchema(mappingDbPath: string): Promise<void> {
         const existing = this.schemaReady.get(mappingDbPath);
         if (existing) {
@@ -618,6 +704,10 @@ function getTriviumNamespace(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 
+function getOptionalTriviumNamespace(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function getRequiredExternalId(value: unknown): string {
     if (typeof value === 'string' && value.trim()) {
         return value.trim();
@@ -630,6 +720,35 @@ function getRequiredNumericId(value: unknown, label = 'id'): number {
         return value;
     }
     throw new Error(`Trivium ${label} must be a positive safe integer`);
+}
+
+function buildEmptyCursorPage(page: CursorPageRequest): CursorPageInfo {
+    const limit = Number.isInteger(page.limit) && Number(page.limit) > 0
+        ? Math.min(Number(page.limit), MAX_CURSOR_PAGE_LIMIT)
+        : DEFAULT_CURSOR_PAGE_LIMIT;
+    const cursor = page.cursor?.trim();
+    if (cursor) {
+        const offset = Number(cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            throw new Error('invalid_page_cursor');
+        }
+    }
+    return {
+        nextCursor: null,
+        limit,
+        hasMore: false,
+        totalCount: 0,
+    };
+}
+
+function readMappingRecord(row: Record<string, unknown>): TriviumMappingRecord {
+    return {
+        id: getRequiredNumericId(row.internalId, 'internalId'),
+        externalId: getRequiredExternalId(row.externalId),
+        namespace: getTriviumNamespace(row.namespace),
+        createdAt: typeof row.createdAt === 'string' ? row.createdAt : '',
+        updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : '',
+    };
 }
 
 function readResolvedReference(row: Record<string, unknown>): TriviumResolvedNodeReference {

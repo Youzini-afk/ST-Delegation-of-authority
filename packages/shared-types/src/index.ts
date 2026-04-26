@@ -100,10 +100,12 @@ export interface AuthorityFeatureFlags {
     };
     trivium: {
         resolveId: boolean;
+        resolveMany: boolean;
         upsert: boolean;
         bulkMutations: boolean;
         filterWherePage: boolean;
         queryPage: boolean;
+        mappingPages: boolean;
     };
     transfers: {
         blob: boolean;
@@ -927,6 +929,22 @@ export interface TriviumResolveIdRequest extends TriviumOpenOptions {
     namespace?: string;
 }
 
+export interface TriviumResolveManyRequest extends TriviumOpenOptions {
+    items: TriviumNodeReference[];
+}
+
+export interface TriviumResolveManyItem {
+    index: number;
+    id: number | null;
+    externalId: string | null;
+    namespace: string | null;
+    error?: string;
+}
+
+export interface TriviumResolveManyResponse {
+    items: TriviumResolveManyItem[];
+}
+
 export interface TriviumUpsertRequest extends TriviumOpenOptions, TriviumNodeReference {
     vector: number[];
     payload: unknown;
@@ -1086,6 +1104,24 @@ export interface TriviumResolveIdResponse {
     id: number | null;
     externalId: string;
     namespace: string;
+}
+
+export interface TriviumMappingRecord {
+    id: number;
+    externalId: string;
+    namespace: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface TriviumListMappingsRequest extends TriviumOpenOptions {
+    namespace?: string;
+    page?: CursorPageRequest;
+}
+
+export interface TriviumListMappingsResponse {
+    mappings: TriviumMappingRecord[];
+    page?: CursorPageInfo;
 }
 
 export type TriviumUpsertAction = 'inserted' | 'updated';

@@ -28,6 +28,8 @@ describe('SessionService', () => {
         expect(response.features.sql.queryPage).toBe(true);
         expect(response.features.trivium.queryPage).toBe(true);
         expect(response.features.trivium.filterWherePage).toBe(true);
+        expect(response.features.trivium.resolveMany).toBe(true);
+        expect(response.features.trivium.mappingPages).toBe(true);
         expect(response.features.jobs.builtinTypes).toEqual(['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl']);
         expect(response.features.diagnostics.jobsPage).toBe(true);
     });

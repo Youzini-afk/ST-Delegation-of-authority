@@ -105,6 +105,88 @@ describe('TriviumService', () => {
         expect(resolved.id).toBeNull();
     });
 
+    it('resolves many mappings and lists mapping pages with namespace filtering', async () => {
+        const user = createUser(dirs);
+        const trivium = new TriviumService(createMockCore());
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha', vector: [1, 0], payload: { name: 'alpha' } },
+                { externalId: 'beta', vector: [0, 1], payload: { name: 'beta' } },
+                { externalId: 'gamma', namespace: 'alt', vector: [1, 1], payload: { name: 'gamma' } },
+            ],
+        });
+
+        const resolved = await trivium.resolveMany(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha' },
+                { id: 2 },
+                { externalId: 'missing' },
+                { externalId: 'alpha', id: 99 },
+                {},
+            ],
+        });
+
+        expect(resolved.items).toEqual([
+            { index: 0, id: 1, externalId: 'alpha', namespace: 'default' },
+            { index: 1, id: 2, externalId: 'beta', namespace: 'default' },
+            { index: 2, id: null, externalId: 'missing', namespace: 'default' },
+            {
+                index: 3,
+                id: 1,
+                externalId: 'alpha',
+                namespace: 'default',
+                error: 'Trivium externalId default:alpha is already mapped to 1',
+            },
+            {
+                index: 4,
+                id: null,
+                externalId: null,
+                namespace: null,
+                error: 'Trivium id must be a positive safe integer',
+            },
+        ]);
+
+        const firstPage = await trivium.listMappingsPage(user, 'third-party/ext-a', {
+            database: 'graph',
+            page: { limit: 2 },
+        });
+        expect(firstPage.mappings.map(item => `${item.namespace}:${item.externalId}`)).toEqual(['alt:gamma', 'default:alpha']);
+        expect(firstPage.page).toEqual({
+            nextCursor: '2',
+            limit: 2,
+            hasMore: true,
+            totalCount: 3,
+        });
+
+        const secondPage = await trivium.listMappingsPage(user, 'third-party/ext-a', {
+            database: 'graph',
+            page: { cursor: '2', limit: 2 },
+        });
+        expect(secondPage.mappings.map(item => `${item.namespace}:${item.externalId}`)).toEqual(['default:beta']);
+        expect(secondPage.page).toEqual({
+            nextCursor: null,
+            limit: 2,
+            hasMore: false,
+            totalCount: 3,
+        });
+
+        const filteredPage = await trivium.listMappingsPage(user, 'third-party/ext-a', {
+            database: 'graph',
+            namespace: 'alt',
+            page: { limit: 5 },
+        });
+        expect(filteredPage.mappings.map(item => item.externalId)).toEqual(['gamma']);
+        expect(filteredPage.page).toEqual({
+            nextCursor: null,
+            limit: 5,
+            hasMore: false,
+            totalCount: 1,
+        });
+    });
+
     it('returns page-aware enriched filter/query responses while keeping array wrappers compatible', async () => {
         const user = createUser(dirs);
         const trivium = new TriviumService(createMockCore());
@@ -165,11 +247,12 @@ function createMockCore(): CoreService {
     const mappings = new Map<string, { nextId: number; rows: MappingRow[]; meta: Map<string, string> }>();
     const databases = new Map<string, Map<number, MockNode>>();
 
-    function toPage(totalCount: number, limit: number): CursorPageInfo {
+    function toPage(totalCount: number, limit: number, offset = 0): CursorPageInfo {
+        const nextOffset = offset + limit;
         return {
-            nextCursor: totalCount > limit ? String(limit) : null,
+            nextCursor: nextOffset < totalCount ? String(nextOffset) : null,
             limit,
-            hasMore: totalCount > limit,
+            hasMore: nextOffset < totalCount,
             totalCount,
         };
     }
@@ -199,12 +282,13 @@ function createMockCore(): CoreService {
         return store;
     }
 
-    function toQueryResult(rows: Record<string, SqlValue>[]): SqlQueryResult {
+    function toQueryResult(rows: Record<string, SqlValue>[], page?: CursorPageInfo): SqlQueryResult {
         return {
             kind: 'query',
             columns: rows[0] ? Object.keys(rows[0]) : [],
             rows,
             rowCount: rows.length,
+            ...(page ? { page } : {}),
         };
     }
 
@@ -236,7 +320,7 @@ function createMockCore(): CoreService {
                 latestId: '001_authority_trivium_mapping',
             };
         },
-        async querySql(dbPath: string, request: { statement: string; params?: unknown[] }): Promise<SqlQueryResult> {
+        async querySql(dbPath: string, request: { statement: string; params?: unknown[]; page?: { cursor?: string; limit?: number } }): Promise<SqlQueryResult> {
             const store = getMappingStore(dbPath);
             if (request.statement.includes('FROM authority_trivium_external_ids') && request.statement.includes('external_id = ?2')) {
                 const namespace = String(request.params?.[0] ?? 'default');
@@ -249,6 +333,35 @@ function createMockCore(): CoreService {
                 return toQueryResult(store.rows
                     .filter(row => ids.includes(row.id))
                     .map(row => ({ internalId: row.id, externalId: row.externalId, namespace: row.namespace })));
+            }
+            if (request.statement.includes('FROM authority_trivium_external_ids') && request.statement.includes('created_at AS createdAt')) {
+                const namespace = request.statement.includes('WHERE namespace = ?1')
+                    ? String(request.params?.[0] ?? '')
+                    : null;
+                const rows = [...store.rows]
+                    .filter(row => namespace == null || row.namespace === namespace)
+                    .sort((left, right) => {
+                        if (left.namespace !== right.namespace) {
+                            return left.namespace.localeCompare(right.namespace);
+                        }
+                        if (left.externalId !== right.externalId) {
+                            return left.externalId.localeCompare(right.externalId);
+                        }
+                        return left.id - right.id;
+                    })
+                    .map(row => ({
+                        internalId: row.id,
+                        externalId: row.externalId,
+                        namespace: row.namespace,
+                        createdAt: row.createdAt,
+                        updatedAt: row.updatedAt,
+                    }));
+                if (!request.page) {
+                    return toQueryResult(rows);
+                }
+                const offset = Number(request.page.cursor ?? '0');
+                const limit = request.page.limit ?? 50;
+                return toQueryResult(rows.slice(offset, offset + limit), toPage(rows.length, limit, offset));
             }
             if (request.statement.includes('FROM authority_trivium_meta')) {
                 const key = String(request.params?.[0] ?? '');
