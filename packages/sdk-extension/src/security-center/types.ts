@@ -7,10 +7,11 @@ import type {
 } from '@stdo/shared-types';
 import type { AuthorityGrant, AuthorityPolicyEntry, JobRecord, PermissionResource, PermissionStatus } from '@stdo/shared-types';
 
-export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies';
+export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies' | 'updates';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
 export type OverviewSectionKey = 'governance' | 'capabilityMatrix' | 'recentActivity';
 export type OverviewSectionState = Record<OverviewSectionKey, boolean>;
+export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
 
 export interface ActivityRecord {
     timestamp: string;
@@ -82,6 +83,44 @@ export interface ProbeResponse {
     };
 }
 
+export interface InstallSnapshot {
+    pluginVersion: string;
+    sdkBundledVersion: string;
+    sdkDeployedVersion: string | null;
+    coreBundledVersion: string | null;
+    coreArtifactPlatform: string | null;
+    coreArtifactPlatforms: string[];
+    coreArtifactHash: string | null;
+    coreBinarySha256: string | null;
+    coreVerified: boolean;
+    coreMessage: string | null;
+    installStatus: string;
+    installMessage: string;
+}
+
+export interface AdminGitUpdateSummary {
+    pluginRoot: string;
+    branch: string | null;
+    previousRevision: string | null;
+    currentRevision: string | null;
+    changed: boolean;
+    stdout: string | null;
+    stderr: string | null;
+}
+
+export interface AdminUpdateResponse {
+    action: AdminUpdateAction;
+    message: string;
+    requiresRestart: boolean;
+    before: InstallSnapshot;
+    after: InstallSnapshot;
+    git: AdminGitUpdateSummary | null;
+    core: ProbeResponse['core'];
+    coreRestarted: boolean;
+    coreRestartMessage: string | null;
+    updatedAt: string;
+}
+
 export interface ExtensionDetailResponse {
     extension: ControlExtensionRecord;
     grants: AuthorityGrant[];
@@ -126,6 +165,8 @@ export interface SecurityCenterState {
     extensionFilter: string;
     policies: PoliciesResponse | null;
     policyEditorExtensionId: string | null;
+    updateResult: AdminUpdateResponse | null;
+    updateInProgress: boolean;
 }
 
 export interface SecurityCenterOpenOptions {

@@ -42,7 +42,7 @@ import type {
 } from '@stdo/shared-types';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
-import type { AuthorityRequest, AuthorityResponse } from './types.js';
+import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
 import { asErrorMessage, getSessionToken, getUserContext, normalizeHostname, sanitizeFileSegment } from './utils.js';
 
 type RouterLike = {
@@ -63,6 +63,10 @@ function fail(runtime: AuthorityRuntime, req: AuthorityRequest, res: AuthorityRe
         // ignore errors raised before auth is available
     }
     res.status(400).json({ error: message });
+}
+
+function parseAdminUpdateAction(value: unknown): AdminUpdateAction {
+    return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
 }
 
 function getSqlDatabaseName(value: unknown): string {
@@ -1373,6 +1377,74 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/admin/update', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+
+            const action = parseAdminUpdateAction((req.body as { action?: unknown } | undefined)?.action);
+            const before = runtime.install.getStatus();
+            const coreBefore = runtime.core.getStatus();
+            const shouldStopCore = action === 'git-pull' && (coreBefore.state === 'running' || coreBefore.state === 'starting' || coreBefore.state === 'error');
+            let git = null;
+
+            if (shouldStopCore) {
+                await runtime.core.stop();
+            }
+
+            try {
+                if (action === 'git-pull') {
+                    git = runtime.install.pullLatestFromGit();
+                }
+
+                const after = await runtime.install.redeployBundledSdk();
+                const core = await runtime.core.start();
+                const coreRestarted = shouldStopCore && core.state === 'running';
+                const requiresRestart = action === 'git-pull' && Boolean(git?.changed);
+                const message = action === 'git-pull'
+                    ? requiresRestart
+                        ? '服务端插件已拉取最新提交，并已重新部署携带的前端插件。要应用新的 Node 服务端代码，请重启 SillyTavern 并刷新页面。'
+                        : '服务端插件已经是最新版本，已重新校验并部署携带的前端插件。'
+                    : '已重新部署携带的前端插件，并重新校验 Authority 后台服务状态。';
+
+                const response: AdminUpdateResponse = {
+                    action,
+                    message,
+                    requiresRestart,
+                    before,
+                    after,
+                    git,
+                    core,
+                    coreRestarted,
+                    coreRestartMessage: coreRestarted
+                        ? null
+                        : core.state === 'running'
+                            ? 'Authority 后台服务已保持运行。'
+                            : `Authority 后台服务当前状态：${core.state}`,
+                    updatedAt: new Date().toISOString(),
+                };
+
+                await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', action === 'git-pull' ? 'Authority plugin updated' : 'Authority SDK redeployed');
+                ok(res, response);
+            } catch (error) {
+                let recoveryMessage = '';
+                try {
+                    const recovery = await runtime.core.start();
+                    recoveryMessage = recovery.state === 'running'
+                        ? '更新失败后后台服务已恢复。'
+                        : `更新失败后后台服务状态为 ${recovery.state}。`;
+                } catch (recoveryError) {
+                    recoveryMessage = `更新失败且后台服务恢复失败：${asErrorMessage(recoveryError)}`;
+                }
+                throw new Error(`${asErrorMessage(error)} ${recoveryMessage}`.trim());
+            }
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }

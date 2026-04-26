@@ -167,6 +167,31 @@ export interface InstallStatusSnapshot {
     coreMessage: string | null;
 }
 
+export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
+
+export interface AdminGitUpdateSummary {
+    pluginRoot: string;
+    branch: string | null;
+    previousRevision: string | null;
+    currentRevision: string | null;
+    changed: boolean;
+    stdout: string | null;
+    stderr: string | null;
+}
+
+export interface AdminUpdateResponse {
+    action: AdminUpdateAction;
+    message: string;
+    requiresRestart: boolean;
+    before: InstallStatusSnapshot;
+    after: InstallStatusSnapshot;
+    git: AdminGitUpdateSummary | null;
+    core: AuthorityCoreStatus;
+    coreRestarted: boolean;
+    coreRestartMessage: string | null;
+    updatedAt: string;
+}
+
 export interface AuthorityCoreHealthSnapshot {
     name: string;
     apiVersion: string;

@@ -34,6 +34,7 @@ describe('registerRoutes', () => {
             '/fs/private/read-file',
             '/fs/private/delete',
             '/fs/private/stat',
+            '/admin/update',
         ]));
     });
 });

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -10,6 +11,7 @@ import {
     AUTHORITY_SDK_EXTENSION_ID,
 } from '../constants.js';
 import type {
+    AdminGitUpdateSummary,
     AuthorityCoreManagedMetadata,
     AuthorityManagedMetadata,
     AuthorityReleaseMetadata,
@@ -46,7 +48,7 @@ export class InstallService {
     private readonly cwd: string;
     private readonly env: NodeJS.ProcessEnv;
     private readonly logger: Pick<typeof console, 'info' | 'warn' | 'error'>;
-    private readonly releaseMetadata: AuthorityReleaseMetadata | null;
+    private releaseMetadata: AuthorityReleaseMetadata | null;
     private status: InstallStatusSnapshot;
 
     constructor(options: InstallServiceOptions = {}) {
@@ -56,23 +58,19 @@ export class InstallService {
         this.env = options.env ?? process.env;
         this.logger = options.logger ?? console;
         this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
-
-        const pluginVersion = this.releaseMetadata?.pluginVersion ?? readPackageVersion(this.pluginRoot) ?? DEFAULT_VERSION;
-        const sdkBundledVersion = this.releaseMetadata?.sdkVersion ?? readBundledSdkVersion(this.pluginRoot) ?? pluginVersion;
-        const coreArtifactPlatforms = getReleaseCorePlatforms(this.releaseMetadata);
         const expectedCorePlatform = getCurrentCorePlatform();
 
         this.status = {
             installStatus: 'missing',
             installMessage: 'Authority SDK deployment has not run yet.',
-            pluginVersion,
-            sdkBundledVersion,
+            pluginVersion: this.getPluginVersion(),
+            sdkBundledVersion: this.getBundledSdkVersion(),
             sdkDeployedVersion: null,
             coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
-            coreArtifactPlatform: coreArtifactPlatforms.includes(expectedCorePlatform)
+            coreArtifactPlatform: this.getCoreArtifactPlatforms().includes(expectedCorePlatform)
                 ? expectedCorePlatform
                 : this.releaseMetadata?.coreArtifactPlatform ?? null,
-            coreArtifactPlatforms,
+            coreArtifactPlatforms: this.getCoreArtifactPlatforms(),
             coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
             coreBinarySha256: this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
                 ?? this.releaseMetadata?.coreBinarySha256
@@ -90,6 +88,7 @@ export class InstallService {
     }
 
     async bootstrap(): Promise<InstallStatusSnapshot> {
+        this.refreshReleaseMetadata();
         const bundledDir = path.join(this.pluginRoot, AUTHORITY_MANAGED_SDK_DIR);
         try {
             if (!this.releaseMetadata || !fs.existsSync(bundledDir)) {
@@ -169,6 +168,78 @@ export class InstallService {
                 coreMessage: message,
             });
         }
+    }
+
+    getPluginRoot(): string {
+        return this.pluginRoot;
+    }
+
+    redeployBundledSdk(): Promise<InstallStatusSnapshot> {
+        return this.bootstrap();
+    }
+
+    pullLatestFromGit(): AdminGitUpdateSummary {
+        if (!fs.existsSync(path.join(this.pluginRoot, '.git'))) {
+            throw new Error('当前 Authority 插件目录不是 Git 仓库，无法执行服务端插件更新。');
+        }
+
+        const branch = runGit(this.pluginRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], this.env).stdout || null;
+        const previousRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
+        const pullResult = runGit(this.pluginRoot, ['pull', '--ff-only'], this.env, true);
+        const currentRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
+
+        this.refreshReleaseMetadata();
+
+        return {
+            pluginRoot: this.pluginRoot,
+            branch,
+            previousRevision,
+            currentRevision,
+            changed: previousRevision !== currentRevision,
+            stdout: pullResult.stdout || null,
+            stderr: pullResult.stderr || null,
+        };
+    }
+
+    private refreshReleaseMetadata(): void {
+        this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
+        this.status = {
+            ...this.status,
+            pluginVersion: this.getPluginVersion(),
+            sdkBundledVersion: this.getBundledSdkVersion(),
+            coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
+            coreArtifactPlatform: this.getResolvedCoreArtifactPlatform(),
+            coreArtifactPlatforms: this.getCoreArtifactPlatforms(),
+            coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
+            coreBinarySha256: this.getCoreBinarySha256(),
+        };
+    }
+
+    private getPluginVersion(): string {
+        return this.releaseMetadata?.pluginVersion ?? readPackageVersion(this.pluginRoot) ?? DEFAULT_VERSION;
+    }
+
+    private getBundledSdkVersion(): string {
+        return this.releaseMetadata?.sdkVersion ?? readBundledSdkVersion(this.pluginRoot) ?? this.getPluginVersion();
+    }
+
+    private getCoreArtifactPlatforms(): string[] {
+        return getReleaseCorePlatforms(this.releaseMetadata);
+    }
+
+    private getResolvedCoreArtifactPlatform(): string | null {
+        const expectedCorePlatform = getCurrentCorePlatform();
+        const coreArtifactPlatforms = this.getCoreArtifactPlatforms();
+        return coreArtifactPlatforms.includes(expectedCorePlatform)
+            ? expectedCorePlatform
+            : this.releaseMetadata?.coreArtifactPlatform ?? null;
+    }
+
+    private getCoreBinarySha256(): string | null {
+        const expectedCorePlatform = getCurrentCorePlatform();
+        return this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
+            ?? this.releaseMetadata?.coreBinarySha256
+            ?? null;
     }
 
     private resolveSillyTavernRoot(): string | null {
@@ -396,6 +467,38 @@ function resolvePluginRoot(runtimeDir: string): string {
 
 function readReleaseMetadata(pluginRoot: string): AuthorityReleaseMetadata | null {
     return readJsonFile<AuthorityReleaseMetadata | null>(path.join(pluginRoot, AUTHORITY_RELEASE_FILE), null);
+}
+
+function runGit(
+    cwd: string,
+    args: string[],
+    env: NodeJS.ProcessEnv,
+    allowNoisyOutput = false,
+): { stdout: string; stderr: string } {
+    const result = spawnSync('git', args, {
+        cwd,
+        env,
+        encoding: 'utf8',
+        windowsHide: true,
+    });
+
+    const stdout = (result.stdout ?? '').trim();
+    const stderr = (result.stderr ?? '').trim();
+
+    if (result.error) {
+        throw result.error;
+    }
+
+    if (typeof result.status === 'number' && result.status !== 0) {
+        const message = [stderr, stdout].filter(Boolean).join('\n') || `git ${args.join(' ')} failed with exit code ${result.status}`;
+        throw new Error(message);
+    }
+
+    if (!allowNoisyOutput && stderr) {
+        return { stdout, stderr: '' };
+    }
+
+    return { stdout, stderr };
 }
 
 function getCurrentCorePlatform(): string {
