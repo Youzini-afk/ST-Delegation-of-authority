@@ -422,7 +422,6 @@ class SecurityCenterView {
                                 <h3>核心诊断与完整性</h3>
                                 <div class="authority-muted">后台服务、SDK 接入与本地平台校验</div>
                             </div>
-                            <span class="authority-muted">启动时间：${escapeHtml(core?.startedAt ? formatDate(core.startedAt) : MISSING_TEXT)}</span>
                         </div>
                         <div class="authority-diagnostics-grid">
                             <div class="authority-diagnostic-primary">
