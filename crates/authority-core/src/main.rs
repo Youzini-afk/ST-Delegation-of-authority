@@ -42,8 +42,10 @@ const MAX_CONCURRENCY: usize = 64;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 const MAX_KV_VALUE_BYTES: usize = 128 * 1024;
 const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
-const MAX_HTTP_BODY_BYTES: usize = 512 * 1024;
-const MAX_HTTP_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_HTTP_INLINE_BODY_BYTES: usize = 512 * 1024;
+const MAX_HTTP_INLINE_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = MAX_BLOB_BYTES;
+const MAX_HTTP_RESPONSE_BYTES: usize = MAX_BLOB_BYTES;
 const MAX_EVENT_POLL_LIMIT: usize = 200;
 const MAX_PRIVATE_READ_DIR_LIMIT: usize = 200;
 const JOB_PROGRESS_INTERVAL_MS: u64 = 250;
@@ -751,6 +753,19 @@ struct CoreHttpFetchRequest {
     method: Option<String>,
     headers: Option<HashMap<String, String>>,
     body: Option<String>,
+    body_encoding: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreHttpFetchOpenRequest {
+    url: String,
+    method: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+    body_encoding: Option<String>,
+    body_source_path: Option<String>,
+    response_path: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -873,6 +888,28 @@ struct HttpFetchResponse {
     body: String,
     body_encoding: String,
     content_type: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpFetchOpenResponse {
+    url: String,
+    hostname: String,
+    status: u16,
+    ok: bool,
+    headers: HashMap<String, String>,
+    body_encoding: String,
+    content_type: String,
+    size_bytes: usize,
+}
+
+struct FetchedHttpResponse {
+    status: u16,
+    ok: bool,
+    headers: HashMap<String, String>,
+    content_type: String,
+    body_encoding: String,
+    body_bytes: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -1048,6 +1085,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/fs/private/delete", post(v1_private_delete))
         .route("/fs/private/stat", post(v1_private_stat))
         .route("/http/fetch", post(v1_http_fetch))
+        .route("/http/fetch-open", post(v1_http_fetch_open))
         .route("/sql/query", post(v1_sql_query))
         .route("/sql/exec", post(v1_sql_exec))
         .route("/sql/batch", post(v1_sql_batch))
@@ -1353,6 +1391,7 @@ async fn v1_private_read(State(_config): State<Arc<Config>>, Json(body): Json<Pr
 async fn v1_private_delete(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_delete).await }
 async fn v1_private_stat(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileStatRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_stat).await }
 async fn v1_http_fetch(State(_config): State<Arc<Config>>, Json(body): Json<CoreHttpFetchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_http_fetch).await }
+async fn v1_http_fetch_open(State(_config): State<Arc<Config>>, Json(body): Json<CoreHttpFetchOpenRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_http_fetch_open).await }
 async fn v1_sql_query(State(_config): State<Arc<Config>>, Json(body): Json<SqlRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_query).await }
 async fn v1_sql_exec(State(_config): State<Arc<Config>>, Json(body): Json<SqlRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_exec).await }
 async fn v1_sql_batch(State(_config): State<Arc<Config>>, Json(body): Json<SqlBatchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_batch).await }
@@ -2713,84 +2752,103 @@ fn handle_private_file_stat(request: PrivateFileStatRequest) -> Result<JsonValue
 
 fn handle_http_fetch(request: CoreHttpFetchRequest) -> Result<JsonValue, ApiError> {
     validate_non_empty("url", &request.url)?;
-    let body_size = request.body.as_ref().map(|value| value.len()).unwrap_or(0);
-    if body_size > MAX_HTTP_BODY_BYTES {
+    let request_body = request
+        .body
+        .as_ref()
+        .map(|body| decode_http_fetch_body(request.body_encoding.as_deref(), body))
+        .transpose()?;
+    let body_size = request_body.as_ref().map(|value| value.len()).unwrap_or(0);
+    if body_size > MAX_HTTP_INLINE_BODY_BYTES {
         return Err(ApiError {
             status_code: 400,
-            message: format!("HTTP request body exceeds {} bytes", MAX_HTTP_BODY_BYTES),
+            message: format!("HTTP request body exceeds {} bytes", MAX_HTTP_INLINE_BODY_BYTES),
         });
     }
 
-    let hostname = normalize_hostname(&request.url)?;
-    let method = request.method.as_deref().unwrap_or("GET");
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(30))
-        .build();
-    let mut operation = agent.request(method, &request.url);
-    if let Some(headers) = &request.headers {
-        for (name, value) in headers {
-            operation = operation.set(name, value);
-        }
-    }
-
-    let response = match request.body.as_ref() {
-        Some(body) => operation.send_string(body),
-        None => operation.call(),
-    };
-    let response = match response {
-        Ok(response) => response,
-        Err(ureq::Error::Status(_, response)) => response,
-        Err(error) => {
-            return Err(ApiError {
-                status_code: 400,
-                message: format!("http_fetch_failed: {error}"),
-            });
-        }
-    };
-
-    let status = response.status();
-    let ok = (200..300).contains(&status);
-    let mut headers = HashMap::new();
-    for name in response.headers_names() {
-        if let Some(value) = response.header(&name) {
-            headers.insert(name.to_lowercase(), value.to_string());
-        }
-    }
-    let content_type = headers
-        .get("content-type")
-        .cloned()
-        .unwrap_or_else(|| String::from("application/octet-stream"));
-    let mut reader = response.into_reader().take((MAX_HTTP_RESPONSE_BYTES + 1) as u64);
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer).map_err(to_internal_error)?;
-    if buffer.len() > MAX_HTTP_RESPONSE_BYTES {
-        return Err(ApiError {
-            status_code: 400,
-            message: format!("HTTP response exceeds {} bytes", MAX_HTTP_RESPONSE_BYTES),
-        });
-    }
-
-    let body_encoding = if is_textual_content_type(&content_type) {
-        String::from("utf8")
+    let (response, hostname) = execute_http_fetch(
+        &request.url,
+        request.method.as_deref(),
+        request.headers.as_ref(),
+        request_body.as_deref(),
+    )?;
+    let fetched = read_http_fetch_response(response, MAX_HTTP_INLINE_RESPONSE_BYTES)?;
+    let body = if fetched.body_encoding == "utf8" {
+        String::from_utf8_lossy(&fetched.body_bytes).into_owned()
     } else {
-        String::from("base64")
-    };
-    let body = if body_encoding == "utf8" {
-        String::from_utf8_lossy(&buffer).into_owned()
-    } else {
-        BASE64_STANDARD.encode(&buffer)
+        BASE64_STANDARD.encode(&fetched.body_bytes)
     };
 
     Ok(serde_json::to_value(HttpFetchResponse {
         url: request.url,
         hostname,
-        status,
-        ok,
-        headers,
+        status: fetched.status,
+        ok: fetched.ok,
+        headers: fetched.headers,
         body,
-        body_encoding,
-        content_type,
+        body_encoding: fetched.body_encoding,
+        content_type: fetched.content_type,
     }).expect("http fetch response should serialize"))
+}
+
+fn handle_http_fetch_open(request: CoreHttpFetchOpenRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("url", &request.url)?;
+    validate_non_empty("responsePath", &request.response_path)?;
+    if request.body.is_some() && request.body_source_path.is_some() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("HTTP fetch body and bodySourcePath cannot both be provided"),
+        });
+    }
+
+    let request_body = if let Some(source_path) = request
+        .body_source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let source_size = validate_source_file_path(source_path)?;
+        if source_size > MAX_HTTP_BODY_BYTES as u64 {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("HTTP request body exceeds {} bytes", MAX_HTTP_BODY_BYTES),
+            });
+        }
+        Some(fs::read(source_path).map_err(to_internal_error)?)
+    } else {
+        let body = request
+            .body
+            .as_ref()
+            .map(|content| decode_http_fetch_body(request.body_encoding.as_deref(), content))
+            .transpose()?;
+        if body.as_ref().map(|value| value.len()).unwrap_or(0) > MAX_HTTP_BODY_BYTES {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("HTTP request body exceeds {} bytes", MAX_HTTP_BODY_BYTES),
+            });
+        }
+        body
+    };
+
+    validate_source_file_path(&request.response_path)?;
+    let (response, hostname) = execute_http_fetch(
+        &request.url,
+        request.method.as_deref(),
+        request.headers.as_ref(),
+        request_body.as_deref(),
+    )?;
+    let fetched = read_http_fetch_response(response, MAX_HTTP_RESPONSE_BYTES)?;
+    fs::write(&request.response_path, &fetched.body_bytes).map_err(to_internal_error)?;
+
+    Ok(serde_json::to_value(HttpFetchOpenResponse {
+        url: request.url,
+        hostname,
+        status: fetched.status,
+        ok: fetched.ok,
+        headers: fetched.headers,
+        body_encoding: fetched.body_encoding,
+        content_type: fetched.content_type,
+        size_bytes: fetched.body_bytes.len(),
+    }).expect("http fetch open response should serialize"))
 }
 
 fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<RuntimeState>) -> Result<JsonValue, ApiError> {
@@ -4205,18 +4263,94 @@ fn mark_job_retry_scheduled(
     Ok(())
 }
 
-fn decode_blob_content(encoding: Option<&str>, content: &str) -> Result<Vec<u8>, ApiError> {
+fn decode_binary_content(kind: &str, encoding: Option<&str>, content: &str) -> Result<Vec<u8>, ApiError> {
     match encoding.unwrap_or("utf8") {
         "utf8" => Ok(content.as_bytes().to_vec()),
         "base64" => BASE64_STANDARD.decode(content).map_err(|error| ApiError {
             status_code: 400,
-            message: format!("invalid_base64_blob: {error}"),
+            message: format!("invalid_base64_{kind}: {error}"),
         }),
         value => Err(ApiError {
             status_code: 400,
-            message: format!("blob encoding has unsupported value: {value}"),
+            message: format!("{kind} encoding has unsupported value: {value}"),
         }),
     }
+}
+
+fn decode_blob_content(encoding: Option<&str>, content: &str) -> Result<Vec<u8>, ApiError> {
+    decode_binary_content("blob", encoding, content)
+}
+
+fn decode_http_fetch_body(encoding: Option<&str>, content: &str) -> Result<Vec<u8>, ApiError> {
+    decode_binary_content("http_fetch_body", encoding, content)
+}
+
+fn execute_http_fetch(
+    url: &str,
+    method: Option<&str>,
+    headers: Option<&HashMap<String, String>>,
+    body: Option<&[u8]>,
+) -> Result<(ureq::Response, String), ApiError> {
+    let hostname = normalize_hostname(url)?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .build();
+    let mut operation = agent.request(method.unwrap_or("GET"), url);
+    if let Some(headers) = headers {
+        for (name, value) in headers {
+            operation = operation.set(name, value);
+        }
+    }
+
+    let response = match body {
+        Some(body) => operation.send_bytes(body),
+        None => operation.call(),
+    };
+    match response {
+        Ok(response) => Ok((response, hostname)),
+        Err(ureq::Error::Status(_, response)) => Ok((response, hostname)),
+        Err(error) => Err(ApiError {
+            status_code: 400,
+            message: format!("http_fetch_failed: {error}"),
+        }),
+    }
+}
+
+fn read_http_fetch_response(response: ureq::Response, max_bytes: usize) -> Result<FetchedHttpResponse, ApiError> {
+    let status = response.status();
+    let ok = (200..300).contains(&status);
+    let mut headers = HashMap::new();
+    for name in response.headers_names() {
+        if let Some(value) = response.header(&name) {
+            headers.insert(name.to_lowercase(), value.to_string());
+        }
+    }
+    let content_type = headers
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| String::from("application/octet-stream"));
+    let mut reader = response.into_reader().take((max_bytes + 1) as u64);
+    let mut body_bytes = Vec::new();
+    reader.read_to_end(&mut body_bytes).map_err(to_internal_error)?;
+    if body_bytes.len() > max_bytes {
+        return Err(ApiError {
+            status_code: 400,
+            message: format!("HTTP response exceeds {} bytes", max_bytes),
+        });
+    }
+
+    Ok(FetchedHttpResponse {
+        status,
+        ok,
+        headers,
+        content_type: content_type.clone(),
+        body_encoding: if is_textual_content_type(&content_type) {
+            String::from("utf8")
+        } else {
+            String::from("base64")
+        },
+        body_bytes,
+    })
 }
 
 fn blob_binary_path(blob_dir: &str, extension_id: &str, blob_id: &str) -> PathBuf {
@@ -4761,6 +4895,8 @@ fn system_time_to_iso(value: SystemTime) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+    use std::net::TcpListener;
 
     #[test]
     fn sql_transaction_rolls_back_on_error() {
@@ -5064,6 +5200,64 @@ mod tests {
     }
 
     #[test]
+    fn http_fetch_open_writes_response_to_staged_file() {
+        let response_body = vec![0x41; 300 * 1024];
+        let (url, handle) = spawn_test_http_server(response_body.clone(), "application/octet-stream", None);
+        let root_dir = test_private_root("http-fetch-open-response");
+        fs::create_dir_all(&root_dir).expect("response root should exist");
+        let response_path = Path::new(&root_dir).join("response.bin");
+        fs::write(&response_path, b"").expect("response file should exist");
+
+        let opened = handle_http_fetch_open(CoreHttpFetchOpenRequest {
+            url,
+            method: Some(String::from("GET")),
+            headers: None,
+            body: None,
+            body_encoding: None,
+            body_source_path: None,
+            response_path: response_path.to_string_lossy().into_owned(),
+        }).expect("http fetch open should succeed");
+
+        assert_eq!(opened["bodyEncoding"], json!("base64"));
+        assert_eq!(opened["sizeBytes"], json!(response_body.len()));
+        assert_eq!(fs::read(&response_path).expect("response file should read"), response_body);
+        handle.join().expect("http server should stop");
+    }
+
+    #[test]
+    fn http_fetch_open_supports_body_source_path() {
+        let captured_request = Arc::new(Mutex::new(Vec::new()));
+        let (url, handle) = spawn_test_http_server(
+            b"ok".to_vec(),
+            "text/plain; charset=utf-8",
+            Some(captured_request.clone()),
+        );
+        let root_dir = test_private_root("http-fetch-open-request");
+        fs::create_dir_all(&root_dir).expect("request root should exist");
+        let body_source_path = Path::new(&root_dir).join("request.bin");
+        fs::write(&body_source_path, b"payload via source path").expect("request body should write");
+        let response_path = Path::new(&root_dir).join("response.txt");
+        fs::write(&response_path, b"").expect("response file should exist");
+
+        let opened = handle_http_fetch_open(CoreHttpFetchOpenRequest {
+            url,
+            method: Some(String::from("POST")),
+            headers: Some(HashMap::from([(String::from("content-type"), String::from("application/octet-stream"))])),
+            body: None,
+            body_encoding: None,
+            body_source_path: Some(body_source_path.to_string_lossy().into_owned()),
+            response_path: response_path.to_string_lossy().into_owned(),
+        }).expect("http fetch open with source path should succeed");
+
+        assert_eq!(opened["bodyEncoding"], json!("utf8"));
+        assert_eq!(fs::read(&response_path).expect("response file should read"), b"ok");
+        handle.join().expect("http server should stop");
+
+        let request = captured_request.lock().expect("request capture should lock");
+        assert!(String::from_utf8_lossy(&request).contains("payload via source path"));
+    }
+
+    #[test]
     fn runtime_diagnostics_are_monotonic() {
         let started_at = current_unix_millis().saturating_sub(50).to_string();
         assert!(runtime_uptime_ms(&started_at) >= 50);
@@ -5216,5 +5410,55 @@ mod tests {
         let path = env::temp_dir()
             .join(format!("authority-core-private-{}-{}-{}", name, process::id(), current_unix_millis()));
         path.to_string_lossy().into_owned()
+    }
+
+    fn spawn_test_http_server(
+        response_body: Vec<u8>,
+        content_type: &str,
+        captured_request: Option<Arc<Mutex<Vec<u8>>>>,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let address = listener.local_addr().expect("listener should expose address");
+        let content_type = content_type.to_string();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("server should accept connection");
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .expect("read timeout should apply");
+
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(size) => request.extend_from_slice(&buffer[..size]),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            || error.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("failed to read test request: {error}"),
+                }
+            }
+
+            if let Some(captured_request) = captured_request {
+                let mut target = captured_request.lock().expect("captured request should lock");
+                *target = request;
+            }
+
+            let response_head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                response_body.len(),
+                content_type,
+            );
+            stream
+                .write_all(response_head.as_bytes())
+                .expect("response head should write");
+            stream
+                .write_all(&response_body)
+                .expect("response body should write");
+        });
+        (format!("http://{address}/"), handle)
     }
 }

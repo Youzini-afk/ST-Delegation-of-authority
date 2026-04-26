@@ -75,6 +75,24 @@ describe('DataTransferService', () => {
         await transfers.discard(user, 'third-party/ext-a', opened.transferId);
         expect(fs.existsSync(sourcePath)).toBe(true);
     });
+
+    it('promotes owned staged files into readable http.fetch transfers', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+        const initialized = await transfers.init(user, 'third-party/ext-a', { resource: 'http.fetch' });
+        const record = transfers.get(user, 'third-party/ext-a', initialized.transferId, 'http.fetch');
+        fs.writeFileSync(record.filePath, Buffer.from('http response body', 'utf8'));
+
+        const promoted = await transfers.promoteToDownload(user, 'third-party/ext-a', initialized.transferId);
+        expect(promoted.sizeBytes).toBe(Buffer.byteLength('http response body'));
+
+        const chunk = await transfers.read(user, 'third-party/ext-a', initialized.transferId, {
+            offset: 0,
+            limit: 1024,
+        });
+        expect(Buffer.from(chunk.content, 'base64').toString('utf8')).toBe('http response body');
+        expect(chunk.eof).toBe(true);
+    });
 });
 
 function createUser(dirs: string[]): UserContext {

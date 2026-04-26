@@ -11,6 +11,9 @@ import type {
     DataTransferReadResponse,
     DataTransferResource,
     DeclaredPermissions,
+    HttpBodyEncoding,
+    HttpFetchOpenResponse,
+    HttpFetchResponse,
     JobRecord,
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
@@ -81,6 +84,7 @@ export interface AuthorityHttpRequest {
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    bodyEncoding?: HttpBodyEncoding;
 }
 
 export interface AuthorityEventEnvelope {
@@ -170,7 +174,7 @@ export class AuthorityClient {
     };
 
     readonly http: {
-        fetch: (input: AuthorityHttpRequest) => Promise<Record<string, unknown>>;
+        fetch: (input: AuthorityHttpRequest) => Promise<HttpFetchResponse>;
     };
 
     readonly jobs: {
@@ -712,10 +716,7 @@ export class AuthorityClient {
                     target: hostname,
                     reason: `访问主机 ${hostname}`,
                 });
-                return await this.requestWithSession<Record<string, unknown>>('/http/fetch', {
-                    method: 'POST',
-                    body: input,
-                });
+                return await this.fetchHttpWithTransfer(input);
             },
         };
 
@@ -1015,6 +1016,68 @@ export class AuthorityClient {
         }
     }
 
+    private async fetchHttpWithTransfer(input: AuthorityHttpRequest): Promise<HttpFetchResponse> {
+        const bodyEncoding = input.bodyEncoding ?? 'utf8';
+        const bodyBytes = input.body === undefined ? undefined : contentToBytes(input.body, bodyEncoding);
+        if (!bodyBytes || bodyBytes.byteLength <= SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+            const opened = await this.requestWithSession<HttpFetchOpenResponse>('/http/fetch-open', {
+                method: 'POST',
+                body: input,
+            });
+            return await this.resolveHttpFetchOpenResponse(opened);
+        }
+
+        const transfer = await this.initializeTransfer('http.fetch');
+        try {
+            await this.appendTransferBytes(transfer, bodyBytes);
+            const opened = await this.requestWithSession<HttpFetchOpenResponse>('/http/fetch-open', {
+                method: 'POST',
+                body: {
+                    url: input.url,
+                    ...(input.method === undefined ? {} : { method: input.method }),
+                    ...(input.headers === undefined ? {} : { headers: input.headers }),
+                    ...(input.bodyEncoding === undefined ? {} : { bodyEncoding: input.bodyEncoding }),
+                    bodyTransferId: transfer.transferId,
+                },
+            });
+            return await this.resolveHttpFetchOpenResponse(opened);
+        } catch (error) {
+            await this.discardTransferQuietly(transfer.transferId);
+            throw error;
+        }
+    }
+
+    private async resolveHttpFetchOpenResponse(opened: HttpFetchOpenResponse): Promise<HttpFetchResponse> {
+        if (opened.mode === 'inline') {
+            return {
+                url: opened.url,
+                hostname: opened.hostname,
+                status: opened.status,
+                ok: opened.ok,
+                headers: opened.headers,
+                body: opened.body,
+                bodyEncoding: opened.bodyEncoding,
+                contentType: opened.contentType,
+            };
+        }
+
+        try {
+            const bytes = await this.readTransferBytes(opened.transfer);
+            return {
+                url: opened.url,
+                hostname: opened.hostname,
+                status: opened.status,
+                ok: opened.ok,
+                headers: opened.headers,
+                body: bytesToHttpContent(bytes, opened.bodyEncoding),
+                bodyEncoding: opened.bodyEncoding,
+                contentType: opened.contentType,
+            };
+        } finally {
+            await this.discardTransferQuietly(opened.transfer.transferId);
+        }
+    }
+
     private async writePrivateFileWithTransfer(
         path: string,
         bytes: Uint8Array,
@@ -1293,6 +1356,13 @@ function bytesToContent(bytes: Uint8Array, encoding: 'utf8' | 'base64'): string 
         return bytesToBase64(bytes);
     }
     return bytesToUtf8(bytes);
+}
+
+function bytesToHttpContent(bytes: Uint8Array, encoding: HttpBodyEncoding): string {
+    if (encoding === 'base64') {
+        return bytesToBase64(bytes);
+    }
+    return new TextDecoder('utf-8').decode(bytes);
 }
 
 function bytesToUtf8(bytes: Uint8Array): string {

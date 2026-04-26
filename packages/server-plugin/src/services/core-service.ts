@@ -49,6 +49,8 @@ import type {
     ControlPoliciesResponse,
     ControlPoliciesSaveRequest,
     ControlPrivateFileDeleteRequest,
+    ControlHttpFetchOpenRequest,
+    ControlHttpFetchOpenResponse,
     ControlPrivateFileMkdirRequest,
     ControlPrivateFileOpenReadResponse,
     ControlPrivateFileReadDirRequest,
@@ -751,6 +753,10 @@ export class CoreService {
 
     async fetchHttp(request: HttpFetchRequest): Promise<HttpFetchResponse> {
         return await this.request('/v1/http/fetch', request);
+    }
+
+    async openHttpFetch(request: ControlHttpFetchOpenRequest): Promise<ControlHttpFetchOpenResponse> {
+        return await this.request('/v1/http/fetch-open', request);
     }
 
     async listControlJobs(dbPath: string, request: ControlJobsListRequest): Promise<ControlJobRecord[]> {

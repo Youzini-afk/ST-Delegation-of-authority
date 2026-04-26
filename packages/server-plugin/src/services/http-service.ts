@@ -1,4 +1,4 @@
-import type { HttpFetchRequest, HttpFetchResponse } from '@stdo/shared-types';
+import type { ControlHttpFetchOpenRequest, ControlHttpFetchOpenResponse, HttpFetchRequest, HttpFetchResponse } from '@stdo/shared-types';
 import type { UserContext } from '../types.js';
 import { CoreService } from './core-service.js';
 
@@ -9,5 +9,9 @@ export class HttpService {
 
     async fetch(_user: UserContext, input: HttpFetchInput): Promise<HttpFetchResponse> {
         return await this.core.fetchHttp(input);
+    }
+
+    async openFetch(_user: UserContext, input: ControlHttpFetchOpenRequest): Promise<ControlHttpFetchOpenResponse> {
+        return await this.core.openHttpFetch(input);
     }
 }

@@ -17,7 +17,8 @@ export type GrantScope = 'session' | 'persistent' | 'policy';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type PrivateFileKind = 'file' | 'directory';
 export type PrivateFileEncoding = 'utf8' | 'base64';
-export type DataTransferResource = 'storage.blob' | 'fs.private';
+export type HttpBodyEncoding = 'utf8' | 'base64';
+export type DataTransferResource = 'storage.blob' | 'fs.private' | 'http.fetch';
 
 export interface DeclaredPermissions {
     storage?: {
@@ -424,6 +425,30 @@ export interface ControlPrivateFileReadRequest extends ControlPrivateFileScopeRe
 export interface ControlPrivateFileOpenReadResponse {
     entry: PrivateFileEntry;
     sourcePath: string;
+}
+
+export interface ControlHttpFetchRequest {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    bodyEncoding?: HttpBodyEncoding;
+    bodySourcePath?: string;
+}
+
+export interface ControlHttpFetchOpenRequest extends ControlHttpFetchRequest {
+    responsePath: string;
+}
+
+export interface ControlHttpFetchOpenResponse {
+    url: string;
+    hostname: string;
+    status: number;
+    ok: boolean;
+    headers: Record<string, string>;
+    bodyEncoding: HttpBodyEncoding;
+    contentType: string;
+    sizeBytes: number;
 }
 
 export interface ControlPrivateFileDeleteRequest extends ControlPrivateFileScopeRequest {
@@ -857,6 +882,7 @@ export interface HttpFetchRequest {
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    bodyEncoding?: HttpBodyEncoding;
 }
 
 export interface HttpFetchResponse {
@@ -866,6 +892,28 @@ export interface HttpFetchResponse {
     ok: boolean;
     headers: Record<string, string>;
     body: string;
-    bodyEncoding: 'utf8' | 'base64';
+    bodyEncoding: HttpBodyEncoding;
     contentType: string;
 }
+
+export interface HttpFetchOpenRequest extends HttpFetchRequest {
+    bodyTransferId?: string;
+}
+
+export interface HttpFetchOpenInlineResponse extends HttpFetchResponse {
+    mode: 'inline';
+}
+
+export interface HttpFetchOpenTransferResponse {
+    mode: 'transfer';
+    url: string;
+    hostname: string;
+    status: number;
+    ok: boolean;
+    headers: Record<string, string>;
+    bodyEncoding: HttpBodyEncoding;
+    contentType: string;
+    transfer: DataTransferInitResponse;
+}
+
+export type HttpFetchOpenResponse = HttpFetchOpenInlineResponse | HttpFetchOpenTransferResponse;

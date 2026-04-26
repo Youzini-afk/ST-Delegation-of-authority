@@ -40,6 +40,7 @@ describe('registerRoutes', () => {
             '/fs/private/write-file-transfer',
             '/fs/private/read-file',
             '/fs/private/open-read',
+            '/http/fetch-open',
             '/fs/private/delete',
             '/fs/private/stat',
             '/admin/update',

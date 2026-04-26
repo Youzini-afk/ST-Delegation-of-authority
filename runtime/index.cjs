@@ -215,6 +215,12 @@ function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
 function getTriviumDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
+function decodeHttpResponseBody(bytes, encoding) {
+    if (encoding === 'base64') {
+        return bytes.toString('base64');
+    }
+    return bytes.toString('utf8');
+}
 function resolvePrivateTriviumDatabaseDir(user, extensionId) {
     const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
     return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
@@ -541,10 +547,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
-            if (payload.resource !== 'storage.blob' && payload.resource !== 'fs.private') {
+            if (payload.resource !== 'storage.blob' && payload.resource !== 'fs.private' && payload.resource !== 'http.fetch') {
                 throw new Error(`Unsupported transfer resource: ${String(payload.resource)}`);
             }
-            if (!await runtime.permissions.authorize(user, session, { resource: payload.resource })) {
+            if (payload.resource !== 'http.fetch' && !await runtime.permissions.authorize(user, session, { resource: payload.resource })) {
                 throw new Error(`Permission not granted: ${payload.resource}`);
             }
             ok(res, await runtime.transfers.init(user, session.extension.id, payload));
@@ -1473,6 +1479,91 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'http.fetch', error);
         }
     });
+    router.post('/http/fetch-open', async (req, res) => {
+        const payload = (req.body ?? {});
+        let user;
+        let session;
+        let bodyTransferIdToDiscard;
+        let responseTransferIdToDiscard;
+        try {
+            user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.normalizeHostname)(String(payload.url ?? ''));
+            if (!await runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
+                throw new Error(`Permission not granted: http.fetch for ${hostname}`);
+            }
+            if (payload.body !== undefined && payload.bodyTransferId) {
+                throw new Error('HTTP fetch body and bodyTransferId cannot both be provided');
+            }
+            const bodyTransfer = payload.bodyTransferId
+                ? runtime.transfers.get(user, session.extension.id, payload.bodyTransferId, 'http.fetch')
+                : undefined;
+            bodyTransferIdToDiscard = payload.bodyTransferId;
+            const responseTransfer = await runtime.transfers.init(user, session.extension.id, { resource: 'http.fetch' });
+            responseTransferIdToDiscard = responseTransfer.transferId;
+            const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
+            const result = await runtime.http.openFetch(user, {
+                url: payload.url,
+                ...(payload.method === undefined ? {} : { method: payload.method }),
+                ...(payload.headers === undefined ? {} : { headers: payload.headers }),
+                ...(bodyTransfer
+                    ? { bodySourcePath: bodyTransfer.filePath }
+                    : payload.body === undefined
+                        ? {}
+                        : {
+                            body: payload.body,
+                            ...(payload.bodyEncoding === undefined ? {} : { bodyEncoding: payload.bodyEncoding }),
+                        }),
+                responsePath: responseTransferRecord.filePath,
+            });
+            const finalizedTransfer = await runtime.transfers.promoteToDownload(user, session.extension.id, responseTransfer.transferId);
+            await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', {
+                hostname,
+                ...(bodyTransfer ? { requestVia: 'transfer' } : {}),
+                ...(finalizedTransfer.sizeBytes > _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES ? { responseVia: 'transfer' } : {}),
+            });
+            if (finalizedTransfer.sizeBytes <= _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                const bytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(responseTransferRecord.filePath);
+                await runtime.transfers.discard(user, session.extension.id, responseTransfer.transferId).catch(() => undefined);
+                responseTransferIdToDiscard = undefined;
+                ok(res, {
+                    mode: 'inline',
+                    url: result.url,
+                    hostname: result.hostname,
+                    status: result.status,
+                    ok: result.ok,
+                    headers: result.headers,
+                    body: decodeHttpResponseBody(bytes, result.bodyEncoding),
+                    bodyEncoding: result.bodyEncoding,
+                    contentType: result.contentType,
+                });
+                return;
+            }
+            responseTransferIdToDiscard = undefined;
+            ok(res, {
+                mode: 'transfer',
+                url: result.url,
+                hostname: result.hostname,
+                status: result.status,
+                ok: result.ok,
+                headers: result.headers,
+                bodyEncoding: result.bodyEncoding,
+                contentType: result.contentType,
+                transfer: finalizedTransfer,
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'http.fetch', error);
+        }
+        finally {
+            if (user && session && bodyTransferIdToDiscard) {
+                await runtime.transfers.discard(user, session.extension.id, bodyTransferIdToDiscard).catch(() => undefined);
+            }
+            if (user && session && responseTransferIdToDiscard) {
+                await runtime.transfers.discard(user, session.extension.id, responseTransferIdToDiscard).catch(() => undefined);
+            }
+        }
+    });
     router.post('/jobs/create', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -2356,6 +2447,9 @@ class CoreService {
     async fetchHttp(request) {
         return await this.request('/v1/http/fetch', request);
     }
+    async openHttpFetch(request) {
+        return await this.request('/v1/http/fetch-open', request);
+    }
     async listControlJobs(dbPath, request) {
         const response = await this.request('/v1/control/jobs/list', {
             dbPath,
@@ -2726,6 +2820,22 @@ class DataTransferService {
         this.transfers.set(transferId, record);
         return toInitResponse(record);
     }
+    async promoteToDownload(user, extensionId, transferId) {
+        const record = this.get(user, extensionId, transferId);
+        if (record.direction !== 'upload') {
+            throw new Error('Transfer is already readable');
+        }
+        const { filePath, sizeBytes } = validateReadableTransferFile(record.filePath);
+        if (sizeBytes > _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES) {
+            throw new Error(`Transfer exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES} bytes`);
+        }
+        record.filePath = filePath;
+        record.sizeBytes = sizeBytes;
+        record.maxBytes = sizeBytes;
+        record.direction = 'download';
+        record.updatedAt = new Date().toISOString();
+        return toInitResponse(record);
+    }
     async read(user, extensionId, transferId, request) {
         const record = this.get(user, extensionId, transferId);
         if (record.direction !== 'download') {
@@ -2813,7 +2923,7 @@ function toInitResponse(record) {
     };
 }
 function normalizeTransferResource(resource) {
-    if (resource === 'storage.blob' || resource === 'fs.private') {
+    if (resource === 'storage.blob' || resource === 'fs.private' || resource === 'http.fetch') {
         return resource;
     }
     throw new Error(`Unsupported transfer resource: ${String(resource)}`);
@@ -2919,6 +3029,9 @@ class HttpService {
     }
     async fetch(_user, input) {
         return await this.core.fetchHttp(input);
+    }
+    async openFetch(_user, input) {
+        return await this.core.openHttpFetch(input);
     }
 }
 

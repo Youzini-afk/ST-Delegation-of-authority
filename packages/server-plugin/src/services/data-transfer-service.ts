@@ -113,6 +113,25 @@ export class DataTransferService {
         return toInitResponse(record);
     }
 
+    async promoteToDownload(user: UserContext, extensionId: string, transferId: string): Promise<DataTransferInitResponse> {
+        const record = this.get(user, extensionId, transferId);
+        if (record.direction !== 'upload') {
+            throw new Error('Transfer is already readable');
+        }
+
+        const { filePath, sizeBytes } = validateReadableTransferFile(record.filePath);
+        if (sizeBytes > MAX_DATA_TRANSFER_BYTES) {
+            throw new Error(`Transfer exceeds ${MAX_DATA_TRANSFER_BYTES} bytes`);
+        }
+
+        record.filePath = filePath;
+        record.sizeBytes = sizeBytes;
+        record.maxBytes = sizeBytes;
+        record.direction = 'download';
+        record.updatedAt = new Date().toISOString();
+        return toInitResponse(record);
+    }
+
     async read(user: UserContext, extensionId: string, transferId: string, request: DataTransferReadRequest): Promise<DataTransferReadResponse> {
         const record = this.get(user, extensionId, transferId);
         if (record.direction !== 'download') {
@@ -211,7 +230,7 @@ function toInitResponse(record: DataTransferRecord): DataTransferInitResponse {
 }
 
 function normalizeTransferResource(resource: DataTransferInitRequest['resource']): DataTransferResource {
-    if (resource === 'storage.blob' || resource === 'fs.private') {
+    if (resource === 'storage.blob' || resource === 'fs.private' || resource === 'http.fetch') {
         return resource;
     }
     throw new Error(`Unsupported transfer resource: ${String(resource)}`);
