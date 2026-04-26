@@ -1,4 +1,5 @@
 import type {
+    AuthorityJobRegistryEntry,
     AuthorityPolicyEntry,
     PermissionResource,
     PermissionStatus,
@@ -586,6 +587,7 @@ class SecurityCenterView {
                                 <strong>${escapeHtml(core?.health ? `${core.health.jobRegistrySummary.registered} / ${core.health.jobRegistrySummary.jobTypes.join(', ')}` : MISSING_TEXT)}</strong>
                             </div>
                         </div>
+                        ${this.renderJobRegistryDetails()}
                     </section>
                     ${this.renderOverviewCollapsibleSection(
             'governance',
@@ -1157,6 +1159,57 @@ class SecurityCenterView {
                 </div>
             </details>
         `;
+    }
+
+    private renderJobRegistryDetails(): string {
+        const registry = this.state.probe?.jobs.registry;
+        if (!registry) {
+            return '';
+        }
+        if (registry.entries.length === 0) {
+            return '<div class="authority-muted">当前未提供 Job Registry 明细。</div>';
+        }
+
+        return `
+            <div class="authority-stack">
+                ${registry.entries.map(entry => this.renderJobRegistryEntry(entry)).join('')}
+            </div>
+        `;
+    }
+
+    private renderJobRegistryEntry(entry: AuthorityJobRegistryEntry): string {
+        return `
+            <div class="authority-list-card authority-list-card--column">
+                <div class="authority-page-actions">
+                    <strong>${escapeHtml(entry.type)}</strong>
+                    <span class="authority-pill authority-pill--${entry.cancellable ? 'granted' : 'warning'}">${escapeHtml(entry.cancellable ? '可取消' : '不可取消')}</span>
+                </div>
+                <div class="authority-muted">${escapeHtml(entry.description)}</div>
+                <div class="authority-kv-grid">
+                    <div><strong>默认超时</strong><div>${escapeHtml(entry.defaultTimeoutMs == null ? '未设置' : `${entry.defaultTimeoutMs}ms`)}</div></div>
+                    <div><strong>默认重试</strong><div>${escapeHtml(String(entry.defaultMaxAttempts))}</div></div>
+                    <div><strong>Payload 字段</strong><div>${escapeHtml(entry.payloadFields.length === 0 ? '无' : String(entry.payloadFields.length))}</div></div>
+                    <div><strong>Progress 字段</strong><div>${escapeHtml(entry.progressFields.length === 0 ? '无' : String(entry.progressFields.length))}</div></div>
+                </div>
+                <div class="authority-stack authority-stack--compact">
+                    <div>
+                        <strong>Payload</strong>
+                        <div class="authority-muted">${escapeHtml(this.renderJobRegistryFieldSummary(entry.payloadFields))}</div>
+                    </div>
+                    <div>
+                        <strong>Progress / Result</strong>
+                        <div class="authority-muted">${escapeHtml(this.renderJobRegistryFieldSummary(entry.progressFields))}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    private renderJobRegistryFieldSummary(fields: AuthorityJobRegistryEntry['payloadFields']): string {
+        if (fields.length === 0) {
+            return '无字段';
+        }
+        return fields.map(field => `${field.name}${field.required ? '' : ' ?'}: ${field.type} — ${field.description}`).join('；');
     }
 
     private toggleSections(): void {
