@@ -88,8 +88,24 @@
 
 但别忘了：
 
+- `GET /extensions/:id` 的 `activity` 现在包含 `warnings` 与 `pages`
+- `jobsPage` 是控制面聚合字段，不等于公开 `GET /jobs` 的返回合同
 - 最终运行的是 `managed/sdk-extension/*`
 - 改完源码后需要同步 installable
+
+## 2.6 修改大列表 / 分页合同
+
+优先看：
+
+- `packages/shared-types/src/index.ts`
+- `packages/server-plugin/src/services/core-service.ts`
+- `crates/authority-core/src/main.rs`
+
+默认规则：
+
+- 优先复用 `CursorPageRequest` / `CursorPageInfo`
+- 不要为 audit / jobs / events / SQL / Trivium 再发明一套新的分页 envelope
+- 区分“公开工作流接口”和“控制面聚合接口”的分页语义
 
 ## 3. 对 AI 最重要的接口边界
 
@@ -206,9 +222,12 @@ Authority Trivium 当前要求调用方提供 `vector`。
 
 ## 6.5 不要把 `jobs.background` 当成任意代码执行平台
 
-当前公开内置 job type 只有：
+当前公开内置 job type 包括：
 
 - `delay`
+- `sql.backup`
+- `trivium.flush`
+- `fs.import-jsonl`
 
 如果 AI 擅自设计“后台执行任意 JS/Rust 逻辑”的接口，那不是当前实现。
 
@@ -224,7 +243,8 @@ Authority Trivium 当前要求调用方提供 `vector`。
 4. 在 server service / route 暴露公开 API
 5. 在 SDK client 暴露前端方法
 6. 补文档 / Security Center
-7. 跑测试与 installable 同步
+7. 对性能敏感改动补跑 `npm run bench:core`
+8. 跑测试与 installable 同步
 
 ## 7.2 纯 UI 改动
 
@@ -265,14 +285,14 @@ Authority Trivium 当前要求调用方提供 `vector`。
 3. session 是否有效
 4. 权限是否 granted
 5. route 是否正确映射到 core
-6. installable 是否和源码一致
+6. Security Center / control audit 里是否已有 `warning` / `error` 诊断线索
+7. installable 是否和源码一致
 
 如果用户说“前端看起来没更新”，优先看：
 
 1. `managed/sdk-extension/*` 是否同步
 2. `.authority-release.json` 是否更新
-3. Security Center 是否仍在读旧部署目录
-4. 是否需要重启 SillyTavern
+3. 是否需要重启 SillyTavern
 
 ## 10. 一句话总结给 AI
 

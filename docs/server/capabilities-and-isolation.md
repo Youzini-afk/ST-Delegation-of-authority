@@ -116,6 +116,7 @@ Authority 当前至少按这些维度隔离数据：
 - audit
 - jobs
 - events
+- 运行诊断线索（warning / error 审计）
 - 以及其他控制面记录
 
 ## 6.3 全局管理员策略路径
@@ -245,14 +246,34 @@ target 为：
 job.type
 ```
 
-当前内置 job type 只有：
+当前内置 job type 包括：
 
 - `delay`
+- `sql.backup`
+- `trivium.flush`
+- `fs.import-jsonl`
 
 这很关键：
 
 - 现在不是一个“通用执行任意后台函数”的平台
 - 若未来扩展 job type，需要同时更新权限和服务端执行逻辑
+
+当前几个内置任务的落盘/隔离语义分别是：
+
+- `delay`
+  - 只更新控制面 jobs / events / audit
+
+- `sql.backup`
+  - 读取当前扩展私有 SQL 数据库
+  - 备份文件写到同扩展数据库目录下的 `__backup__`
+
+- `trivium.flush`
+  - 作用于当前扩展私有 Trivium `.tdb`
+  - 不跨扩展共享数据库
+
+- `fs.import-jsonl`
+  - 从当前扩展 blob 读取 JSONL 源
+  - 校验后写入当前扩展私有文件根目录
 
 ## 7.8 Events：`events.stream`
 

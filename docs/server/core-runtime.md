@@ -59,13 +59,26 @@ Node adapter 会在启动 core 前设置这些环境变量：
 
 - `name`
 - `apiVersion`
+- `buildHash`
 - `version`
+- `platform`
 - `pid`
 - `startedAt`
 - `uptimeMs`
 - `requestCount`
 - `errorCount`
 - `activeJobCount`
+- `queuedJobCount`
+- `queuedRequestCount`
+- `runtimeMode`
+- `maxConcurrency`
+- `currentConcurrency`
+- `workerCount`
+- `lastError`
+- `jobRegistrySummary`
+- `jobWorkerConcurrency`
+- `maxJobQueueSize`
+- `timeoutMs`
 - `limits`
 
 当前 `limits` 内含：
@@ -90,6 +103,7 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 - `POST /v1/storage/kv/delete`
 - `POST /v1/storage/kv/list`
 - `POST /v1/storage/blob/put`
+- `POST /v1/storage/blob/open-read`
 - `POST /v1/storage/blob/get`
 - `POST /v1/storage/blob/delete`
 - `POST /v1/storage/blob/list`
@@ -99,6 +113,7 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 - `POST /v1/fs/private/mkdir`
 - `POST /v1/fs/private/read-dir`
 - `POST /v1/fs/private/write-file`
+- `POST /v1/fs/private/open-read`
 - `POST /v1/fs/private/read-file`
 - `POST /v1/fs/private/delete`
 - `POST /v1/fs/private/stat`
@@ -106,6 +121,7 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 ## 5.3 HTTP
 
 - `POST /v1/http/fetch`
+- `POST /v1/http/fetch-open`
 
 ## 5.4 SQL
 
@@ -119,12 +135,16 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 
 - `POST /v1/trivium/insert`
 - `POST /v1/trivium/insert-with-id`
+- `POST /v1/trivium/bulk-upsert`
 - `POST /v1/trivium/get`
 - `POST /v1/trivium/update-payload`
 - `POST /v1/trivium/update-vector`
 - `POST /v1/trivium/delete`
+- `POST /v1/trivium/bulk-delete`
 - `POST /v1/trivium/link`
+- `POST /v1/trivium/bulk-link`
 - `POST /v1/trivium/unlink`
+- `POST /v1/trivium/bulk-unlink`
 - `POST /v1/trivium/neighbors`
 - `POST /v1/trivium/search`
 - `POST /v1/trivium/search-advanced`
@@ -134,8 +154,6 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 - `POST /v1/trivium/index-text`
 - `POST /v1/trivium/index-keyword`
 - `POST /v1/trivium/build-text-index`
-- `POST /v1/trivium/flush`
-- `POST /v1/trivium/stat`
 
 ## 5.6 控制面
 
@@ -157,6 +175,39 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 - `POST /v1/control/jobs/cancel`
 - `POST /v1/control/jobs/upsert`
 - `POST /v1/control/events/poll`
+
+## 5.7 分页、诊断与作业注册补充
+
+- `POST /v1/control/audit/recent`
+  - 返回 `permissions` / `usage` / `errors` / `warnings`
+  - 每一类都会附带 `pages.*: CursorPageInfo`
+
+- `POST /v1/control/jobs/list`
+  - 返回 `jobs` 与 `page: CursorPageInfo`
+
+- `POST /v1/control/events/poll`
+  - 同时支持传统 `afterId` 和新的 `page`
+  - 返回 `events`、`cursor` 与 `page: CursorPageInfo`
+
+- `POST /v1/sql/query`
+  - 可接受可选 `page`
+  - 当提供 `page` 时，结果会带 `page: CursorPageInfo`
+
+- `POST /v1/trivium/filter-where` / `POST /v1/trivium/query`
+  - 可接受可选 `page`
+  - 当提供 `page` 时，结果会带 `page: CursorPageInfo`
+
+- 当前内置后台任务注册表：
+  - `delay`
+  - `sql.backup`
+  - `trivium.flush`
+  - `fs.import-jsonl`
+
+- 当前会持久化的运行诊断包括：
+  - queue pressure
+  - retry scheduled
+  - timeout / failure
+  - slow job
 
 ## 6. core 不直接负责什么
 

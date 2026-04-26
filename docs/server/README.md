@@ -18,6 +18,9 @@
 - **Session Header**：`x-authority-session-token`
 - **Session Query**：`authoritySessionToken`
 - **Core Header**：`x-authority-core-token`
+- **内置后台任务**：`delay`、`sql.backup`、`trivium.flush`、`fs.import-jsonl`
+- **控制面诊断种类**：`permission`、`usage`、`warning`、`error`
+- **统一分页合同**：`CursorPageRequest` / `CursorPageInfo`
 - **installable 关键产物**：`runtime/`、`managed/sdk-extension/`、`managed/core/`、`.authority-release.json`
 
 ## 文档目录
@@ -26,16 +29,16 @@
   - 架构分层、调用链、生命周期、端口暴露模型
 
 - `docs/server/http-api.md`
-  - Node server-plugin 对外公开的 HTTP / SSE API 清单
+  - Node server-plugin 对外公开的 HTTP / SSE API 清单，包括 Security Center 聚合视图与作业/事件边界
 
 - `docs/server/capabilities-and-isolation.md`
   - 权限资源、风险等级、数据隔离、路径布局、能力边界
 
 - `docs/server/core-runtime.md`
-  - Rust `authority-core` 的内部 API、健康检查、环境变量和运行细节
+  - Rust `authority-core` 的内部 API、健康检查、环境变量、作业注册和分页/诊断细节
 
 - `docs/server/install-update-release.md`
-  - installable 产物、SDK 部署、core 校验、更新流程、同步命令
+  - installable 产物、SDK 部署、core 校验、更新流程、同步命令与基线验证命令
 
 - `docs/server/ai-integration-guide.md`
   - 面向编程 AI 的接入规则、常见修改任务、反模式和检查清单
@@ -57,8 +60,31 @@
 - **想改构建、升级或发布流程**
   - 先读 `install-update-release.md`
 
+- **想做性能回归或优化切片基线**
+  - 先看根目录 `npm run bench:core`
+
 - **想让编程 AI 快速安全地改这个项目**
   - 先读 `ai-integration-guide.md`
+
+## 常用验证命令
+
+```bash
+npm run typecheck
+npm test
+npm run bench:core
+npm run sync:installable
+npm run check:installable
+```
+
+其中：
+
+- `npm run bench:core`
+  - 会临时拉起 `authority-core`
+  - 生成 SQL 与 paged control audit/jobs/events 的延迟基线
+
+- `npm run sync:installable`
+  - 会先做类型检查、构建和测试
+  - 然后同步 `runtime/`、`managed/sdk-extension/`、`managed/core/` 和 `.authority-release.json`
 
 ## 给编程 AI 的最小规则
 

@@ -225,11 +225,22 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 - 修改了 `managed/` 相关脚本或 release metadata 生成逻辑
 - 准备推送一个“用户安装后应该立即生效”的改动
 
-## 11.2 配套检查
+### 配套检查
 
 最安全的顺序是：
 
 ```bash
+npm run bench:core
+npm run sync:installable
+npm run check:installable
+```
+
+如果你在做性能相关改动，更推荐：
+
+```bash
+npm run typecheck
+npm test
+npm run bench:core
 npm run sync:installable
 npm run check:installable
 ```
@@ -249,6 +260,7 @@ npm run check:installable
 npm run build
 npm run typecheck
 npm test
+npm run bench:core
 npm run sync:installable
 npm run check:installable
 ```
@@ -261,6 +273,10 @@ npm run check:installable
 - `npm test`
   - `vitest run`
   - `cargo test --manifest-path crates/authority-core/Cargo.toml`
+
+- `npm run bench:core`
+  - 拉起临时 `authority-core`
+  - 生成 SQL 与 paged control audit/jobs/events 的延迟基线
 
 - `npm run sync:installable`
   - 全量构建 + 测试 + installable 同步

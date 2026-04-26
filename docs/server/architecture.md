@@ -20,7 +20,7 @@ SillyTavern Frontend Extension
 ```text
 third-party/st-authority-sdk
   -> Security Center
-  -> 会话初始化 / 权限提示 / 审计可视化 / 管理员更新
+  -> 会话初始化 / 权限提示 / 审计与告警可视化 / 管理员策略 / 管理员更新
 ```
 
 ## 2. 三层职责边界
@@ -51,6 +51,7 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 - 权限决策组合
 - 审计日志写入
 - 存储路径解析
+- 聚合扩展详情、活动与作业视图
 - 将请求转发给 Rust core
 - 管理 `authority-core` 进程生命周期
 - 首次启动时自动部署 `st-authority-sdk`
@@ -65,9 +66,11 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 
 - KV / Blob / SQL / Trivium / 私有文件的底层执行
 - 控制面状态持久化
+- cursor-paged control audit / jobs / events 读取
 - 会话、扩展、grant、policy、audit、jobs、events 的底层读写
 - HTTP fetch
-- 后台任务执行
+- 后台任务注册表执行（`delay`、`sql.backup`、`trivium.flush`、`fs.import-jsonl`）
+- 持久化 queue pressure、retry、timeout / failure、slow job 等诊断线索
 - 事件轮询源
 - `/health` 健康检查
 
@@ -153,6 +156,24 @@ browser EventSource
 
 - 当前公开层只提供 **订阅**，没有公开的“任意事件发布”HTTP 路由
 - SSE 是基于控制面事件轮询桥接，不是纯内存广播
+
+## 5.4 Security Center 扩展详情
+
+```text
+Security Center
+  -> GET /api/plugins/authority/extensions/:id
+  -> runtime.extensions.getExtension(...)
+  -> runtime.audit.getRecentActivityPage(...)
+  -> runtime.jobs.listPage(...)
+  -> Node adapter 组装 activity + activity.pages + jobs + jobsPage
+  -> 返回扩展详情聚合视图
+```
+
+这条链路很关键，因为它说明：
+
+- 公开层聚合视图和 core 内部分页合同是两回事
+- Security Center 可以看到 `warnings`、`activity.pages` 和 `jobsPage`
+- 公开 `GET /jobs` 仍然是扩展工作流接口，而不是控制面详情接口
 
 ## 6. 端口与暴露面
 

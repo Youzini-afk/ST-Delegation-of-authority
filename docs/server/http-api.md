@@ -97,14 +97,20 @@
 
 ## 3.6 Trivium
 
+- `POST /trivium/resolve-id`
 - `POST /trivium/insert`
 - `POST /trivium/insert-with-id`
+- `POST /trivium/upsert`
+- `POST /trivium/bulk-upsert`
 - `POST /trivium/get`
 - `POST /trivium/update-payload`
 - `POST /trivium/update-vector`
 - `POST /trivium/delete`
+- `POST /trivium/bulk-delete`
 - `POST /trivium/link`
+- `POST /trivium/bulk-link`
 - `POST /trivium/unlink`
+- `POST /trivium/bulk-unlink`
 - `POST /trivium/neighbors`
 - `POST /trivium/search`
 - `POST /trivium/search-advanced`
@@ -232,9 +238,19 @@
 - `policies`
 - `activity`
 - `jobs`
+- `jobsPage`
 - `databases`
 - `triviumDatabases`
 - `storage`
+
+其中：
+
+- `activity.permissions` / `activity.usage` / `activity.errors` / `activity.warnings`
+- `activity.pages.{permissions,usage,errors,warnings}`
+- `jobs` 是当前页的 job 列表
+- `jobsPage` 是对应的 `CursorPageInfo`
+
+这个接口主要给 Security Center 用，所以它会比普通扩展工作流接口多一层聚合和分页元数据。
 
 ## 4.6 `POST /extensions/:id/grants/reset`
 
@@ -331,15 +347,25 @@
 - `migrate`：幂等迁移，默认 migration table 为 `_authority_migrations`
 - `databases`：列出当前扩展的私有 SQL 文件
 
+分页补充：
+
+- `POST /sql/query` 现在可接受可选 `page`
+- 当提供 `page` 时，响应会带 `page: CursorPageInfo`
+- 默认 limit 为 100，最大 limit 为 1000
+
 ## 9. Trivium API
 
 Trivium 公开 API 相对完整，支持：
 
+- external string id 解析 / 稳定化
 - 点写入
+- upsert / bulk upsert
 - 点读取
 - payload/vector 更新
 - 删除
+- bulk delete
 - 图边 link/unlink
+- bulk link/unlink
 - neighbors
 - vector search
 - advanced search
@@ -358,6 +384,14 @@ Trivium 公开 API 相对完整，支持：
 - 默认数据库名也是 `default`
 - 权限资源是 `trivium.private`
 - target 是数据库名
+- `resolve-id` / `upsert` / `get` / `search` / `neighbors` 等公开层接口会处理 external ID 映射
+- `stat` 返回 richer runtime metadata，例如 `edgeCount`、`vectorDim`、`databaseSize`、`walSize`、`vecSize`
+
+分页补充：
+
+- `POST /trivium/filter-where` 与 `POST /trivium/query` 现在可接受可选 `page`
+- 当提供 `page` 时，响应会带 `page: CursorPageInfo`
+- 默认 limit 为 100，最大 limit 为 1000
 
 ## 10. `POST /http/fetch`
 
@@ -392,11 +426,19 @@ https://api.openai.com/v1/...
 - `GET /jobs/:id`
 - `POST /jobs/:id/cancel`
 
-当前内置 job type 只有：
+当前内置 job type 包括：
 
 - `delay`
+- `sql.backup`
+- `trivium.flush`
+- `fs.import-jsonl`
 
 也就是说，当前公开后台任务能力并不是“任意代码执行框架”，而是受限的 job 类型执行。
+
+额外边界：
+
+- `GET /jobs` 仍然返回当前扩展的 job 数组，不单独暴露 page envelope
+- 如果你需要 `jobsPage` 这类分页元数据，应看 `GET /extensions/:id` 的控制面聚合响应
 
 ## 12. SSE 事件流
 
@@ -414,6 +456,7 @@ https://api.openai.com/v1/...
 
 - 建立连接后先发一个 `authority.connected`
 - 然后通过控制面事件轮询不断推送事件
+- 底层使用带 cursor/page 元数据的 control events poll，但这些元数据不会直接暴露给浏览器 SSE 消费者
 
 ## 13. 管理员接口
 
