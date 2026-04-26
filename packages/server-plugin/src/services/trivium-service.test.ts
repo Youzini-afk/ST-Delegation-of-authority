@@ -15,10 +15,13 @@ import type {
     TriviumSearchHit,
     TriviumFilterWhereResponse,
     TriviumQueryResponse,
+    TriviumStatResponse,
 } from '@stdo/shared-types';
 import { TriviumService } from './trivium-service.js';
 import type { CoreService } from './core-service.js';
+import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
+import { sanitizeFileSegment } from '../utils.js';
 
 type MappingRow = {
     id: number;
@@ -187,6 +190,44 @@ describe('TriviumService', () => {
         });
     });
 
+    it('reports mapping counts and opt-in orphan mapping integrity in stat', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha', vector: [1, 0], payload: { name: 'alpha' } },
+                { externalId: 'beta', vector: [0, 1], payload: { name: 'beta' } },
+            ],
+        });
+
+        const basicStat = await trivium.stat(user, 'third-party/ext-a', {
+            database: 'graph',
+        });
+        expect(basicStat.mappingCount).toBe(2);
+        expect(basicStat.orphanMappingCount).toBeNull();
+
+        const dbPath = path.join(
+            getUserAuthorityPaths(user).triviumPrivateDir,
+            sanitizeFileSegment('third-party/ext-a'),
+            'graph.tdb',
+        );
+        await core.bulkDeleteTrivium(dbPath, {
+            database: 'graph',
+            items: [{ id: 2 }],
+        });
+
+        const integrityStat = await trivium.stat(user, 'third-party/ext-a', {
+            database: 'graph',
+            includeMappingIntegrity: true,
+        });
+        expect(integrityStat.nodeCount).toBe(1);
+        expect(integrityStat.mappingCount).toBe(2);
+        expect(integrityStat.orphanMappingCount).toBe(1);
+    });
+
     it('returns page-aware enriched filter/query responses while keeping array wrappers compatible', async () => {
         const user = createUser(dirs);
         const trivium = new TriviumService(createMockCore());
@@ -328,11 +369,19 @@ function createMockCore(): CoreService {
                 const row = store.rows.find(item => item.namespace === namespace && item.externalId === externalId);
                 return toQueryResult(row ? [{ internalId: row.id, externalId: row.externalId, namespace: row.namespace }] : []);
             }
+            if (request.statement.includes('SELECT COUNT(*) AS count FROM authority_trivium_external_ids')) {
+                return toQueryResult([{ count: store.rows.length }]);
+            }
             if (request.statement.includes('FROM authority_trivium_external_ids') && request.statement.includes('internal_id IN')) {
                 const ids = (request.params ?? []).map(value => Number(value));
                 return toQueryResult(store.rows
                     .filter(row => ids.includes(row.id))
                     .map(row => ({ internalId: row.id, externalId: row.externalId, namespace: row.namespace })));
+            }
+            if (request.statement.includes('SELECT internal_id AS internalId FROM authority_trivium_external_ids ORDER BY internal_id ASC')) {
+                return toQueryResult([...store.rows]
+                    .sort((left, right) => left.id - right.id)
+                    .map(row => ({ internalId: row.id })));
             }
             if (request.statement.includes('FROM authority_trivium_external_ids') && request.statement.includes('created_at AS createdAt')) {
                 const namespace = request.statement.includes('WHERE namespace = ?1')
@@ -501,6 +550,37 @@ function createMockCore(): CoreService {
             return {
                 rows: rows.slice(0, limit),
                 ...(request.page ? { page: toPage(rows.length, limit) } : {}),
+            };
+        },
+        async statTrivium(dbPath: string, request: { database?: string }): Promise<TriviumStatResponse> {
+            const database = String(request.database ?? 'default');
+            const nodes = [...getDatabase(dbPath).values()].sort((left, right) => left.id - right.id);
+            return {
+                name: database,
+                fileName: `${database}.tdb`,
+                dim: nodes[0]?.vector.length ?? null,
+                dtype: 'f32',
+                syncMode: null,
+                storageMode: null,
+                sizeBytes: 0,
+                walSizeBytes: 0,
+                vecSizeBytes: 0,
+                totalSizeBytes: 0,
+                updatedAt: null,
+                database,
+                filePath: dbPath,
+                exists: databases.has(dbPath),
+                nodeCount: nodes.length,
+                edgeCount: nodes.reduce((sum, node) => sum + node.edges.length, 0),
+                textIndexCount: 0,
+                lastFlushAt: null,
+                mappingCount: 0,
+                orphanMappingCount: null,
+                vectorDim: nodes[0]?.vector.length ?? null,
+                databaseSize: 0,
+                walSize: 0,
+                vecSize: 0,
+                estimatedMemoryBytes: 0,
             };
         },
     } as unknown as CoreService;

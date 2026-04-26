@@ -4870,9 +4870,15 @@ class TriviumService {
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         const stat = await this.core.statTrivium(dbPath, { ...request, database });
         const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
+        const mappingCount = await this.countMappings(mappingDbPath);
+        const orphanMappingCount = request.includeMappingIntegrity
+            ? await this.countOrphanMappings(dbPath, mappingDbPath, database)
+            : null;
         return {
             ...stat,
             lastFlushAt,
+            mappingCount,
+            orphanMappingCount,
         };
     }
     async listMappingsPage(user, extensionId, request = {}) {
@@ -5041,6 +5047,35 @@ class TriviumService {
             return [resolved.id, resolved];
         }));
     }
+    async countMappings(mappingDbPath) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return 0;
+        }
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT COUNT(*) AS count FROM ${EXTERNAL_IDS_TABLE}`,
+        });
+        return getNonNegativeInteger(result.rows[0]?.count);
+    }
+    async countOrphanMappings(dbPath, mappingDbPath, database) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return 0;
+        }
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT internal_id AS internalId FROM ${EXTERNAL_IDS_TABLE} ORDER BY internal_id ASC`,
+        });
+        let orphanCount = 0;
+        for (const row of result.rows) {
+            const id = getRequiredNumericId(row.internalId, 'internalId');
+            const node = await this.core.getTrivium(dbPath, {
+                database,
+                id,
+            });
+            if (!node) {
+                orphanCount += 1;
+            }
+        }
+        return orphanCount;
+    }
     async insertMappingAuto(mappingDbPath, externalId, namespace) {
         const timestamp = new Date().toISOString();
         const result = await this.core.execSql(mappingDbPath, {
@@ -5142,6 +5177,18 @@ function getRequiredNumericId(value, label = 'id') {
         return value;
     }
     throw new Error(`Trivium ${label} must be a positive safe integer`);
+}
+function getNonNegativeInteger(value) {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isSafeInteger(parsed) && parsed >= 0) {
+            return parsed;
+        }
+    }
+    return 0;
 }
 function buildEmptyCursorPage(page) {
     const limit = Number.isInteger(page.limit) && Number(page.limit) > 0

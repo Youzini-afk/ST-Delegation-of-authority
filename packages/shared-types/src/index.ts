@@ -1056,7 +1056,9 @@ export interface TriviumBuildTextIndexRequest extends TriviumOpenOptions {}
 
 export interface TriviumFlushRequest extends TriviumOpenOptions {}
 
-export interface TriviumStatRequest extends TriviumOpenOptions {}
+export interface TriviumStatRequest extends TriviumOpenOptions {
+    includeMappingIntegrity?: boolean;
+}
 
 export interface ControlTriviumBulkUpsertItem {
     id: number;
@@ -1210,6 +1212,8 @@ export interface TriviumStatResponse extends TriviumDatabaseRecord {
     edgeCount: number;
     textIndexCount: number | null;
     lastFlushAt: string | null;
+    mappingCount: number;
+    orphanMappingCount: number | null;
     vectorDim: number | null;
     databaseSize: number;
     walSize: number;
