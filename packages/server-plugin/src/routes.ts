@@ -18,6 +18,20 @@ import type {
     SqlMigrateRequest,
     SqlQueryRequest,
     SqlTransactionRequest,
+    TriviumDatabaseRecord,
+    TriviumDeleteRequest,
+    TriviumFlushRequest,
+    TriviumGetRequest,
+    TriviumInsertRequest,
+    TriviumInsertWithIdRequest,
+    TriviumLinkRequest,
+    TriviumListDatabasesResponse,
+    TriviumNeighborsRequest,
+    TriviumSearchRequest,
+    TriviumStatRequest,
+    TriviumUnlinkRequest,
+    TriviumUpdatePayloadRequest,
+    TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
@@ -58,6 +72,81 @@ function resolvePrivateSqlDatabasePath(user: ReturnType<typeof getUserContext>, 
         resolvePrivateSqlDatabaseDir(user, extensionId),
         `${sanitizeFileSegment(databaseName)}.sqlite`,
     );
+}
+
+function getTriviumDatabaseName(value: unknown): string {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+
+function resolvePrivateTriviumDatabaseDir(user: ReturnType<typeof getUserContext>, extensionId: string): string {
+    const paths = getUserAuthorityPaths(user);
+    return path.join(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
+}
+
+function resolvePrivateTriviumDatabasePath(user: ReturnType<typeof getUserContext>, extensionId: string, databaseName: string): string {
+    return path.join(
+        resolvePrivateTriviumDatabaseDir(user, extensionId),
+        `${sanitizeFileSegment(databaseName)}.tdb`,
+    );
+}
+
+function readTriviumDimension(filePath: string): number | null {
+    try {
+        const handle = fs.openSync(filePath, 'r');
+        try {
+            const header = Buffer.alloc(10);
+            const bytesRead = fs.readSync(handle, header, 0, 10, 0);
+            if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
+                return null;
+            }
+            return header.readUInt32LE(6);
+        } finally {
+            fs.closeSync(handle);
+        }
+    } catch {
+        return null;
+    }
+}
+
+function buildTriviumDatabaseRecord(filePath: string, entryName: string): TriviumDatabaseRecord {
+    const mainStats = fs.statSync(filePath);
+    const walPath = `${filePath}.wal`;
+    const vecPath = `${filePath}.vec`;
+    const walStats = fs.existsSync(walPath) ? fs.statSync(walPath) : null;
+    const vecStats = fs.existsSync(vecPath) ? fs.statSync(vecPath) : null;
+    const storageMode = vecStats ? 'mmap' : 'rom';
+    const timestamps = [mainStats, walStats, vecStats]
+        .filter((value): value is fs.Stats => value !== null)
+        .map(stats => stats.mtime.toISOString())
+        .sort((left, right) => left.localeCompare(right));
+
+    return {
+        name: entryName.slice(0, -'.tdb'.length),
+        fileName: entryName,
+        dim: readTriviumDimension(filePath),
+        dtype: null,
+        syncMode: null,
+        storageMode,
+        sizeBytes: mainStats.size,
+        walSizeBytes: walStats?.size ?? 0,
+        vecSizeBytes: vecStats?.size ?? 0,
+        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
+        updatedAt: timestamps.at(-1) ?? null,
+    };
+}
+
+function listPrivateTriviumDatabases(user: ReturnType<typeof getUserContext>, extensionId: string): TriviumListDatabasesResponse {
+    const databaseDir = resolvePrivateTriviumDatabaseDir(user, extensionId);
+    if (!fs.existsSync(databaseDir)) {
+        return { databases: [] };
+    }
+
+    const databases = fs.readdirSync(databaseDir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.tdb'))
+        .map(entry => buildTriviumDatabaseRecord(path.join(databaseDir, entry.name), entry.name))
+        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+
+    return { databases };
 }
 
 function listPrivateSqlDatabases(user: ReturnType<typeof getUserContext>, extensionId: string): SqlListDatabasesResponse {
@@ -645,6 +734,327 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             ok(res, result);
         } catch (error) {
             fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.post('/trivium/insert', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumInsertRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.insertTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert', {
+                database,
+                id: result.id,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/insert-with-id', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumInsertWithIdRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.insertTriviumWithId(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert with id', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/get', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumGetRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const node = await runtime.core.getTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium get', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { node });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/update-payload', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumUpdatePayloadRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.updateTriviumPayload(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium update payload', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/update-vector', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumUpdateVectorRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.updateTriviumVector(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium update vector', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/delete', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumDeleteRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.deleteTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium delete', {
+                database,
+                id: payload.id,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/link', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumLinkRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.linkTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium link', {
+                database,
+                src: payload.src,
+                dst: payload.dst,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/unlink', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumUnlinkRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.unlinkTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium unlink', {
+                database,
+                src: payload.src,
+                dst: payload.dst,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/neighbors', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumNeighborsRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.neighborsTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium neighbors', {
+                database,
+                id: payload.id,
+                depth: payload.depth ?? 1,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/search', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumSearchRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const hits = await runtime.core.searchTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium search', {
+                database,
+                topK: payload.topK ?? 5,
+                expandDepth: payload.expandDepth ?? 0,
+            });
+            ok(res, { hits });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/flush', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumFlushRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            await runtime.core.flushTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium flush', {
+                database,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/stat', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumStatRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.statTrivium(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
+                database,
+                nodeCount: result.nodeCount,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.get('/trivium/databases', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private' }, false)) {
+                throw new Error('Permission not granted: trivium.private');
+            }
+
+            const result = listPrivateTriviumDatabases(user, session.extension.id);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium list databases', {
+                count: result.databases.length,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
         }
     });
 

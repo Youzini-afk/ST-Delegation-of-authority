@@ -4,6 +4,7 @@ import type { UserContext } from '../types.js';
 
 export interface UserAuthorityPaths {
     sqlPrivateDir: string;
+    triviumPrivateDir: string;
     kvDir: string;
     blobDir: string;
     filesDir: string;
@@ -19,9 +20,11 @@ export function getUserAuthorityPaths(user: UserContext): UserAuthorityPaths {
     const stateDir = path.join(baseDir, 'state');
     const storageDir = path.join(baseDir, 'storage');
     const sqlDir = path.join(baseDir, 'sql');
+    const triviumDir = path.join(storageDir, 'trivium');
 
     return {
         sqlPrivateDir: path.join(sqlDir, 'private'),
+        triviumPrivateDir: path.join(triviumDir, 'private'),
         kvDir: path.join(storageDir, 'kv'),
         blobDir: path.join(storageDir, 'blobs'),
         filesDir: path.join(storageDir, 'files'),

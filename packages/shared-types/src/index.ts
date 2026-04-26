@@ -5,6 +5,7 @@ export type PermissionResource =
     | 'storage.blob'
     | 'fs.private'
     | 'sql.private'
+    | 'trivium.private'
     | 'http.fetch'
     | 'jobs.background'
     | 'events.stream';
@@ -26,6 +27,9 @@ export interface DeclaredPermissions {
         private?: boolean;
     };
     sql?: {
+        private?: boolean | string[];
+    };
+    trivium?: {
         private?: boolean | string[];
     };
     http?: {
@@ -554,6 +558,129 @@ export interface SqlDatabaseRecord {
 
 export interface SqlListDatabasesResponse {
     databases: SqlDatabaseRecord[];
+}
+
+export type TriviumDType = 'f32' | 'f16' | 'u64';
+export type TriviumSyncMode = 'full' | 'normal' | 'off';
+export type TriviumStorageMode = 'mmap' | 'rom';
+
+export interface TriviumOpenOptions {
+    database?: string;
+    dim?: number;
+    dtype?: TriviumDType;
+    syncMode?: TriviumSyncMode;
+    storageMode?: TriviumStorageMode;
+}
+
+export interface TriviumEdgeView {
+    targetId: number;
+    label: string;
+    weight: number;
+}
+
+export interface TriviumNodeView {
+    id: number;
+    vector: number[];
+    payload: unknown;
+    edges: TriviumEdgeView[];
+    numEdges: number;
+}
+
+export interface TriviumSearchHit {
+    id: number;
+    score: number;
+    payload: unknown;
+}
+
+export interface TriviumInsertRequest extends TriviumOpenOptions {
+    vector: number[];
+    payload: unknown;
+}
+
+export interface TriviumInsertWithIdRequest extends TriviumOpenOptions {
+    id: number;
+    vector: number[];
+    payload: unknown;
+}
+
+export interface TriviumGetRequest extends TriviumOpenOptions {
+    id: number;
+}
+
+export interface TriviumUpdatePayloadRequest extends TriviumOpenOptions {
+    id: number;
+    payload: unknown;
+}
+
+export interface TriviumUpdateVectorRequest extends TriviumOpenOptions {
+    id: number;
+    vector: number[];
+}
+
+export interface TriviumDeleteRequest extends TriviumOpenOptions {
+    id: number;
+}
+
+export interface TriviumLinkRequest extends TriviumOpenOptions {
+    src: number;
+    dst: number;
+    label?: string;
+    weight?: number;
+}
+
+export interface TriviumUnlinkRequest extends TriviumOpenOptions {
+    src: number;
+    dst: number;
+}
+
+export interface TriviumNeighborsRequest extends TriviumOpenOptions {
+    id: number;
+    depth?: number;
+}
+
+export interface TriviumSearchRequest extends TriviumOpenOptions {
+    vector: number[];
+    topK?: number;
+    expandDepth?: number;
+    minScore?: number;
+}
+
+export interface TriviumFlushRequest extends TriviumOpenOptions {}
+
+export interface TriviumStatRequest extends TriviumOpenOptions {}
+
+export interface TriviumInsertResponse {
+    id: number;
+}
+
+export interface TriviumNeighborsResponse {
+    ids: number[];
+}
+
+export interface TriviumDatabaseRecord {
+    name: string;
+    fileName: string;
+    dim: number | null;
+    dtype: TriviumDType | null;
+    syncMode: TriviumSyncMode | null;
+    storageMode: TriviumStorageMode | null;
+    sizeBytes: number;
+    walSizeBytes: number;
+    vecSizeBytes: number;
+    totalSizeBytes: number;
+    updatedAt: string | null;
+}
+
+export interface TriviumListDatabasesResponse {
+    databases: TriviumDatabaseRecord[];
+}
+
+export interface TriviumStatResponse extends TriviumDatabaseRecord {
+    database: string;
+    filePath: string;
+    exists: boolean;
+    nodeCount: number;
+    estimatedMemoryBytes: number;
 }
 
 export interface HttpFetchRequest {

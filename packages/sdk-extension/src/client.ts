@@ -27,6 +27,24 @@ import type {
     SqlQueryResult,
     SqlTransactionRequest,
     SqlTransactionResponse,
+    TriviumDeleteRequest,
+    TriviumFlushRequest,
+    TriviumGetRequest,
+    TriviumInsertRequest,
+    TriviumInsertResponse,
+    TriviumInsertWithIdRequest,
+    TriviumLinkRequest,
+    TriviumListDatabasesResponse,
+    TriviumNeighborsRequest,
+    TriviumNeighborsResponse,
+    TriviumNodeView,
+    TriviumSearchHit,
+    TriviumSearchRequest,
+    TriviumStatRequest,
+    TriviumStatResponse,
+    TriviumUnlinkRequest,
+    TriviumUpdatePayloadRequest,
+    TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt, type PermissionPromptContext } from './permission-prompt.js';
@@ -108,6 +126,22 @@ export class AuthorityClient {
         transaction: (input: SqlTransactionRequest) => Promise<SqlTransactionResponse>;
         migrate: (input: SqlMigrateRequest) => Promise<SqlMigrateResponse>;
         listDatabases: () => Promise<SqlListDatabasesResponse>;
+    };
+
+    readonly trivium: {
+        insert: (input: TriviumInsertRequest) => Promise<TriviumInsertResponse>;
+        insertWithId: (input: TriviumInsertWithIdRequest) => Promise<void>;
+        get: (input: TriviumGetRequest) => Promise<TriviumNodeView | null>;
+        updatePayload: (input: TriviumUpdatePayloadRequest) => Promise<void>;
+        updateVector: (input: TriviumUpdateVectorRequest) => Promise<void>;
+        delete: (input: TriviumDeleteRequest) => Promise<void>;
+        link: (input: TriviumLinkRequest) => Promise<void>;
+        unlink: (input: TriviumUnlinkRequest) => Promise<void>;
+        neighbors: (input: TriviumNeighborsRequest) => Promise<TriviumNeighborsResponse>;
+        search: (input: TriviumSearchRequest) => Promise<TriviumSearchHit[]>;
+        flush: (input?: TriviumFlushRequest) => Promise<void>;
+        stat: (input?: TriviumStatRequest) => Promise<TriviumStatResponse>;
+        listDatabases: () => Promise<TriviumListDatabasesResponse>;
     };
 
     readonly http: {
@@ -342,6 +376,198 @@ export class AuthorityClient {
                     reason: '列出私有 SQL 数据库',
                 });
                 return await this.requestWithSession<SqlListDatabasesResponse>('/sql/databases');
+            },
+        };
+
+        this.trivium = {
+            insert: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `写入 Trivium 数据库 ${database}`,
+                });
+                return await this.requestWithSession<TriviumInsertResponse>('/trivium/insert', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            insertWithId: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `写入指定 ID 的 Trivium 节点到 ${database}`,
+                });
+                await this.requestWithSession('/trivium/insert-with-id', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            get: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `读取 Trivium 节点 ${input.id}（${database}）`,
+                });
+                const response = await this.requestWithSession<{ node: TriviumNodeView | null }>('/trivium/get', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+                return response.node;
+            },
+            updatePayload: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `更新 Trivium 节点负载 ${input.id}（${database}）`,
+                });
+                await this.requestWithSession('/trivium/update-payload', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            updateVector: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `更新 Trivium 节点向量 ${input.id}（${database}）`,
+                });
+                await this.requestWithSession('/trivium/update-vector', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            delete: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `删除 Trivium 节点 ${input.id}（${database}）`,
+                });
+                await this.requestWithSession('/trivium/delete', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            link: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `建立 Trivium 图边 ${input.src} -> ${input.dst}（${database}）`,
+                });
+                await this.requestWithSession('/trivium/link', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            unlink: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `删除 Trivium 图边 ${input.src} -> ${input.dst}（${database}）`,
+                });
+                await this.requestWithSession('/trivium/unlink', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            neighbors: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `查询 Trivium 邻居 ${input.id}（${database}）`,
+                });
+                return await this.requestWithSession<TriviumNeighborsResponse>('/trivium/neighbors', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            search: async input => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `检索 Trivium 数据库 ${database}`,
+                });
+                const response = await this.requestWithSession<{ hits: TriviumSearchHit[] }>('/trivium/search', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+                return response.hits;
+            },
+            flush: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `刷新 Trivium 数据库 ${database}`,
+                });
+                await this.requestWithSession('/trivium/flush', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            stat: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `查看 Trivium 数据库状态 ${database}`,
+                });
+                return await this.requestWithSession<TriviumStatResponse>('/trivium/stat', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            listDatabases: async () => {
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    reason: '列出私有 Trivium 数据库',
+                });
+                return await this.requestWithSession<TriviumListDatabasesResponse>('/trivium/databases');
             },
         };
 
@@ -663,6 +889,7 @@ function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items:
         'storage.blob': [],
         'fs.private': [],
         'sql.private': [],
+        'trivium.private': [],
         'http.fetch': [],
         'jobs.background': [],
         'events.stream': [],
@@ -712,6 +939,8 @@ function getPermissionResourceLabel(resource: PermissionResource): string {
             return '私有文件夹';
         case 'sql.private':
             return '私有 SQL 数据库';
+        case 'trivium.private':
+            return '私有记忆数据库';
         case 'http.fetch':
             return 'HTTP 访问';
         case 'jobs.background':
@@ -724,5 +953,9 @@ function getPermissionResourceLabel(resource: PermissionResource): string {
 }
 
 function getSqlDatabaseName(value: unknown): string {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+
+function getTriviumDatabaseName(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }

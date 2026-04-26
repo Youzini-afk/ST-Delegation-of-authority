@@ -72,6 +72,23 @@ import type {
     SqlQueryResult,
     SqlTransactionRequest,
     SqlTransactionResponse,
+    TriviumDeleteRequest,
+    TriviumFlushRequest,
+    TriviumGetRequest,
+    TriviumInsertRequest,
+    TriviumInsertResponse,
+    TriviumInsertWithIdRequest,
+    TriviumLinkRequest,
+    TriviumNeighborsRequest,
+    TriviumNeighborsResponse,
+    TriviumNodeView,
+    TriviumSearchHit,
+    TriviumSearchRequest,
+    TriviumStatRequest,
+    TriviumStatResponse,
+    TriviumUnlinkRequest,
+    TriviumUpdatePayloadRequest,
+    TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
 import { AUTHORITY_MANAGED_CORE_DIR } from '../constants.js';
 import type { AuthorityCoreHealthSnapshot, AuthorityCoreManagedMetadata, AuthorityCoreStatus, CoreRuntimeState } from '../types.js';
@@ -104,6 +121,14 @@ interface CoreSqlMigrateRequestPayload {
     dbPath: string;
     migrations: SqlMigrateRequest['migrations'];
     tableName?: SqlMigrateRequest['tableName'];
+}
+
+interface CoreTriviumOpenRequestPayload {
+    dbPath: string;
+    dim?: number;
+    dtype?: TriviumInsertRequest['dtype'];
+    syncMode?: TriviumInsertRequest['syncMode'];
+    storageMode?: TriviumInsertRequest['storageMode'];
 }
 
 const HEALTH_TIMEOUT_MS = 5000;
@@ -336,6 +361,99 @@ export class CoreService {
             migrations: request.migrations,
             tableName: request.tableName,
         } satisfies CoreSqlMigrateRequestPayload);
+    }
+
+    async insertTrivium(dbPath: string, request: TriviumInsertRequest): Promise<TriviumInsertResponse> {
+        return await this.request('/v1/trivium/insert', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            payload: request.payload,
+        });
+    }
+
+    async insertTriviumWithId(dbPath: string, request: TriviumInsertWithIdRequest): Promise<void> {
+        await this.request('/v1/trivium/insert-with-id', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            vector: request.vector,
+            payload: request.payload,
+        });
+    }
+
+    async getTrivium(dbPath: string, request: TriviumGetRequest): Promise<TriviumNodeView | null> {
+        const response = await this.request<{ node: TriviumNodeView | null }>('/v1/trivium/get', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+        });
+        return response.node;
+    }
+
+    async updateTriviumPayload(dbPath: string, request: TriviumUpdatePayloadRequest): Promise<void> {
+        await this.request('/v1/trivium/update-payload', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            payload: request.payload,
+        });
+    }
+
+    async updateTriviumVector(dbPath: string, request: TriviumUpdateVectorRequest): Promise<void> {
+        await this.request('/v1/trivium/update-vector', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            vector: request.vector,
+        });
+    }
+
+    async deleteTrivium(dbPath: string, request: TriviumDeleteRequest): Promise<void> {
+        await this.request('/v1/trivium/delete', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+        });
+    }
+
+    async linkTrivium(dbPath: string, request: TriviumLinkRequest): Promise<void> {
+        await this.request('/v1/trivium/link', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            src: request.src,
+            dst: request.dst,
+            label: request.label,
+            weight: request.weight,
+        });
+    }
+
+    async unlinkTrivium(dbPath: string, request: TriviumUnlinkRequest): Promise<void> {
+        await this.request('/v1/trivium/unlink', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            src: request.src,
+            dst: request.dst,
+        });
+    }
+
+    async neighborsTrivium(dbPath: string, request: TriviumNeighborsRequest): Promise<TriviumNeighborsResponse> {
+        return await this.request('/v1/trivium/neighbors', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            id: request.id,
+            depth: request.depth,
+        });
+    }
+
+    async searchTrivium(dbPath: string, request: TriviumSearchRequest): Promise<TriviumSearchHit[]> {
+        const response = await this.request<{ hits: TriviumSearchHit[] }>('/v1/trivium/search', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            vector: request.vector,
+            topK: request.topK,
+            expandDepth: request.expandDepth,
+            minScore: request.minScore,
+        });
+        return response.hits;
+    }
+
+    async flushTrivium(dbPath: string, request: TriviumFlushRequest = {}): Promise<void> {
+        await this.request('/v1/trivium/flush', buildTriviumOpenPayload(dbPath, request));
+    }
+
+    async statTrivium(dbPath: string, request: TriviumStatRequest = {}): Promise<TriviumStatResponse> {
+        return await this.request('/v1/trivium/stat', buildTriviumOpenPayload(dbPath, request));
     }
 
     async initializeControlSession(
@@ -760,6 +878,21 @@ function readArtifact(root: string): CoreArtifact | null {
     return {
         binaryPath,
         metadata,
+    };
+}
+
+function buildTriviumOpenPayload(dbPath: string, request: {
+    dim?: number;
+    dtype?: TriviumInsertRequest['dtype'];
+    syncMode?: TriviumInsertRequest['syncMode'];
+    storageMode?: TriviumInsertRequest['storageMode'];
+}): CoreTriviumOpenRequestPayload {
+    return {
+        dbPath,
+        ...(request.dim === undefined ? {} : { dim: request.dim }),
+        ...(request.dtype === undefined ? {} : { dtype: request.dtype }),
+        ...(request.syncMode === undefined ? {} : { syncMode: request.syncMode }),
+        ...(request.storageMode === undefined ? {} : { storageMode: request.storageMode }),
     };
 }
 

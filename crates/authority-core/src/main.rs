@@ -1,5 +1,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use half::f16;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use rusqlite::types::{Value as SqliteValue, ValueRef};
 use serde::Deserialize;
@@ -19,6 +20,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use triviumdb::database::{Config as TriviumConfig, Database as TriviumDatabase, StorageMode as TriviumStorageMode};
+use triviumdb::node::{NodeView as TriviumRawNodeView, SearchHit as TriviumRawSearchHit};
+use triviumdb::storage::wal::SyncMode as TriviumSyncMode;
 use url::Url;
 
 const HEADER_END: &[u8] = b"\r\n\r\n";
@@ -136,6 +140,206 @@ struct SqlMigrateResponse {
     applied: Vec<String>,
     skipped: Vec<String>,
     latest_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumOpenRequest {
+    db_path: String,
+    dim: Option<usize>,
+    dtype: Option<String>,
+    sync_mode: Option<String>,
+    storage_mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumInsertRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    vector: Vec<f64>,
+    payload: JsonValue,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumInsertWithIdRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+    vector: Vec<f64>,
+    payload: JsonValue,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumGetRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumUpdatePayloadRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+    payload: JsonValue,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumUpdateVectorRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+    vector: Vec<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumDeleteRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumLinkRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    src: u64,
+    dst: u64,
+    label: Option<String>,
+    weight: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumUnlinkRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    src: u64,
+    dst: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumNeighborsRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    id: u64,
+    depth: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumSearchRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    vector: Vec<f64>,
+    top_k: Option<usize>,
+    expand_depth: Option<usize>,
+    min_score: Option<f32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumFlushRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumStatRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumInsertResponse {
+    id: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumEdgeView {
+    target_id: u64,
+    label: String,
+    weight: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumNodeView {
+    id: u64,
+    vector: Vec<f64>,
+    payload: JsonValue,
+    edges: Vec<TriviumEdgeView>,
+    num_edges: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumSearchHit {
+    id: u64,
+    score: f64,
+    payload: JsonValue,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumNeighborsResponse {
+    ids: Vec<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumDatabaseRecord {
+    name: String,
+    file_name: String,
+    dim: Option<usize>,
+    dtype: Option<String>,
+    sync_mode: Option<String>,
+    storage_mode: Option<String>,
+    size_bytes: u64,
+    wal_size_bytes: u64,
+    vec_size_bytes: u64,
+    total_size_bytes: u64,
+    updated_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumStatResponse {
+    database: String,
+    file_path: String,
+    exists: bool,
+    node_count: usize,
+    estimated_memory_bytes: usize,
+    #[serde(flatten)]
+    record: TriviumDatabaseRecord,
+}
+
+#[derive(Clone, Copy)]
+enum TriviumDTypeTag {
+    F32,
+    F16,
+    U64,
+}
+
+impl TriviumDTypeTag {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F16 => "f16",
+            Self::U64 => "u64",
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -728,6 +932,18 @@ fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result
         ("POST", "/v1/sql/batch") => parse_json_body::<SqlBatchRequest>(&request).and_then(handle_sql_batch),
         ("POST", "/v1/sql/transaction") => parse_json_body::<SqlBatchRequest>(&request).and_then(handle_sql_transaction),
         ("POST", "/v1/sql/migrate") => parse_json_body::<SqlMigrateRequest>(&request).and_then(handle_sql_migrate),
+        ("POST", "/v1/trivium/insert") => parse_json_body::<TriviumInsertRequest>(&request).and_then(handle_trivium_insert),
+        ("POST", "/v1/trivium/insert-with-id") => parse_json_body::<TriviumInsertWithIdRequest>(&request).and_then(handle_trivium_insert_with_id),
+        ("POST", "/v1/trivium/get") => parse_json_body::<TriviumGetRequest>(&request).and_then(handle_trivium_get),
+        ("POST", "/v1/trivium/update-payload") => parse_json_body::<TriviumUpdatePayloadRequest>(&request).and_then(handle_trivium_update_payload),
+        ("POST", "/v1/trivium/update-vector") => parse_json_body::<TriviumUpdateVectorRequest>(&request).and_then(handle_trivium_update_vector),
+        ("POST", "/v1/trivium/delete") => parse_json_body::<TriviumDeleteRequest>(&request).and_then(handle_trivium_delete),
+        ("POST", "/v1/trivium/link") => parse_json_body::<TriviumLinkRequest>(&request).and_then(handle_trivium_link),
+        ("POST", "/v1/trivium/unlink") => parse_json_body::<TriviumUnlinkRequest>(&request).and_then(handle_trivium_unlink),
+        ("POST", "/v1/trivium/neighbors") => parse_json_body::<TriviumNeighborsRequest>(&request).and_then(handle_trivium_neighbors),
+        ("POST", "/v1/trivium/search") => parse_json_body::<TriviumSearchRequest>(&request).and_then(handle_trivium_search),
+        ("POST", "/v1/trivium/flush") => parse_json_body::<TriviumFlushRequest>(&request).and_then(handle_trivium_flush),
+        ("POST", "/v1/trivium/stat") => parse_json_body::<TriviumStatRequest>(&request).and_then(handle_trivium_stat),
         ("POST", "/v1/control/session/init") => parse_json_body::<ControlSessionInitRequest>(&request).and_then(handle_control_session_init),
         ("POST", "/v1/control/session/get") => parse_json_body::<ControlSessionGetRequest>(&request).and_then(handle_control_session_get),
         ("POST", "/v1/control/extensions/list") => parse_json_body::<ControlExtensionsListRequest>(&request).and_then(handle_control_extensions_list),
@@ -842,6 +1058,223 @@ fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError>
         latest_id,
     };
     Ok(serde_json::to_value(response).expect("sql migrate response should serialize"))
+}
+
+fn handle_trivium_insert(request: TriviumInsertRequest) -> Result<JsonValue, ApiError> {
+    let TriviumInsertRequest { open, vector, payload } = request;
+    let id = match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&open)?;
+            db.insert(&vector.iter().map(|&value| value as f32).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&open)?;
+            db.insert(&vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&open)?;
+            db.insert(&vector.iter().map(|&value| value as u64).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?
+        }
+    };
+
+    Ok(serde_json::to_value(TriviumInsertResponse { id }).expect("trivium insert response should serialize"))
+}
+
+fn handle_trivium_insert_with_id(request: TriviumInsertWithIdRequest) -> Result<JsonValue, ApiError> {
+    let TriviumInsertWithIdRequest { open, id, vector, payload } = request;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            let mut db = open_trivium_f32(&open)?;
+            db.insert_with_id(id, &vector.iter().map(|&value| value as f32).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::F16 => {
+            let mut db = open_trivium_f16(&open)?;
+            db.insert_with_id(id, &vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::U64 => {
+            let mut db = open_trivium_u64(&open)?;
+            db.insert_with_id(id, &vector.iter().map(|&value| value as u64).collect::<Vec<_>>(), payload).map_err(to_trivium_error)?;
+        }
+    }
+
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_get(request: TriviumGetRequest) -> Result<JsonValue, ApiError> {
+    let TriviumGetRequest { open, id } = request;
+    let node = match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.get(id).map(|node| map_trivium_node(node, |value| value as f64)),
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.get(id).map(|node| map_trivium_node(node, |value| value.to_f64())),
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.get(id).map(|node| map_trivium_node(node, |value| value as f64)),
+    };
+    Ok(json!({ "node": node }))
+}
+
+fn handle_trivium_update_payload(request: TriviumUpdatePayloadRequest) -> Result<JsonValue, ApiError> {
+    let TriviumUpdatePayloadRequest { open, id, payload } = request;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.update_payload(id, payload).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.update_payload(id, payload).map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.update_payload(id, payload).map_err(to_trivium_error)?,
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_update_vector(request: TriviumUpdateVectorRequest) -> Result<JsonValue, ApiError> {
+    let TriviumUpdateVectorRequest { open, id, vector } = request;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => {
+            open_trivium_f32(&open)?.update_vector(id, &vector.iter().map(|&value| value as f32).collect::<Vec<_>>()).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::F16 => {
+            open_trivium_f16(&open)?.update_vector(id, &vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>()).map_err(to_trivium_error)?;
+        }
+        TriviumDTypeTag::U64 => {
+            open_trivium_u64(&open)?.update_vector(id, &vector.iter().map(|&value| value as u64).collect::<Vec<_>>()).map_err(to_trivium_error)?;
+        }
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_delete(request: TriviumDeleteRequest) -> Result<JsonValue, ApiError> {
+    let TriviumDeleteRequest { open, id } = request;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.delete(id).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.delete(id).map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.delete(id).map_err(to_trivium_error)?,
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_link(request: TriviumLinkRequest) -> Result<JsonValue, ApiError> {
+    let TriviumLinkRequest { open, src, dst, label, weight } = request;
+    let label = label.unwrap_or_else(|| String::from("related"));
+    let weight = weight.unwrap_or(1.0) as f32;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.link(src, dst, &label, weight).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.link(src, dst, &label, weight).map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.link(src, dst, &label, weight).map_err(to_trivium_error)?,
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_unlink(request: TriviumUnlinkRequest) -> Result<JsonValue, ApiError> {
+    let TriviumUnlinkRequest { open, src, dst } = request;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.unlink(src, dst).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.unlink(src, dst).map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.unlink(src, dst).map_err(to_trivium_error)?,
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_neighbors(request: TriviumNeighborsRequest) -> Result<JsonValue, ApiError> {
+    let TriviumNeighborsRequest { open, id, depth } = request;
+    let depth = depth.unwrap_or(1);
+    let ids = match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.neighbors(id, depth),
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.neighbors(id, depth),
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.neighbors(id, depth),
+    };
+    Ok(serde_json::to_value(TriviumNeighborsResponse { ids }).expect("trivium neighbors response should serialize"))
+}
+
+fn handle_trivium_search(request: TriviumSearchRequest) -> Result<JsonValue, ApiError> {
+    let TriviumSearchRequest { open, vector, top_k, expand_depth, min_score } = request;
+    let top_k = top_k.unwrap_or(5);
+    let expand_depth = expand_depth.unwrap_or(0);
+    let min_score = min_score.unwrap_or(0.5);
+    let hits = match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.search(&vector.iter().map(|&value| value as f32).collect::<Vec<_>>(), top_k, expand_depth, min_score).map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.search(&vector.iter().map(|&value| f16::from_f64(value)).collect::<Vec<_>>(), top_k, expand_depth, min_score).map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.search(&vector.iter().map(|&value| value as u64).collect::<Vec<_>>(), top_k, expand_depth, min_score).map_err(to_trivium_error)?,
+    };
+    let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
+    Ok(json!({ "hits": hits }))
+}
+
+fn handle_trivium_flush(request: TriviumFlushRequest) -> Result<JsonValue, ApiError> {
+    let TriviumFlushRequest { open } = request;
+    match parse_trivium_dtype(open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&open)?.flush().map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&open)?.flush().map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&open)?.flush().map_err(to_trivium_error)?,
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_stat(request: TriviumStatRequest) -> Result<JsonValue, ApiError> {
+    let TriviumStatRequest { open } = request;
+    validate_non_empty("dbPath", &open.db_path)?;
+
+    let dtype = parse_trivium_dtype(open.dtype.as_deref())?;
+    let sync_mode = parse_trivium_sync_mode(open.sync_mode.as_deref())?;
+    let storage_mode = parse_trivium_storage_mode(open.storage_mode.as_deref())?;
+    let db_path = Path::new(&open.db_path);
+    let file_name = db_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(&open.db_path)
+        .to_string();
+    let database = db_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("default")
+        .to_string();
+    let exists = db_path.exists();
+    let detected_dim = if exists {
+        read_trivium_dimension_from_file(db_path)
+    } else {
+        None
+    };
+
+    let mut record = build_trivium_database_record(
+        &open.db_path,
+        database.clone(),
+        file_name,
+        detected_dim.or(open.dim),
+        Some(dtype.as_str().to_string()),
+        Some(trivium_sync_mode_to_string(sync_mode).to_string()),
+        Some(trivium_storage_mode_to_string(storage_mode).to_string()),
+    );
+
+    if !exists {
+        let response = TriviumStatResponse {
+            database,
+            file_path: open.db_path,
+            exists: false,
+            node_count: 0,
+            estimated_memory_bytes: 0,
+            record,
+        };
+        return Ok(serde_json::to_value(response).expect("trivium stat response should serialize"));
+    }
+
+    let (node_count, estimated_memory_bytes) = match dtype {
+        TriviumDTypeTag::F32 => {
+            let db = open_trivium_f32(&open)?;
+            (db.node_count(), db.estimated_memory())
+        }
+        TriviumDTypeTag::F16 => {
+            let db = open_trivium_f16(&open)?;
+            (db.node_count(), db.estimated_memory())
+        }
+        TriviumDTypeTag::U64 => {
+            let db = open_trivium_u64(&open)?;
+            (db.node_count(), db.estimated_memory())
+        }
+    };
+    record.dim = detected_dim.or(record.dim);
+
+    let response = TriviumStatResponse {
+        database,
+        file_path: open.db_path,
+        exists: true,
+        node_count,
+        estimated_memory_bytes,
+        record,
+    };
+    Ok(serde_json::to_value(response).expect("trivium stat response should serialize"))
 }
 
 fn handle_control_session_init(request: ControlSessionInitRequest) -> Result<JsonValue, ApiError> {
@@ -1883,6 +2316,171 @@ fn open_connection(db_path: &str) -> Result<Connection, ApiError> {
     Ok(connection)
 }
 
+fn parse_trivium_dtype(value: Option<&str>) -> Result<TriviumDTypeTag, ApiError> {
+    match value.unwrap_or("f32") {
+        "f32" => Ok(TriviumDTypeTag::F32),
+        "f16" => Ok(TriviumDTypeTag::F16),
+        "u64" => Ok(TriviumDTypeTag::U64),
+        other => Err(ApiError {
+            status_code: 400,
+            message: format!("trivium dtype must be one of f32/f16/u64, got {other}"),
+        }),
+    }
+}
+
+fn parse_trivium_sync_mode(value: Option<&str>) -> Result<TriviumSyncMode, ApiError> {
+    match value.unwrap_or("normal") {
+        "full" => Ok(TriviumSyncMode::Full),
+        "normal" => Ok(TriviumSyncMode::Normal),
+        "off" => Ok(TriviumSyncMode::Off),
+        other => Err(ApiError {
+            status_code: 400,
+            message: format!("trivium syncMode must be one of full/normal/off, got {other}"),
+        }),
+    }
+}
+
+fn parse_trivium_storage_mode(value: Option<&str>) -> Result<TriviumStorageMode, ApiError> {
+    match value.unwrap_or("mmap") {
+        "mmap" => Ok(TriviumStorageMode::Mmap),
+        "rom" => Ok(TriviumStorageMode::Rom),
+        other => Err(ApiError {
+            status_code: 400,
+            message: format!("trivium storageMode must be one of mmap/rom, got {other}"),
+        }),
+    }
+}
+
+fn build_trivium_config(request: &TriviumOpenRequest) -> Result<TriviumConfig, ApiError> {
+    validate_non_empty("dbPath", &request.db_path)?;
+    Ok(TriviumConfig {
+        dim: request.dim.unwrap_or(1536),
+        sync_mode: parse_trivium_sync_mode(request.sync_mode.as_deref())?,
+        storage_mode: parse_trivium_storage_mode(request.storage_mode.as_deref())?,
+    })
+}
+
+fn open_trivium_f32(request: &TriviumOpenRequest) -> Result<TriviumDatabase<f32>, ApiError> {
+    TriviumDatabase::<f32>::open_with_config(&request.db_path, build_trivium_config(request)?).map_err(to_trivium_error)
+}
+
+fn open_trivium_f16(request: &TriviumOpenRequest) -> Result<TriviumDatabase<f16>, ApiError> {
+    TriviumDatabase::<f16>::open_with_config(&request.db_path, build_trivium_config(request)?).map_err(to_trivium_error)
+}
+
+fn open_trivium_u64(request: &TriviumOpenRequest) -> Result<TriviumDatabase<u64>, ApiError> {
+    TriviumDatabase::<u64>::open_with_config(&request.db_path, build_trivium_config(request)?).map_err(to_trivium_error)
+}
+
+fn map_trivium_node<T, F>(node: TriviumRawNodeView<T>, map_value: F) -> TriviumNodeView
+where
+    T: Copy,
+    F: Fn(T) -> f64,
+{
+    let edges: Vec<TriviumEdgeView> = node
+        .edges
+        .into_iter()
+        .map(|edge| TriviumEdgeView {
+            target_id: edge.target_id,
+            label: edge.label,
+            weight: edge.weight as f64,
+        })
+        .collect();
+    let num_edges = edges.len();
+
+    TriviumNodeView {
+        id: node.id,
+        vector: node.vector.into_iter().map(map_value).collect(),
+        payload: node.payload,
+        edges,
+        num_edges,
+    }
+}
+
+fn map_trivium_search_hit(hit: TriviumRawSearchHit) -> TriviumSearchHit {
+    TriviumSearchHit {
+        id: hit.id,
+        score: hit.score as f64,
+        payload: hit.payload,
+    }
+}
+
+fn read_trivium_dimension_from_file(path: &Path) -> Option<usize> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut header = [0u8; 10];
+    file.read_exact(&mut header).ok()?;
+    if &header[0..4] != b"TVDB" {
+        return None;
+    }
+    Some(u32::from_le_bytes([header[6], header[7], header[8], header[9]]) as usize)
+}
+
+fn build_trivium_database_record(
+    db_path: &str,
+    database: String,
+    file_name: String,
+    dim: Option<usize>,
+    dtype: Option<String>,
+    sync_mode: Option<String>,
+    storage_mode: Option<String>,
+) -> TriviumDatabaseRecord {
+    let path = Path::new(db_path);
+    let wal_path = PathBuf::from(format!("{}.wal", db_path));
+    let vec_path = PathBuf::from(format!("{}.vec", db_path));
+    let main_metadata = fs::metadata(path).ok();
+    let wal_metadata = fs::metadata(&wal_path).ok();
+    let vec_metadata = fs::metadata(&vec_path).ok();
+    let size_bytes = main_metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0);
+    let wal_size_bytes = wal_metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0);
+    let vec_size_bytes = vec_metadata.as_ref().map(|metadata| metadata.len()).unwrap_or(0);
+    let actual_storage_mode = if main_metadata.is_some() {
+        Some(if vec_metadata.is_some() { String::from("mmap") } else { String::from("rom") })
+    } else {
+        storage_mode
+    };
+    let mut timestamps = Vec::new();
+    if let Some(metadata) = &main_metadata {
+        timestamps.push(metadata.modified().ok().and_then(system_time_to_iso));
+    }
+    if let Some(metadata) = &wal_metadata {
+        timestamps.push(metadata.modified().ok().and_then(system_time_to_iso));
+    }
+    if let Some(metadata) = &vec_metadata {
+        timestamps.push(metadata.modified().ok().and_then(system_time_to_iso));
+    }
+    timestamps.retain(|value| value.is_some());
+    timestamps.sort();
+
+    TriviumDatabaseRecord {
+        name: database,
+        file_name,
+        dim,
+        dtype,
+        sync_mode,
+        storage_mode: actual_storage_mode,
+        size_bytes,
+        wal_size_bytes,
+        vec_size_bytes,
+        total_size_bytes: size_bytes + wal_size_bytes + vec_size_bytes,
+        updated_at: timestamps.into_iter().flatten().last(),
+    }
+}
+
+fn trivium_sync_mode_to_string(mode: TriviumSyncMode) -> &'static str {
+    match mode {
+        TriviumSyncMode::Full => "full",
+        TriviumSyncMode::Normal => "normal",
+        TriviumSyncMode::Off => "off",
+    }
+}
+
+fn trivium_storage_mode_to_string(mode: TriviumStorageMode) -> &'static str {
+    match mode {
+        TriviumStorageMode::Mmap => "mmap",
+        TriviumStorageMode::Rom => "rom",
+    }
+}
+
 fn ensure_migration_table(connection: &Connection, table_name: &str) -> Result<(), ApiError> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
@@ -2165,6 +2763,7 @@ fn default_control_policies_document() -> ControlPoliciesDocument {
     defaults.insert(String::from("storage.blob"), String::from("prompt"));
     defaults.insert(String::from("fs.private"), String::from("prompt"));
     defaults.insert(String::from("sql.private"), String::from("prompt"));
+    defaults.insert(String::from("trivium.private"), String::from("prompt"));
     defaults.insert(String::from("http.fetch"), String::from("prompt"));
     defaults.insert(String::from("jobs.background"), String::from("prompt"));
     defaults.insert(String::from("events.stream"), String::from("prompt"));
@@ -2956,6 +3555,13 @@ fn to_sql_error(error: rusqlite::Error) -> ApiError {
     }
 }
 
+fn to_trivium_error(error: impl std::fmt::Display) -> ApiError {
+    ApiError {
+        status_code: 400,
+        message: format!("trivium_error: {error}"),
+    }
+}
+
 fn to_internal_error(error: std::io::Error) -> ApiError {
     ApiError {
         status_code: 500,
@@ -3055,6 +3661,7 @@ fn validate_supported_resource(field_name: &str, value: &str) -> Result<(), ApiE
             "storage.blob",
             "fs.private",
             "sql.private",
+            "trivium.private",
             "http.fetch",
             "jobs.background",
             "events.stream",

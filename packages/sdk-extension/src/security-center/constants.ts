@@ -14,7 +14,7 @@ export const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
     uiLabel: '扩展权限中心',
 };
 
-export const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'http.fetch', 'jobs.background', 'events.stream'];
+export const RESOURCE_OPTIONS: PermissionResource[] = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'trivium.private', 'http.fetch', 'jobs.background', 'events.stream'];
 export const STATUS_OPTIONS: PermissionStatus[] = ['prompt', 'granted', 'denied', 'blocked'];
 
 export const TOP_BAR_DRAWER_ID = 'authority-security-center-drawer';
