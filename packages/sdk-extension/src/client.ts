@@ -4,6 +4,9 @@ import type {
     AuthorityPolicyEntry,
     BlobPutRequest,
     BlobRecord,
+    BlobTransferCommitRequest,
+    DataTransferInitResponse,
+    DataTransferResource,
     DeclaredPermissions,
     JobRecord,
     PermissionEvaluateRequest,
@@ -14,6 +17,7 @@ import type {
     PrivateFileReadDirRequest,
     PrivateFileReadRequest,
     PrivateFileReadResponse,
+    PrivateFileTransferCommitRequest,
     PrivateFileWriteRequest,
     SessionInitResponse,
     SqlBatchRequest,
@@ -62,6 +66,12 @@ export interface AuthorityPermissionRequest extends PermissionEvaluateRequest {
     promptTitle?: string;
 }
 
+export interface JobCreateOptions {
+    timeoutMs?: number;
+    idempotencyKey?: string;
+    maxAttempts?: number;
+}
+
 export interface AuthorityHttpRequest {
     url: string;
     method?: string;
@@ -101,6 +111,8 @@ interface SessionRequestOptions {
     method?: 'GET' | 'POST';
     body?: unknown;
 }
+
+const SDK_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
 
 export class AuthorityClient {
     readonly storage: {
@@ -164,7 +176,7 @@ export class AuthorityClient {
     };
 
     readonly jobs: {
-        create: (type: string, payload?: Record<string, unknown>) => Promise<JobRecord>;
+        create: (type: string, payload?: Record<string, unknown>, options?: JobCreateOptions) => Promise<JobRecord>;
         get: (id: string) => Promise<JobRecord>;
         list: () => Promise<JobRecord[]>;
         cancel: (id: string) => Promise<JobRecord>;
@@ -214,6 +226,10 @@ export class AuthorityClient {
             blob: {
                 put: async input => {
                     await this.ensurePermission({ resource: 'storage.blob', reason: `写入 Blob ${input.name}` });
+                    const bytes = contentToBytes(input.content, input.encoding ?? 'utf8');
+                    if (bytes.byteLength > SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                        return await this.putBlobWithTransfer(input, bytes);
+                    }
                     return await this.requestWithSession<BlobRecord>('/storage/blob/put', {
                         method: 'POST',
                         body: input,
@@ -268,6 +284,10 @@ export class AuthorityClient {
             },
             writeFile: async (path, content, options = {}) => {
                 await this.ensurePermission({ resource: 'fs.private', reason: `写入私有文件 ${path}` });
+                const bytes = contentToBytes(content, options.encoding ?? 'utf8');
+                if (bytes.byteLength > SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                    return await this.writePrivateFileWithTransfer(path, bytes, options);
+                }
                 const response = await this.requestWithSession<{ entry: PrivateFileEntry }>('/fs/private/write-file', {
                     method: 'POST',
                     body: {
@@ -711,7 +731,7 @@ export class AuthorityClient {
         };
 
         this.jobs = {
-            create: async (type, payload = {}) => {
+            create: async (type, payload = {}, options) => {
                 await this.ensurePermission({
                     resource: 'jobs.background',
                     target: type,
@@ -719,7 +739,13 @@ export class AuthorityClient {
                 });
                 return await this.requestWithSession<JobRecord>('/jobs/create', {
                     method: 'POST',
-                    body: { type, payload },
+                    body: {
+                        type,
+                        payload,
+                        ...(options?.timeoutMs != null ? { timeoutMs: options.timeoutMs } : {}),
+                        ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+                        ...(options?.maxAttempts != null ? { maxAttempts: options.maxAttempts } : {}),
+                    },
                 });
             },
             get: async id => {
@@ -956,6 +982,82 @@ export class AuthorityClient {
         }
     }
 
+    private async putBlobWithTransfer(input: BlobPutRequest, bytes: Uint8Array): Promise<BlobRecord> {
+        const transfer = await this.initializeTransfer('storage.blob');
+        try {
+            await this.appendTransferBytes(transfer, bytes);
+            const request: BlobTransferCommitRequest = {
+                transferId: transfer.transferId,
+                name: input.name,
+                ...(input.contentType ? { contentType: input.contentType } : {}),
+            };
+            return await this.requestWithSession<BlobRecord>('/storage/blob/commit-transfer', {
+                method: 'POST',
+                body: request,
+            });
+        } catch (error) {
+            await this.discardTransferQuietly(transfer.transferId);
+            throw error;
+        }
+    }
+
+    private async writePrivateFileWithTransfer(
+        path: string,
+        bytes: Uint8Array,
+        options: Omit<PrivateFileWriteRequest, 'path' | 'content'>,
+    ): Promise<PrivateFileEntry> {
+        const transfer = await this.initializeTransfer('fs.private');
+        try {
+            await this.appendTransferBytes(transfer, bytes);
+            const request: PrivateFileTransferCommitRequest = {
+                transferId: transfer.transferId,
+                path,
+                ...(options.createParents === undefined ? {} : { createParents: options.createParents }),
+            };
+            const response = await this.requestWithSession<{ entry: PrivateFileEntry }>('/fs/private/write-file-transfer', {
+                method: 'POST',
+                body: request,
+            });
+            return response.entry;
+        } catch (error) {
+            await this.discardTransferQuietly(transfer.transferId);
+            throw error;
+        }
+    }
+
+    private async initializeTransfer(resource: DataTransferResource): Promise<DataTransferInitResponse> {
+        return await this.requestWithSession<DataTransferInitResponse>('/transfers/init', {
+            method: 'POST',
+            body: { resource },
+        });
+    }
+
+    private async appendTransferBytes(transfer: DataTransferInitResponse, bytes: Uint8Array): Promise<void> {
+        const chunkSize = transfer.chunkSize > 0 ? transfer.chunkSize : SDK_TRANSFER_INLINE_THRESHOLD_BYTES;
+        let offset = 0;
+        while (offset < bytes.byteLength) {
+            const chunk = bytes.subarray(offset, offset + chunkSize);
+            await this.requestWithSession(`/transfers/${encodeURIComponent(transfer.transferId)}/append`, {
+                method: 'POST',
+                body: {
+                    offset,
+                    content: bytesToBase64(chunk),
+                },
+            });
+            offset += chunk.byteLength;
+        }
+    }
+
+    private async discardTransferQuietly(transferId: string): Promise<void> {
+        try {
+            await this.requestWithSession(`/transfers/${encodeURIComponent(transferId)}/discard`, {
+                method: 'POST',
+            });
+        } catch {
+            return;
+        }
+    }
+
     private mergeGrant(grant: AuthorityGrant): void {
         this.runtimeGrants.set(grant.key, grant);
 
@@ -1082,4 +1184,33 @@ function getSqlDatabaseName(value: unknown): string {
 
 function getTriviumDatabaseName(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+
+function contentToBytes(content: string, encoding: 'utf8' | 'base64'): Uint8Array {
+    if (encoding === 'base64') {
+        return base64ToBytes(content);
+    }
+    return new TextEncoder().encode(content);
+}
+
+function base64ToBytes(content: string): Uint8Array {
+    const binary = globalThis.atob(content);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+    const segments: string[] = [];
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        const chunk = bytes.subarray(offset, offset + 0x8000);
+        let binary = '';
+        for (let index = 0; index < chunk.length; index += 1) {
+            binary += String.fromCharCode(chunk[index] ?? 0);
+        }
+        segments.push(binary);
+    }
+    return globalThis.btoa(segments.join(''));
 }

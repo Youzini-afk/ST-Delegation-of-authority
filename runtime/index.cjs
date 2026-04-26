@@ -18,9 +18,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   AUTHORITY_RELEASE_FILE: () => (/* binding */ AUTHORITY_RELEASE_FILE),
 /* harmony export */   AUTHORITY_SDK_EXTENSION_ID: () => (/* binding */ AUTHORITY_SDK_EXTENSION_ID),
 /* harmony export */   BUILTIN_JOB_TYPES: () => (/* binding */ BUILTIN_JOB_TYPES),
+/* harmony export */   DATA_TRANSFER_CHUNK_BYTES: () => (/* binding */ DATA_TRANSFER_CHUNK_BYTES),
+/* harmony export */   DATA_TRANSFER_INLINE_THRESHOLD_BYTES: () => (/* binding */ DATA_TRANSFER_INLINE_THRESHOLD_BYTES),
 /* harmony export */   DEFAULT_POLICY_STATUS: () => (/* binding */ DEFAULT_POLICY_STATUS),
 /* harmony export */   MAX_AUDIT_LINES: () => (/* binding */ MAX_AUDIT_LINES),
 /* harmony export */   MAX_BLOB_BYTES: () => (/* binding */ MAX_BLOB_BYTES),
+/* harmony export */   MAX_DATA_TRANSFER_BYTES: () => (/* binding */ MAX_DATA_TRANSFER_BYTES),
 /* harmony export */   MAX_HTTP_BODY_BYTES: () => (/* binding */ MAX_HTTP_BODY_BYTES),
 /* harmony export */   MAX_HTTP_RESPONSE_BYTES: () => (/* binding */ MAX_HTTP_RESPONSE_BYTES),
 /* harmony export */   MAX_KV_VALUE_BYTES: () => (/* binding */ MAX_KV_VALUE_BYTES),
@@ -39,10 +42,13 @@ const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
 const SESSION_HEADER = 'x-authority-session-token';
 const SESSION_QUERY = 'authoritySessionToken';
 const MAX_KV_VALUE_BYTES = 128 * 1024;
-const MAX_BLOB_BYTES = 2 * 1024 * 1024;
+const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_HTTP_BODY_BYTES = 512 * 1024;
 const MAX_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_AUDIT_LINES = 200;
+const DATA_TRANSFER_CHUNK_BYTES = 256 * 1024;
+const DATA_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
+const MAX_DATA_TRANSFER_BYTES = MAX_BLOB_BYTES;
 const SUPPORTED_RESOURCES = [
     'storage.kv',
     'storage.blob',
@@ -528,6 +534,45 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'storage.kv', error);
         }
     });
+    router.post('/transfers/init', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (payload.resource !== 'storage.blob' && payload.resource !== 'fs.private') {
+                throw new Error(`Unsupported transfer resource: ${String(payload.resource)}`);
+            }
+            if (!await runtime.permissions.authorize(user, session, { resource: payload.resource })) {
+                throw new Error(`Permission not granted: ${payload.resource}`);
+            }
+            ok(res, await runtime.transfers.init(user, session.extension.id, payload));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/transfers/:id/append', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            ok(res, await runtime.transfers.append(user, session.extension.id, String(req.params?.id ?? ''), payload));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/transfers/:id/discard', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            await runtime.transfers.discard(user, session.extension.id, String(req.params?.id ?? ''));
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
     router.post('/storage/blob/put', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
@@ -537,6 +582,24 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             }
             const record = await runtime.storage.putBlob(user, session.extension.id, String(req.body?.name ?? 'blob'), String(req.body?.content ?? ''), req.body?.encoding, req.body?.contentType);
             await runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id });
+            ok(res, record);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'storage.blob', error);
+        }
+    });
+    router.post('/storage/blob/commit-transfer', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+                throw new Error('Permission not granted: storage.blob');
+            }
+            const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'storage.blob');
+            const record = await runtime.storage.putBlobFromSource(user, session.extension.id, String(payload.name ?? 'blob'), transfer.filePath, payload.contentType);
+            await runtime.transfers.discard(user, session.extension.id, payload.transferId).catch(() => undefined);
+            await runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id, via: 'transfer' });
             ok(res, record);
         }
         catch (error) {
@@ -625,6 +688,28 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             }
             const entry = await runtime.files.writeFile(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Private file write', { path: payload.path });
+            ok(res, { entry });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+    router.post('/fs/private/write-file-transfer', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+            const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'fs.private');
+            const entry = await runtime.files.writeFileFromSource(user, session.extension.id, {
+                path: payload.path,
+                sourcePath: transfer.filePath,
+                ...(payload.createParents === undefined ? {} : { createParents: payload.createParents }),
+            });
+            await runtime.transfers.discard(user, session.extension.id, payload.transferId).catch(() => undefined);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file write', { path: payload.path, via: 'transfer' });
             ok(res, { entry });
         }
         catch (error) {
@@ -1318,7 +1403,14 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: jobType })) {
                 throw new Error(`Permission not granted: jobs.background for ${jobType}`);
             }
-            const job = await runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {});
+            const jobOptions = {};
+            if (typeof req.body?.timeoutMs === 'number')
+                jobOptions.timeoutMs = req.body.timeoutMs;
+            if (typeof req.body?.idempotencyKey === 'string')
+                jobOptions.idempotencyKey = req.body.idempotencyKey;
+            if (typeof req.body?.maxAttempts === 'number')
+                jobOptions.maxAttempts = req.body.maxAttempts;
+            const job = await runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {}, jobOptions);
             await runtime.audit.logUsage(user, session.extension.id, 'Job created', { jobId: job.id, jobType });
             ok(res, job);
         }
@@ -1489,15 +1581,17 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
 /* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
 /* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+
 
 
 
@@ -1514,19 +1608,21 @@ function createAuthorityRuntime() {
     const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__.CoreService();
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
     const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__.AuditService(core);
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_3__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_5__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_8__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_7__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_10__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_11__.StorageService(core);
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_9__.PrivateFsService(core);
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_4__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_6__.JobService(core);
+    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_3__.DataTransferService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_4__.ExtensionService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_6__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_9__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_8__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_11__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_12__.StorageService(core);
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_10__.PrivateFsService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_5__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_7__.JobService(core);
     return {
         events,
         audit,
         core,
+        transfers,
         extensions,
         install,
         policies,
@@ -2446,6 +2542,145 @@ function delay(durationMs) {
 
 /***/ },
 
+/***/ "./src/services/data-transfer-service.ts"
+/*!***********************************************!*\
+  !*** ./src/services/data-transfer-service.ts ***!
+  \***********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   DataTransferService: () => (/* binding */ DataTransferService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+
+class DataTransferService {
+    transfers = new Map();
+    async init(user, extensionId, request) {
+        const resource = normalizeTransferResource(request.resource);
+        const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const timestamp = new Date().toISOString();
+        const dirPath = this.getTransferDir(user, extensionId, resource);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(dirPath, { recursive: true });
+        const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(dirPath, `${transferId}.part`);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, Buffer.alloc(0));
+        const record = {
+            transferId,
+            userHandle: user.handle,
+            extensionId,
+            resource,
+            filePath,
+            sizeBytes: 0,
+            maxBytes: _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+        };
+        this.transfers.set(transferId, record);
+        return toInitResponse(record);
+    }
+    async append(user, extensionId, transferId, request) {
+        const record = this.get(user, extensionId, transferId);
+        if (request.offset !== record.sizeBytes) {
+            throw new Error(`Transfer offset mismatch: expected ${record.sizeBytes}, received ${request.offset}`);
+        }
+        const chunk = decodeTransferChunk(request.content);
+        const nextSize = record.sizeBytes + chunk.byteLength;
+        if (nextSize > record.maxBytes) {
+            throw new Error(`Transfer exceeds ${record.maxBytes} bytes`);
+        }
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().appendFileSync(record.filePath, chunk);
+        record.sizeBytes = nextSize;
+        record.updatedAt = new Date().toISOString();
+        return {
+            transferId: record.transferId,
+            sizeBytes: record.sizeBytes,
+            updatedAt: record.updatedAt,
+        };
+    }
+    get(user, extensionId, transferId, resource) {
+        const record = this.transfers.get(transferId);
+        if (!record || record.userHandle !== user.handle || record.extensionId !== extensionId) {
+            throw new Error('Transfer not found');
+        }
+        if (resource && record.resource !== resource) {
+            throw new Error(`Transfer resource mismatch: expected ${resource}, received ${record.resource}`);
+        }
+        return record;
+    }
+    async discard(user, extensionId, transferId) {
+        const record = this.get(user, extensionId, transferId);
+        this.transfers.delete(transferId);
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(record.filePath, { force: true });
+        }
+        finally {
+            pruneEmptyTransferDirs(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(record.filePath));
+        }
+    }
+    getTransferDir(user, extensionId, resource) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
+        const stateDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(paths.controlDbFile);
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(stateDir, 'transfers', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId), (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(resource));
+    }
+}
+function toInitResponse(record) {
+    return {
+        transferId: record.transferId,
+        resource: record.resource,
+        chunkSize: _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES,
+        maxBytes: record.maxBytes,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        sizeBytes: record.sizeBytes,
+    };
+}
+function normalizeTransferResource(resource) {
+    if (resource === 'storage.blob' || resource === 'fs.private') {
+        return resource;
+    }
+    throw new Error(`Unsupported transfer resource: ${String(resource)}`);
+}
+function decodeTransferChunk(content) {
+    try {
+        return Buffer.from(content, 'base64');
+    }
+    catch {
+        throw new Error('Invalid transfer chunk encoding');
+    }
+}
+function pruneEmptyTransferDirs(dirPath) {
+    let current = dirPath;
+    for (let index = 0; index < 3; index += 1) {
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmdirSync(current);
+        }
+        catch {
+            return;
+        }
+        const parent = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(current);
+        if (parent === current) {
+            return;
+        }
+        current = parent;
+    }
+}
+
+
+/***/ },
+
 /***/ "./src/services/extension-service.ts"
 /*!*******************************************!*\
   !*** ./src/services/extension-service.ts ***!
@@ -3036,17 +3271,24 @@ class JobService {
             jobId,
         });
     }
-    async create(user, extensionId, type, payload) {
+    async create(user, extensionId, type, payload, options = {}) {
         if (!_constants_js__WEBPACK_IMPORTED_MODULE_0__.BUILTIN_JOB_TYPES.includes(type)) {
             throw new Error(`Unsupported job type: ${type}`);
         }
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
-        return await this.core.createControlJob(paths.controlDbFile, {
+        const request = {
             userHandle: user.handle,
             extensionId,
             type,
             payload,
-        });
+        };
+        if (typeof options.timeoutMs === 'number')
+            request.timeoutMs = options.timeoutMs;
+        if (typeof options.idempotencyKey === 'string')
+            request.idempotencyKey = options.idempotencyKey;
+        if (typeof options.maxAttempts === 'number')
+            request.maxAttempts = options.maxAttempts;
+        return await this.core.createControlJob(paths.controlDbFile, request);
     }
     async cancel(user, extensionId, jobId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
@@ -3323,6 +3565,15 @@ class PrivateFsService {
             ...request,
         });
     }
+    async writeFileFromSource(user, extensionId, request) {
+        return await this.core.writePrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            path: request.path,
+            content: '',
+            sourcePath: request.sourcePath,
+            ...(request.createParents === undefined ? {} : { createParents: request.createParents }),
+        });
+    }
     async readFile(user, extensionId, request) {
         return await this.core.readPrivateFile({
             rootDir: this.getRootDir(user, extensionId),
@@ -3556,6 +3807,18 @@ class StorageService {
             content,
             encoding,
             contentType,
+        });
+    }
+    async putBlobFromSource(user, extensionId, name, sourcePath, contentType = 'application/octet-stream') {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.putStorageBlob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
+            name,
+            content: '',
+            contentType,
+            sourcePath,
         });
     }
     async getBlob(user, extensionId, blobId) {

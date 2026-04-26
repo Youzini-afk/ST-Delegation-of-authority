@@ -1,6 +1,7 @@
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt } from './permission-prompt.js';
 import { openSecurityCenter } from './security-center.js';
+const SDK_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
 export class AuthorityClient {
     config;
     storage;
@@ -50,6 +51,10 @@ export class AuthorityClient {
             blob: {
                 put: async (input) => {
                     await this.ensurePermission({ resource: 'storage.blob', reason: `写入 Blob ${input.name}` });
+                    const bytes = contentToBytes(input.content, input.encoding ?? 'utf8');
+                    if (bytes.byteLength > SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                        return await this.putBlobWithTransfer(input, bytes);
+                    }
                     return await this.requestWithSession('/storage/blob/put', {
                         method: 'POST',
                         body: input,
@@ -103,6 +108,10 @@ export class AuthorityClient {
             },
             writeFile: async (path, content, options = {}) => {
                 await this.ensurePermission({ resource: 'fs.private', reason: `写入私有文件 ${path}` });
+                const bytes = contentToBytes(content, options.encoding ?? 'utf8');
+                if (bytes.byteLength > SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                    return await this.writePrivateFileWithTransfer(path, bytes, options);
+                }
                 const response = await this.requestWithSession('/fs/private/write-file', {
                     method: 'POST',
                     body: {
@@ -542,7 +551,7 @@ export class AuthorityClient {
             },
         };
         this.jobs = {
-            create: async (type, payload = {}) => {
+            create: async (type, payload = {}, options) => {
                 await this.ensurePermission({
                     resource: 'jobs.background',
                     target: type,
@@ -550,7 +559,13 @@ export class AuthorityClient {
                 });
                 return await this.requestWithSession('/jobs/create', {
                     method: 'POST',
-                    body: { type, payload },
+                    body: {
+                        type,
+                        payload,
+                        ...(options?.timeoutMs != null ? { timeoutMs: options.timeoutMs } : {}),
+                        ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+                        ...(options?.maxAttempts != null ? { maxAttempts: options.maxAttempts } : {}),
+                    },
                 });
             },
             get: async (id) => {
@@ -748,6 +763,76 @@ export class AuthorityClient {
             throw error;
         }
     }
+    async putBlobWithTransfer(input, bytes) {
+        const transfer = await this.initializeTransfer('storage.blob');
+        try {
+            await this.appendTransferBytes(transfer, bytes);
+            const request = {
+                transferId: transfer.transferId,
+                name: input.name,
+                ...(input.contentType ? { contentType: input.contentType } : {}),
+            };
+            return await this.requestWithSession('/storage/blob/commit-transfer', {
+                method: 'POST',
+                body: request,
+            });
+        }
+        catch (error) {
+            await this.discardTransferQuietly(transfer.transferId);
+            throw error;
+        }
+    }
+    async writePrivateFileWithTransfer(path, bytes, options) {
+        const transfer = await this.initializeTransfer('fs.private');
+        try {
+            await this.appendTransferBytes(transfer, bytes);
+            const request = {
+                transferId: transfer.transferId,
+                path,
+                ...(options.createParents === undefined ? {} : { createParents: options.createParents }),
+            };
+            const response = await this.requestWithSession('/fs/private/write-file-transfer', {
+                method: 'POST',
+                body: request,
+            });
+            return response.entry;
+        }
+        catch (error) {
+            await this.discardTransferQuietly(transfer.transferId);
+            throw error;
+        }
+    }
+    async initializeTransfer(resource) {
+        return await this.requestWithSession('/transfers/init', {
+            method: 'POST',
+            body: { resource },
+        });
+    }
+    async appendTransferBytes(transfer, bytes) {
+        const chunkSize = transfer.chunkSize > 0 ? transfer.chunkSize : SDK_TRANSFER_INLINE_THRESHOLD_BYTES;
+        let offset = 0;
+        while (offset < bytes.byteLength) {
+            const chunk = bytes.subarray(offset, offset + chunkSize);
+            await this.requestWithSession(`/transfers/${encodeURIComponent(transfer.transferId)}/append`, {
+                method: 'POST',
+                body: {
+                    offset,
+                    content: bytesToBase64(chunk),
+                },
+            });
+            offset += chunk.byteLength;
+        }
+    }
+    async discardTransferQuietly(transferId) {
+        try {
+            await this.requestWithSession(`/transfers/${encodeURIComponent(transferId)}/discard`, {
+                method: 'POST',
+            });
+        }
+        catch {
+            return;
+        }
+    }
     mergeGrant(grant) {
         this.runtimeGrants.set(grant.key, grant);
         if (!this.session) {
@@ -852,5 +937,31 @@ function getSqlDatabaseName(value) {
 }
 function getTriviumDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+function contentToBytes(content, encoding) {
+    if (encoding === 'base64') {
+        return base64ToBytes(content);
+    }
+    return new TextEncoder().encode(content);
+}
+function base64ToBytes(content) {
+    const binary = globalThis.atob(content);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+}
+function bytesToBase64(bytes) {
+    const segments = [];
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        const chunk = bytes.subarray(offset, offset + 0x8000);
+        let binary = '';
+        for (let index = 0; index < chunk.length; index += 1) {
+            binary += String.fromCharCode(chunk[index] ?? 0);
+        }
+        segments.push(binary);
+    }
+    return globalThis.btoa(segments.join(''));
 }
 //# sourceMappingURL=client.js.map

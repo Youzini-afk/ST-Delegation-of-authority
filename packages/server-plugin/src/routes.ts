@@ -3,9 +3,13 @@ import path from 'node:path';
 import type {
     AuthorityInitConfig,
     BlobRecord,
+    BlobTransferCommitRequest,
+    DataTransferAppendRequest,
+    DataTransferInitRequest,
     PermissionEvaluateRequest,
     PermissionResolveRequest,
     PrivateFileDeleteRequest,
+    PrivateFileTransferCommitRequest,
     PrivateFileMkdirRequest,
     PrivateFileReadDirRequest,
     PrivateFileReadRequest,
@@ -456,6 +460,46 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
+    router.post('/transfers/init', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as DataTransferInitRequest;
+            if (payload.resource !== 'storage.blob' && payload.resource !== 'fs.private') {
+                throw new Error(`Unsupported transfer resource: ${String(payload.resource)}`);
+            }
+            if (!await runtime.permissions.authorize(user, session, { resource: payload.resource })) {
+                throw new Error(`Permission not granted: ${payload.resource}`);
+            }
+
+            ok(res, await runtime.transfers.init(user, session.extension.id, payload));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/transfers/:id/append', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as DataTransferAppendRequest;
+            ok(res, await runtime.transfers.append(user, session.extension.id, String(req.params?.id ?? ''), payload));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/transfers/:id/discard', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            await runtime.transfers.discard(user, session.extension.id, String(req.params?.id ?? ''));
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
     router.post('/storage/blob/put', async (req, res) => {
         try {
             const user = getUserContext(req);
@@ -473,6 +517,31 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 req.body?.contentType,
             );
             await runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id });
+            ok(res, record);
+        } catch (error) {
+            fail(runtime, req, res, 'storage.blob', error);
+        }
+    });
+
+    router.post('/storage/blob/commit-transfer', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as BlobTransferCommitRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
+                throw new Error('Permission not granted: storage.blob');
+            }
+
+            const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'storage.blob');
+            const record = await runtime.storage.putBlobFromSource(
+                user,
+                session.extension.id,
+                String(payload.name ?? 'blob'),
+                transfer.filePath,
+                payload.contentType,
+            );
+            await runtime.transfers.discard(user, session.extension.id, payload.transferId).catch(() => undefined);
+            await runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id, via: 'transfer' });
             ok(res, record);
         } catch (error) {
             fail(runtime, req, res, 'storage.blob', error);
@@ -567,6 +636,29 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
             const entry = await runtime.files.writeFile(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Private file write', { path: payload.path });
+            ok(res, { entry });
+        } catch (error) {
+            fail(runtime, req, res, 'fs.private', error);
+        }
+    });
+
+    router.post('/fs/private/write-file-transfer', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PrivateFileTransferCommitRequest;
+            if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
+                throw new Error('Permission not granted: fs.private');
+            }
+
+            const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'fs.private');
+            const entry = await runtime.files.writeFileFromSource(user, session.extension.id, {
+                path: payload.path,
+                sourcePath: transfer.filePath,
+                ...(payload.createParents === undefined ? {} : { createParents: payload.createParents }),
+            });
+            await runtime.transfers.discard(user, session.extension.id, payload.transferId).catch(() => undefined);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file write', { path: payload.path, via: 'transfer' });
             ok(res, { entry });
         } catch (error) {
             fail(runtime, req, res, 'fs.private', error);
@@ -1291,7 +1383,11 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: jobs.background for ${jobType}`);
             }
 
-            const job = await runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {});
+            const jobOptions: Record<string, unknown> = {};
+            if (typeof req.body?.timeoutMs === 'number') jobOptions.timeoutMs = req.body.timeoutMs;
+            if (typeof req.body?.idempotencyKey === 'string') jobOptions.idempotencyKey = req.body.idempotencyKey;
+            if (typeof req.body?.maxAttempts === 'number') jobOptions.maxAttempts = req.body.maxAttempts;
+            const job = await runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {}, jobOptions);
             await runtime.audit.logUsage(user, session.extension.id, 'Job created', { jobId: job.id, jobType });
             ok(res, job);
         } catch (error) {

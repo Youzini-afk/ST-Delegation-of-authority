@@ -48,6 +48,19 @@ export class StorageService {
         });
     }
 
+    async putBlobFromSource(user: UserContext, extensionId: string, name: string, sourcePath: string, contentType = 'application/octet-stream'): Promise<BlobRecord> {
+        const paths = getUserAuthorityPaths(user);
+        return await this.core.putStorageBlob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            blobDir: paths.blobDir,
+            name,
+            content: '',
+            contentType,
+            sourcePath,
+        });
+    }
+
     async getBlob(user: UserContext, extensionId: string, blobId: string): Promise<BlobGetResponse> {
         const paths = getUserAuthorityPaths(user);
         return await this.core.getStorageBlob(paths.controlDbFile, {

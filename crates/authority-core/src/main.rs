@@ -1,3 +1,11 @@
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Json;
+use axum::extract::Request;
+use axum::Router;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use half::f16;
@@ -6,40 +14,54 @@ use rusqlite::types::{Value as SqliteValue, ValueRef};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
+use tower_http::timeout::TimeoutLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use triviumdb::database::{Config as TriviumConfig, Database as TriviumDatabase, SearchConfig as TriviumSearchConfig, StorageMode as TriviumStorageMode};
 use triviumdb::filter::Filter as TriviumFilter;
 use triviumdb::node::{NodeView as TriviumRawNodeView, SearchHit as TriviumRawSearchHit};
 use triviumdb::storage::wal::SyncMode as TriviumSyncMode;
 use url::Url;
 
-const HEADER_END: &[u8] = b"\r\n\r\n";
 const MAX_REQUEST_SIZE: usize = 1024 * 1024;
+const MAX_CONCURRENCY: usize = 64;
+const REQUEST_TIMEOUT_SECS: u64 = 30;
 const MAX_KV_VALUE_BYTES: usize = 128 * 1024;
-const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024;
+const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 512 * 1024;
 const MAX_HTTP_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EVENT_POLL_LIMIT: usize = 200;
 const MAX_PRIVATE_READ_DIR_LIMIT: usize = 200;
 const JOB_PROGRESS_INTERVAL_MS: u64 = 250;
+const JOB_WORKER_CONCURRENCY: usize = 4;
+const MAX_JOB_QUEUE_SIZE: usize = 256;
+const MAX_JOB_ATTEMPTS: i64 = 5;
+const MAX_JOB_TIMEOUT_MS: i64 = 5 * 60 * 1000;
+const JOB_RETRY_BACKOFF_BASE_MS: u64 = 250;
+const JOB_RETRY_BACKOFF_MAX_MS: u64 = 5_000;
 
 struct RuntimeState {
     job_controls: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    job_queue: JobQueue,
+    queued_job_count: AtomicU64,
     request_count: AtomicU64,
     error_count: AtomicU64,
+    current_concurrency: AtomicU64,
+    concurrency_semaphore: Semaphore,
 }
 
 struct Config {
@@ -50,17 +72,34 @@ struct Config {
     runtime: Arc<RuntimeState>,
 }
 
-struct HttpRequest {
-    method: String,
-    path: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+#[derive(Clone)]
+struct JobDispatch {
+    db_path: String,
+    user_handle: String,
+    job: ControlJobRecord,
+}
+
+struct JobQueueState {
+    items: VecDeque<JobDispatch>,
+}
+
+struct JobQueue {
+    state: Mutex<JobQueueState>,
+    available: Condvar,
 }
 
 #[derive(Debug)]
 struct ApiError {
     status_code: u16,
     message: String,
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let body = json!({ "error": self.message });
+        (status, Json(body)).into_response()
+    }
 }
 
 #[derive(Deserialize)]
@@ -607,6 +646,12 @@ struct ControlJobCreateRequest {
     #[serde(rename = "type")]
     job_type: String,
     payload: Option<JsonValue>,
+    #[serde(default)]
+    timeout_ms: Option<i64>,
+    #[serde(default)]
+    idempotency_key: Option<String>,
+    #[serde(default)]
+    max_attempts: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -657,6 +702,7 @@ struct StorageBlobPutRequest {
     content: String,
     encoding: Option<String>,
     content_type: Option<String>,
+    source_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -758,6 +804,24 @@ struct ControlJobRecord {
     payload: Option<JsonValue>,
     result: Option<JsonValue>,
     channel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    attempt: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_attempts: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cancel_requested_at: Option<String>,
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 #[derive(Serialize)]
@@ -873,6 +937,7 @@ struct PrivateFileWriteRequest {
     content: String,
     encoding: Option<String>,
     create_parents: Option<bool>,
+    source_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -928,7 +993,8 @@ struct PrivateFileReadResponse {
     encoding: String,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let host = env::var("AUTHORITY_CORE_HOST").unwrap_or_else(|_| String::from("127.0.0.1"));
     let port = env::var("AUTHORITY_CORE_PORT")
         .ok()
@@ -941,145 +1007,397 @@ fn main() -> Result<(), Box<dyn Error>> {
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .to_string();
-    let runtime = Arc::new(RuntimeState {
-        job_controls: Mutex::new(HashMap::new()),
-        request_count: AtomicU64::new(0),
-        error_count: AtomicU64::new(0),
-    });
-    let config = Config {
+    let runtime = create_runtime_state();
+    let config = Arc::new(Config {
         token,
         version,
         api_version,
         started_at,
         runtime,
-    };
+    });
 
-    let listener = TcpListener::bind(format!("{host}:{port}"))?;
+    let v1_routes = Router::new()
+        .route("/storage/kv/get", post(v1_storage_kv_get))
+        .route("/storage/kv/set", post(v1_storage_kv_set))
+        .route("/storage/kv/delete", post(v1_storage_kv_delete))
+        .route("/storage/kv/list", post(v1_storage_kv_list))
+        .route("/storage/blob/put", post(v1_storage_blob_put))
+        .route("/storage/blob/get", post(v1_storage_blob_get))
+        .route("/storage/blob/delete", post(v1_storage_blob_delete))
+        .route("/storage/blob/list", post(v1_storage_blob_list))
+        .route("/fs/private/mkdir", post(v1_private_mkdir))
+        .route("/fs/private/read-dir", post(v1_private_read_dir))
+        .route("/fs/private/write-file", post(v1_private_write))
+        .route("/fs/private/read-file", post(v1_private_read))
+        .route("/fs/private/delete", post(v1_private_delete))
+        .route("/fs/private/stat", post(v1_private_stat))
+        .route("/http/fetch", post(v1_http_fetch))
+        .route("/sql/query", post(v1_sql_query))
+        .route("/sql/exec", post(v1_sql_exec))
+        .route("/sql/batch", post(v1_sql_batch))
+        .route("/sql/transaction", post(v1_sql_transaction))
+        .route("/sql/migrate", post(v1_sql_migrate))
+        .route("/trivium/insert", post(v1_trivium_insert))
+        .route("/trivium/insert-with-id", post(v1_trivium_insert_with_id))
+        .route("/trivium/get", post(v1_trivium_get))
+        .route("/trivium/update-payload", post(v1_trivium_update_payload))
+        .route("/trivium/update-vector", post(v1_trivium_update_vector))
+        .route("/trivium/delete", post(v1_trivium_delete))
+        .route("/trivium/link", post(v1_trivium_link))
+        .route("/trivium/unlink", post(v1_trivium_unlink))
+        .route("/trivium/neighbors", post(v1_trivium_neighbors))
+        .route("/trivium/search", post(v1_trivium_search))
+        .route("/trivium/search-advanced", post(v1_trivium_search_advanced))
+        .route("/trivium/search-hybrid", post(v1_trivium_search_hybrid))
+        .route("/trivium/filter-where", post(v1_trivium_filter_where))
+        .route("/trivium/query", post(v1_trivium_query))
+        .route("/trivium/index-text", post(v1_trivium_index_text))
+        .route("/trivium/index-keyword", post(v1_trivium_index_keyword))
+        .route("/trivium/build-text-index", post(v1_trivium_build_text_index))
+        .route("/trivium/flush", post(v1_trivium_flush))
+        .route("/trivium/stat", post(v1_trivium_stat))
+        .route("/control/session/init", post(v1_control_session_init))
+        .route("/control/session/get", post(v1_control_session_get))
+        .route("/control/extensions/list", post(v1_control_extensions_list))
+        .route("/control/extensions/get", post(v1_control_extension_get))
+        .route("/control/audit/log", post(v1_control_audit_log))
+        .route("/control/audit/recent", post(v1_control_audit_recent))
+        .route("/control/grants/list", post(v1_control_grants_list))
+        .route("/control/grants/get", post(v1_control_grant_get))
+        .route("/control/grants/upsert", post(v1_control_grant_upsert))
+        .route("/control/grants/reset", post(v1_control_grants_reset))
+        .route("/control/policies/get", post(v1_control_policies_get))
+        .route("/control/policies/save", post(v1_control_policies_save))
+        .route("/control/jobs/list", post(v1_control_jobs_list))
+        .route("/control/jobs/get", post(v1_control_job_get))
+        .route("/control/jobs/create", post(v1_control_job_create))
+        .route("/control/jobs/cancel", post(v1_control_job_cancel))
+        .route("/control/jobs/upsert", post(v1_control_job_upsert))
+        .route("/control/events/poll", post(v1_control_events_poll))
+        .layer(TimeoutLayer::new(Duration::from_secs(REQUEST_TIMEOUT_SECS)))
+        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_SIZE))
+        .layer(middleware::from_fn_with_state(config.clone(), concurrency_guard))
+        .layer(middleware::from_fn_with_state(config.clone(), auth_middleware));
+
+    let app = Router::new()
+        .route("/health", get(health_handler))
+        .nest("/v1", v1_routes)
+        .with_state(config);
+
+    let listener = TcpListener::bind(format!("{host}:{port}")).await?;
     println!("AUTHORITY_CORE_READY {}", listener.local_addr()?);
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                if let Err(error) = handle_connection(&mut stream, &config) {
-                    eprintln!("authority-core connection error: {error}");
-                }
-            }
-            Err(error) => {
-                eprintln!("authority-core accept error: {error}");
-            }
-        }
-    }
-
+    axum::serve(listener, app).await?;
     Ok(())
 }
 
-fn handle_connection(stream: &mut TcpStream, config: &Config) -> std::io::Result<()> {
-    let request = match read_http_request(stream) {
-        Ok(Some(request)) => request,
-        Ok(None) => return Ok(()),
+type JobRunner = fn(&str, &str, &ControlJobRecord, Arc<AtomicBool>, Option<u64>, i64) -> Result<(), ApiError>;
+
+fn create_runtime_state() -> Arc<RuntimeState> {
+    let runtime = Arc::new(RuntimeState {
+        job_controls: Mutex::new(HashMap::new()),
+        job_queue: JobQueue {
+            state: Mutex::new(JobQueueState {
+                items: VecDeque::new(),
+            }),
+            available: Condvar::new(),
+        },
+        queued_job_count: AtomicU64::new(0),
+        request_count: AtomicU64::new(0),
+        error_count: AtomicU64::new(0),
+        current_concurrency: AtomicU64::new(0),
+        concurrency_semaphore: Semaphore::new(MAX_CONCURRENCY),
+    });
+    spawn_job_workers(&runtime);
+    runtime
+}
+
+fn spawn_job_workers(runtime: &Arc<RuntimeState>) {
+    for worker_index in 0..JOB_WORKER_CONCURRENCY {
+        let runtime = Arc::clone(runtime);
+        thread::Builder::new()
+            .name(format!("authority-job-worker-{worker_index}"))
+            .spawn(move || job_worker_loop(runtime))
+            .expect("authority-core job worker should start");
+    }
+}
+
+fn job_worker_loop(runtime: Arc<RuntimeState>) {
+    loop {
+        let dispatch = dequeue_job_dispatch(&runtime);
+        process_job_dispatch(dispatch, &runtime);
+    }
+}
+
+fn enqueue_job_dispatch(runtime: &Arc<RuntimeState>, dispatch: JobDispatch) -> Result<(), ApiError> {
+    let mut state = runtime.job_queue.state.lock().map_err(|_| ApiError {
+        status_code: 500,
+        message: String::from("internal_error: job queue lock poisoned"),
+    })?;
+    if state.items.len() >= MAX_JOB_QUEUE_SIZE {
+        return Err(ApiError {
+            status_code: 503,
+            message: String::from("job_queue_full"),
+        });
+    }
+    state.items.push_back(dispatch);
+    runtime.queued_job_count.fetch_add(1, Ordering::SeqCst);
+    drop(state);
+    runtime.job_queue.available.notify_one();
+    Ok(())
+}
+
+fn dequeue_job_dispatch(runtime: &Arc<RuntimeState>) -> JobDispatch {
+    let mut state = runtime
+        .job_queue
+        .state
+        .lock()
+        .expect("authority-core job queue lock should not be poisoned");
+    loop {
+        if let Some(dispatch) = state.items.pop_front() {
+            runtime.queued_job_count.fetch_sub(1, Ordering::SeqCst);
+            return dispatch;
+        }
+        state = runtime
+            .job_queue
+            .available
+            .wait(state)
+            .expect("authority-core job queue condvar should not be poisoned");
+    }
+}
+
+fn process_job_dispatch(dispatch: JobDispatch, runtime: &Arc<RuntimeState>) {
+    let current = match fetch_job_for_dispatch(&dispatch) {
+        Ok(job) => job,
         Err(error) => {
-            let body = json!({ "error": format!("invalid_http_request: {error}") }).to_string();
-            return write_json(stream, 400, &body);
+            let _ = mark_job_failed(&dispatch.db_path, &dispatch.user_handle, &dispatch.job, &error.message);
+            return;
         }
     };
-    config.runtime.request_count.fetch_add(1, Ordering::SeqCst);
-
-    if !is_authorized(&request.headers, &config.token) {
-        config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
-        return write_json(stream, 401, r#"{"error":"unauthorized"}"#);
+    if matches!(current.status.as_str(), "cancelled" | "completed") {
+        return;
     }
 
-    let response = match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/health") => Ok(json!({
-            "name": "authority-core",
-            "apiVersion": config.api_version,
-            "version": config.version,
-            "pid": process::id(),
-            "startedAt": config.started_at,
-            "uptimeMs": runtime_uptime_ms(&config.started_at),
-            "requestCount": config.runtime.request_count.load(Ordering::SeqCst),
-            "errorCount": config.runtime.error_count.load(Ordering::SeqCst),
-            "activeJobCount": active_job_count(&config.runtime),
-            "limits": {
-                "maxRequestBytes": MAX_REQUEST_SIZE,
-                "maxKvValueBytes": MAX_KV_VALUE_BYTES,
-                "maxBlobBytes": MAX_BLOB_BYTES,
-                "maxHttpBodyBytes": MAX_HTTP_BODY_BYTES,
-                "maxHttpResponseBytes": MAX_HTTP_RESPONSE_BYTES,
-                "maxEventPollLimit": MAX_EVENT_POLL_LIMIT,
-            },
-        })),
-        ("POST", "/v1/storage/kv/get") => parse_json_body::<StorageKvGetRequest>(&request).and_then(handle_storage_kv_get),
-        ("POST", "/v1/storage/kv/set") => parse_json_body::<StorageKvSetRequest>(&request).and_then(handle_storage_kv_set),
-        ("POST", "/v1/storage/kv/delete") => parse_json_body::<StorageKvDeleteRequest>(&request).and_then(handle_storage_kv_delete),
-        ("POST", "/v1/storage/kv/list") => parse_json_body::<StorageKvListRequest>(&request).and_then(handle_storage_kv_list),
-        ("POST", "/v1/storage/blob/put") => parse_json_body::<StorageBlobPutRequest>(&request).and_then(handle_storage_blob_put),
-        ("POST", "/v1/storage/blob/get") => parse_json_body::<StorageBlobGetRequest>(&request).and_then(handle_storage_blob_get),
-        ("POST", "/v1/storage/blob/delete") => parse_json_body::<StorageBlobDeleteRequest>(&request).and_then(handle_storage_blob_delete),
-        ("POST", "/v1/storage/blob/list") => parse_json_body::<StorageBlobListRequest>(&request).and_then(handle_storage_blob_list),
-        ("POST", "/v1/fs/private/mkdir") => parse_json_body::<PrivateFileMkdirRequest>(&request).and_then(handle_private_file_mkdir),
-        ("POST", "/v1/fs/private/read-dir") => parse_json_body::<PrivateFileReadDirRequest>(&request).and_then(handle_private_file_read_dir),
-        ("POST", "/v1/fs/private/write-file") => parse_json_body::<PrivateFileWriteRequest>(&request).and_then(handle_private_file_write),
-        ("POST", "/v1/fs/private/read-file") => parse_json_body::<PrivateFileReadRequest>(&request).and_then(handle_private_file_read),
-        ("POST", "/v1/fs/private/delete") => parse_json_body::<PrivateFileDeleteRequest>(&request).and_then(handle_private_file_delete),
-        ("POST", "/v1/fs/private/stat") => parse_json_body::<PrivateFileStatRequest>(&request).and_then(handle_private_file_stat),
-        ("POST", "/v1/http/fetch") => parse_json_body::<CoreHttpFetchRequest>(&request).and_then(handle_http_fetch),
-        ("POST", "/v1/sql/query") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_query),
-        ("POST", "/v1/sql/exec") => parse_json_body::<SqlRequest>(&request).and_then(handle_sql_exec),
-        ("POST", "/v1/sql/batch") => parse_json_body::<SqlBatchRequest>(&request).and_then(handle_sql_batch),
-        ("POST", "/v1/sql/transaction") => parse_json_body::<SqlBatchRequest>(&request).and_then(handle_sql_transaction),
-        ("POST", "/v1/sql/migrate") => parse_json_body::<SqlMigrateRequest>(&request).and_then(handle_sql_migrate),
-        ("POST", "/v1/trivium/insert") => parse_json_body::<TriviumInsertRequest>(&request).and_then(handle_trivium_insert),
-        ("POST", "/v1/trivium/insert-with-id") => parse_json_body::<TriviumInsertWithIdRequest>(&request).and_then(handle_trivium_insert_with_id),
-        ("POST", "/v1/trivium/get") => parse_json_body::<TriviumGetRequest>(&request).and_then(handle_trivium_get),
-        ("POST", "/v1/trivium/update-payload") => parse_json_body::<TriviumUpdatePayloadRequest>(&request).and_then(handle_trivium_update_payload),
-        ("POST", "/v1/trivium/update-vector") => parse_json_body::<TriviumUpdateVectorRequest>(&request).and_then(handle_trivium_update_vector),
-        ("POST", "/v1/trivium/delete") => parse_json_body::<TriviumDeleteRequest>(&request).and_then(handle_trivium_delete),
-        ("POST", "/v1/trivium/link") => parse_json_body::<TriviumLinkRequest>(&request).and_then(handle_trivium_link),
-        ("POST", "/v1/trivium/unlink") => parse_json_body::<TriviumUnlinkRequest>(&request).and_then(handle_trivium_unlink),
-        ("POST", "/v1/trivium/neighbors") => parse_json_body::<TriviumNeighborsRequest>(&request).and_then(handle_trivium_neighbors),
-        ("POST", "/v1/trivium/search") => parse_json_body::<TriviumSearchRequest>(&request).and_then(handle_trivium_search),
-        ("POST", "/v1/trivium/search-advanced") => parse_json_body::<TriviumSearchAdvancedRequest>(&request).and_then(handle_trivium_search_advanced),
-        ("POST", "/v1/trivium/search-hybrid") => parse_json_body::<TriviumSearchHybridRequest>(&request).and_then(handle_trivium_search_hybrid),
-        ("POST", "/v1/trivium/filter-where") => parse_json_body::<TriviumFilterWhereRequest>(&request).and_then(handle_trivium_filter_where),
-        ("POST", "/v1/trivium/query") => parse_json_body::<TriviumQueryRequest>(&request).and_then(handle_trivium_query),
-        ("POST", "/v1/trivium/index-text") => parse_json_body::<TriviumIndexTextRequest>(&request).and_then(handle_trivium_index_text),
-        ("POST", "/v1/trivium/index-keyword") => parse_json_body::<TriviumIndexKeywordRequest>(&request).and_then(handle_trivium_index_keyword),
-        ("POST", "/v1/trivium/build-text-index") => parse_json_body::<TriviumBuildTextIndexRequest>(&request).and_then(handle_trivium_build_text_index),
-        ("POST", "/v1/trivium/flush") => parse_json_body::<TriviumFlushRequest>(&request).and_then(handle_trivium_flush),
-        ("POST", "/v1/trivium/stat") => parse_json_body::<TriviumStatRequest>(&request).and_then(handle_trivium_stat),
-        ("POST", "/v1/control/session/init") => parse_json_body::<ControlSessionInitRequest>(&request).and_then(handle_control_session_init),
-        ("POST", "/v1/control/session/get") => parse_json_body::<ControlSessionGetRequest>(&request).and_then(handle_control_session_get),
-        ("POST", "/v1/control/extensions/list") => parse_json_body::<ControlExtensionsListRequest>(&request).and_then(handle_control_extensions_list),
-        ("POST", "/v1/control/extensions/get") => parse_json_body::<ControlExtensionGetRequest>(&request).and_then(handle_control_extension_get),
-        ("POST", "/v1/control/audit/log") => parse_json_body::<ControlAuditLogRequest>(&request).and_then(handle_control_audit_log),
-        ("POST", "/v1/control/audit/recent") => parse_json_body::<ControlAuditRecentRequest>(&request).and_then(handle_control_audit_recent),
-        ("POST", "/v1/control/grants/list") => parse_json_body::<ControlGrantListRequest>(&request).and_then(handle_control_grants_list),
-        ("POST", "/v1/control/grants/get") => parse_json_body::<ControlGrantGetRequest>(&request).and_then(handle_control_grant_get),
-        ("POST", "/v1/control/grants/upsert") => parse_json_body::<ControlGrantUpsertRequest>(&request).and_then(handle_control_grant_upsert),
-        ("POST", "/v1/control/grants/reset") => parse_json_body::<ControlGrantResetRequest>(&request).and_then(handle_control_grants_reset),
-        ("POST", "/v1/control/policies/get") => parse_json_body::<ControlPoliciesRequest>(&request).and_then(handle_control_policies_get),
-        ("POST", "/v1/control/policies/save") => parse_json_body::<ControlPoliciesSaveRequest>(&request).and_then(handle_control_policies_save),
-        ("POST", "/v1/control/jobs/list") => parse_json_body::<ControlJobsListRequest>(&request).and_then(handle_control_jobs_list),
-        ("POST", "/v1/control/jobs/get") => parse_json_body::<ControlJobGetRequest>(&request).and_then(handle_control_job_get),
-        ("POST", "/v1/control/jobs/create") => parse_json_body::<ControlJobCreateRequest>(&request).and_then(|body| handle_control_job_create(body, &config.runtime)),
-        ("POST", "/v1/control/jobs/cancel") => parse_json_body::<ControlJobCancelRequest>(&request).and_then(|body| handle_control_job_cancel(body, &config.runtime)),
-        ("POST", "/v1/control/jobs/upsert") => parse_json_body::<ControlJobUpsertRequest>(&request).and_then(handle_control_job_upsert),
-        ("POST", "/v1/control/events/poll") => parse_json_body::<ControlEventsPollRequest>(&request).and_then(handle_control_events_poll),
-        _ => Err(ApiError {
-            status_code: 404,
-            message: String::from("not_found"),
-        }),
-    };
+    let control = Arc::new(AtomicBool::new(false));
+    let key = job_control_key(&dispatch.user_handle, &dispatch.job.id);
+    if let Ok(mut controls) = runtime.job_controls.lock() {
+        controls.insert(key.clone(), Arc::clone(&control));
+    }
 
-    match response {
-        Ok(body) => write_json(stream, 200, &body.to_string()),
-        Err(error) => {
+    let run_result = run_job_dispatch(&dispatch, Arc::clone(&control));
+    if let Err(error) = run_result {
+        let _ = mark_job_failed(&dispatch.db_path, &dispatch.user_handle, &dispatch.job, &error.message);
+    }
+
+    if let Ok(mut controls) = runtime.job_controls.lock() {
+        controls.remove(&key);
+    }
+}
+
+fn run_job_dispatch(dispatch: &JobDispatch, control: Arc<AtomicBool>) -> Result<(), ApiError> {
+    let runner = resolve_job_runner(&dispatch.job.job_type).ok_or_else(|| ApiError {
+        status_code: 400,
+        message: format!("unsupported_job_type: {}", dispatch.job.job_type),
+    })?;
+    let timeout_ms = normalize_job_timeout_ms(dispatch.job.timeout_ms)?;
+    let max_attempts = normalize_job_max_attempts(dispatch.job.max_attempts);
+
+    loop {
+        let current = fetch_job_for_dispatch(dispatch)?;
+        if matches!(current.status.as_str(), "cancelled" | "completed") || control.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        let attempt = current.attempt.saturating_add(1).max(1);
+        match runner(
+            &dispatch.db_path,
+            &dispatch.user_handle,
+            &current,
+            Arc::clone(&control),
+            timeout_ms,
+            attempt,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let latest = fetch_job_for_dispatch(dispatch).unwrap_or_else(|_| current.clone());
+                if latest.status == "cancelled" || control.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                if attempt < max_attempts {
+                    let backoff_ms = job_retry_backoff_ms(attempt);
+                    mark_job_retry_scheduled(
+                        &dispatch.db_path,
+                        &dispatch.user_handle,
+                        &latest,
+                        &error.message,
+                        backoff_ms,
+                        attempt,
+                    )?;
+                    thread::sleep(Duration::from_millis(backoff_ms));
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+}
+
+fn fetch_job_for_dispatch(dispatch: &JobDispatch) -> Result<ControlJobRecord, ApiError> {
+    let connection = open_connection(&dispatch.db_path)?;
+    ensure_control_schema(&connection)?;
+    Ok(fetch_control_job(&connection, &dispatch.user_handle, &dispatch.job.id)?
+        .unwrap_or_else(|| dispatch.job.clone()))
+}
+
+fn resolve_job_runner(job_type: &str) -> Option<JobRunner> {
+    match job_type {
+        "delay" => Some(run_delay_job),
+        _ => None,
+    }
+}
+
+async fn health_handler(State(config): State<Arc<Config>>) -> Json<JsonValue> {
+    Json(json!({
+        "name": "authority-core",
+        "apiVersion": config.api_version,
+        "version": config.version,
+        "pid": process::id(),
+        "startedAt": config.started_at,
+        "uptimeMs": runtime_uptime_ms(&config.started_at),
+        "requestCount": config.runtime.request_count.load(Ordering::SeqCst),
+        "errorCount": config.runtime.error_count.load(Ordering::SeqCst),
+        "activeJobCount": active_job_count(&config.runtime),
+        "queuedJobCount": config.runtime.queued_job_count.load(Ordering::SeqCst),
+        "runtimeMode": "async",
+        "maxConcurrency": MAX_CONCURRENCY,
+        "currentConcurrency": config.runtime.current_concurrency.load(Ordering::SeqCst),
+        "jobWorkerConcurrency": JOB_WORKER_CONCURRENCY,
+        "maxJobQueueSize": MAX_JOB_QUEUE_SIZE,
+        "timeoutMs": REQUEST_TIMEOUT_SECS * 1000,
+        "limits": {
+            "maxRequestBytes": MAX_REQUEST_SIZE,
+            "maxKvValueBytes": MAX_KV_VALUE_BYTES,
+            "maxBlobBytes": MAX_BLOB_BYTES,
+            "maxHttpBodyBytes": MAX_HTTP_BODY_BYTES,
+            "maxHttpResponseBytes": MAX_HTTP_RESPONSE_BYTES,
+            "maxEventPollLimit": MAX_EVENT_POLL_LIMIT,
+        },
+    }))
+}
+
+async fn auth_middleware(
+    State(config): State<Arc<Config>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    if !config.token.is_empty() {
+        let token_header = request.headers()
+            .get("x-authority-core-token")
+            .and_then(|value| value.to_str().ok());
+        if token_header != Some(config.token.as_str()) {
             config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
-            let body = json!({ "error": error.message }).to_string();
-            write_json(stream, error.status_code, &body)
+            return Err(ApiError { status_code: 401, message: String::from("unauthorized") });
         }
     }
+    config.runtime.request_count.fetch_add(1, Ordering::SeqCst);
+    Ok(next.run(request).await)
+}
+
+async fn concurrency_guard(
+    State(config): State<Arc<Config>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let permit = config.runtime.concurrency_semaphore.try_acquire();
+    if permit.is_err() {
+        config.runtime.error_count.fetch_add(1, Ordering::SeqCst);
+        return Err(ApiError { status_code: 503, message: String::from("concurrency_limit_exceeded") });
+    }
+    config.runtime.current_concurrency.fetch_add(1, Ordering::SeqCst);
+    let response = next.run(request).await;
+    config.runtime.current_concurrency.fetch_sub(1, Ordering::SeqCst);
+    drop(permit);
+    Ok(response)
+}
+
+async fn v1_storage_kv_get(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_get).await }
+async fn v1_storage_kv_set(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvSetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_set).await }
+async fn v1_storage_kv_delete(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_delete).await }
+async fn v1_storage_kv_list(State(_config): State<Arc<Config>>, Json(body): Json<StorageKvListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_kv_list).await }
+async fn v1_storage_blob_put(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobPutRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_put).await }
+async fn v1_storage_blob_get(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_get).await }
+async fn v1_storage_blob_delete(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_delete).await }
+async fn v1_storage_blob_list(State(_config): State<Arc<Config>>, Json(body): Json<StorageBlobListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_storage_blob_list).await }
+async fn v1_private_mkdir(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileMkdirRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_mkdir).await }
+async fn v1_private_read_dir(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadDirRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_read_dir).await }
+async fn v1_private_write(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileWriteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_write).await }
+async fn v1_private_read(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileReadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_read).await }
+async fn v1_private_delete(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_delete).await }
+async fn v1_private_stat(State(_config): State<Arc<Config>>, Json(body): Json<PrivateFileStatRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_private_file_stat).await }
+async fn v1_http_fetch(State(_config): State<Arc<Config>>, Json(body): Json<CoreHttpFetchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_http_fetch).await }
+async fn v1_sql_query(State(_config): State<Arc<Config>>, Json(body): Json<SqlRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_query).await }
+async fn v1_sql_exec(State(_config): State<Arc<Config>>, Json(body): Json<SqlRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_exec).await }
+async fn v1_sql_batch(State(_config): State<Arc<Config>>, Json(body): Json<SqlBatchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_batch).await }
+async fn v1_sql_transaction(State(_config): State<Arc<Config>>, Json(body): Json<SqlBatchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_transaction).await }
+async fn v1_sql_migrate(State(_config): State<Arc<Config>>, Json(body): Json<SqlMigrateRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_sql_migrate).await }
+async fn v1_trivium_insert(State(_config): State<Arc<Config>>, Json(body): Json<TriviumInsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_insert).await }
+async fn v1_trivium_insert_with_id(State(_config): State<Arc<Config>>, Json(body): Json<TriviumInsertWithIdRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_insert_with_id).await }
+async fn v1_trivium_get(State(_config): State<Arc<Config>>, Json(body): Json<TriviumGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_get).await }
+async fn v1_trivium_update_payload(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUpdatePayloadRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_update_payload).await }
+async fn v1_trivium_update_vector(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUpdateVectorRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_update_vector).await }
+async fn v1_trivium_delete(State(_config): State<Arc<Config>>, Json(body): Json<TriviumDeleteRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_delete).await }
+async fn v1_trivium_link(State(_config): State<Arc<Config>>, Json(body): Json<TriviumLinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_link).await }
+async fn v1_trivium_unlink(State(_config): State<Arc<Config>>, Json(body): Json<TriviumUnlinkRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_unlink).await }
+async fn v1_trivium_neighbors(State(_config): State<Arc<Config>>, Json(body): Json<TriviumNeighborsRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_neighbors).await }
+async fn v1_trivium_search(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search).await }
+async fn v1_trivium_search_advanced(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchAdvancedRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search_advanced).await }
+async fn v1_trivium_search_hybrid(State(_config): State<Arc<Config>>, Json(body): Json<TriviumSearchHybridRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_search_hybrid).await }
+async fn v1_trivium_filter_where(State(_config): State<Arc<Config>>, Json(body): Json<TriviumFilterWhereRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_filter_where).await }
+async fn v1_trivium_query(State(_config): State<Arc<Config>>, Json(body): Json<TriviumQueryRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_query).await }
+async fn v1_trivium_index_text(State(_config): State<Arc<Config>>, Json(body): Json<TriviumIndexTextRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_index_text).await }
+async fn v1_trivium_index_keyword(State(_config): State<Arc<Config>>, Json(body): Json<TriviumIndexKeywordRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_index_keyword).await }
+async fn v1_trivium_build_text_index(State(_config): State<Arc<Config>>, Json(body): Json<TriviumBuildTextIndexRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_build_text_index).await }
+async fn v1_trivium_flush(State(_config): State<Arc<Config>>, Json(body): Json<TriviumFlushRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_flush).await }
+async fn v1_trivium_stat(State(_config): State<Arc<Config>>, Json(body): Json<TriviumStatRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_trivium_stat).await }
+async fn v1_control_session_init(State(_config): State<Arc<Config>>, Json(body): Json<ControlSessionInitRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_session_init).await }
+async fn v1_control_session_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlSessionGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_session_get).await }
+async fn v1_control_extensions_list(State(_config): State<Arc<Config>>, Json(body): Json<ControlExtensionsListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_extensions_list).await }
+async fn v1_control_extension_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlExtensionGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_extension_get).await }
+async fn v1_control_audit_log(State(_config): State<Arc<Config>>, Json(body): Json<ControlAuditLogRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_audit_log).await }
+async fn v1_control_audit_recent(State(_config): State<Arc<Config>>, Json(body): Json<ControlAuditRecentRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_audit_recent).await }
+async fn v1_control_grants_list(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grants_list).await }
+async fn v1_control_grant_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grant_get).await }
+async fn v1_control_grant_upsert(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantUpsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grant_upsert).await }
+async fn v1_control_grants_reset(State(_config): State<Arc<Config>>, Json(body): Json<ControlGrantResetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_grants_reset).await }
+async fn v1_control_policies_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlPoliciesRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_policies_get).await }
+async fn v1_control_policies_save(State(_config): State<Arc<Config>>, Json(body): Json<ControlPoliciesSaveRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_policies_save).await }
+async fn v1_control_jobs_list(State(_config): State<Arc<Config>>, Json(body): Json<ControlJobsListRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_jobs_list).await }
+async fn v1_control_job_get(State(_config): State<Arc<Config>>, Json(body): Json<ControlJobGetRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_job_get).await }
+async fn v1_control_job_upsert(State(_config): State<Arc<Config>>, Json(body): Json<ControlJobUpsertRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_job_upsert).await }
+async fn v1_control_events_poll(State(_config): State<Arc<Config>>, Json(body): Json<ControlEventsPollRequest>) -> Result<Json<JsonValue>, ApiError> { spawn_blocking_handler(body, handle_control_events_poll).await }
+
+async fn v1_control_job_create(State(config): State<Arc<Config>>, Json(body): Json<ControlJobCreateRequest>) -> Result<Json<JsonValue>, ApiError> {
+    let runtime = config.runtime.clone();
+    let result = tokio::task::spawn_blocking(move || handle_control_job_create(body, &runtime)).await
+        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    result.map(Json)
+}
+async fn v1_control_job_cancel(State(config): State<Arc<Config>>, Json(body): Json<ControlJobCancelRequest>) -> Result<Json<JsonValue>, ApiError> {
+    let runtime = config.runtime.clone();
+    let result = tokio::task::spawn_blocking(move || handle_control_job_cancel(body, &runtime)).await
+        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?;
+    result.map(Json)
+}
+
+async fn spawn_blocking_handler<T, F>(body: T, handler: F) -> Result<Json<JsonValue>, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce(T) -> Result<JsonValue, ApiError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || handler(body))
+        .await
+        .map_err(|_| ApiError { status_code: 500, message: String::from("task_join_error") })?
+        .map(Json)
 }
 
 fn handle_sql_query(request: SqlRequest) -> Result<JsonValue, ApiError> {
@@ -1855,8 +2173,9 @@ fn handle_control_job_upsert(request: ControlJobUpsertRequest) -> Result<JsonVal
     };
     connection.execute(
         "INSERT INTO authority_jobs (
-            user_handle, id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            user_handle, id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel,
+            started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
         ON CONFLICT(user_handle, id) DO UPDATE SET
             extension_id = excluded.extension_id,
             type = excluded.type,
@@ -1868,7 +2187,14 @@ fn handle_control_job_upsert(request: ControlJobUpsertRequest) -> Result<JsonVal
             error = excluded.error,
             payload = excluded.payload,
             result = excluded.result,
-            channel = excluded.channel",
+            channel = excluded.channel,
+            started_at = excluded.started_at,
+            finished_at = excluded.finished_at,
+            timeout_ms = excluded.timeout_ms,
+            idempotency_key = excluded.idempotency_key,
+            attempt = excluded.attempt,
+            max_attempts = excluded.max_attempts,
+            cancel_requested_at = excluded.cancel_requested_at",
         params![
             &request.user_handle,
             &request.job.id,
@@ -1883,6 +2209,13 @@ fn handle_control_job_upsert(request: ControlJobUpsertRequest) -> Result<JsonVal
             &payload,
             &result,
             &request.job.channel,
+            &request.job.started_at,
+            &request.job.finished_at,
+            &request.job.timeout_ms,
+            &request.job.idempotency_key,
+            request.job.attempt,
+            &request.job.max_attempts,
+            &request.job.cancel_requested_at,
         ],
     ).map_err(to_sql_error)?;
     Ok(json!({ "job": request.job }))
@@ -1952,13 +2285,6 @@ fn handle_storage_blob_put(request: StorageBlobPutRequest) -> Result<JsonValue, 
         request.name.clone()
     };
     let blob_id = sanitize_file_segment(&name);
-    let payload = decode_blob_content(request.encoding.as_deref(), &request.content)?;
-    if payload.len() > MAX_BLOB_BYTES {
-        return Err(ApiError {
-            status_code: 400,
-            message: format!("Blob exceeds {} bytes", MAX_BLOB_BYTES),
-        });
-    }
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
@@ -1966,13 +2292,38 @@ fn handle_storage_blob_put(request: StorageBlobPutRequest) -> Result<JsonValue, 
     if let Some(parent) = binary_path.parent() {
         fs::create_dir_all(parent).map_err(to_internal_error)?;
     }
-    fs::write(&binary_path, &payload).map_err(to_internal_error)?;
+    let size_bytes = if let Some(source_path) = request
+        .source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let source_size = validate_source_file_path(source_path)?;
+        if source_size > MAX_BLOB_BYTES as u64 {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("Blob exceeds {} bytes", MAX_BLOB_BYTES),
+            });
+        }
+        fs::copy(source_path, &binary_path).map_err(to_internal_error)?;
+        usize::try_from(source_size).unwrap_or(MAX_BLOB_BYTES)
+    } else {
+        let payload = decode_blob_content(request.encoding.as_deref(), &request.content)?;
+        if payload.len() > MAX_BLOB_BYTES {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("Blob exceeds {} bytes", MAX_BLOB_BYTES),
+            });
+        }
+        fs::write(&binary_path, &payload).map_err(to_internal_error)?;
+        payload.len()
+    };
 
     let record = BlobRecord {
         id: blob_id,
         name,
         content_type: request.content_type.unwrap_or_else(|| String::from("application/octet-stream")),
-        size: payload.len() as i64,
+        size: size_bytes as i64,
         updated_at: current_timestamp_iso(),
     };
     upsert_blob_record(&connection, &request.user_handle, &request.extension_id, &record)?;
@@ -2129,14 +2480,6 @@ fn handle_private_file_write(request: PrivateFileWriteRequest) -> Result<JsonVal
         });
     }
 
-    let payload = decode_blob_content(request.encoding.as_deref(), &request.content)?;
-    if payload.len() > MAX_BLOB_BYTES {
-        return Err(ApiError {
-            status_code: 400,
-            message: format!("Private file exceeds {} bytes", MAX_BLOB_BYTES),
-        });
-    }
-
     fs::create_dir_all(&root_dir).map_err(to_internal_error)?;
     let parent = target_path.parent().ok_or_else(|| ApiError {
         status_code: 400,
@@ -2161,7 +2504,30 @@ fn handle_private_file_write(request: PrivateFileWriteRequest) -> Result<JsonVal
         }
     }
 
-    fs::write(&target_path, &payload).map_err(to_internal_error)?;
+    if let Some(source_path) = request
+        .source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let source_size = validate_source_file_path(source_path)?;
+        if source_size > MAX_BLOB_BYTES as u64 {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("Private file exceeds {} bytes", MAX_BLOB_BYTES),
+            });
+        }
+        fs::copy(source_path, &target_path).map_err(to_internal_error)?;
+    } else {
+        let payload = decode_blob_content(request.encoding.as_deref(), &request.content)?;
+        if payload.len() > MAX_BLOB_BYTES {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("Private file exceeds {} bytes", MAX_BLOB_BYTES),
+            });
+        }
+        fs::write(&target_path, &payload).map_err(to_internal_error)?;
+    }
     let metadata = fs::metadata(&target_path).map_err(to_internal_error)?;
     let entry = build_private_file_entry(&root_dir, &target_path, &metadata)?;
     Ok(serde_json::to_value(PrivateFileResponse { entry }).expect("private file response should serialize"))
@@ -2345,13 +2711,41 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
     validate_non_empty("userHandle", &request.user_handle)?;
     validate_non_empty("extensionId", &request.extension_id)?;
     validate_non_empty("type", &request.job_type)?;
-    validate_one_of("type", &request.job_type, &["delay"])?;
+    validate_supported_job_type("type", &request.job_type)?;
+    validate_job_runtime_options(request.timeout_ms, request.max_attempts)?;
     if let Some(payload) = &request.payload {
         if !payload.is_object() {
             return Err(ApiError {
                 status_code: 400,
                 message: String::from("job payload must be an object"),
             });
+        }
+    }
+    if let Some(key) = &request.idempotency_key {
+        if key.is_empty() {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("idempotencyKey must not be empty if provided"),
+            });
+        }
+    }
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+
+    if let Some(key) = &request.idempotency_key {
+        let mut statement = connection.prepare(
+            "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
+             FROM authority_jobs
+             WHERE user_handle = ?1 AND idempotency_key = ?2
+             LIMIT 1",
+        ).map_err(to_sql_error)?;
+        let existing = statement
+            .query_row(params![&request.user_handle, key], control_job_from_row)
+            .optional()
+            .map_err(to_sql_error)?;
+        if let Some(job) = existing {
+            return Ok(json!({ "job": job }));
         }
     }
 
@@ -2369,10 +2763,15 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
         payload: request.payload.clone(),
         result: None,
         channel: format!("extension:{}", request.extension_id),
+        started_at: None,
+        finished_at: None,
+        timeout_ms: request.timeout_ms,
+        idempotency_key: request.idempotency_key.clone(),
+        attempt: 0,
+        max_attempts: request.max_attempts,
+        cancel_requested_at: None,
     };
 
-    let connection = open_connection(&request.db_path)?;
-    ensure_control_schema(&connection)?;
     save_control_job_record(&connection, &request.user_handle, &job)?;
     publish_control_event(
         &connection,
@@ -2382,7 +2781,35 @@ fn handle_control_job_create(request: ControlJobCreateRequest, runtime: &Arc<Run
         "authority.job",
         Some(&serde_json::to_value(&job).map_err(to_json_error)?),
     )?;
-    spawn_delay_job(request.db_path, request.user_handle, job.clone(), Arc::clone(runtime));
+
+    if let Err(error) = enqueue_job_dispatch(
+        runtime,
+        JobDispatch {
+            db_path: request.db_path.clone(),
+            user_handle: request.user_handle.clone(),
+            job: job.clone(),
+        },
+    ) {
+        let rejected = ControlJobRecord {
+            status: String::from("failed"),
+            updated_at: current_timestamp_iso(),
+            finished_at: Some(current_timestamp_iso()),
+            summary: Some(String::from("Job rejected by worker queue")),
+            error: Some(error.message.clone()),
+            ..job.clone()
+        };
+        save_control_job_record(&connection, &request.user_handle, &rejected)?;
+        publish_control_event(
+            &connection,
+            &request.user_handle,
+            Some(&request.extension_id),
+            &rejected.channel,
+            "authority.job",
+            Some(&serde_json::to_value(&rejected).map_err(to_json_error)?),
+        )?;
+        return Err(error);
+    }
+
     Ok(json!({ "job": job }))
 }
 
@@ -2421,6 +2848,7 @@ fn handle_control_job_cancel(request: ControlJobCancelRequest, runtime: &Arc<Run
     let next = ControlJobRecord {
         status: String::from("cancelled"),
         updated_at: current_timestamp_iso(),
+        cancel_requested_at: Some(current_timestamp_iso()),
         summary: Some(String::from("Cancelled by user")),
         ..job
     };
@@ -3002,9 +3430,17 @@ fn ensure_control_schema(connection: &Connection) -> Result<(), ApiError> {
             payload TEXT,
             result TEXT,
             channel TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            timeout_ms INTEGER,
+            idempotency_key TEXT,
+            attempt INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER,
+            cancel_requested_at TEXT,
             PRIMARY KEY (user_handle, id)
         );
         CREATE INDEX IF NOT EXISTS idx_authority_jobs_extension ON authority_jobs(user_handle, extension_id, updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_authority_jobs_idempotency ON authority_jobs(user_handle, idempotency_key);
         CREATE TABLE IF NOT EXISTS authority_blob_records (
             user_handle TEXT NOT NULL,
             extension_id TEXT NOT NULL,
@@ -3219,7 +3655,7 @@ fn fetch_control_jobs(connection: &Connection, user_handle: &str, extension_id: 
     let mut jobs = Vec::new();
     if let Some(extension_id) = extension_id {
         let mut statement = connection.prepare(
-            "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel
+            "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
              FROM authority_jobs
              WHERE user_handle = ?1 AND extension_id = ?2
              ORDER BY updated_at DESC, id DESC",
@@ -3232,7 +3668,7 @@ fn fetch_control_jobs(connection: &Connection, user_handle: &str, extension_id: 
         }
     } else {
         let mut statement = connection.prepare(
-            "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel
+            "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
              FROM authority_jobs
              WHERE user_handle = ?1
              ORDER BY updated_at DESC, id DESC",
@@ -3249,7 +3685,7 @@ fn fetch_control_jobs(connection: &Connection, user_handle: &str, extension_id: 
 
 fn fetch_control_job(connection: &Connection, user_handle: &str, job_id: &str) -> Result<Option<ControlJobRecord>, ApiError> {
     let mut statement = connection.prepare(
-        "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel
+        "SELECT id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel, started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
          FROM authority_jobs
          WHERE user_handle = ?1 AND id = ?2",
     ).map_err(to_sql_error)?;
@@ -3275,6 +3711,13 @@ fn control_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlJobR
         payload: payload_text.and_then(|value| serde_json::from_str(&value).ok()),
         result: result_text.and_then(|value| serde_json::from_str(&value).ok()),
         channel: row.get(11)?,
+        started_at: row.get(12)?,
+        finished_at: row.get(13)?,
+        timeout_ms: row.get(14)?,
+        idempotency_key: row.get(15)?,
+        attempt: row.get::<_, Option<i64>>(16)?.unwrap_or(0),
+        max_attempts: row.get(17)?,
+        cancel_requested_at: row.get(18)?,
     })
 }
 
@@ -3447,8 +3890,9 @@ fn save_control_job_record(connection: &Connection, user_handle: &str, job: &Con
     };
     connection.execute(
         "INSERT INTO authority_jobs (
-            user_handle, id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            user_handle, id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel,
+            started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
         ON CONFLICT(user_handle, id) DO UPDATE SET
             extension_id = excluded.extension_id,
             type = excluded.type,
@@ -3460,7 +3904,14 @@ fn save_control_job_record(connection: &Connection, user_handle: &str, job: &Con
             error = excluded.error,
             payload = excluded.payload,
             result = excluded.result,
-            channel = excluded.channel",
+            channel = excluded.channel,
+            started_at = excluded.started_at,
+            finished_at = excluded.finished_at,
+            timeout_ms = excluded.timeout_ms,
+            idempotency_key = excluded.idempotency_key,
+            attempt = excluded.attempt,
+            max_attempts = excluded.max_attempts,
+            cancel_requested_at = excluded.cancel_requested_at",
         params![
             user_handle,
             &job.id,
@@ -3475,30 +3926,26 @@ fn save_control_job_record(connection: &Connection, user_handle: &str, job: &Con
             &payload,
             &result,
             &job.channel,
+            &job.started_at,
+            &job.finished_at,
+            &job.timeout_ms,
+            &job.idempotency_key,
+            job.attempt,
+            &job.max_attempts,
+            &job.cancel_requested_at,
         ],
     ).map_err(to_sql_error)?;
     Ok(())
 }
 
-fn spawn_delay_job(db_path: String, user_handle: String, job: ControlJobRecord, runtime: Arc<RuntimeState>) {
-    let control = Arc::new(AtomicBool::new(false));
-    let key = job_control_key(&user_handle, &job.id);
-    if let Ok(mut controls) = runtime.job_controls.lock() {
-        controls.insert(key.clone(), Arc::clone(&control));
-    }
-
-    thread::spawn(move || {
-        let run_result = run_delay_job(&db_path, &user_handle, &job, Arc::clone(&control));
-        if let Err(error) = run_result {
-            let _ = mark_job_failed(&db_path, &user_handle, &job, &error.message);
-        }
-        if let Ok(mut controls) = runtime.job_controls.lock() {
-            controls.remove(&key);
-        }
-    });
-}
-
-fn run_delay_job(db_path: &str, user_handle: &str, job: &ControlJobRecord, control: Arc<AtomicBool>) -> Result<(), ApiError> {
+fn run_delay_job(
+    db_path: &str,
+    user_handle: &str,
+    job: &ControlJobRecord,
+    control: Arc<AtomicBool>,
+    timeout_ms: Option<u64>,
+    attempt: i64,
+) -> Result<(), ApiError> {
     let connection = open_connection(db_path)?;
     ensure_control_schema(&connection)?;
     let duration_ms = job_duration_ms(job);
@@ -3509,9 +3956,16 @@ fn run_delay_job(db_path: &str, user_handle: &str, job: &ControlJobRecord, contr
         return Ok(());
     }
 
+    let running_timestamp = current_timestamp_iso();
     running.status = String::from("running");
-    running.updated_at = current_timestamp_iso();
-    running.summary = Some(format!("Running delay job for {}ms", duration_ms));
+    running.updated_at = running_timestamp.clone();
+    if running.started_at.is_none() {
+        running.started_at = Some(running_timestamp);
+    }
+    running.finished_at = None;
+    running.attempt = attempt;
+    running.error = None;
+    running.summary = Some(format!("Running delay job for {}ms (attempt {})", duration_ms, attempt));
     save_control_job_record(&connection, user_handle, &running)?;
     let running_payload = serde_json::to_value(&running).map_err(to_json_error)?;
     publish_control_event(
@@ -3522,6 +3976,13 @@ fn run_delay_job(db_path: &str, user_handle: &str, job: &ControlJobRecord, contr
         "authority.job",
         Some(&running_payload),
     )?;
+
+    if job_should_fail_attempt(&running, attempt) {
+        return Err(ApiError {
+            status_code: 500,
+            message: format!("simulated_job_failure_attempt_{attempt}"),
+        });
+    }
 
     loop {
         thread::sleep(Duration::from_millis(JOB_PROGRESS_INTERVAL_MS));
@@ -3534,6 +3995,14 @@ fn run_delay_job(db_path: &str, user_handle: &str, job: &ControlJobRecord, contr
         }
 
         let elapsed_ms = started.elapsed().as_millis() as u64;
+        if let Some(timeout_ms) = timeout_ms {
+            if elapsed_ms >= timeout_ms {
+                return Err(ApiError {
+                    status_code: 408,
+                    message: String::from("job_timeout"),
+                });
+            }
+        }
         let progress = if duration_ms == 0 {
             100_i64
         } else {
@@ -3546,6 +4015,7 @@ fn run_delay_job(db_path: &str, user_handle: &str, job: &ControlJobRecord, contr
                 status: String::from("completed"),
                 progress: 100,
                 updated_at: current_timestamp_iso(),
+                finished_at: Some(current_timestamp_iso()),
                 summary: Some(message.clone()),
                 result: Some(json!({
                     "elapsedMs": duration_ms,
@@ -3594,6 +4064,7 @@ fn mark_job_failed(db_path: &str, user_handle: &str, job: &ControlJobRecord, mes
     let failed = ControlJobRecord {
         status: String::from("failed"),
         updated_at: current_timestamp_iso(),
+        finished_at: Some(current_timestamp_iso()),
         error: Some(message.to_string()),
         ..current
     };
@@ -3604,6 +4075,44 @@ fn mark_job_failed(db_path: &str, user_handle: &str, job: &ControlJobRecord, mes
         user_handle,
         Some(&failed.extension_id),
         &failed.channel,
+        "authority.job",
+        Some(&payload),
+    )?;
+    Ok(())
+}
+
+fn mark_job_retry_scheduled(
+    db_path: &str,
+    user_handle: &str,
+    job: &ControlJobRecord,
+    message: &str,
+    backoff_ms: u64,
+    attempt: i64,
+) -> Result<(), ApiError> {
+    let connection = open_connection(db_path)?;
+    ensure_control_schema(&connection)?;
+    let current = match fetch_control_job(&connection, user_handle, &job.id)? {
+        Some(current) if current.status != "cancelled" && current.status != "completed" => current,
+        _ => return Ok(()),
+    };
+    let queued = ControlJobRecord {
+        status: String::from("queued"),
+        updated_at: current_timestamp_iso(),
+        progress: 0,
+        summary: Some(format!("Retrying in {}ms after attempt {}", backoff_ms, attempt)),
+        error: Some(message.to_string()),
+        result: None,
+        finished_at: None,
+        attempt,
+        ..current
+    };
+    save_control_job_record(&connection, user_handle, &queued)?;
+    let payload = serde_json::to_value(&queued).map_err(to_json_error)?;
+    publish_control_event(
+        &connection,
+        user_handle,
+        Some(&queued.extension_id),
+        &queued.channel,
         "authority.job",
         Some(&payload),
     )?;
@@ -3628,6 +4137,31 @@ fn blob_binary_path(blob_dir: &str, extension_id: &str, blob_id: &str) -> PathBu
     Path::new(blob_dir)
         .join(sanitize_file_segment(extension_id))
         .join(format!("{}.bin", sanitize_file_segment(blob_id)))
+}
+
+fn validate_source_file_path(source_path: &str) -> Result<u64, ApiError> {
+    let metadata = fs::symlink_metadata(source_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return ApiError {
+                status_code: 400,
+                message: String::from("sourcePath not found"),
+            };
+        }
+        to_internal_error(error)
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("sourcePath symlink is not allowed"),
+        });
+    }
+    if !metadata.is_file() {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("sourcePath must reference a file"),
+        });
+    }
+    Ok(metadata.len())
 }
 
 fn resolve_private_path(root_dir: &Path, value: &str) -> Result<(PathBuf, String), ApiError> {
@@ -3817,6 +4351,32 @@ fn job_duration_ms(job: &ControlJobRecord) -> u64 {
         .unwrap_or(3000)
 }
 
+fn job_should_fail_attempt(job: &ControlJobRecord, attempt: i64) -> bool {
+    job.payload
+        .as_ref()
+        .and_then(|payload| payload.get("failAttempts"))
+        .and_then(|value| value.as_i64().or_else(|| value.as_u64().and_then(|unsigned| i64::try_from(unsigned).ok())))
+        .map(|max_failed_attempt| attempt <= max_failed_attempt)
+        .unwrap_or(false)
+}
+
+fn normalize_job_timeout_ms(timeout_ms: Option<i64>) -> Result<Option<u64>, ApiError> {
+    validate_job_runtime_options(timeout_ms, None)?;
+    Ok(timeout_ms.and_then(|value| u64::try_from(value).ok()))
+}
+
+fn normalize_job_max_attempts(max_attempts: Option<i64>) -> i64 {
+    max_attempts.unwrap_or(1).clamp(1, MAX_JOB_ATTEMPTS)
+}
+
+fn job_retry_backoff_ms(attempt: i64) -> u64 {
+    let exponent = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX).min(6);
+    let multiplier = 2_u64.saturating_pow(exponent);
+    JOB_RETRY_BACKOFF_BASE_MS
+        .saturating_mul(multiplier)
+        .min(JOB_RETRY_BACKOFF_MAX_MS)
+}
+
 fn job_message(job: &ControlJobRecord) -> String {
     job.payload
         .as_ref()
@@ -3888,106 +4448,6 @@ fn sqlite_value_to_json(value: ValueRef<'_>) -> JsonValue {
     }
 }
 
-fn parse_json_body<T>(request: &HttpRequest) -> Result<T, ApiError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    serde_json::from_slice::<T>(&request.body).map_err(|error| ApiError {
-        status_code: 400,
-        message: format!("invalid_json_body: {error}"),
-    })
-}
-
-fn read_http_request(stream: &mut TcpStream) -> std::io::Result<Option<HttpRequest>> {
-    let mut buffer = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    let header_end = loop {
-        let size = stream.read(&mut chunk)?;
-        if size == 0 {
-            if buffer.is_empty() {
-                return Ok(None);
-            }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "request ended before headers completed",
-            ));
-        }
-
-        buffer.extend_from_slice(&chunk[..size]);
-        if buffer.len() > MAX_REQUEST_SIZE {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "request exceeded maximum size",
-            ));
-        }
-
-        if let Some(position) = find_header_end(&buffer) {
-            break position;
-        }
-    };
-
-    let header_text = String::from_utf8_lossy(&buffer[..header_end]);
-    let mut lines = header_text.split("\r\n");
-    let request_line = lines.next().unwrap_or("");
-    let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next().unwrap_or("").to_string();
-    let path = request_parts.next().unwrap_or("").to_string();
-    let mut headers = Vec::new();
-    let mut content_length = 0_usize;
-
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Some((name, value)) = line.split_once(':') {
-            let header_name = name.trim().to_ascii_lowercase();
-            let header_value = value.trim().to_string();
-            if header_name == "content-length" {
-                content_length = header_value.parse::<usize>().unwrap_or(0);
-            }
-            headers.push((header_name, header_value));
-        }
-    }
-
-    let body_start = header_end + HEADER_END.len();
-    let mut body = buffer[body_start..].to_vec();
-    while body.len() < content_length {
-        let size = stream.read(&mut chunk)?;
-        if size == 0 {
-            break;
-        }
-        body.extend_from_slice(&chunk[..size]);
-        if header_end + HEADER_END.len() + body.len() > MAX_REQUEST_SIZE {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "request exceeded maximum size",
-            ));
-        }
-    }
-    body.truncate(content_length);
-
-    Ok(Some(HttpRequest {
-        method,
-        path,
-        headers,
-        body,
-    }))
-}
-
-fn find_header_end(buffer: &[u8]) -> Option<usize> {
-    buffer
-        .windows(HEADER_END.len())
-        .position(|window| window == HEADER_END)
-}
-
-fn is_authorized(headers: &[(String, String)], token: &str) -> bool {
-    if token.is_empty() {
-        return true;
-    }
-
-    headers.iter().any(|(name, value)| name == "x-authority-core-token" && value == token)
-}
 
 fn to_sql_error(error: rusqlite::Error) -> ApiError {
     ApiError {
@@ -4023,6 +4483,42 @@ fn validate_non_empty(field_name: &str, value: &str) -> Result<(), ApiError> {
             status_code: 400,
             message: format!("{field_name} must not be empty"),
         });
+    }
+    Ok(())
+}
+
+fn validate_supported_job_type(field_name: &str, value: &str) -> Result<(), ApiError> {
+    if resolve_job_runner(value).is_some() {
+        return Ok(());
+    }
+    Err(ApiError {
+        status_code: 400,
+        message: format!("{field_name} must be a supported job type, got {value}"),
+    })
+}
+
+fn validate_job_runtime_options(timeout_ms: Option<i64>, max_attempts: Option<i64>) -> Result<(), ApiError> {
+    if let Some(timeout_ms) = timeout_ms {
+        if timeout_ms <= 0 {
+            return Err(ApiError {
+                status_code: 400,
+                message: String::from("timeoutMs must be greater than zero"),
+            });
+        }
+        if timeout_ms > MAX_JOB_TIMEOUT_MS {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("timeoutMs exceeds maximum of {}", MAX_JOB_TIMEOUT_MS),
+            });
+        }
+    }
+    if let Some(max_attempts) = max_attempts {
+        if !(1..=MAX_JOB_ATTEMPTS).contains(&max_attempts) {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("maxAttempts must be between 1 and {}", MAX_JOB_ATTEMPTS),
+            });
+        }
     }
     Ok(())
 }
@@ -4080,10 +4576,12 @@ fn validate_job_record(job: &ControlJobRecord) -> Result<(), ApiError> {
     validate_non_empty("job.id", &job.id)?;
     validate_non_empty("job.extensionId", &job.extension_id)?;
     validate_non_empty("job.type", &job.job_type)?;
+    validate_supported_job_type("job.type", &job.job_type)?;
     validate_one_of("job.status", &job.status, &["queued", "running", "completed", "failed", "cancelled"])?;
     validate_non_empty("job.createdAt", &job.created_at)?;
     validate_non_empty("job.updatedAt", &job.updated_at)?;
     validate_non_empty("job.channel", &job.channel)?;
+    validate_job_runtime_options(job.timeout_ms, job.max_attempts)?;
     if !(0..=100).contains(&job.progress) {
         return Err(ApiError {
             status_code: 400,
@@ -4173,25 +4671,6 @@ fn system_time_to_iso(value: SystemTime) -> Option<String> {
     timestamp.format(&Rfc3339).ok()
 }
 
-fn write_json(stream: &mut TcpStream, status_code: u16, body: &str) -> std::io::Result<()> {
-    let status_text = match status_code {
-        200 => "OK",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "Error",
-    };
-    let response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        status_code,
-        status_text,
-        body.len(),
-        body,
-    );
-    stream.write_all(response.as_bytes())?;
-    stream.flush()
-}
 
 #[cfg(test)]
 mod tests {
@@ -4264,11 +4743,7 @@ mod tests {
     #[test]
     fn jobs_and_events_remain_consistent() {
         let db_path = test_db_path("jobs-events");
-        let runtime = Arc::new(RuntimeState {
-            job_controls: Mutex::new(HashMap::new()),
-            request_count: AtomicU64::new(0),
-            error_count: AtomicU64::new(0),
-        });
+        let runtime = create_runtime_state();
         let created = handle_control_job_create(ControlJobCreateRequest {
             db_path: db_path.clone(),
             user_handle: String::from("alice"),
@@ -4278,6 +4753,9 @@ mod tests {
                 "durationMs": 0,
                 "message": "done",
             })),
+            timeout_ms: None,
+            idempotency_key: None,
+            max_attempts: None,
         }, &runtime).expect("job create should succeed");
         let job_id = created["job"]["id"].as_str().expect("job id should exist").to_string();
 
@@ -4332,6 +4810,7 @@ mod tests {
             content: String::from("hello authority"),
             encoding: Some(String::from("utf8")),
             create_parents: Some(true),
+            source_path: None,
         }).expect("write should succeed");
         assert_eq!(written["entry"]["path"], json!("/notes/hello.txt"));
 
@@ -4376,19 +4855,77 @@ mod tests {
             content: String::from("bad"),
             encoding: Some(String::from("utf8")),
             create_parents: Some(true),
+            source_path: None,
         }).expect_err("escape path should fail");
         assert!(error.message.contains("escape"));
+    }
+
+    #[test]
+    fn storage_blob_put_supports_source_path_import() {
+        let db_path = test_db_path("blob-source-import");
+        let blob_dir = test_private_root("blob-source-dir");
+        let source_root = test_private_root("blob-source-input");
+        fs::create_dir_all(&source_root).expect("source root should exist");
+        let source_path = Path::new(&source_root).join("payload.bin");
+        fs::write(&source_path, b"hello staged blob").expect("source blob should write");
+
+        let created = handle_storage_blob_put(StorageBlobPutRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            blob_dir: blob_dir.clone(),
+            name: String::from("hello.bin"),
+            content: String::new(),
+            encoding: None,
+            content_type: Some(String::from("application/octet-stream")),
+            source_path: Some(source_path.to_string_lossy().into_owned()),
+        }).expect("blob import should succeed");
+        assert_eq!(created["size"], json!(17));
+
+        let fetched = handle_storage_blob_get(StorageBlobGetRequest {
+            db_path,
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            blob_dir,
+            id: String::from("hello.bin"),
+        }).expect("blob get should succeed");
+        let content = fetched["content"].as_str().expect("content should exist");
+        assert_eq!(BASE64_STANDARD.decode(content).expect("blob content should decode"), b"hello staged blob");
+    }
+
+    #[test]
+    fn private_file_write_supports_source_path_import() {
+        let root_dir = test_private_root("private-source-import");
+        let source_root = test_private_root("private-source-input");
+        fs::create_dir_all(&source_root).expect("source root should exist");
+        let source_path = Path::new(&source_root).join("payload.txt");
+        fs::write(&source_path, b"hello staged file").expect("source file should write");
+
+        let written = handle_private_file_write(PrivateFileWriteRequest {
+            root_dir: root_dir.clone(),
+            path: String::from("notes/imported.txt"),
+            content: String::new(),
+            encoding: None,
+            create_parents: Some(true),
+            source_path: Some(source_path.to_string_lossy().into_owned()),
+        }).expect("private file import should succeed");
+        assert_eq!(written["entry"]["path"], json!("/notes/imported.txt"));
+
+        let read = handle_private_file_read(PrivateFileReadRequest {
+            root_dir,
+            path: String::from("notes/imported.txt"),
+            encoding: Some(String::from("utf8")),
+        }).expect("private file read should succeed");
+        assert_eq!(read["content"], json!("hello staged file"));
     }
 
     #[test]
     fn runtime_diagnostics_are_monotonic() {
         let started_at = current_unix_millis().saturating_sub(50).to_string();
         assert!(runtime_uptime_ms(&started_at) >= 50);
-        let runtime = RuntimeState {
-            job_controls: Mutex::new(HashMap::new()),
-            request_count: AtomicU64::new(7),
-            error_count: AtomicU64::new(2),
-        };
+        let runtime = create_runtime_state();
+        runtime.request_count.store(7, Ordering::SeqCst);
+        runtime.error_count.store(2, Ordering::SeqCst);
         assert_eq!(active_job_count(&runtime), 0);
         assert_eq!(runtime.request_count.load(Ordering::SeqCst), 7);
         assert_eq!(runtime.error_count.load(Ordering::SeqCst), 2);
@@ -4441,6 +4978,88 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(5), "active job count did not reach expected value");
             thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    #[test]
+    fn job_idempotency_key_deduplicates() {
+        let db_path = test_db_path("job-idempotency");
+        let runtime = create_runtime_state();
+        let first = handle_control_job_create(ControlJobCreateRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            job_type: String::from("delay"),
+            payload: Some(json!({ "durationMs": 0, "message": "first" })),
+            timeout_ms: None,
+            idempotency_key: Some(String::from("unique-key-1")),
+            max_attempts: None,
+        }, &runtime).expect("first job create should succeed");
+        let first_id = first["job"]["id"].as_str().unwrap().to_string();
+
+        let second = handle_control_job_create(ControlJobCreateRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            job_type: String::from("delay"),
+            payload: Some(json!({ "durationMs": 0, "message": "second" })),
+            timeout_ms: None,
+            idempotency_key: Some(String::from("unique-key-1")),
+            max_attempts: None,
+        }, &runtime).expect("second job create should succeed");
+        let second_id = second["job"]["id"].as_str().unwrap().to_string();
+
+        assert_eq!(first_id, second_id, "idempotency key should return existing job");
+    }
+
+    #[test]
+    fn job_timeout_marks_failed() {
+        let db_path = test_db_path("job-timeout");
+        let runtime = create_runtime_state();
+        let created = handle_control_job_create(ControlJobCreateRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            job_type: String::from("delay"),
+            payload: Some(json!({
+                "durationMs": 200,
+                "message": "timeout",
+            })),
+            timeout_ms: Some(50),
+            idempotency_key: None,
+            max_attempts: Some(1),
+        }, &runtime).expect("timed job create should succeed");
+        let job_id = created["job"]["id"].as_str().expect("job id should exist").to_string();
+
+        let failed = wait_for_job_status(&db_path, &job_id, "failed");
+        assert_eq!(failed.error.as_deref(), Some("job_timeout"));
+        assert!(failed.finished_at.is_some());
+        wait_for_active_job_count(&runtime, 0);
+    }
+
+    #[test]
+    fn job_retries_then_completes() {
+        let db_path = test_db_path("job-retry");
+        let runtime = create_runtime_state();
+        let created = handle_control_job_create(ControlJobCreateRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            extension_id: String::from("third-party/example"),
+            job_type: String::from("delay"),
+            payload: Some(json!({
+                "durationMs": 0,
+                "message": "retry-ok",
+                "failAttempts": 1,
+            })),
+            timeout_ms: None,
+            idempotency_key: None,
+            max_attempts: Some(2),
+        }, &runtime).expect("retry job create should succeed");
+        let job_id = created["job"]["id"].as_str().expect("job id should exist").to_string();
+
+        let completed = wait_for_job_status(&db_path, &job_id, "completed");
+        assert_eq!(completed.attempt, 2);
+        assert_eq!(completed.result.as_ref().and_then(|value| value.get("message")), Some(&json!("retry-ok")));
+        wait_for_active_job_count(&runtime, 0);
     }
 
     fn test_db_path(name: &str) -> String {

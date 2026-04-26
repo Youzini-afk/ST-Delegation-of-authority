@@ -17,6 +17,7 @@ export type GrantScope = 'session' | 'persistent' | 'policy';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type PrivateFileKind = 'file' | 'directory';
 export type PrivateFileEncoding = 'utf8' | 'base64';
+export type DataTransferResource = 'storage.blob' | 'fs.private';
 
 export interface DeclaredPermissions {
     storage?: {
@@ -247,6 +248,9 @@ export interface ControlJobCreateRequest {
     extensionId: string;
     type: string;
     payload?: Record<string, unknown>;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+    maxAttempts?: number;
 }
 
 export interface ControlJobCancelRequest {
@@ -297,7 +301,9 @@ export interface ControlBlobScopeRequest {
     blobDir: string;
 }
 
-export interface ControlBlobPutRequest extends ControlBlobScopeRequest, BlobPutRequest {}
+export interface ControlBlobPutRequest extends ControlBlobScopeRequest, BlobPutRequest {
+    sourcePath?: string;
+}
 
 export interface ControlBlobGetRequest extends ControlBlobScopeRequest {
     id: string;
@@ -390,6 +396,7 @@ export interface ControlPrivateFileWriteRequest extends ControlPrivateFileScopeR
     content: string;
     encoding?: PrivateFileEncoding;
     createParents?: boolean;
+    sourcePath?: string;
 }
 
 export interface ControlPrivateFileReadRequest extends ControlPrivateFileScopeRequest {
@@ -450,6 +457,43 @@ export interface BlobPutRequest {
     contentType?: string;
 }
 
+export interface DataTransferInitRequest {
+    resource: DataTransferResource;
+}
+
+export interface DataTransferInitResponse {
+    transferId: string;
+    resource: DataTransferResource;
+    chunkSize: number;
+    maxBytes: number;
+    createdAt: string;
+    updatedAt: string;
+    sizeBytes: number;
+}
+
+export interface DataTransferAppendRequest {
+    offset: number;
+    content: string;
+}
+
+export interface DataTransferAppendResponse {
+    transferId: string;
+    sizeBytes: number;
+    updatedAt: string;
+}
+
+export interface BlobTransferCommitRequest {
+    transferId: string;
+    name: string;
+    contentType?: string;
+}
+
+export interface PrivateFileTransferCommitRequest {
+    transferId: string;
+    path: string;
+    createParents?: boolean;
+}
+
 export interface BlobRecord {
     id: string;
     name: string;
@@ -474,6 +518,13 @@ export interface JobRecord {
     progress: number;
     summary?: string;
     error?: string;
+    startedAt?: string;
+    finishedAt?: string;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+    attempt?: number;
+    maxAttempts?: number;
+    cancelRequestedAt?: string;
 }
 
 export type SqlValue = string | number | boolean | null;

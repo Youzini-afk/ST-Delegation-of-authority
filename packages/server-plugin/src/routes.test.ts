@@ -28,9 +28,14 @@ describe('registerRoutes', () => {
             '/admin/policies',
         ]));
         expect(posts).toEqual(expect.arrayContaining([
+            '/transfers/init',
+            '/transfers/:id/append',
+            '/transfers/:id/discard',
+            '/storage/blob/commit-transfer',
             '/fs/private/mkdir',
             '/fs/private/read-dir',
             '/fs/private/write-file',
+            '/fs/private/write-file-transfer',
             '/fs/private/read-file',
             '/fs/private/delete',
             '/fs/private/stat',

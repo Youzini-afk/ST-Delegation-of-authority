@@ -45,6 +45,16 @@ export class PrivateFsService {
         });
     }
 
+    async writeFileFromSource(user: UserContext, extensionId: string, request: Omit<PrivateFileWriteRequest, 'content' | 'encoding'> & { sourcePath: string }): Promise<PrivateFileEntry> {
+        return await this.core.writePrivateFile({
+            rootDir: this.getRootDir(user, extensionId),
+            path: request.path,
+            content: '',
+            sourcePath: request.sourcePath,
+            ...(request.createParents === undefined ? {} : { createParents: request.createParents }),
+        });
+    }
+
     async readFile(user: UserContext, extensionId: string, request: PrivateFileReadRequest): Promise<PrivateFileReadResponse> {
         return await this.core.readPrivateFile({
             rootDir: this.getRootDir(user, extensionId),

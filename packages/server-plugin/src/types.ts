@@ -202,6 +202,10 @@ export interface AuthorityCoreHealthSnapshot {
     requestCount: number;
     errorCount: number;
     activeJobCount: number;
+    runtimeMode: string;
+    maxConcurrency: number;
+    currentConcurrency: number;
+    timeoutMs: number;
     limits: {
         maxRequestBytes: number;
         maxKvValueBytes: number;

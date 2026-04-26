@@ -12,10 +12,13 @@ export const SESSION_HEADER = 'x-authority-session-token';
 export const SESSION_QUERY = 'authoritySessionToken';
 
 export const MAX_KV_VALUE_BYTES = 128 * 1024;
-export const MAX_BLOB_BYTES = 2 * 1024 * 1024;
+export const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 export const MAX_HTTP_BODY_BYTES = 512 * 1024;
 export const MAX_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const MAX_AUDIT_LINES = 200;
+export const DATA_TRANSFER_CHUNK_BYTES = 256 * 1024;
+export const DATA_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
+export const MAX_DATA_TRANSFER_BYTES = MAX_BLOB_BYTES;
 
 export const SUPPORTED_RESOURCES: PermissionResource[] = [
     'storage.kv',
