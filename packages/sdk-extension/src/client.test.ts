@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
-    AuthorityFeatureFlags,
     AuthorityProbeResponse,
     TriviumBulkDeleteRequest,
     TriviumBulkUpsertRequest,
@@ -302,6 +301,73 @@ describe('AuthorityClient', () => {
         });
     });
 
+    it('routes Trivium mapping integrity tools through the new endpoints', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async (path: string) => {
+            if (path === '/trivium/check-mappings-integrity') {
+                return {
+                    ok: false,
+                    mappingCount: 2,
+                    nodeCount: 2,
+                    orphanMappingCount: 1,
+                    missingMappingCount: 1,
+                    duplicateInternalIdCount: 0,
+                    duplicateExternalIdCount: 0,
+                    issues: [],
+                    sampled: false,
+                };
+            }
+            return {
+                scannedCount: 2,
+                orphanCount: 1,
+                deletedCount: 1,
+                hasMore: false,
+                orphans: [{ id: 2, externalId: 'beta', namespace: 'default', createdAt: 'now', updatedAt: 'now' }],
+            };
+        });
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const integrity = await client.trivium.checkMappingsIntegrity({
+            database: 'graph',
+            sampleLimit: 5,
+        });
+        const deleted = await client.trivium.deleteOrphanMappings({
+            database: 'graph',
+            limit: 10,
+        });
+
+        expect(integrity.orphanMappingCount).toBe(1);
+        expect(deleted.deletedCount).toBe(1);
+        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/trivium/check-mappings-integrity', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+                sampleLimit: 5,
+            },
+        });
+        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/trivium/delete-orphan-mappings', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+                limit: 10,
+            },
+        });
+    });
+
     it('routes sql.listMigrationsPage through the SQL migration listing endpoint', async () => {
         const { AuthorityClient } = await import('./client.js');
 
@@ -342,7 +408,16 @@ describe('AuthorityClient', () => {
     });
 });
 
-function buildProbe(overrides: Partial<AuthorityFeatureFlags['trivium']> = {}): AuthorityProbeResponse {
+function buildProbe(overrides: Partial<{
+    resolveId: boolean;
+    resolveMany: boolean;
+    upsert: boolean;
+    bulkMutations: boolean;
+    filterWherePage: boolean;
+    queryPage: boolean;
+    mappingPages: boolean;
+    mappingIntegrity: boolean;
+}> = {}): AuthorityProbeResponse {
     return {
         id: 'authority',
         online: true,
@@ -377,6 +452,7 @@ function buildProbe(overrides: Partial<AuthorityFeatureFlags['trivium']> = {}): 
                 filterWherePage: true,
                 queryPage: true,
                 mappingPages: true,
+                mappingIntegrity: true,
                 ...overrides,
             },
             transfers: {

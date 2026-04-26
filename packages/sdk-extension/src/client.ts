@@ -51,7 +51,11 @@ import type {
     TriviumBulkUpsertResponse,
     TriviumBulkUpsertResponseItem,
     TriviumBuildTextIndexRequest,
+    TriviumCheckMappingsIntegrityRequest,
+    TriviumCheckMappingsIntegrityResponse,
     TriviumDeleteRequest,
+    TriviumDeleteOrphanMappingsRequest,
+    TriviumDeleteOrphanMappingsResponse,
     TriviumFilterWhereRequest,
     TriviumFilterWhereResponse,
     TriviumFlushRequest,
@@ -144,6 +148,7 @@ export type AuthorityFeaturePath =
     | 'trivium.filterWherePage'
     | 'trivium.queryPage'
     | 'trivium.mappingPages'
+    | 'trivium.mappingIntegrity'
     | 'transfers.blob'
     | 'transfers.fs'
     | 'transfers.httpFetch'
@@ -293,6 +298,8 @@ export class AuthorityClient {
         query: (input: TriviumQueryRequest) => Promise<TriviumQueryRow[]>;
         queryPage: (input: TriviumQueryRequest) => Promise<TriviumQueryResponse>;
         listMappingsPage: (input?: TriviumListMappingsRequest) => Promise<TriviumListMappingsResponse>;
+        checkMappingsIntegrity: (input?: TriviumCheckMappingsIntegrityRequest) => Promise<TriviumCheckMappingsIntegrityResponse>;
+        deleteOrphanMappings: (input?: TriviumDeleteOrphanMappingsRequest) => Promise<TriviumDeleteOrphanMappingsResponse>;
         indexText: (input: TriviumIndexTextRequest) => Promise<void>;
         indexKeyword: (input: TriviumIndexKeywordRequest) => Promise<void>;
         buildTextIndex: (input?: TriviumBuildTextIndexRequest) => Promise<void>;
@@ -893,6 +900,38 @@ export class AuthorityClient {
                     reason: `分页列出 Trivium externalId 映射（${database}）`,
                 });
                 return await this.requestWithSession<TriviumListMappingsResponse>('/trivium/list-mappings', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            checkMappingsIntegrity: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.mappingIntegrity', 'Authority 当前版本尚未提供 Trivium 映射完整性检查能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `检查 Trivium externalId 映射完整性（${database}）`,
+                });
+                return await this.requestWithSession<TriviumCheckMappingsIntegrityResponse>('/trivium/check-mappings-integrity', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            deleteOrphanMappings: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.mappingIntegrity', 'Authority 当前版本尚未提供 Trivium orphan mapping 清理能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `清理 Trivium orphan externalId 映射（${database}）`,
+                });
+                return await this.requestWithSession<TriviumDeleteOrphanMappingsResponse>('/trivium/delete-orphan-mappings', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -1930,6 +1969,8 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
             return features.trivium.queryPage;
         case 'trivium.mappingPages':
             return features.trivium.mappingPages;
+        case 'trivium.mappingIntegrity':
+            return features.trivium.mappingIntegrity;
         case 'transfers.blob':
             return features.transfers.blob;
         case 'transfers.fs':

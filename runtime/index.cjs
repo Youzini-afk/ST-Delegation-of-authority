@@ -97,6 +97,7 @@ function buildAuthorityFeatureFlags(isAdmin) {
             filterWherePage: true,
             queryPage: true,
             mappingPages: true,
+            mappingIntegrity: true,
         },
         transfers: {
             blob: true,
@@ -1715,6 +1716,52 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
                 database,
                 nodeCount: result.nodeCount,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/check-mappings-integrity', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.checkMappingsIntegrity(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium check mappings integrity', {
+                database,
+                mappingCount: result.mappingCount,
+                orphanMappingCount: result.orphanMappingCount,
+                missingMappingCount: result.missingMappingCount,
+                issueCount: result.issues.length,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/delete-orphan-mappings', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            const result = await runtime.trivium.deleteOrphanMappings(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium delete orphan mappings', {
+                database,
+                dryRun: payload.dryRun === true,
+                orphanCount: result.orphanCount,
+                deletedCount: result.deletedCount,
+                hasMore: result.hasMore,
             });
             ok(res, result);
         }
@@ -4629,6 +4676,8 @@ const META_TABLE = 'authority_trivium_meta';
 const LAST_FLUSH_META_KEY = 'last_flush_at';
 const DEFAULT_CURSOR_PAGE_LIMIT = 50;
 const MAX_CURSOR_PAGE_LIMIT = 500;
+const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
+const DEFAULT_ORPHAN_DELETE_LIMIT = 100;
 class TriviumService {
     core;
     schemaReady = new Map();
@@ -4965,6 +5014,94 @@ class TriviumService {
             orphanMappingCount,
         };
     }
+    async checkMappingsIntegrity(user, extensionId, request = {}) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const sampleLimit = getBoundedPositiveInteger(request.sampleLimit, DEFAULT_INTEGRITY_SAMPLE_LIMIT, MAX_CURSOR_PAGE_LIMIT, 'sampleLimit');
+        const analysis = await this.analyzeMappingsIntegrity(dbPath, mappingDbPath, database);
+        const issues = [];
+        const pushIssue = (issue) => {
+            if (issues.length < sampleLimit) {
+                issues.push(issue);
+            }
+        };
+        for (const mapping of analysis.orphanMappings) {
+            pushIssue({
+                type: 'orphanMapping',
+                message: `Trivium mapping ${mapping.namespace}:${mapping.externalId} points to missing node ${mapping.id}`,
+                id: mapping.id,
+                externalId: mapping.externalId,
+                namespace: mapping.namespace,
+            });
+        }
+        for (const id of analysis.missingNodeIds) {
+            pushIssue({
+                type: 'missingMapping',
+                message: `Trivium node ${id} has no externalId mapping`,
+                id,
+                externalId: null,
+                namespace: null,
+            });
+        }
+        for (const group of analysis.duplicateInternalGroups) {
+            const first = group[0];
+            if (!first) {
+                continue;
+            }
+            pushIssue({
+                type: 'duplicateInternalId',
+                message: `Trivium internalId ${first.id} appears in ${group.length} mapping rows`,
+                id: first.id,
+                externalId: first.externalId,
+                namespace: first.namespace,
+            });
+        }
+        for (const group of analysis.duplicateExternalGroups) {
+            const first = group[0];
+            if (!first) {
+                continue;
+            }
+            pushIssue({
+                type: 'duplicateExternalId',
+                message: `Trivium externalId ${first.namespace}:${first.externalId} appears in ${group.length} mapping rows`,
+                id: first.id,
+                externalId: first.externalId,
+                namespace: first.namespace,
+            });
+        }
+        const totalIssues = analysis.orphanMappings.length
+            + analysis.missingNodeIds.length
+            + analysis.duplicateInternalGroups.length
+            + analysis.duplicateExternalGroups.length;
+        return {
+            ok: totalIssues === 0,
+            mappingCount: analysis.mappings.length,
+            nodeCount: analysis.nodeIds.length,
+            orphanMappingCount: analysis.orphanMappings.length,
+            missingMappingCount: analysis.missingNodeIds.length,
+            duplicateInternalIdCount: analysis.duplicateInternalGroups.length,
+            duplicateExternalIdCount: analysis.duplicateExternalGroups.length,
+            issues,
+            sampled: totalIssues > issues.length,
+        };
+    }
+    async deleteOrphanMappings(user, extensionId, request = {}) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const limit = getBoundedPositiveInteger(request.limit, DEFAULT_ORPHAN_DELETE_LIMIT, MAX_CURSOR_PAGE_LIMIT, 'limit');
+        const analysis = await this.analyzeMappingsIntegrity(dbPath, mappingDbPath, database);
+        const orphans = analysis.orphanMappings.slice(0, limit);
+        if (!request.dryRun && orphans.length > 0) {
+            await this.deleteMappingsByInternalIds(mappingDbPath, orphans.map(item => item.id));
+        }
+        return {
+            scannedCount: analysis.mappings.length,
+            orphanCount: analysis.orphanMappings.length,
+            deletedCount: request.dryRun ? 0 : orphans.length,
+            hasMore: analysis.orphanMappings.length > orphans.length,
+            orphans,
+        };
+    }
     async listMappingsPage(user, extensionId, request = {}) {
         const database = getTriviumDatabaseName(request.database);
         const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
@@ -5160,6 +5297,79 @@ class TriviumService {
         }
         return orphanCount;
     }
+    async analyzeMappingsIntegrity(dbPath, mappingDbPath, database) {
+        const mappings = await this.listAllMappings(mappingDbPath);
+        const nodeIds = await this.listAllNodeIds(dbPath, database);
+        const nodeIdSet = new Set(nodeIds);
+        const mappedIdSet = new Set();
+        const byInternalId = new Map();
+        const byExternalId = new Map();
+        for (const mapping of mappings) {
+            mappedIdSet.add(mapping.id);
+            const internalGroup = byInternalId.get(mapping.id);
+            if (internalGroup) {
+                internalGroup.push(mapping);
+            }
+            else {
+                byInternalId.set(mapping.id, [mapping]);
+            }
+            const externalKey = `${mapping.namespace}\u0000${mapping.externalId}`;
+            const externalGroup = byExternalId.get(externalKey);
+            if (externalGroup) {
+                externalGroup.push(mapping);
+            }
+            else {
+                byExternalId.set(externalKey, [mapping]);
+            }
+        }
+        return {
+            mappings,
+            nodeIds,
+            orphanMappings: mappings.filter(mapping => !nodeIdSet.has(mapping.id)),
+            missingNodeIds: nodeIds.filter(id => !mappedIdSet.has(id)),
+            duplicateInternalGroups: [...byInternalId.entries()]
+                .filter(([, group]) => group.length > 1)
+                .sort((left, right) => left[0] - right[0])
+                .map(([, group]) => group),
+            duplicateExternalGroups: [...byExternalId.entries()]
+                .filter(([, group]) => group.length > 1)
+                .sort((left, right) => left[0].localeCompare(right[0]))
+                .map(([, group]) => group),
+        };
+    }
+    async listAllMappings(mappingDbPath) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingDbPath)) {
+            return [];
+        }
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace, created_at AS createdAt, updated_at AS updatedAt
+                FROM ${EXTERNAL_IDS_TABLE}
+                ORDER BY internal_id ASC, namespace ASC, external_id ASC`,
+        });
+        return result.rows.map(row => readMappingRecord(row));
+    }
+    async listAllNodeIds(dbPath, database) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath)) {
+            return [];
+        }
+        const ids = [];
+        let cursor = null;
+        do {
+            const response = await this.core.queryTriviumPage(dbPath, {
+                database,
+                cypher: 'MATCH (n) RETURN n',
+                page: {
+                    ...(cursor ? { cursor } : {}),
+                    limit: MAX_CURSOR_PAGE_LIMIT,
+                },
+            });
+            for (const row of response.rows) {
+                ids.push(getRequiredNumericId(row.n?.id, 'id'));
+            }
+            cursor = response.page?.nextCursor ?? null;
+        } while (cursor);
+        return [...new Set(ids)].sort((left, right) => left - right);
+    }
     async insertMappingAuto(mappingDbPath, externalId, namespace) {
         const timestamp = new Date().toISOString();
         const result = await this.core.execSql(mappingDbPath, {
@@ -5273,6 +5483,15 @@ function getNonNegativeInteger(value) {
         }
     }
     return 0;
+}
+function getBoundedPositiveInteger(value, defaultValue, maxValue, label) {
+    if (value == null) {
+        return defaultValue;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return Math.min(value, maxValue);
+    }
+    throw new Error(`Trivium ${label} must be a positive safe integer`);
 }
 function buildEmptyCursorPage(page) {
     const limit = Number.isInteger(page.limit) && Number(page.limit) > 0

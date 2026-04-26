@@ -228,6 +228,81 @@ describe('TriviumService', () => {
         expect(integrityStat.orphanMappingCount).toBe(1);
     });
 
+    it('checks mapping integrity and deletes orphan mappings without deleting live nodes', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha', vector: [1, 0], payload: { name: 'alpha' } },
+                { externalId: 'beta', vector: [0, 1], payload: { name: 'beta' } },
+            ],
+        });
+
+        const dbPath = path.join(
+            getUserAuthorityPaths(user).triviumPrivateDir,
+            sanitizeFileSegment('third-party/ext-a'),
+            'graph.tdb',
+        );
+        await core.bulkDeleteTrivium(dbPath, {
+            database: 'graph',
+            items: [{ id: 2 }],
+        });
+        await core.bulkUpsertTrivium(dbPath, {
+            database: 'graph',
+            items: [{ id: 3, vector: [1, 1], payload: { name: 'gamma' } }],
+        });
+
+        const integrity = await trivium.checkMappingsIntegrity(user, 'third-party/ext-a', {
+            database: 'graph',
+            sampleLimit: 10,
+        });
+        expect(integrity.ok).toBe(false);
+        expect(integrity.mappingCount).toBe(2);
+        expect(integrity.nodeCount).toBe(2);
+        expect(integrity.orphanMappingCount).toBe(1);
+        expect(integrity.missingMappingCount).toBe(1);
+        expect(integrity.duplicateInternalIdCount).toBe(0);
+        expect(integrity.duplicateExternalIdCount).toBe(0);
+        expect(integrity.issues).toEqual(expect.arrayContaining([
+            expect.objectContaining({ type: 'orphanMapping', id: 2, externalId: 'beta', namespace: 'default' }),
+            expect.objectContaining({ type: 'missingMapping', id: 3, externalId: null, namespace: null }),
+        ]));
+
+        const deleted = await trivium.deleteOrphanMappings(user, 'third-party/ext-a', {
+            database: 'graph',
+            limit: 10,
+        });
+        expect(deleted.scannedCount).toBe(2);
+        expect(deleted.orphanCount).toBe(1);
+        expect(deleted.deletedCount).toBe(1);
+        expect(deleted.hasMore).toBe(false);
+        expect(deleted.orphans).toEqual([
+            expect.objectContaining({ id: 2, externalId: 'beta', namespace: 'default' }),
+        ]);
+
+        const betaMapping = await trivium.resolveId(user, 'third-party/ext-a', {
+            database: 'graph',
+            externalId: 'beta',
+        });
+        expect(betaMapping.id).toBeNull();
+
+        const remainingNode = await trivium.get(user, 'third-party/ext-a', {
+            database: 'graph',
+            id: 3,
+        });
+        expect(remainingNode?.id).toBe(3);
+
+        const afterDelete = await trivium.checkMappingsIntegrity(user, 'third-party/ext-a', {
+            database: 'graph',
+            sampleLimit: 10,
+        });
+        expect(afterDelete.orphanMappingCount).toBe(0);
+        expect(afterDelete.missingMappingCount).toBe(1);
+    });
+
     it('returns page-aware enriched filter/query responses while keeping array wrappers compatible', async () => {
         const user = createUser(dirs);
         const trivium = new TriviumService(createMockCore());
@@ -462,6 +537,7 @@ function createMockCore(): CoreService {
             return toExecResult(0, null);
         },
         async bulkUpsertTrivium(dbPath: string, request: ControlTriviumBulkUpsertRequest): Promise<ControlTriviumBulkUpsertResponse> {
+            touch(dbPath);
             const store = getDatabase(dbPath);
             const items = request.items.map((item, index) => {
                 const existing = store.get(item.id);
@@ -542,14 +618,15 @@ function createMockCore(): CoreService {
                 ...(request.page ? { page: toPage(nodes.length, limit) } : {}),
             };
         },
-        async queryTriviumPage(dbPath: string, request: { page?: { limit?: number } }): Promise<TriviumQueryResponse> {
+        async queryTriviumPage(dbPath: string, request: { page?: { cursor?: string; limit?: number } }): Promise<TriviumQueryResponse> {
             const rows = [...getDatabase(dbPath).values()]
                 .sort((left, right) => left.id - right.id)
                 .map(node => ({ n: JSON.parse(JSON.stringify(node)) as TriviumNodeView }));
+            const offset = Number(request.page?.cursor ?? '0');
             const limit = request.page?.limit ?? rows.length;
             return {
-                rows: rows.slice(0, limit),
-                ...(request.page ? { page: toPage(rows.length, limit) } : {}),
+                rows: rows.slice(offset, offset + limit),
+                ...(request.page ? { page: toPage(rows.length, limit, offset) } : {}),
             };
         },
         async statTrivium(dbPath: string, request: { database?: string }): Promise<TriviumStatResponse> {

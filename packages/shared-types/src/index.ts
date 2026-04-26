@@ -106,6 +106,7 @@ export interface AuthorityFeatureFlags {
         filterWherePage: boolean;
         queryPage: boolean;
         mappingPages: boolean;
+        mappingIntegrity: boolean;
     };
     transfers: {
         blob: boolean;
@@ -1141,6 +1142,45 @@ export interface TriviumListMappingsRequest extends TriviumOpenOptions {
 export interface TriviumListMappingsResponse {
     mappings: TriviumMappingRecord[];
     page?: CursorPageInfo;
+}
+
+export type TriviumMappingIntegrityIssueType = 'orphanMapping' | 'missingMapping' | 'duplicateInternalId' | 'duplicateExternalId';
+
+export interface TriviumMappingIntegrityIssue {
+    type: TriviumMappingIntegrityIssueType;
+    message: string;
+    id: number | null;
+    externalId: string | null;
+    namespace: string | null;
+}
+
+export interface TriviumCheckMappingsIntegrityRequest extends TriviumOpenOptions {
+    sampleLimit?: number;
+}
+
+export interface TriviumCheckMappingsIntegrityResponse {
+    ok: boolean;
+    mappingCount: number;
+    nodeCount: number;
+    orphanMappingCount: number;
+    missingMappingCount: number;
+    duplicateInternalIdCount: number;
+    duplicateExternalIdCount: number;
+    issues: TriviumMappingIntegrityIssue[];
+    sampled: boolean;
+}
+
+export interface TriviumDeleteOrphanMappingsRequest extends TriviumOpenOptions {
+    limit?: number;
+    dryRun?: boolean;
+}
+
+export interface TriviumDeleteOrphanMappingsResponse {
+    scannedCount: number;
+    orphanCount: number;
+    deletedCount: number;
+    hasMore: boolean;
+    orphans: TriviumMappingRecord[];
 }
 
 export type TriviumUpsertAction = 'inserted' | 'updated';

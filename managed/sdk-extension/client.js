@@ -595,6 +595,38 @@ export class AuthorityClient {
                     },
                 });
             },
+            checkMappingsIntegrity: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.mappingIntegrity', 'Authority 当前版本尚未提供 Trivium 映射完整性检查能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `检查 Trivium externalId 映射完整性（${database}）`,
+                });
+                return await this.requestWithSession('/trivium/check-mappings-integrity', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            deleteOrphanMappings: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.requireFeature('trivium.mappingIntegrity', 'Authority 当前版本尚未提供 Trivium orphan mapping 清理能力');
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `清理 Trivium orphan externalId 映射（${database}）`,
+                });
+                return await this.requestWithSession('/trivium/delete-orphan-mappings', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             indexText: async (input) => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
@@ -1488,6 +1520,8 @@ function getFeatureAvailability(features, feature) {
             return features.trivium.queryPage;
         case 'trivium.mappingPages':
             return features.trivium.mappingPages;
+        case 'trivium.mappingIntegrity':
+            return features.trivium.mappingIntegrity;
         case 'transfers.blob':
             return features.transfers.blob;
         case 'transfers.fs':

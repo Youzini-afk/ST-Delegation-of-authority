@@ -71,6 +71,7 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
             filterWherePage: true,
             queryPage: true,
             mappingPages: true,
+            mappingIntegrity: true,
         },
         transfers: {
             blob: true,

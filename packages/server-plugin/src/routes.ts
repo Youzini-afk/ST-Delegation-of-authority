@@ -35,8 +35,10 @@ import type {
     TriviumBulkUnlinkRequest,
     TriviumBulkUpsertRequest,
     TriviumBuildTextIndexRequest,
+    TriviumCheckMappingsIntegrityRequest,
     TriviumDatabaseRecord,
     TriviumDeleteRequest,
+    TriviumDeleteOrphanMappingsRequest,
     TriviumFilterWhereRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
@@ -1708,6 +1710,54 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
                 database,
                 nodeCount: result.nodeCount,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/check-mappings-integrity', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumCheckMappingsIntegrityRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const result = await runtime.trivium.checkMappingsIntegrity(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium check mappings integrity', {
+                database,
+                mappingCount: result.mappingCount,
+                orphanMappingCount: result.orphanMappingCount,
+                missingMappingCount: result.missingMappingCount,
+                issueCount: result.issues.length,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/delete-orphan-mappings', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumDeleteOrphanMappingsRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const result = await runtime.trivium.deleteOrphanMappings(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium delete orphan mappings', {
+                database,
+                dryRun: payload.dryRun === true,
+                orphanCount: result.orphanCount,
+                deletedCount: result.deletedCount,
+                hasMore: result.hasMore,
             });
             ok(res, result);
         } catch (error) {

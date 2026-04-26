@@ -14,13 +14,18 @@ import type {
     TriviumBulkUnlinkRequest,
     TriviumBulkUpsertRequest,
     TriviumBulkUpsertResponse,
+    TriviumCheckMappingsIntegrityRequest,
+    TriviumCheckMappingsIntegrityResponse,
     TriviumDeleteRequest,
+    TriviumDeleteOrphanMappingsRequest,
+    TriviumDeleteOrphanMappingsResponse,
     TriviumFilterWhereRequest,
     TriviumFilterWhereResponse,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumListMappingsRequest,
     TriviumListMappingsResponse,
+    TriviumMappingIntegrityIssue,
     TriviumMappingRecord,
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
@@ -53,6 +58,8 @@ const META_TABLE = 'authority_trivium_meta';
 const LAST_FLUSH_META_KEY = 'last_flush_at';
 const DEFAULT_CURSOR_PAGE_LIMIT = 50;
 const MAX_CURSOR_PAGE_LIMIT = 500;
+const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
+const DEFAULT_ORPHAN_DELETE_LIMIT = 100;
 
 interface ResolvedReference extends TriviumResolvedNodeReference {
     createdMapping: boolean;
@@ -67,6 +74,15 @@ interface IndexedCoreUpsertItem {
 interface IndexedCoreMutationItem<T> {
     originalIndex: number;
     request: T;
+}
+
+interface MappingIntegrityAnalysis {
+    mappings: TriviumMappingRecord[];
+    nodeIds: number[];
+    orphanMappings: TriviumMappingRecord[];
+    missingNodeIds: number[];
+    duplicateInternalGroups: TriviumMappingRecord[][];
+    duplicateExternalGroups: TriviumMappingRecord[][];
 }
 
 export class TriviumService {
@@ -430,6 +446,113 @@ export class TriviumService {
         };
     }
 
+    async checkMappingsIntegrity(
+        user: UserContext,
+        extensionId: string,
+        request: TriviumCheckMappingsIntegrityRequest = {},
+    ): Promise<TriviumCheckMappingsIntegrityResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const sampleLimit = getBoundedPositiveInteger(request.sampleLimit, DEFAULT_INTEGRITY_SAMPLE_LIMIT, MAX_CURSOR_PAGE_LIMIT, 'sampleLimit');
+        const analysis = await this.analyzeMappingsIntegrity(dbPath, mappingDbPath, database);
+
+        const issues: TriviumMappingIntegrityIssue[] = [];
+        const pushIssue = (issue: TriviumMappingIntegrityIssue): void => {
+            if (issues.length < sampleLimit) {
+                issues.push(issue);
+            }
+        };
+
+        for (const mapping of analysis.orphanMappings) {
+            pushIssue({
+                type: 'orphanMapping',
+                message: `Trivium mapping ${mapping.namespace}:${mapping.externalId} points to missing node ${mapping.id}`,
+                id: mapping.id,
+                externalId: mapping.externalId,
+                namespace: mapping.namespace,
+            });
+        }
+
+        for (const id of analysis.missingNodeIds) {
+            pushIssue({
+                type: 'missingMapping',
+                message: `Trivium node ${id} has no externalId mapping`,
+                id,
+                externalId: null,
+                namespace: null,
+            });
+        }
+
+        for (const group of analysis.duplicateInternalGroups) {
+            const first = group[0];
+            if (!first) {
+                continue;
+            }
+            pushIssue({
+                type: 'duplicateInternalId',
+                message: `Trivium internalId ${first.id} appears in ${group.length} mapping rows`,
+                id: first.id,
+                externalId: first.externalId,
+                namespace: first.namespace,
+            });
+        }
+
+        for (const group of analysis.duplicateExternalGroups) {
+            const first = group[0];
+            if (!first) {
+                continue;
+            }
+            pushIssue({
+                type: 'duplicateExternalId',
+                message: `Trivium externalId ${first.namespace}:${first.externalId} appears in ${group.length} mapping rows`,
+                id: first.id,
+                externalId: first.externalId,
+                namespace: first.namespace,
+            });
+        }
+
+        const totalIssues = analysis.orphanMappings.length
+            + analysis.missingNodeIds.length
+            + analysis.duplicateInternalGroups.length
+            + analysis.duplicateExternalGroups.length;
+
+        return {
+            ok: totalIssues === 0,
+            mappingCount: analysis.mappings.length,
+            nodeCount: analysis.nodeIds.length,
+            orphanMappingCount: analysis.orphanMappings.length,
+            missingMappingCount: analysis.missingNodeIds.length,
+            duplicateInternalIdCount: analysis.duplicateInternalGroups.length,
+            duplicateExternalIdCount: analysis.duplicateExternalGroups.length,
+            issues,
+            sampled: totalIssues > issues.length,
+        };
+    }
+
+    async deleteOrphanMappings(
+        user: UserContext,
+        extensionId: string,
+        request: TriviumDeleteOrphanMappingsRequest = {},
+    ): Promise<TriviumDeleteOrphanMappingsResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const limit = getBoundedPositiveInteger(request.limit, DEFAULT_ORPHAN_DELETE_LIMIT, MAX_CURSOR_PAGE_LIMIT, 'limit');
+        const analysis = await this.analyzeMappingsIntegrity(dbPath, mappingDbPath, database);
+        const orphans = analysis.orphanMappings.slice(0, limit);
+
+        if (!request.dryRun && orphans.length > 0) {
+            await this.deleteMappingsByInternalIds(mappingDbPath, orphans.map(item => item.id));
+        }
+
+        return {
+            scannedCount: analysis.mappings.length,
+            orphanCount: analysis.orphanMappings.length,
+            deletedCount: request.dryRun ? 0 : orphans.length,
+            hasMore: analysis.orphanMappings.length > orphans.length,
+            orphans,
+        };
+    }
+
     async listMappingsPage(user: UserContext, extensionId: string, request: TriviumListMappingsRequest = {}): Promise<TriviumListMappingsResponse> {
         const database = getTriviumDatabaseName(request.database);
         const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
@@ -645,6 +768,87 @@ export class TriviumService {
         return orphanCount;
     }
 
+    private async analyzeMappingsIntegrity(dbPath: string, mappingDbPath: string, database: string): Promise<MappingIntegrityAnalysis> {
+        const mappings = await this.listAllMappings(mappingDbPath);
+        const nodeIds = await this.listAllNodeIds(dbPath, database);
+        const nodeIdSet = new Set(nodeIds);
+        const mappedIdSet = new Set<number>();
+        const byInternalId = new Map<number, TriviumMappingRecord[]>();
+        const byExternalId = new Map<string, TriviumMappingRecord[]>();
+
+        for (const mapping of mappings) {
+            mappedIdSet.add(mapping.id);
+            const internalGroup = byInternalId.get(mapping.id);
+            if (internalGroup) {
+                internalGroup.push(mapping);
+            } else {
+                byInternalId.set(mapping.id, [mapping]);
+            }
+
+            const externalKey = `${mapping.namespace}\u0000${mapping.externalId}`;
+            const externalGroup = byExternalId.get(externalKey);
+            if (externalGroup) {
+                externalGroup.push(mapping);
+            } else {
+                byExternalId.set(externalKey, [mapping]);
+            }
+        }
+
+        return {
+            mappings,
+            nodeIds,
+            orphanMappings: mappings.filter(mapping => !nodeIdSet.has(mapping.id)),
+            missingNodeIds: nodeIds.filter(id => !mappedIdSet.has(id)),
+            duplicateInternalGroups: [...byInternalId.entries()]
+                .filter(([, group]) => group.length > 1)
+                .sort((left, right) => left[0] - right[0])
+                .map(([, group]) => group),
+            duplicateExternalGroups: [...byExternalId.entries()]
+                .filter(([, group]) => group.length > 1)
+                .sort((left, right) => left[0].localeCompare(right[0]))
+                .map(([, group]) => group),
+        };
+    }
+
+    private async listAllMappings(mappingDbPath: string): Promise<TriviumMappingRecord[]> {
+        if (!fs.existsSync(mappingDbPath)) {
+            return [];
+        }
+        const result = await this.core.querySql(mappingDbPath, {
+            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace, created_at AS createdAt, updated_at AS updatedAt
+                FROM ${EXTERNAL_IDS_TABLE}
+                ORDER BY internal_id ASC, namespace ASC, external_id ASC`,
+        });
+        return result.rows.map(row => readMappingRecord(row));
+    }
+
+    private async listAllNodeIds(dbPath: string, database: string): Promise<number[]> {
+        if (!fs.existsSync(dbPath)) {
+            return [];
+        }
+
+        const ids: number[] = [];
+        let cursor: string | null = null;
+        do {
+            const response = await this.core.queryTriviumPage(dbPath, {
+                database,
+                cypher: 'MATCH (n) RETURN n',
+                page: {
+                    ...(cursor ? { cursor } : {}),
+                    limit: MAX_CURSOR_PAGE_LIMIT,
+                },
+            });
+
+            for (const row of response.rows) {
+                ids.push(getRequiredNumericId(row.n?.id, 'id'));
+            }
+
+            cursor = response.page?.nextCursor ?? null;
+        } while (cursor);
+
+        return [...new Set(ids)].sort((left, right) => left - right);
+    }
+
     private async insertMappingAuto(mappingDbPath: string, externalId: string, namespace: string): Promise<number> {
         const timestamp = new Date().toISOString();
         const result = await this.core.execSql(mappingDbPath, {
@@ -771,6 +975,16 @@ function getNonNegativeInteger(value: unknown): number {
         }
     }
     return 0;
+}
+
+function getBoundedPositiveInteger(value: unknown, defaultValue: number, maxValue: number, label: string): number {
+    if (value == null) {
+        return defaultValue;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+        return Math.min(value, maxValue);
+    }
+    throw new Error(`Trivium ${label} must be a positive safe integer`);
 }
 
 function buildEmptyCursorPage(page: CursorPageRequest): CursorPageInfo {
