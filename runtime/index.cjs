@@ -711,55 +711,189 @@ async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatab
         files,
     };
 }
+async function buildProbeResponse(runtime, user) {
+    await runtime.core.refreshHealth();
+    const install = runtime.install.getStatus();
+    const core = runtime.core.getStatus();
+    const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin);
+    const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
+    const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
+    return {
+        id: 'authority',
+        online: true,
+        version: install.pluginVersion,
+        pluginId: _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_PLUGIN_ID,
+        sdkExtensionId: _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID,
+        pluginVersion: install.pluginVersion,
+        sdkBundledVersion: install.sdkBundledVersion,
+        sdkDeployedVersion: install.sdkDeployedVersion,
+        coreBundledVersion: install.coreBundledVersion,
+        coreArtifactPlatform: install.coreArtifactPlatform,
+        coreArtifactPlatforms: install.coreArtifactPlatforms,
+        coreArtifactHash: install.coreArtifactHash,
+        coreBinarySha256: install.coreBinarySha256,
+        coreVerified: install.coreVerified,
+        coreMessage: install.coreMessage,
+        installStatus: install.installStatus,
+        installMessage: install.installMessage,
+        storageRoot: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(user.rootDir, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_DATA_FOLDER, 'storage'),
+        features,
+        limits: {
+            maxRequestBytes: core.health?.limits.maxRequestBytes ?? null,
+            maxKvValueBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_KV_VALUE_BYTES,
+            maxBlobBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_BLOB_BYTES,
+            maxHttpBodyBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_BODY_BYTES,
+            maxHttpResponseBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_RESPONSE_BYTES,
+            maxEventPollLimit: core.health?.limits.maxEventPollLimit ?? null,
+            maxDataTransferBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_DATA_TRANSFER_BYTES,
+            dataTransferChunkBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_CHUNK_BYTES,
+            dataTransferInlineThresholdBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+            effectiveInlineThresholdBytes,
+            effectiveTransferMaxBytes,
+        },
+        jobs: {
+            builtinTypes: [..._constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES],
+            registry: core.health?.jobRegistrySummary ?? _constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_REGISTRY_SUMMARY,
+        },
+        core,
+    };
+}
+async function buildUsageSummaryExtension(runtime, user, extension, sqlDatabases, triviumDatabases) {
+    const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
+    return {
+        extension,
+        grantedCount: grants.filter(grant => grant.status === 'granted').length,
+        deniedCount: grants.filter(grant => grant.status === 'denied').length,
+        storage: await buildExtensionStorageSummary(runtime, user, extension.id, sqlDatabases, triviumDatabases),
+    };
+}
+function buildUsageSummaryTotals(extensions) {
+    const initialTotals = {
+        extensionCount: 0,
+        kvEntries: 0,
+        blobCount: 0,
+        blobBytes: 0,
+        databaseCount: 0,
+        databaseBytes: 0,
+        sqlDatabaseCount: 0,
+        sqlDatabaseBytes: 0,
+        triviumDatabaseCount: 0,
+        triviumDatabaseBytes: 0,
+        files: {
+            fileCount: 0,
+            directoryCount: 0,
+            totalSizeBytes: 0,
+            latestUpdatedAt: null,
+        },
+    };
+    return extensions.reduce((totals, entry) => ({
+        extensionCount: totals.extensionCount + 1,
+        kvEntries: totals.kvEntries + entry.storage.kvEntries,
+        blobCount: totals.blobCount + entry.storage.blobCount,
+        blobBytes: totals.blobBytes + entry.storage.blobBytes,
+        databaseCount: totals.databaseCount + entry.storage.databaseCount,
+        databaseBytes: totals.databaseBytes + entry.storage.databaseBytes,
+        sqlDatabaseCount: totals.sqlDatabaseCount + entry.storage.sqlDatabaseCount,
+        sqlDatabaseBytes: totals.sqlDatabaseBytes + entry.storage.sqlDatabaseBytes,
+        triviumDatabaseCount: totals.triviumDatabaseCount + entry.storage.triviumDatabaseCount,
+        triviumDatabaseBytes: totals.triviumDatabaseBytes + entry.storage.triviumDatabaseBytes,
+        files: {
+            fileCount: totals.files.fileCount + entry.storage.files.fileCount,
+            directoryCount: totals.files.directoryCount + entry.storage.files.directoryCount,
+            totalSizeBytes: totals.files.totalSizeBytes + entry.storage.files.totalSizeBytes,
+            latestUpdatedAt: pickLatestIsoTimestamp(totals.files.latestUpdatedAt, entry.storage.files.latestUpdatedAt),
+        },
+    }), initialTotals);
+}
+function pickLatestIsoTimestamp(left, right) {
+    if (!left) {
+        return right;
+    }
+    if (!right) {
+        return left;
+    }
+    return left >= right ? left : right;
+}
+async function buildUsageSummary(runtime, user) {
+    const extensions = await runtime.extensions.listExtensions(user);
+    const summaries = await Promise.all(extensions.map(async (extension) => {
+        const sqlDatabases = (await listPrivateSqlDatabases(runtime, user, extension.id)).databases;
+        const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extension.id)).databases;
+        return await buildUsageSummaryExtension(runtime, user, extension, sqlDatabases, triviumDatabases);
+    }));
+    return {
+        generatedAt: new Date().toISOString(),
+        totals: buildUsageSummaryTotals(summaries),
+        extensions: summaries,
+    };
+}
+async function buildExtensionDiagnosticSnapshot(runtime, user, extensionId, extension) {
+    const resolvedExtension = extension ?? await runtime.extensions.getExtension(user, extensionId);
+    if (!resolvedExtension) {
+        throw new Error('Extension not found');
+    }
+    const databases = (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
+    const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
+    const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
+    const jobsPage = await runtime.jobs.listPage(user, extensionId);
+    return {
+        extension: resolvedExtension,
+        grants: await runtime.permissions.listPersistentGrants(user, extensionId),
+        policies: await runtime.permissions.getPolicyEntries(user, extensionId),
+        activity,
+        jobs: jobsPage.jobs,
+        jobsPage: jobsPage.page,
+        databases,
+        triviumDatabases,
+        storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),
+    };
+}
+async function buildDiagnosticBundle(runtime, user) {
+    const [probe, policies, usageSummary, jobs] = await Promise.all([
+        buildProbeResponse(runtime, user),
+        runtime.policies.getPolicies(user),
+        buildUsageSummary(runtime, user),
+        runtime.jobs.listPage(user),
+    ]);
+    const extensions = await Promise.all(usageSummary.extensions.map(async (entry) => await buildExtensionDiagnosticSnapshot(runtime, user, entry.extension.id, entry.extension)));
+    return sanitizeDiagnosticPayload({
+        generatedAt: new Date().toISOString(),
+        probe,
+        policies,
+        usageSummary,
+        jobs,
+        extensions,
+    });
+}
+function sanitizeDiagnosticPayload(value) {
+    return sanitizeDiagnosticValue(undefined, value);
+}
+function sanitizeDiagnosticValue(key, value) {
+    if (typeof value === 'string') {
+        return shouldRedactDiagnosticKey(key) ? '<redacted>' : value;
+    }
+    if (Array.isArray(value)) {
+        return value.map(item => sanitizeDiagnosticValue(undefined, item));
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        sanitizeDiagnosticValue(entryKey, entryValue),
+    ]));
+}
+function shouldRedactDiagnosticKey(key) {
+    const normalized = key?.toLowerCase() ?? '';
+    return normalized.includes('path')
+        || normalized.includes('root')
+        || normalized.includes('token')
+        || normalized.includes('secret');
+}
 function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_3__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
-        await runtime.core.refreshHealth();
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-        const install = runtime.install.getStatus();
-        const core = runtime.core.getStatus();
-        const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin);
-        const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
-        const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
-        const response = {
-            id: 'authority',
-            online: true,
-            version: install.pluginVersion,
-            pluginId: _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_PLUGIN_ID,
-            sdkExtensionId: _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID,
-            pluginVersion: install.pluginVersion,
-            sdkBundledVersion: install.sdkBundledVersion,
-            sdkDeployedVersion: install.sdkDeployedVersion,
-            coreBundledVersion: install.coreBundledVersion,
-            coreArtifactPlatform: install.coreArtifactPlatform,
-            coreArtifactPlatforms: install.coreArtifactPlatforms,
-            coreArtifactHash: install.coreArtifactHash,
-            coreBinarySha256: install.coreBinarySha256,
-            coreVerified: install.coreVerified,
-            coreMessage: install.coreMessage,
-            installStatus: install.installStatus,
-            installMessage: install.installMessage,
-            storageRoot: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(user.rootDir, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_DATA_FOLDER, 'storage'),
-            features,
-            limits: {
-                maxRequestBytes: core.health?.limits.maxRequestBytes ?? null,
-                maxKvValueBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_KV_VALUE_BYTES,
-                maxBlobBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_BLOB_BYTES,
-                maxHttpBodyBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_BODY_BYTES,
-                maxHttpResponseBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_RESPONSE_BYTES,
-                maxEventPollLimit: core.health?.limits.maxEventPollLimit ?? null,
-                maxDataTransferBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_DATA_TRANSFER_BYTES,
-                dataTransferChunkBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_CHUNK_BYTES,
-                dataTransferInlineThresholdBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
-                effectiveInlineThresholdBytes,
-                effectiveTransferMaxBytes,
-            },
-            jobs: {
-                builtinTypes: [..._constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES],
-                registry: core.health?.jobRegistrySummary ?? _constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_REGISTRY_SUMMARY,
-            },
-            core,
-        };
-        ok(res, response);
+        ok(res, await buildProbeResponse(runtime, user));
     });
     router.post('/session/init', async (req, res) => {
         try {
@@ -1003,6 +1137,27 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
     });
+    router.post('/transfers/:id/status', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            ok(res, runtime.transfers.status(user, session.extension.id, String(req.params?.id ?? '')));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/transfers/:id/manifest', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const manifest = runtime.transfers.manifest(user, session.extension.id, String(req.params?.id ?? ''));
+            ok(res, manifest);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
     router.post('/transfers/:id/discard', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -1038,6 +1193,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 throw new Error('Permission not granted: storage.blob');
             }
             const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'storage.blob');
+            if (payload.expectedChecksumSha256) {
+                runtime.transfers.assertChecksum(user, session.extension.id, payload.transferId, payload.expectedChecksumSha256);
+            }
             const record = await runtime.storage.putBlobFromSource(user, session.extension.id, String(payload.name ?? 'blob'), transfer.filePath, payload.contentType);
             await runtime.transfers.discard(user, session.extension.id, payload.transferId).catch(() => undefined);
             await runtime.audit.logUsage(user, session.extension.id, 'Blob stored', { id: record.id, via: 'transfer' });
@@ -1177,6 +1335,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 throw new Error('Permission not granted: fs.private');
             }
             const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'fs.private');
+            if (payload.expectedChecksumSha256) {
+                runtime.transfers.assertChecksum(user, session.extension.id, payload.transferId, payload.expectedChecksumSha256);
+            }
             const entry = await runtime.files.writeFileFromSource(user, session.extension.id, {
                 path: payload.path,
                 sourcePath: transfer.filePath,
@@ -2371,6 +2532,30 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/admin/usage-summary', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            ok(res, await buildUsageSummary(runtime, user));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/admin/diagnostic-bundle', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            ok(res, await buildDiagnosticBundle(runtime, user));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -3577,6 +3762,7 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+const EMPTY_FILE_SHA256 = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update('').digest('hex');
 class DataTransferService {
     transfers = new Map();
     async init(user, extensionId, request, maxBytesOverride) {
@@ -3584,8 +3770,9 @@ class DataTransferService {
         const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         const timestamp = new Date().toISOString();
-        const dirPath = this.getTransferDir(user, extensionId, resource);
+        const dirPath = this.getTransferDataDir(user, extensionId, resource);
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(dirPath, { recursive: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(this.getTransferRecordDir(user, extensionId), { recursive: true });
         const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(dirPath, `${transferId}.part`);
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, Buffer.alloc(0));
         const record = {
@@ -3601,8 +3788,9 @@ class DataTransferService {
             updatedAt: timestamp,
             direction: 'upload',
             ownedFile: true,
+            checksumSha256: EMPTY_FILE_SHA256,
         };
-        this.transfers.set(transferId, record);
+        this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
     async append(user, extensionId, transferId, request) {
@@ -3621,10 +3809,13 @@ class DataTransferService {
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().appendFileSync(record.filePath, chunk);
         record.sizeBytes = nextSize;
         record.updatedAt = new Date().toISOString();
+        record.checksumSha256 = computeFileSha256(record.filePath);
+        this.storeRecord(user, extensionId, record);
         return {
             transferId: record.transferId,
             sizeBytes: record.sizeBytes,
             updatedAt: record.updatedAt,
+            checksumSha256: record.checksumSha256,
         };
     }
     async openRead(user, extensionId, request, maxBytesOverride) {
@@ -3637,6 +3828,7 @@ class DataTransferService {
         }
         const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         const timestamp = new Date().toISOString();
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(this.getTransferRecordDir(user, extensionId), { recursive: true });
         const record = {
             transferId,
             userHandle: user.handle,
@@ -3650,8 +3842,9 @@ class DataTransferService {
             updatedAt: timestamp,
             direction: 'download',
             ownedFile: false,
+            checksumSha256: computeFileSha256(filePath),
         };
-        this.transfers.set(transferId, record);
+        this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
     async promoteToDownload(user, extensionId, transferId) {
@@ -3668,7 +3861,26 @@ class DataTransferService {
         record.maxBytes = sizeBytes;
         record.direction = 'download';
         record.updatedAt = new Date().toISOString();
+        record.checksumSha256 = computeFileSha256(filePath);
+        this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
+    }
+    status(user, extensionId, transferId, resource) {
+        return toInitResponse(this.get(user, extensionId, transferId, resource));
+    }
+    manifest(user, extensionId, transferId, resource) {
+        return toManifestResponse(this.get(user, extensionId, transferId, resource));
+    }
+    assertChecksum(user, extensionId, transferId, expectedChecksumSha256) {
+        const record = this.get(user, extensionId, transferId);
+        const expected = normalizeChecksumSha256(expectedChecksumSha256);
+        if (!expected) {
+            throw new Error('Transfer checksum must be a 64-character sha256 hex string');
+        }
+        if (record.checksumSha256.toLowerCase() !== expected) {
+            throw new Error(`Transfer checksum mismatch: expected ${expected}, received ${record.checksumSha256}`);
+        }
+        return record.checksumSha256;
     }
     async read(user, extensionId, transferId, request) {
         const record = this.get(user, extensionId, transferId);
@@ -3696,6 +3908,7 @@ class DataTransferService {
                 sizeBytes: record.sizeBytes,
                 eof: true,
                 updatedAt: record.updatedAt,
+                checksumSha256: record.checksumSha256,
             };
         }
         const handle = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(record.filePath, 'r');
@@ -3710,6 +3923,7 @@ class DataTransferService {
                 sizeBytes: record.sizeBytes,
                 eof: request.offset + bytesRead >= record.sizeBytes,
                 updatedAt: record.updatedAt,
+                checksumSha256: record.checksumSha256,
             };
         }
         finally {
@@ -3717,7 +3931,7 @@ class DataTransferService {
         }
     }
     get(user, extensionId, transferId, resource) {
-        const record = this.transfers.get(transferId);
+        const record = this.transfers.get(transferId) ?? this.loadRecord(user, extensionId, transferId);
         if (!record || record.userHandle !== user.handle || record.extensionId !== extensionId) {
             throw new Error('Transfer not found');
         }
@@ -3729,7 +3943,9 @@ class DataTransferService {
     async discard(user, extensionId, transferId) {
         const record = this.get(user, extensionId, transferId);
         this.transfers.delete(transferId);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.getTransferRecordPath(user, extensionId, transferId), { force: true });
         if (!record.ownedFile) {
+            pruneEmptyTransferDirs(this.getTransferRecordDir(user, extensionId));
             return;
         }
         try {
@@ -3737,12 +3953,49 @@ class DataTransferService {
         }
         finally {
             pruneEmptyTransferDirs(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(record.filePath));
+            pruneEmptyTransferDirs(this.getTransferRecordDir(user, extensionId));
         }
     }
-    getTransferDir(user, extensionId, resource) {
+    loadRecord(user, extensionId, transferId) {
+        const recordPath = this.getTransferRecordPath(user, extensionId, transferId);
+        let parsed;
+        try {
+            parsed = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(recordPath, 'utf8'));
+        }
+        catch {
+            return null;
+        }
+        try {
+            const readable = validateReadableTransferFile(parsed.filePath);
+            parsed.sizeBytes = readable.sizeBytes;
+            if (!parsed.checksumSha256) {
+                parsed.checksumSha256 = computeFileSha256(parsed.filePath);
+            }
+        }
+        catch {
+            return null;
+        }
+        this.transfers.set(transferId, parsed);
+        return parsed;
+    }
+    storeRecord(user, extensionId, record) {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(this.getTransferRecordDir(user, extensionId), { recursive: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(this.getTransferRecordPath(user, extensionId, record.transferId), JSON.stringify(record, null, 2));
+        this.transfers.set(record.transferId, record);
+    }
+    getTransferBaseDir(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
         const stateDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(paths.controlDbFile);
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(stateDir, 'transfers', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId), (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(resource));
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(stateDir, 'transfers', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+    }
+    getTransferDataDir(user, extensionId, resource) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getTransferBaseDir(user, extensionId), (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(resource));
+    }
+    getTransferRecordDir(user, extensionId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getTransferBaseDir(user, extensionId), 'records');
+    }
+    getTransferRecordPath(user, extensionId, transferId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
     }
 }
 function toInitResponse(record) {
@@ -3755,6 +4008,27 @@ function toInitResponse(record) {
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         sizeBytes: record.sizeBytes,
+        direction: record.direction,
+        checksumSha256: record.checksumSha256,
+        resumable: true,
+    };
+}
+function toManifestResponse(record) {
+    const chunkSize = _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES;
+    const chunkCount = Math.ceil(record.sizeBytes / chunkSize);
+    return {
+        ...toInitResponse(record),
+        chunkCount,
+        chunks: Array.from({ length: chunkCount }, (_, index) => {
+            const offset = index * chunkSize;
+            const sizeBytes = Math.min(chunkSize, record.sizeBytes - offset);
+            return {
+                index,
+                offset,
+                sizeBytes,
+                checksumSha256: computeFileSliceSha256(record.filePath, offset, sizeBytes),
+            };
+        }),
     };
 }
 function normalizeTransferResource(resource) {
@@ -3841,6 +4115,27 @@ function validateReadableTransferFile(sourcePath) {
         filePath,
         sizeBytes: metadata.size,
     };
+}
+function computeFileSha256(filePath) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath)).digest('hex');
+}
+function computeFileSliceSha256(filePath, offset, sizeBytes) {
+    if (sizeBytes <= 0) {
+        return EMPTY_FILE_SHA256;
+    }
+    const handle = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(filePath, 'r');
+    try {
+        const buffer = Buffer.alloc(sizeBytes);
+        const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readSync(handle, buffer, 0, sizeBytes, offset);
+        return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex');
+    }
+    finally {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(handle);
+    }
+}
+function normalizeChecksumSha256(value) {
+    const candidate = value.trim().toLowerCase();
+    return /^[a-f0-9]{64}$/.test(candidate) ? candidate : null;
 }
 function pruneEmptyTransferDirs(dirPath) {
     let current = dirPath;

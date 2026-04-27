@@ -13,6 +13,14 @@ const DEFAULT_OVERVIEW_SECTION_STATE = {
     capabilityMatrix: true,
     recentActivity: true,
 };
+const LIMIT_OPERATION_OPTIONS = [
+    { key: 'storageBlobWrite', label: 'Blob 写入' },
+    { key: 'storageBlobRead', label: 'Blob 读取' },
+    { key: 'privateFileWrite', label: '私有文件写入' },
+    { key: 'privateFileRead', label: '私有文件读取' },
+    { key: 'httpFetchRequest', label: 'HTTP 请求体' },
+    { key: 'httpFetchResponse', label: 'HTTP 响应体' },
+];
 export function bootstrapSecurityCenter() {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
 }
@@ -119,6 +127,11 @@ class SecurityCenterView {
                 if (action) {
                     void this.runAdminUpdate(action);
                 }
+                return;
+            }
+            const exportDiagnosticBundleButton = target.closest('[data-action="export-diagnostic-bundle"]');
+            if (exportDiagnosticBundleButton) {
+                void this.exportDiagnosticBundle();
             }
         });
         this.root.addEventListener('input', event => {
@@ -206,6 +219,20 @@ class SecurityCenterView {
             void this.renderUpdatesSection();
         }
     }
+    async exportDiagnosticBundle() {
+        if (!this.state.isAdmin) {
+            return;
+        }
+        try {
+            const bundle = await authorityRequest('/admin/diagnostic-bundle');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            downloadJsonFile(`authority-diagnostic-bundle-${timestamp}.json`, bundle);
+            toastr.success('诊断包已导出', TOAST_TITLE);
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+    }
     async selectExtension(extensionId, tab) {
         this.state.selectedExtensionId = extensionId;
         this.state.selectedTab = tab;
@@ -234,6 +261,7 @@ class SecurityCenterView {
         }
         try {
             const nextExtensions = { ...this.state.policies.extensions };
+            const nextLimitExtensions = { ...this.state.policies.limits.extensions };
             const extensionId = this.state.policyEditorExtensionId;
             if (extensionId) {
                 const entries = this.collectOverridePolicies();
@@ -243,12 +271,22 @@ class SecurityCenterView {
                 else {
                     delete nextExtensions[extensionId];
                 }
+                const limitPolicy = this.collectExtensionLimitPolicy();
+                if (limitPolicy) {
+                    nextLimitExtensions[extensionId] = limitPolicy;
+                }
+                else {
+                    delete nextLimitExtensions[extensionId];
+                }
             }
             this.state.policies = await authorityRequest('/admin/policies', {
                 method: 'POST',
                 body: {
                     defaults: this.collectDefaultPolicies(),
                     extensions: nextExtensions,
+                    limits: {
+                        extensions: nextLimitExtensions,
+                    },
                 },
             });
             toastr.success('管理员策略已保存', TOAST_TITLE);
@@ -289,6 +327,29 @@ class SecurityCenterView {
             };
         }
         return result;
+    }
+    collectExtensionLimitPolicy() {
+        const inlineThresholdBytes = {};
+        const transferMaxBytes = {};
+        for (const { key } of LIMIT_OPERATION_OPTIONS) {
+            const inlineInput = this.root.querySelector(`[data-limit-kind="inlineThresholdBytes"][data-limit-key="${key}"]`);
+            const transferInput = this.root.querySelector(`[data-limit-kind="transferMaxBytes"][data-limit-key="${key}"]`);
+            const inlineValue = parsePositiveIntOrNull(inlineInput?.value ?? '');
+            const transferValue = parsePositiveIntOrNull(transferInput?.value ?? '');
+            if (inlineValue !== null) {
+                inlineThresholdBytes[key] = inlineValue;
+            }
+            if (transferValue !== null) {
+                transferMaxBytes[key] = transferValue;
+            }
+        }
+        if (Object.keys(inlineThresholdBytes).length === 0 && Object.keys(transferMaxBytes).length === 0) {
+            return null;
+        }
+        return {
+            ...(Object.keys(inlineThresholdBytes).length > 0 ? { inlineThresholdBytes } : {}),
+            ...(Object.keys(transferMaxBytes).length > 0 ? { transferMaxBytes } : {}),
+        };
     }
     addPolicyOverrideRow(entry) {
         const container = this.root.querySelector('[data-role="policy-rows"]');
@@ -812,6 +873,7 @@ class SecurityCenterView {
         }
         const extensionId = this.state.policyEditorExtensionId ?? this.state.selectedExtensionId ?? this.state.extensions[0]?.id ?? '';
         const overrides = extensionId ? Object.values(policies.extensions[extensionId] ?? {}) : [];
+        const limitPolicy = extensionId ? policies.limits.extensions[extensionId] : null;
         container.innerHTML = `
             <div class="authority-page-stack">
                 <div class="authority-page-header">
@@ -885,6 +947,41 @@ class SecurityCenterView {
                         <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>
                     </div>
                 </section>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>扩展 Limits Policy</h3>
+                            <div class="authority-muted">留空表示沿用 runtime / probe 基线；填写正整数表示对该扩展下压生效值。</div>
+                        </div>
+                        <span class="authority-pill authority-pill--admin">${escapeHtml(extensionId || '未选择扩展')}</span>
+                    </div>
+                    <div class="authority-table-wrap">
+                        <table class="authority-data-table authority-policy-matrix">
+                            <thead>
+                                <tr>
+                                    <th>操作</th>
+                                    <th>Inline 阈值（bytes）</th>
+                                    <th>Transfer 上限（bytes）</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${LIMIT_OPERATION_OPTIONS.map(({ key, label }) => `
+                                    <tr>
+                                        <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
+                                        <td><input type="number" min="1" step="1" data-limit-kind="inlineThresholdBytes" data-limit-key="${escapeHtml(key)}" value="${escapeHtml(String(limitPolicy?.inlineThresholdBytes?.[key] ?? ''))}" placeholder="例如 262144" /></td>
+                                        <td><input type="number" min="1" step="1" data-limit-kind="transferMaxBytes" data-limit-key="${escapeHtml(key)}" value="${escapeHtml(String(limitPolicy?.transferMaxBytes?.[key] ?? ''))}" placeholder="例如 1048576" /></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="authority-policy-footer">
+                        <div class="authority-chip-row">
+                            <span class="authority-pill authority-pill--prompt">留空 = runtime</span>
+                            <span class="authority-pill authority-pill--runtime">probe/session 会显示 source</span>
+                        </div>
+                    </div>
+                </section>
             </div>
         `;
     }
@@ -908,11 +1005,12 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">更新管理</div>
                         <h2>服务端插件与前端插件更新</h2>
-                        <p>手动拉取 Authority 服务端插件最新提交，或重新部署它携带的前端 SDK 扩展。</p>
+                        <p>手动拉取 Authority 服务端插件最新提交、重新部署它携带的前端 SDK 扩展，或导出默认脱敏的诊断包 JSON。</p>
                     </div>
                     <div class="authority-page-actions authority-page-actions--updates">
                         <button type="button" class="authority-action-button authority-action-button--primary authority-action-button--wide" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
                         <button type="button" class="authority-action-button authority-action-button--wide" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-bundle">导出诊断包 JSON</button>
                     </div>
                 </div>
                 <section class="authority-card authority-card--flat">
@@ -1009,27 +1107,18 @@ class SecurityCenterView {
         if (!probeLimits || !sessionLimits) {
             return '';
         }
-        const operations = [
-            { key: 'storageBlobWrite', label: 'Blob 写入' },
-            { key: 'storageBlobRead', label: 'Blob 读取' },
-            { key: 'privateFileWrite', label: '私有文件写入' },
-            { key: 'privateFileRead', label: '私有文件读取' },
-            { key: 'httpFetchRequest', label: 'HTTP 请求体' },
-            { key: 'httpFetchResponse', label: 'HTTP 响应体' },
-        ];
         return `
             <section class="authority-card authority-card--flat">
                 <div class="authority-section-heading">
                     <div>
                         <h3>Effective Limits</h3>
-                        <div class="authority-muted">展示当前 session 生效值、probe 基线值以及 policy source。</div>
+                        <div class="authority-muted">展示当前 session 生效值、probe 基线值以及 policy source。新逻辑应优先使用按操作 effective limits。</div>
                     </div>
                 </div>
                 <div class="authority-chip-row">
-                    <span class="authority-pill authority-pill--prompt">chunk ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
-                    <span class="authority-pill authority-pill--prompt">legacy inline ${escapeHtml(formatBytes(probeLimits.dataTransferInlineThresholdBytes))}</span>
-                    <span class="authority-pill authority-pill--prompt">legacy transfer ${escapeHtml(formatBytes(probeLimits.maxDataTransferBytes))}</span>
+                    <span class="authority-pill authority-pill--prompt">transfer chunk ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
                 </div>
+                <div class="authority-muted">兼容字段仍保留给旧客户端：inline ${escapeHtml(formatBytes(probeLimits.dataTransferInlineThresholdBytes))} · transfer ${escapeHtml(formatBytes(probeLimits.maxDataTransferBytes))}。</div>
                 <div class="authority-table-wrap">
                     <table class="authority-data-table authority-policy-matrix">
                         <thead>
@@ -1042,7 +1131,7 @@ class SecurityCenterView {
                             </tr>
                         </thead>
                         <tbody>
-                            ${operations.map(({ key, label }) => `
+                            ${LIMIT_OPERATION_OPTIONS.map(({ key, label }) => `
                                 <tr>
                                     <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
                                     <td>${escapeHtml(this.formatEffectiveLimitValue(sessionLimits.effectiveInlineThresholdBytes[key]))}</td>
@@ -1194,5 +1283,25 @@ class SecurityCenterView {
         }
         return this.state.details.get(this.state.selectedExtensionId) ?? null;
     }
+}
+function parsePositiveIntOrNull(value) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return null;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+    }
+    return parsed;
+}
+function downloadJsonFile(fileName, value) {
+    const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
 }
 //# sourceMappingURL=security-center.js.map
