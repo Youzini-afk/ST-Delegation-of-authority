@@ -160,7 +160,16 @@
 
 - `GET /admin/policies`
 - `POST /admin/policies`
+- `GET /admin/usage-summary`
 - `POST /admin/update`
+- `GET /admin/import-export/operations`
+- `POST /admin/import-export/export`
+- `POST /admin/import-export/import-transfer/init`
+- `POST /admin/import-export/import`
+- `POST /admin/import-export/operations/:id/resume`
+- `POST /admin/import-export/operations/:id/open-download`
+- `GET /admin/diagnostic-bundle`
+- `POST /admin/diagnostic-bundle/archive`
 
 ## 4. 接口语义详解
 
@@ -630,6 +639,169 @@ https://api.openai.com/v1/...
 - `redeploy-sdk`
   - 只重新部署前端 SDK
   - 不从远端拉代码
+
+## 13.4 `GET /admin/usage-summary`
+
+要求当前 ST 用户是 admin。
+
+返回：`AuthorityUsageSummaryResponse`
+
+主要用于 Security Center 的管理员运维面板，帮助管理员快速判断：
+
+- 哪些扩展占用了最多 KV / Blob / SQL / Trivium / 私有文件
+- 当前 grants 数量和拒绝情况
+- 是否适合执行导出、清理或迁移
+
+返回里包含：
+
+- `generatedAt`
+- `totals`
+- `extensions`
+
+## 13.5 `GET /admin/import-export/operations`
+
+要求当前 ST 用户是 admin。
+
+返回：`AuthorityPackageOperationListResponse`
+
+会列出当前用户下持久化保存的 import/export operation，包括：
+
+- `status`
+- `progress`
+- `summary`
+- `error`
+- `artifact`
+- `importSummary`
+- `warnings`
+
+这组 operation 是 Security Center 运维面板的后端状态来源。
+
+## 13.6 `POST /admin/import-export/export`
+
+要求当前 ST 用户是 admin。
+
+输入：`AuthorityExportPackageRequest`
+
+当前支持：
+
+- `extensionIds?`
+- `includePolicies?`
+- `includeUsageSummary?`
+
+行为：
+
+- 启动一个异步 export operation
+- 后台构建逻辑层 `AuthorityPortablePackage`
+- 再写成 `.authoritypkg.zip` 多文件归档
+
+返回值是 operation 本身，而不是直接返回 zip 文件 body。
+
+## 13.7 `POST /admin/import-export/import-transfer/init`
+
+要求当前 ST 用户是 admin。
+
+输入：
+
+- `sizeBytes`
+
+行为：
+
+- 创建一个 `fs.private` 类型的 transfer staging
+- `purpose` 为 `privateFileWrite`
+- 校验上传大小必须大于 0
+- 校验上传大小不能超过 `256 MiB`
+
+浏览器随后应通过标准 transfer append 路由把包文件上传完，再调用真正的 import route。
+
+## 13.8 `POST /admin/import-export/import`
+
+要求当前 ST 用户是 admin。
+
+输入：`AuthorityPackageImportRequest`
+
+当前字段包括：
+
+- `transferId`
+- `mode?`
+- `fileName?`
+
+当前 `mode` 支持：
+
+- `replace`
+- `merge`
+
+语义：
+
+- 读取 transfer staging 文件
+- 启动一个异步 import operation
+- 支持导入新的 `.authoritypkg.zip` 多文件归档
+- 继续兼容旧的单文件 `.json.gz` 逻辑包
+
+如果导入的是 legacy `.json.gz`，operation `warnings` 会提示管理员重新导出为新的 zip 形态。
+
+## 13.9 `POST /admin/import-export/operations/:id/resume`
+
+要求当前 ST 用户是 admin。
+
+只允许恢复 `failed` 状态的 operation。
+
+当前主要用于两类场景：
+
+- 导入 / 导出运行中失败
+- 服务重启后原本的 `queued` / `running` operation 被标记成 `operation_recovery_required`
+
+恢复时会把 operation 重置回：
+
+- `status = queued`
+- `progress = 0`
+- 清空上一轮的 `summary` / `error` / `startedAt` / `finishedAt`
+
+然后重新进入后台执行。
+
+## 13.10 `POST /admin/import-export/operations/:id/open-download`
+
+要求当前 ST 用户是 admin。
+
+不会直接把 artifact 文件一次性写进 HTTP 响应体。
+
+返回：`AuthorityArtifactDownloadResponse`
+
+其中包括：
+
+- `artifact`
+- `transfer`
+
+也就是说，这个路由的语义是“打开一个 artifact 下载会话”，随后浏览器仍需通过 transfer read 接口分块读取。
+
+## 13.11 `GET /admin/diagnostic-bundle`
+
+要求当前 ST 用户是 admin。
+
+返回脱敏 JSON 诊断快照，当前至少包含：
+
+- `probe`
+- `policies`
+- `usageSummary`
+- `jobs`
+- `extensions`
+- `releaseMetadata`
+
+这个接口适合：
+
+- 直接查看控制面状态
+- 本地快速复制一份 JSON 用于排障
+
+## 13.12 `POST /admin/diagnostic-bundle/archive`
+
+要求当前 ST 用户是 admin。
+
+行为：
+
+- 基于 `GET /admin/diagnostic-bundle` 的内容生成一个 `.json.gz` 归档 artifact
+- 当前 archive 格式为 `authority-diagnostic-bundle-archive-v1`
+- 内部文件包括 `bundle.json`、`probe.json`、`policies.json`、`usage-summary.json`、`jobs.json`、`extensions/index.json`、逐扩展 snapshot，以及存在时的 `release-metadata.json`
+
+返回值同样是 `AuthorityArtifactDownloadResponse`，需要浏览器继续走 transfer read 下载。
 
 ## 14. 返回码与错误处理
 

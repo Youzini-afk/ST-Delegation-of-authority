@@ -24,6 +24,9 @@
 - **控制面诊断种类**：`permission`、`usage`、`warning`、`error`
 - **统一分页合同**：`CursorPageRequest` / `CursorPageInfo`
 - **installable 关键产物**：`runtime/`、`managed/sdk-extension/`、`managed/core/`、`.authority-release.json`
+- **管理员高层包导出格式**：`.authoritypkg.zip`
+- **管理员诊断归档格式**：`.json.gz`
+- **管理员包上传上限**：`256 MiB`
 
 ## 文档目录
 
@@ -41,6 +44,9 @@
 
 - `docs/server/install-update-release.md`
   - installable 产物、SDK 部署、core 校验、更新流程、同步命令与基线验证命令
+
+- `docs/server/admin-import-export.md`
+  - 管理员 Usage Summary、portable package、operation 恢复、artifact 下载与 diagnostic archive
 
 - `docs/server/ai-integration-guide.md`
   - 面向编程 AI 的接入规则、常见修改任务、反模式和检查清单
@@ -61,6 +67,9 @@
 
 - **想改构建、升级或发布流程**
   - 先读 `install-update-release.md`
+
+- **想看管理员运维、迁移、备份或排障 artifact**
+  - 先读 `admin-import-export.md`
 
 - **想做性能回归或优化切片基线**
   - 先看根目录 `npm run bench:core`

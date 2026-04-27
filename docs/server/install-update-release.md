@@ -169,6 +169,28 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 - 前端 SDK 产物已变化，但不需要拉服务端代码
 - 想强制刷新部署到 `third-party/st-authority-sdk`
 
+## 8.3 Security Center 里的管理员运维面板
+
+当前 `Security Center -> Updates` 已经不只是“更新页”，而是管理员运维面板。
+
+它现在聚合了：
+
+- `git-pull`
+- `redeploy-sdk`
+- `Usage Summary`
+- portable package 导出 / 导入
+- import/export operation 列表、失败恢复、artifact 下载
+- diagnostic bundle JSON
+- diagnostic archive `.json.gz`
+
+需要区分两类东西：
+
+- **install/update 行为**
+  - 影响 `runtime/`、`managed/sdk-extension/`、`managed/core/`、`.authority-release.json`
+- **管理员运行时 artifact**
+  - 例如 `.authoritypkg.zip` 与 diagnostic `.json.gz`
+  - 这是运行时生成的运维文件，不属于 installable 发布产物
+
 ## 9. release metadata 为什么重要
 
 `.authority-release.json` 里至少记录：
@@ -277,12 +299,41 @@ npm run check:installable
 - `npm run bench:core`
   - 拉起临时 `authority-core`
   - 生成 SQL 与 paged control audit/jobs/events 的延迟基线
+  - 也是当前 CI 的 benchmark gate 命令
 
 - `npm run sync:installable`
   - 全量构建 + 测试 + installable 同步
 
 - `npm run check:installable`
   - 检查当前 tracked installable 是否与源码/生成逻辑一致
+
+## 12.1 CI 里的 benchmark gate
+
+当前 `.github/workflows/ci.yml` 在 `Typecheck`、`Build`、`Test` 之后，会继续执行：
+
+```bash
+npm run bench:core
+```
+
+并通过环境变量设置保守阈值：
+
+- `AUTHORITY_BENCH_MAX_AVG_MS=150`
+- `AUTHORITY_BENCH_MAX_P95_MS=300`
+
+它的目的不是做完整性能评测，而是：
+
+- 避免明显的性能回退直接进入 `main`
+- 给 SQL 与 paged control audit/jobs/events 这条关键路径一个最低限度的回归门禁
+
+如果你在改：
+
+- 分页路径
+- audit / jobs / events 轮询
+- SQL adapter
+- Trivium 查询聚合
+- Security Center 依赖的控制面聚合接口
+
+就应该默认关注 benchmark gate 是否会被影响。
 
 ## 13. 典型提交边界
 
@@ -306,6 +357,7 @@ npm run check:installable
   - 应该通过同步脚本重建
 - **如果 probe 报 core hash mismatch，先看 release metadata 与 binary 是否同步**
 - **如果只是前端 UI 改了，也要考虑 managed SDK 是否需要一起提交**
+- **不要把 `.authoritypkg.zip` 或 diagnostic `.json.gz` 当成 installable 产物提交进仓库**
 
 ## 15. 对编程 AI 的建议
 
@@ -316,3 +368,4 @@ npm run check:installable
 - 不要把 `redeploy-sdk` 解释成“自动更新了 Node 服务端代码”
 - 不要把 `git-pull` 解释成“马上生效，无需重启 ST”
 - 改 core 后，一定考虑 `managed/core` 和 `.authority-release.json`
+- 不要把管理员运行时 artifact 和 installable 发布产物混为一谈

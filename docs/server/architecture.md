@@ -20,7 +20,7 @@ SillyTavern Frontend Extension
 ```text
 third-party/st-authority-sdk
   -> Security Center
-  -> 会话初始化 / 权限提示 / 审计与告警可视化 / 管理员策略 / 管理员更新
+  -> 会话初始化 / 权限提示 / 审计与告警可视化 / 管理员策略 / 管理员运维面板
 ```
 
 ## 2. 三层职责边界
@@ -53,10 +53,12 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 - 审计日志写入
 - 存储路径解析
 - 聚合扩展详情、活动与作业视图
+- 聚合管理员 usage summary、portable package 与 diagnostic archive 视图
 - 将请求转发给 Rust core
 - 管理 `authority-core` 进程生命周期
 - 首次启动时自动部署 `st-authority-sdk`
 - 管理 installable / core 校验 / 管理员更新
+- 管理 portable package operation、artifact 与 diagnostic archive
 - 提供 SSE 桥接
 
 对开发者来说，**稳定接口优先级是 Node adapter 层，而不是 Rust core 直连**。
@@ -95,6 +97,7 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 
 当前 runtime 由这些服务组成：
 
+- `adminPackages`
 - `events`
 - `audit`
 - `core`
@@ -114,6 +117,7 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 
 - **公开 API 在 `routes.ts`**
 - **能力封装在 `services/*`**
+- **管理员高层导入导出封装在 `AdminPackageService`**
 - **权威执行落在 `CoreService -> authority-core`**
 
 ## 5. 请求调用链
@@ -202,6 +206,29 @@ Security Center
 - 公开层聚合视图和 core 内部分页合同是两回事
 - Security Center 可以看到 `warnings`、`activity.pages` 和 `jobsPage`
 - 公开 `GET /jobs` 仍然是扩展工作流接口，而不是控制面详情接口
+
+## 5.6 Security Center 管理员运维面板
+
+```text
+Security Center -> Updates
+  -> GET /api/plugins/authority/admin/usage-summary
+  -> GET /api/plugins/authority/admin/import-export/operations
+  -> POST /api/plugins/authority/admin/import-export/export
+  -> POST /api/plugins/authority/admin/import-export/import-transfer/init
+  -> POST /api/plugins/authority/admin/import-export/import
+  -> POST /api/plugins/authority/admin/import-export/operations/:id/resume
+  -> POST /api/plugins/authority/admin/import-export/operations/:id/open-download
+  -> GET /api/plugins/authority/admin/diagnostic-bundle
+  -> POST /api/plugins/authority/admin/diagnostic-bundle/archive
+  -> runtime.adminPackages
+  -> DataTransferService / PolicyService / StorageService / PrivateFsService / TriviumService
+```
+
+这条链路说明：
+
+- 管理员运维面板不是单一接口，而是一组聚合 route + 持久 operation 模型
+- portable package 与 diagnostic archive 属于 Node adapter 运行时生成的管理员 artifact，不是 installable 发布产物
+- 下载 artifact 时仍复用 DataTransferService，而不是额外发明一套下载协议
 
 ## 6. 端口与暴露面
 

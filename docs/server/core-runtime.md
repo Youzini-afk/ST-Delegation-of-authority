@@ -226,7 +226,7 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 
 - 浏览器侧 session 生命周期
 - 用户权限提示 UI
-- 管理员更新页面
+- 管理员运维面板（更新、portable package、diagnostic archive）
 - SDK 自动部署
 - SillyTavern 路由注册
 - 浏览器可见的稳定公开 API 兼容层

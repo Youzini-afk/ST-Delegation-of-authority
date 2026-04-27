@@ -278,7 +278,7 @@ function getJobAttemptTimeline(item: JobRecord): string {
                 formatDate(attempt.timestamp),
             ];
             if (attempt.backoffMs != null) {
-                parts.push(`backoff ${attempt.backoffMs}ms`);
+                parts.push(`等待 ${attempt.backoffMs}ms 后重试`);
             }
             if (attempt.error) {
                 parts.push(getSystemMessageLabel(attempt.error));
@@ -393,11 +393,11 @@ export function renderDatabaseTable(items: SqlDatabaseRecord[], emptyText: strin
 }
 
 function getSqlRuntimeConfigLabel(item: SqlDatabaseRecord): string {
-    return `${item.runtimeConfig.journalMode.toUpperCase()} · sync ${item.runtimeConfig.synchronous}`;
+    return `日志模式 ${item.runtimeConfig.journalMode.toUpperCase()} · 同步 ${item.runtimeConfig.synchronous}`;
 }
 
 function getSqlRuntimeConfigMeta(item: SqlDatabaseRecord): string {
-    return `busy ${item.runtimeConfig.busyTimeoutMs}ms · FK ${item.runtimeConfig.foreignKeys ? 'ON' : 'OFF'} · page ORDER BY ${item.runtimeConfig.pagedQueryRequiresOrderBy ? 'required' : 'optional'}`;
+    return `等待超时 ${item.runtimeConfig.busyTimeoutMs}ms · 外键 ${item.runtimeConfig.foreignKeys ? '开启' : '关闭'} · 分页查询排序 ${item.runtimeConfig.pagedQueryRequiresOrderBy ? '必填' : '可选'}`;
 }
 
 function getSqlSlowQueryLabel(item: SqlDatabaseRecord): string {
@@ -409,7 +409,7 @@ function getSqlSlowQueryLabel(item: SqlDatabaseRecord): string {
 
 function getSqlSlowQueryMeta(item: SqlDatabaseRecord): string {
     if (item.slowQuery.count === 0) {
-        return '尚未记录到 slow SQL';
+        return '暂时没有慢查询记录';
     }
     return `${item.slowQuery.lastElapsedMs ?? '未知'}ms · ${item.slowQuery.lastStatementPreview ?? '未记录'} · ${formatDate(item.slowQuery.lastOccurredAt ?? undefined)}`;
 }
@@ -502,7 +502,7 @@ export function renderDatabaseAssetSections(databases: SqlDatabaseRecord[], triv
                 <div class="authority-card__header">
                     <div>
                         <h3>Trivium 私有记忆库</h3>
-                        <div class="authority-muted">向量 / 图谱 / 文本混合检索数据库</div>
+                        <div class="authority-muted">用于向量、图谱和文本检索的记忆库</div>
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--runtime">${triviumDatabases.length} 个</span>
@@ -529,11 +529,11 @@ function getTriviumIndexHealthTone(item: TriviumDatabaseRecord): string {
 function getTriviumIndexHealthLabel(item: TriviumDatabaseRecord): string {
     switch (item.indexHealth?.status) {
         case 'fresh':
-            return '索引新鲜';
+            return '索引正常';
         case 'stale':
             return '需重建';
         default:
-            return '未建索引';
+            return '还没建索引';
     }
 }
 
@@ -612,7 +612,7 @@ export function renderStorageSummary(storage: ExtensionStorageSummary): string {
     return `
         <div class="authority-storage-grid">
             ${renderStorageCard('键值条目', String(storage.kvEntries), '扩展保存的键值数据')}
-            ${renderStorageCard('文件数量', String(storage.blobCount), formatBytes(storage.blobBytes))}
+            ${renderStorageCard('存储文件', String(storage.blobCount), formatBytes(storage.blobBytes))}
             ${renderStorageCard('数据库数量', String(storage.databaseCount), `总计 ${formatBytes(storage.databaseBytes)}`)}
             ${renderStorageCard('SQL 数据库', String(storage.sqlDatabaseCount), formatBytes(storage.sqlDatabaseBytes))}
             ${renderStorageCard('Trivium 记忆库', String(storage.triviumDatabaseCount), formatBytes(storage.triviumDatabaseBytes))}

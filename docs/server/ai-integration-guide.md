@@ -90,8 +90,15 @@
 
 - `GET /extensions/:id` 的 `activity` 现在包含 `warnings` 与 `pages`
 - `jobsPage` 是控制面聚合字段，不等于公开 `GET /jobs` 的返回合同
+- `Updates` 页现在还是管理员运维面板，里面包含 usage summary、portable package、operation 列表和 diagnostic archive
 - 最终运行的是 `managed/sdk-extension/*`
 - 改完源码后需要同步 installable
+
+如果你改的是管理员运维面板，还应优先看：
+
+- `packages/server-plugin/src/services/admin-package-service.ts`
+- `packages/server-plugin/src/routes.ts`
+- `docs/server/admin-import-export.md`
 
 ## 2.6 修改大列表 / 分页合同
 
@@ -192,6 +199,7 @@
 - **Security Center 是否要显示它？**
 - **是否需要审计日志？**
 - **是否需要聚合进扩展详情页的 storage/activity/jobs？**
+- **如果它属于管理员运维面板，README / `docs/server/http-api.md` / `docs/server/admin-import-export.md` 是否都要更新？**
 - **如果它影响 payload 路径，是否还要更新 `/probe` / session limits 合同？**
 
 ## 5. 何时必须更新 installable
@@ -209,6 +217,11 @@ npm run check:installable
 - server-plugin 编译输出变了
 - core 变了
 - release metadata / managed 逻辑变了
+
+额外提醒：
+
+- 运行时生成的 `.authoritypkg.zip` / diagnostic `.json.gz` artifact 不是 installable 产物
+- 不要把管理员导出包误当成应该提交进仓库的发布文件
 
 ## 6. 不要做的事
 
