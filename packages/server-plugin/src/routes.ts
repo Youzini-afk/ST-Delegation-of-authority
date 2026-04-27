@@ -86,8 +86,12 @@ import {
     MAX_BLOB_BYTES,
     MAX_DATA_TRANSFER_BYTES,
     MAX_HTTP_BODY_BYTES,
+    MAX_HTTP_REQUEST_TRANSFER_BYTES,
     MAX_HTTP_RESPONSE_BYTES,
+    MAX_HTTP_RESPONSE_TRANSFER_BYTES,
     MAX_KV_VALUE_BYTES,
+    MAX_PRIVATE_FILE_TRANSFER_BYTES,
+    MAX_STORAGE_BLOB_TRANSFER_BYTES,
     buildAuthorityFeatureFlags,
 } from './constants.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
@@ -286,6 +290,17 @@ function buildEffectiveInlineThresholds() {
         privateFileRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
         httpFetchRequest: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
         httpFetchResponse: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
+    };
+}
+
+function buildEffectiveTransferMaxBytes() {
+    return {
+        storageBlobWrite: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' as const },
+        storageBlobRead: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' as const },
+        privateFileWrite: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' as const },
+        privateFileRead: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' as const },
+        httpFetchRequest: { bytes: MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' as const },
+        httpFetchResponse: { bytes: MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' as const },
     };
 }
 
@@ -595,6 +610,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         const core = runtime.core.getStatus();
         const features = buildAuthorityFeatureFlags(user.isAdmin);
         const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
+        const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
         const response: AuthorityProbeResponse = {
             id: 'authority',
             online: true,
@@ -626,6 +642,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 dataTransferChunkBytes: DATA_TRANSFER_CHUNK_BYTES,
                 dataTransferInlineThresholdBytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
                 effectiveInlineThresholdBytes,
+                effectiveTransferMaxBytes,
             },
             jobs: {
                 builtinTypes: [...BUILTIN_JOB_TYPES],

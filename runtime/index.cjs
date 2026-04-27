@@ -462,6 +462,16 @@ function buildEffectiveInlineThresholds() {
         httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
     };
 }
+function buildEffectiveTransferMaxBytes() {
+    return {
+        storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+        storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+        privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+        privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+        httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
+        httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
+    };
+}
 function getEffectiveInlineThresholdBytes(key) {
     return buildEffectiveInlineThresholds()[key].bytes;
 }
@@ -688,6 +698,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         const core = runtime.core.getStatus();
         const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin);
         const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
+        const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
         const response = {
             id: 'authority',
             online: true,
@@ -719,6 +730,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 dataTransferChunkBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_CHUNK_BYTES,
                 dataTransferInlineThresholdBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
                 effectiveInlineThresholdBytes,
+                effectiveTransferMaxBytes,
             },
             jobs: {
                 builtinTypes: [..._constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES],
@@ -4498,6 +4510,7 @@ class PermissionService {
         const policy = await this.policyService.getExtensionLimitPolicy(user, extensionId);
         return {
             effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(policy),
+            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(),
         };
     }
     async getEffectiveInlineThresholdBytes(user, extensionId, key) {
@@ -4649,6 +4662,16 @@ class PermissionService {
             privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
             httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
             httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        };
+    }
+    buildEffectiveTransferMaxBytes() {
+        return {
+            storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
         };
     }
     getDeclarationDecision(declaredPermissions, descriptor) {

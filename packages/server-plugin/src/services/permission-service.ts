@@ -1,5 +1,6 @@
 import type {
     AuthorityEffectiveInlineThresholds,
+    AuthorityEffectiveOperationByteLimits,
     AuthorityGrant,
     AuthorityExtensionLimitsPolicy,
     AuthorityInlineThresholdKey,
@@ -10,7 +11,14 @@ import type {
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
 } from '@stdo/shared-types';
-import { DATA_TRANSFER_INLINE_THRESHOLD_BYTES, DEFAULT_POLICY_STATUS } from '../constants.js';
+import {
+    DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+    DEFAULT_POLICY_STATUS,
+    MAX_HTTP_REQUEST_TRANSFER_BYTES,
+    MAX_HTTP_RESPONSE_TRANSFER_BYTES,
+    MAX_PRIVATE_FILE_TRANSFER_BYTES,
+    MAX_STORAGE_BLOB_TRANSFER_BYTES,
+} from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type {
     SessionGrantState,
@@ -55,6 +63,7 @@ export class PermissionService {
         const policy = await this.policyService.getExtensionLimitPolicy(user, extensionId);
         return {
             effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(policy),
+            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(),
         };
     }
 
@@ -233,6 +242,17 @@ export class PermissionService {
             privateFileRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
             httpFetchRequest: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
             httpFetchResponse: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        };
+    }
+
+    private buildEffectiveTransferMaxBytes(): AuthorityEffectiveOperationByteLimits {
+        return {
+            storageBlobWrite: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
         };
     }
 

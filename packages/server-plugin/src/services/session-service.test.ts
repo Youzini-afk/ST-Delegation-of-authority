@@ -31,6 +31,14 @@ describe('SessionService', () => {
                 httpFetchRequest: { bytes: 256 * 1024, source: 'runtime' },
                 httpFetchResponse: { bytes: 256 * 1024, source: 'runtime' },
             },
+            effectiveTransferMaxBytes: {
+                storageBlobWrite: { bytes: 16 * 1024 * 1024, source: 'runtime' },
+                storageBlobRead: { bytes: 16 * 1024 * 1024, source: 'runtime' },
+                privateFileWrite: { bytes: 16 * 1024 * 1024, source: 'runtime' },
+                privateFileRead: { bytes: 16 * 1024 * 1024, source: 'runtime' },
+                httpFetchRequest: { bytes: 512 * 1024, source: 'runtime' },
+                httpFetchResponse: { bytes: 2 * 1024 * 1024, source: 'runtime' },
+            },
         });
 
         expect(response.features.admin).toBe(true);

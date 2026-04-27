@@ -97,7 +97,9 @@ export interface AuthorityEffectiveBytesLimit {
     source: AuthorityLimitSource;
 }
 
-export type AuthorityEffectiveInlineThresholds = Record<AuthorityInlineThresholdKey, AuthorityEffectiveBytesLimit>;
+export type AuthorityEffectiveOperationByteLimits = Record<AuthorityInlineThresholdKey, AuthorityEffectiveBytesLimit>;
+
+export type AuthorityEffectiveInlineThresholds = AuthorityEffectiveOperationByteLimits;
 
 export interface AuthorityExtensionLimitsPolicy {
     inlineThresholdBytes?: AuthorityInlineThresholdOverrides;
@@ -109,6 +111,7 @@ export interface AuthorityLimitsPolicyState {
 
 export interface AuthoritySessionLimits {
     effectiveInlineThresholdBytes: AuthorityEffectiveInlineThresholds;
+    effectiveTransferMaxBytes: AuthorityEffectiveOperationByteLimits;
 }
 
 export interface AuthorityGrant {
@@ -219,6 +222,7 @@ export interface AuthorityProbeLimits {
     dataTransferChunkBytes: number;
     dataTransferInlineThresholdBytes: number;
     effectiveInlineThresholdBytes: AuthorityEffectiveInlineThresholds;
+    effectiveTransferMaxBytes: AuthorityEffectiveOperationByteLimits;
 }
 
 export interface AuthorityProbeCoreHealth {
