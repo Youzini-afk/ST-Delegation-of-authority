@@ -70,7 +70,7 @@ function syncWorkspacePackages(version) {
         updateJson(path.join(repoRoot, 'packages', packageName, 'package.json'), value => {
             value.version = version;
             value.dependencies ??= {};
-            value.dependencies['@stdo/shared-types'] = 'workspace:*';
+            value.dependencies['@stdo/shared-types'] = version;
         });
     }
 }
@@ -117,15 +117,15 @@ function syncPackageLock(version) {
             },
             'packages/server-plugin': {
                 version,
-                dependencyVersion: 'workspace:*',
+                dependencyVersion: version,
             },
             'packages/sdk-extension': {
                 version,
-                dependencyVersion: 'workspace:*',
+                dependencyVersion: version,
             },
             'packages/example-extension': {
                 version,
-                dependencyVersion: 'workspace:*',
+                dependencyVersion: version,
             },
         };
 

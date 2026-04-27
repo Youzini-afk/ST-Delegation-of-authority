@@ -7,6 +7,6 @@
     "build": "webpack --config webpack.config.cjs && node ../../scripts/copy-static.mjs . static dist/authority && node ../../scripts/copy-managed-core.mjs"
   },
   "dependencies": {
-    "@stdo/shared-types": "workspace:*"
+    "@stdo/shared-types": "1.0.0"
   }
 }
