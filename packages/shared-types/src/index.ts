@@ -131,6 +131,7 @@ export interface AuthorityFeatureFlags {
     };
     jobs: {
         background: boolean;
+        safeRequeue: boolean;
         builtinTypes: string[];
     };
     diagnostics: {
@@ -431,6 +432,12 @@ export interface ControlJobCreateRequest {
 }
 
 export interface ControlJobCancelRequest {
+    userHandle: string;
+    extensionId: string;
+    jobId: string;
+}
+
+export interface ControlJobRequeueRequest {
     userHandle: string;
     extensionId: string;
     jobId: string;

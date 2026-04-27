@@ -156,6 +156,7 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
         },
         jobs: {
             background: true,
+            safeRequeue: true,
             builtinTypes: [...BUILTIN_JOB_TYPES],
         },
         diagnostics: {

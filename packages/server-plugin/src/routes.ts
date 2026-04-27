@@ -2101,6 +2101,31 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
+    router.post('/jobs/:id/requeue', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const jobId = String(req.params?.id ?? '');
+            const existing = await runtime.jobs.get(user, jobId);
+            if (!existing || existing.extensionId !== session.extension.id) {
+                throw new Error('Job not found');
+            }
+            if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: existing.type })) {
+                throw new Error(`Permission not granted: jobs.background for ${existing.type}`);
+            }
+
+            const job = await runtime.jobs.requeue(user, session.extension.id, jobId);
+            await runtime.audit.logUsage(user, session.extension.id, 'Job requeued', {
+                previousJobId: jobId,
+                jobId: job.id,
+                jobType: job.type,
+            });
+            ok(res, job);
+        } catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+
     router.get('/events/stream', async (req, res) => {
         try {
             const user = getUserContext(req);

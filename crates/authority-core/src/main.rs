@@ -875,6 +875,15 @@ struct ControlJobCancelRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ControlJobRequeueRequest {
+    db_path: String,
+    user_handle: String,
+    extension_id: String,
+    job_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StorageKvGetRequest {
     db_path: String,
     key: String,
@@ -1382,6 +1391,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/control/jobs/get", post(v1_control_job_get))
         .route("/control/jobs/create", post(v1_control_job_create))
         .route("/control/jobs/cancel", post(v1_control_job_cancel))
+        .route("/control/jobs/requeue", post(v1_control_job_requeue))
         .route("/control/jobs/upsert", post(v1_control_job_upsert))
         .route("/control/events/poll", post(v1_control_events_poll))
         .layer(TimeoutLayer::new(Duration::from_secs(REQUEST_TIMEOUT_SECS)))
@@ -2153,10 +2163,17 @@ async fn v1_trivium_stat(
     spawn_blocking_handler(body, handle_trivium_stat).await
 }
 async fn v1_control_session_init(
-    State(_config): State<Arc<Config>>,
+    State(config): State<Arc<Config>>,
     Json(body): Json<ControlSessionInitRequest>,
 ) -> Result<Json<JsonValue>, ApiError> {
-    spawn_blocking_handler(body, handle_control_session_init).await
+    let runtime = config.runtime.clone();
+    let result = tokio::task::spawn_blocking(move || handle_control_session_init(body, &runtime))
+        .await
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("task_join_error"),
+        })?;
+    result.map(Json)
 }
 async fn v1_control_session_get(
     State(_config): State<Arc<Config>>,
@@ -2282,6 +2299,19 @@ async fn v1_control_job_cancel(
 ) -> Result<Json<JsonValue>, ApiError> {
     let runtime = config.runtime.clone();
     let result = tokio::task::spawn_blocking(move || handle_control_job_cancel(body, &runtime))
+        .await
+        .map_err(|_| ApiError {
+            status_code: 500,
+            message: String::from("task_join_error"),
+        })?;
+    result.map(Json)
+}
+async fn v1_control_job_requeue(
+    State(config): State<Arc<Config>>,
+    Json(body): Json<ControlJobRequeueRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    let runtime = config.runtime.clone();
+    let result = tokio::task::spawn_blocking(move || handle_control_job_requeue(body, &runtime))
         .await
         .map_err(|_| ApiError {
             status_code: 500,
@@ -3427,7 +3457,10 @@ fn handle_trivium_stat(request: TriviumStatRequest) -> Result<JsonValue, ApiErro
     Ok(serde_json::to_value(response).expect("trivium stat response should serialize"))
 }
 
-fn handle_control_session_init(request: ControlSessionInitRequest) -> Result<JsonValue, ApiError> {
+fn handle_control_session_init(
+    request: ControlSessionInitRequest,
+    runtime: &Arc<RuntimeState>,
+) -> Result<JsonValue, ApiError> {
     validate_non_empty("sessionToken", &request.session_token)?;
     validate_non_empty("timestamp", &request.timestamp)?;
     validate_non_empty("user.handle", &request.user.handle)?;
@@ -3435,6 +3468,7 @@ fn handle_control_session_init(request: ControlSessionInitRequest) -> Result<Jso
 
     let connection = open_connection(&request.db_path)?;
     ensure_control_schema(&connection)?;
+    recover_stale_jobs(&connection, &request.user.handle, runtime)?;
     let current_extension = fetch_control_extension(
         &connection,
         &request.user.handle,
@@ -4629,6 +4663,46 @@ fn handle_control_job_cancel(
         Some(&serde_json::to_value(&next).map_err(to_json_error)?),
     )?;
     Ok(json!({ "job": next }))
+}
+
+fn handle_control_job_requeue(
+    request: ControlJobRequeueRequest,
+    runtime: &Arc<RuntimeState>,
+) -> Result<JsonValue, ApiError> {
+    validate_non_empty("userHandle", &request.user_handle)?;
+    validate_non_empty("extensionId", &request.extension_id)?;
+    validate_non_empty("jobId", &request.job_id)?;
+
+    let connection = open_connection(&request.db_path)?;
+    ensure_control_schema(&connection)?;
+    recover_stale_jobs(&connection, &request.user_handle, runtime)?;
+    let job = fetch_control_job(&connection, &request.user_handle, &request.job_id)?.ok_or_else(
+        || ApiError {
+            status_code: 400,
+            message: String::from("Job not found"),
+        },
+    )?;
+    if job.extension_id != request.extension_id {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("Job not found"),
+        });
+    }
+    ensure_job_safe_to_requeue(&job)?;
+
+    handle_control_job_create(
+        ControlJobCreateRequest {
+            db_path: request.db_path,
+            user_handle: request.user_handle,
+            extension_id: job.extension_id,
+            job_type: job.job_type,
+            payload: job.payload,
+            timeout_ms: job.timeout_ms,
+            idempotency_key: None,
+            max_attempts: job.max_attempts,
+        },
+        runtime,
+    )
 }
 
 fn handle_control_events_poll(request: ControlEventsPollRequest) -> Result<JsonValue, ApiError> {
@@ -7584,6 +7658,42 @@ fn require_job_payload_string(job: &ControlJobRecord, key: &str) -> Result<Strin
     })
 }
 
+fn ensure_job_safe_to_requeue(job: &ControlJobRecord) -> Result<(), ApiError> {
+    if matches!(job.status.as_str(), "queued" | "running") {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("job_requeue_requires_terminal_status"),
+        });
+    }
+    if job.status == "completed" {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("job_requeue_completed_is_not_safe"),
+        });
+    }
+
+    match job.job_type.as_str() {
+        "delay" | "trivium.flush" => Ok(()),
+        "sql.backup" => {
+            if job_payload_string(job, "targetName").is_some() {
+                return Err(ApiError {
+                    status_code: 400,
+                    message: String::from("job_requeue_sql_backup_with_target_name_is_not_safe"),
+                });
+            }
+            Ok(())
+        }
+        "fs.import-jsonl" => Err(ApiError {
+            status_code: 400,
+            message: String::from("job_requeue_fs_import_jsonl_is_not_safe"),
+        }),
+        other => Err(ApiError {
+            status_code: 400,
+            message: format!("job_requeue_unsupported_type: {other}"),
+        }),
+    }
+}
+
 fn job_should_fail_attempt(job: &ControlJobRecord, attempt: i64) -> bool {
     job.payload
         .as_ref()
@@ -9177,6 +9287,175 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert!(matches!(history[0].event, JobAttemptEvent::Recovered));
         assert_eq!(history[0].error.as_deref(), Some("job_recovery_required"));
+    }
+
+    #[test]
+    fn stale_jobs_are_recovered_during_session_init() {
+        let db_path = test_db_path("job-stale-session-init");
+        let stale_timestamp = current_timestamp_iso();
+        handle_control_job_upsert(ControlJobUpsertRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            job: ControlJobRecord {
+                id: String::from("job-stale-session-1"),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                status: String::from("queued"),
+                created_at: stale_timestamp.clone(),
+                updated_at: stale_timestamp,
+                progress: 0,
+                summary: Some(String::from("Queued before restart")),
+                error: None,
+                payload: Some(json!({ "durationMs": 1000 })),
+                result: None,
+                channel: String::from("extension:third-party/example"),
+                started_at: None,
+                finished_at: None,
+                timeout_ms: None,
+                idempotency_key: None,
+                attempt: 1,
+                max_attempts: Some(2),
+                cancel_requested_at: None,
+                attempt_history: None,
+            },
+        })
+        .expect("stale job upsert should succeed");
+
+        let runtime = create_runtime_state();
+        handle_control_session_init(
+            ControlSessionInitRequest {
+                db_path: db_path.clone(),
+                session_token: String::from("session-1"),
+                timestamp: current_timestamp_iso(),
+                user: ControlUserInfo {
+                    handle: String::from("alice"),
+                    is_admin: false,
+                },
+                config: ControlInitConfig {
+                    extension_id: String::from("third-party/example"),
+                    display_name: String::from("Example"),
+                    version: String::from("0.1.0"),
+                    install_type: String::from("local"),
+                    declared_permissions: json!({}),
+                    ui_label: None,
+                },
+            },
+            &runtime,
+        )
+        .expect("session init should succeed");
+
+        let recovered = wait_for_job_status(&db_path, "job-stale-session-1", "failed");
+        assert_eq!(recovered.error.as_deref(), Some("job_recovery_required"));
+    }
+
+    #[test]
+    fn safe_job_requeue_boundaries_are_conservative() {
+        let base = ControlJobRecord {
+            id: String::from("job-1"),
+            extension_id: String::from("third-party/example"),
+            job_type: String::from("delay"),
+            status: String::from("failed"),
+            created_at: current_timestamp_iso(),
+            updated_at: current_timestamp_iso(),
+            progress: 0,
+            summary: Some(String::from("failed")),
+            error: Some(String::from("job_recovery_required")),
+            payload: Some(json!({ "durationMs": 1000 })),
+            result: None,
+            channel: String::from("extension:third-party/example"),
+            started_at: Some(current_timestamp_iso()),
+            finished_at: Some(current_timestamp_iso()),
+            timeout_ms: None,
+            idempotency_key: None,
+            attempt: 1,
+            max_attempts: Some(2),
+            cancel_requested_at: None,
+            attempt_history: None,
+        };
+
+        ensure_job_safe_to_requeue(&base).expect("delay jobs should be safe to requeue");
+        ensure_job_safe_to_requeue(&ControlJobRecord {
+            job_type: String::from("trivium.flush"),
+            payload: Some(json!({ "database": "graph" })),
+            ..base.clone()
+        })
+        .expect("trivium.flush should be safe to requeue");
+        ensure_job_safe_to_requeue(&ControlJobRecord {
+            job_type: String::from("sql.backup"),
+            payload: Some(json!({ "database": "graph" })),
+            ..base.clone()
+        })
+        .expect("sql.backup without targetName should be safe to requeue");
+
+        let sql_backup_error = ensure_job_safe_to_requeue(&ControlJobRecord {
+            job_type: String::from("sql.backup"),
+            payload: Some(json!({ "database": "graph", "targetName": "fixed.sqlite" })),
+            ..base.clone()
+        })
+        .expect_err("sql.backup with fixed targetName should be rejected");
+        assert_eq!(
+            sql_backup_error.message,
+            "job_requeue_sql_backup_with_target_name_is_not_safe"
+        );
+
+        let import_error = ensure_job_safe_to_requeue(&ControlJobRecord {
+            job_type: String::from("fs.import-jsonl"),
+            payload: Some(json!({ "blobId": "blob-1", "targetPath": "/data/items.jsonl" })),
+            ..base.clone()
+        })
+        .expect_err("fs.import-jsonl should be rejected for safe requeue");
+        assert_eq!(import_error.message, "job_requeue_fs_import_jsonl_is_not_safe");
+    }
+
+    #[test]
+    fn safe_job_requeue_creates_a_new_delay_job() {
+        let db_path = test_db_path("job-safe-requeue-delay");
+        let original_id = String::from("job-failed-delay-1");
+        handle_control_job_upsert(ControlJobUpsertRequest {
+            db_path: db_path.clone(),
+            user_handle: String::from("alice"),
+            job: ControlJobRecord {
+                id: original_id.clone(),
+                extension_id: String::from("third-party/example"),
+                job_type: String::from("delay"),
+                status: String::from("failed"),
+                created_at: current_timestamp_iso(),
+                updated_at: current_timestamp_iso(),
+                progress: 0,
+                summary: Some(String::from("Recovered stale job after runtime restart")),
+                error: Some(String::from("job_recovery_required")),
+                payload: Some(json!({ "durationMs": 1000, "message": "done" })),
+                result: None,
+                channel: String::from("extension:third-party/example"),
+                started_at: Some(current_timestamp_iso()),
+                finished_at: Some(current_timestamp_iso()),
+                timeout_ms: Some(5000),
+                idempotency_key: Some(String::from("dedupe-1")),
+                attempt: 1,
+                max_attempts: Some(2),
+                cancel_requested_at: None,
+                attempt_history: None,
+            },
+        })
+        .expect("failed delay job upsert should succeed");
+
+        let runtime = create_runtime_state();
+        let requeued = handle_control_job_requeue(
+            ControlJobRequeueRequest {
+                db_path: db_path.clone(),
+                user_handle: String::from("alice"),
+                extension_id: String::from("third-party/example"),
+                job_id: original_id,
+            },
+            &runtime,
+        )
+        .expect("requeue should succeed");
+
+        assert_eq!(requeued["job"]["status"], json!("queued"));
+        assert_eq!(requeued["job"]["type"], json!("delay"));
+        assert_eq!(requeued["job"]["payload"]["message"], json!("done"));
+        assert_eq!(requeued["job"]["idempotencyKey"], JsonValue::Null);
+        assert_ne!(requeued["job"]["id"], json!("job-failed-delay-1"));
     }
 
     fn test_db_path(name: &str) -> String {

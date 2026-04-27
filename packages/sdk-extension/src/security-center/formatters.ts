@@ -1,4 +1,4 @@
-import type { ControlExtensionRecord, DeclaredPermissions, InstallType, JobStatus, PermissionResource, PermissionStatus } from '@stdo/shared-types';
+import type { ControlExtensionRecord, DeclaredPermissions, InstallType, JobAttemptEvent, JobStatus, PermissionResource, PermissionStatus } from '@stdo/shared-types';
 import type { ActivityRecord, AuthorityRiskLevel, ExtensionSummary } from './types.js';
 
 export function formatBytes(bytes: number): string {
@@ -73,6 +73,7 @@ export function getActivityMessageLabel(message: string): string {
         case 'HTTP fetch': return '已发起网络请求';
         case 'Job created': return '已创建后台任务';
         case 'Job cancelled': return '已取消后台任务';
+        case 'Job requeued': return '已安全重新排队后台任务';
         case 'Job queue full': return '后台任务队列已满';
         case 'Job retry scheduled': return '后台任务已安排重试';
         case 'Job failed': return '后台任务执行失败';
@@ -106,6 +107,18 @@ export function getSystemMessageLabel(message: string): string {
     }
     if (message === 'job_timeout') {
         return '后台任务执行超时。';
+    }
+    if (message === 'job_requeue_requires_terminal_status') {
+        return '只有已结束的后台任务才能安全重新排队。';
+    }
+    if (message === 'job_requeue_completed_is_not_safe') {
+        return '已完成任务默认不允许安全重新排队，以避免重复副作用。';
+    }
+    if (message === 'job_requeue_sql_backup_with_target_name_is_not_safe') {
+        return '带固定 targetName 的 SQL 备份任务不允许安全重新排队，以避免覆盖已有备份。';
+    }
+    if (message === 'job_requeue_fs_import_jsonl_is_not_safe') {
+        return 'JSONL 导入任务默认不允许安全重新排队，以避免覆盖目标文件。';
     }
     if (message === 'Authority SDK deployment has not run yet.') {
         return '权限中心组件还没有部署。';
@@ -298,6 +311,18 @@ export function getJobStatusLabel(status: JobStatus): string {
         case 'failed': return '失败';
         case 'cancelled': return '已取消';
         default: return '状态未知';
+    }
+}
+
+export function getJobAttemptEventLabel(event: JobAttemptEvent): string {
+    switch (event) {
+        case 'started': return '开始';
+        case 'retryScheduled': return '安排重试';
+        case 'completed': return '完成';
+        case 'failed': return '失败';
+        case 'cancelled': return '取消';
+        case 'recovered': return '恢复扫尾';
+        default: return '未知';
     }
 }
 

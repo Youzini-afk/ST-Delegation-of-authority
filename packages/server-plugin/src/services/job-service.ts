@@ -61,5 +61,14 @@ export class JobService {
             jobId,
         });
     }
+
+    async requeue(user: UserContext, extensionId: string, jobId: string): Promise<StoredJobRecord> {
+        const paths = getUserAuthorityPaths(user);
+        return await this.core.requeueControlJob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            jobId,
+        });
+    }
 }
 

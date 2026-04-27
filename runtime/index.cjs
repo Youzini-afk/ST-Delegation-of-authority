@@ -182,6 +182,7 @@ function buildAuthorityFeatureFlags(isAdmin) {
         },
         jobs: {
             background: true,
+            safeRequeue: true,
             builtinTypes: [...BUILTIN_JOB_TYPES],
         },
         diagnostics: {
@@ -2134,6 +2135,30 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'jobs.background', error);
         }
     });
+    router.post('/jobs/:id/requeue', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const jobId = String(req.params?.id ?? '');
+            const existing = await runtime.jobs.get(user, jobId);
+            if (!existing || existing.extensionId !== session.extension.id) {
+                throw new Error('Job not found');
+            }
+            if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: existing.type })) {
+                throw new Error(`Permission not granted: jobs.background for ${existing.type}`);
+            }
+            const job = await runtime.jobs.requeue(user, session.extension.id, jobId);
+            await runtime.audit.logUsage(user, session.extension.id, 'Job requeued', {
+                previousJobId: jobId,
+                jobId: job.id,
+                jobType: job.type,
+            });
+            ok(res, job);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
     router.get('/events/stream', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -3061,6 +3086,16 @@ class CoreService {
         });
         if (!response.job) {
             throw new Error('Control job cancel returned no job');
+        }
+        return response.job;
+    }
+    async requeueControlJob(dbPath, request) {
+        const response = await this.request('/v1/control/jobs/requeue', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job requeue returned no job');
         }
         return response.job;
     }
@@ -4179,6 +4214,14 @@ class JobService {
     async cancel(user, extensionId, jobId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
         return await this.core.cancelControlJob(paths.controlDbFile, {
+            userHandle: user.handle,
+            extensionId,
+            jobId,
+        });
+    }
+    async requeue(user, extensionId, jobId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return await this.core.requeueControlJob(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
             jobId,

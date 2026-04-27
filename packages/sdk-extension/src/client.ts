@@ -324,6 +324,7 @@ export type AuthorityFeaturePath =
     | 'transfers.fs'
     | 'transfers.httpFetch'
     | 'jobs.background'
+    | 'jobs.safeRequeue'
     | 'diagnostics.warnings'
     | 'diagnostics.activityPages'
     | 'diagnostics.jobsPage'
@@ -495,6 +496,7 @@ export class AuthorityClient {
         list: () => Promise<JobRecord[]>;
         listPage: (input?: JobListRequest) => Promise<JobListResponse>;
         cancel: (id: string) => Promise<JobRecord>;
+        requeue: (id: string) => Promise<JobRecord>;
         waitForCompletion: (id: string, options?: JobWaitForCompletionOptions) => Promise<JobRecord>;
         subscribe: (id: string, options?: JobSubscribeOptions) => Promise<AuthorityEventsSubscription>;
     };
@@ -1364,6 +1366,18 @@ export class AuthorityClient {
             },
             cancel: async id => {
                 return await this.requestWithSession<JobRecord>(`/jobs/${encodeURIComponent(id)}/cancel`, {
+                    method: 'POST',
+                });
+            },
+            requeue: async id => {
+                await this.requireFeature('jobs.safeRequeue', 'Authority 当前版本尚未提供后台任务安全重排能力');
+                const job = await this.jobs.get(id);
+                await this.ensurePermission({
+                    resource: 'jobs.background',
+                    target: job.type,
+                    reason: `安全重新排队后台任务 ${job.type}`,
+                });
+                return await this.requestWithSession<JobRecord>(`/jobs/${encodeURIComponent(id)}/requeue`, {
                     method: 'POST',
                 });
             },
@@ -2382,6 +2396,8 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
             return features.transfers.httpFetch;
         case 'jobs.background':
             return features.jobs.background;
+        case 'jobs.safeRequeue':
+            return features.jobs.safeRequeue;
         case 'diagnostics.warnings':
             return features.diagnostics.warnings;
         case 'diagnostics.activityPages':

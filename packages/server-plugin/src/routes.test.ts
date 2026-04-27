@@ -53,6 +53,7 @@ describe('registerRoutes', () => {
             '/trivium/bulk-delete',
             '/trivium/compact',
             '/jobs/list',
+            '/jobs/:id/requeue',
             '/http/fetch-open',
             '/fs/private/delete',
             '/fs/private/stat',

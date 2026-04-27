@@ -34,6 +34,7 @@ import type {
     ControlJobCancelRequest,
     ControlJobCreateRequest,
     ControlJobGetRequest,
+    ControlJobRequeueRequest,
     ControlJobRecord,
     ControlJobResponse,
     ControlJobsListRequest,
@@ -861,6 +862,17 @@ export class CoreService {
         });
         if (!response.job) {
             throw new Error('Control job cancel returned no job');
+        }
+        return response.job;
+    }
+
+    async requeueControlJob(dbPath: string, request: ControlJobRequeueRequest): Promise<ControlJobRecord> {
+        const response = await this.request<ControlJobResponse>('/v1/control/jobs/requeue', {
+            dbPath,
+            ...request,
+        });
+        if (!response.job) {
+            throw new Error('Control job requeue returned no job');
         }
         return response.job;
     }

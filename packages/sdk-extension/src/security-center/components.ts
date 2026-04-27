@@ -4,6 +4,7 @@ import {
     formatBytes,
     getActivityKindLabel,
     getActivityMessageLabel,
+    getJobAttemptEventLabel,
     getJobStatusLabel,
     getJobTypeLabel,
     getResourceLabel,
@@ -219,6 +220,9 @@ export function renderJobList(items: JobRecord[], emptyText: string): string {
                         <span>${escapeHtml(formatDate(item.updatedAt))}</span>
                     </div>
                     <div>${escapeHtml(item.summary ? getActivityMessageLabel(item.summary) : '暂无说明')}</div>
+                    ${getJobAttemptTimeline(item)
+        ? `<div class="authority-muted">${escapeHtml(getJobAttemptTimeline(item))}</div>`
+        : ''}
                     ${item.error ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(getSystemMessageLabel(item.error))}</div>` : ''}
                 </div>
             `).join('')}
@@ -247,6 +251,9 @@ export function renderJobTable(items: JobRecord[], emptyText: string): string {
                             <td>
                                 <strong>${escapeHtml(getJobTypeLabel(item.type))}</strong>
                                 <div class="authority-muted">${escapeHtml(item.summary ? getActivityMessageLabel(item.summary) : item.id)}</div>
+                                ${getJobAttemptTimeline(item)
+        ? `<div class="authority-muted">${escapeHtml(getJobAttemptTimeline(item))}</div>`
+        : ''}
                             </td>
                             <td><span class="authority-pill authority-pill--${item.status}">${escapeHtml(getJobStatusLabel(item.status))}</span></td>
                             <td>${escapeHtml(formatDate(item.updatedAt))}</td>
@@ -256,6 +263,29 @@ export function renderJobTable(items: JobRecord[], emptyText: string): string {
             </table>
         </div>
     `;
+}
+
+function getJobAttemptTimeline(item: JobRecord): string {
+    if (!item.attemptHistory || item.attemptHistory.length === 0) {
+        return '';
+    }
+    return item.attemptHistory
+        .slice(-4)
+        .map(attempt => {
+            const parts = [
+                `#${attempt.attempt}`,
+                getJobAttemptEventLabel(attempt.event),
+                formatDate(attempt.timestamp),
+            ];
+            if (attempt.backoffMs != null) {
+                parts.push(`backoff ${attempt.backoffMs}ms`);
+            }
+            if (attempt.error) {
+                parts.push(getSystemMessageLabel(attempt.error));
+            }
+            return parts.join(' · ');
+        })
+        .join(' → ');
 }
 
 export function renderPolicyList(items: AuthorityPolicyEntry[], emptyText: string): string {

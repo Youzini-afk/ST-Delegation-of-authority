@@ -39,6 +39,19 @@ describe('JobService', () => {
         expect((await jobs.get(user, job.id))?.status).toBe('cancelled');
     });
 
+    it('requeues failed jobs through core', async () => {
+        const user = createUser(dirs);
+        const jobs = new JobService(createMockCore());
+
+        const created = await jobs.create(user, 'third-party/ext-a', 'delay', { durationMs: 2000 });
+        const failed = await jobs.cancel(user, 'third-party/ext-a', created.id);
+        const requeued = await jobs.requeue(user, 'third-party/ext-a', failed.id);
+
+        expect(requeued.id).not.toBe(failed.id);
+        expect(requeued.status).toBe('queued');
+        expect(requeued.type).toBe('delay');
+    });
+
     it('forwards cursor page requests when listing jobs', async () => {
         const user = createUser(dirs);
         const jobs = new JobService(createMockCore());
@@ -105,6 +118,24 @@ function createMockCore(): CoreService {
                 summary: 'Cancelled by user',
             };
             jobs.set(job.id, next);
+            return next;
+        },
+        async requeueControlJob(_dbPath: string, request: { extensionId: string; jobId: string }) {
+            const job = jobs.get(request.jobId);
+            if (!job || job.extensionId !== request.extensionId) {
+                throw new Error('Job not found');
+            }
+            const timestamp = new Date().toISOString();
+            const next: StoredJobRecord = {
+                ...job,
+                id: `job-${jobs.size + 1}`,
+                status: 'queued',
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                progress: 0,
+                summary: 'Queued by safe requeue',
+            };
+            jobs.set(next.id, next);
             return next;
         },
     } as unknown as CoreService;

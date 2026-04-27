@@ -973,6 +973,18 @@ export class AuthorityClient {
                     method: 'POST',
                 });
             },
+            requeue: async (id) => {
+                await this.requireFeature('jobs.safeRequeue', 'Authority 当前版本尚未提供后台任务安全重排能力');
+                const job = await this.jobs.get(id);
+                await this.ensurePermission({
+                    resource: 'jobs.background',
+                    target: job.type,
+                    reason: `安全重新排队后台任务 ${job.type}`,
+                });
+                return await this.requestWithSession(`/jobs/${encodeURIComponent(id)}/requeue`, {
+                    method: 'POST',
+                });
+            },
             waitForCompletion: async (id, options = {}) => {
                 const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
                 const timeoutMs = getOptionalJobWaitTimeout(options.timeoutMs);
@@ -1846,6 +1858,8 @@ function getFeatureAvailability(features, feature) {
             return features.transfers.httpFetch;
         case 'jobs.background':
             return features.jobs.background;
+        case 'jobs.safeRequeue':
+            return features.jobs.safeRequeue;
         case 'diagnostics.warnings':
             return features.diagnostics.warnings;
         case 'diagnostics.activityPages':

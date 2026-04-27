@@ -559,6 +559,55 @@ describe('AuthorityClient', () => {
         });
     });
 
+    it('routes jobs.requeue through the safe requeue endpoint', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async (path: string) => {
+            if (path === '/jobs/job-1') {
+                return {
+                    id: 'job-1',
+                    extensionId: 'third-party/ext-a',
+                    type: 'delay',
+                    status: 'failed',
+                    createdAt: '2026-04-27T00:00:00.000Z',
+                    updatedAt: '2026-04-27T00:00:01.000Z',
+                    progress: 0,
+                };
+            }
+            return {
+                id: 'job-2',
+                extensionId: 'third-party/ext-a',
+                type: 'delay',
+                status: 'queued',
+                createdAt: '2026-04-27T00:00:02.000Z',
+                updatedAt: '2026-04-27T00:00:02.000Z',
+                progress: 0,
+            };
+        });
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const result = await client.jobs.requeue('job-1');
+
+        expect(result.id).toBe('job-2');
+        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/jobs/job-1');
+        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/jobs/job-1/requeue', {
+            method: 'POST',
+        });
+    });
+
     it('aggregates paged SQL query results through sql.pageAll', async () => {
         const { AuthorityClient } = await import('./client.js');
 
@@ -995,6 +1044,7 @@ function buildProbe(overrides: Partial<{
             },
             jobs: {
                 background: true,
+                safeRequeue: true,
                 builtinTypes: ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'],
             },
             diagnostics: {
