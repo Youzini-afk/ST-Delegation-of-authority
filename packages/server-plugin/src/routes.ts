@@ -643,8 +643,9 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
+            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
-            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies));
+            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -654,10 +655,12 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         try {
             const user = getUserContext(req);
             const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             ok(res, runtime.sessions.buildSessionResponse(
                 session,
                 await runtime.permissions.listPersistentGrants(user, session.extension.id),
                 await runtime.permissions.getPolicyEntries(user, session.extension.id),
+                limits,
             ));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -967,7 +970,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
             const blobId = String(req.body?.id ?? '');
             const opened = await runtime.storage.openBlobRead(user, session.extension.id, blobId);
-            if (opened.record.size <= getEffectiveInlineThresholdBytes('storageBlobRead')) {
+            const inlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'storageBlobRead');
+            if (opened.record.size <= inlineThreshold) {
                 ok(res, {
                     mode: 'inline',
                     ...(await runtime.storage.getBlob(user, session.extension.id, blobId)),
@@ -1120,7 +1124,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             }
 
             const opened = await runtime.files.openRead(user, session.extension.id, payload);
-            if (opened.entry.sizeBytes <= getEffectiveInlineThresholdBytes('privateFileRead')) {
+            const inlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'privateFileRead');
+            if (opened.entry.sizeBytes <= inlineThreshold) {
                 const result = await runtime.files.readFile(user, session.extension.id, payload);
                 await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
                 ok(res, {
@@ -2134,7 +2139,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 responsePath: responseTransferRecord.filePath,
             });
             const finalizedTransfer = await runtime.transfers.promoteToDownload(user, session.extension.id, responseTransfer.transferId);
-            const responseInlineThreshold = getEffectiveInlineThresholdBytes('httpFetchResponse');
+            const responseInlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'httpFetchResponse');
             await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', {
                 hostname,
                 ...(bodyTransfer ? { requestVia: 'transfer' } : {}),

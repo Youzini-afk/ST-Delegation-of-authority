@@ -280,6 +280,43 @@ describe('AuthorityClient', () => {
         expect(putBlobWithTransfer).toHaveBeenCalledTimes(1);
     });
 
+    it('prefers session-scoped effective limits over probe defaults for blob transfer routing', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const session = buildSession();
+        session.limits.effectiveInlineThresholdBytes.storageBlobWrite = { bytes: 8, source: 'policy' };
+        const putBlobWithTransfer = vi.fn(async () => ({
+            id: 'blob-1',
+            name: 'payload.txt',
+            contentType: 'text/plain',
+            sizeBytes: 12,
+            createdAt: 't1',
+        }));
+
+        Object.assign(client as object, {
+            session,
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            putBlobWithTransfer,
+        });
+
+        await client.storage.blob.put({
+            name: 'payload.txt',
+            content: 'hello world!',
+            encoding: 'utf8',
+        });
+
+        expect(authorityRequestMock).not.toHaveBeenCalled();
+        expect(putBlobWithTransfer).toHaveBeenCalledTimes(1);
+    });
+
     it('uses probe inline thresholds when deciding private file write transfer routing', async () => {
         const { AuthorityClient } = await import('./client.js');
 
@@ -1382,6 +1419,16 @@ function buildSession() {
         },
         grants: [],
         policies: [],
+        limits: {
+            effectiveInlineThresholdBytes: {
+                storageBlobWrite: { bytes: 256, source: 'runtime' },
+                storageBlobRead: { bytes: 256, source: 'runtime' },
+                privateFileWrite: { bytes: 256, source: 'runtime' },
+                privateFileRead: { bytes: 256, source: 'runtime' },
+                httpFetchRequest: { bytes: 256, source: 'runtime' },
+                httpFetchResponse: { bytes: 256, source: 'runtime' },
+            },
+        },
         features: buildProbe().features,
     };
 }

@@ -727,8 +727,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
+            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
-            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies));
+            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -738,7 +739,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id)));
+            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
+            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -1024,7 +1026,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             }
             const blobId = String(req.body?.id ?? '');
             const opened = await runtime.storage.openBlobRead(user, session.extension.id, blobId);
-            if (opened.record.size <= getEffectiveInlineThresholdBytes('storageBlobRead')) {
+            const inlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'storageBlobRead');
+            if (opened.record.size <= inlineThreshold) {
                 ok(res, {
                     mode: 'inline',
                     ...(await runtime.storage.getBlob(user, session.extension.id, blobId)),
@@ -1168,7 +1171,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 throw new Error('Permission not granted: fs.private');
             }
             const opened = await runtime.files.openRead(user, session.extension.id, payload);
-            if (opened.entry.sizeBytes <= getEffectiveInlineThresholdBytes('privateFileRead')) {
+            const inlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'privateFileRead');
+            if (opened.entry.sizeBytes <= inlineThreshold) {
                 const result = await runtime.files.readFile(user, session.extension.id, payload);
                 await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
                 ok(res, {
@@ -2136,7 +2140,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 responsePath: responseTransferRecord.filePath,
             });
             const finalizedTransfer = await runtime.transfers.promoteToDownload(user, session.extension.id, responseTransfer.transferId);
-            const responseInlineThreshold = getEffectiveInlineThresholdBytes('httpFetchResponse');
+            const responseInlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'httpFetchResponse');
             await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', {
                 hostname,
                 ...(bodyTransfer ? { requestVia: 'transfer' } : {}),
@@ -4408,6 +4412,14 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+const INLINE_THRESHOLD_KEYS = [
+    'storageBlobWrite',
+    'storageBlobRead',
+    'privateFileWrite',
+    'privateFileRead',
+    'httpFetchRequest',
+    'httpFetchResponse',
+];
 class PermissionService {
     policyService;
     core;
@@ -4424,6 +4436,15 @@ class PermissionService {
     }
     async getPolicyEntries(user, extensionId) {
         return await this.policyService.getExtensionPolicies(user, extensionId);
+    }
+    async getEffectiveSessionLimits(user, extensionId) {
+        const policy = await this.policyService.getExtensionLimitPolicy(user, extensionId);
+        return {
+            effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(policy),
+        };
+    }
+    async getEffectiveInlineThresholdBytes(user, extensionId, key) {
+        return (await this.getEffectiveSessionLimits(user, extensionId)).effectiveInlineThresholdBytes[key].bytes;
     }
     async evaluate(user, session, request) {
         const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.buildPermissionDescriptor)(request.resource, request.target);
@@ -4542,6 +4563,37 @@ class PermissionService {
             key,
         });
     }
+    buildEffectiveInlineThresholds(policy) {
+        const effective = this.buildRuntimeInlineThresholds();
+        const overrides = policy?.inlineThresholdBytes;
+        if (!overrides) {
+            return effective;
+        }
+        for (const key of INLINE_THRESHOLD_KEYS) {
+            const requested = overrides[key];
+            if (typeof requested !== 'number' || !Number.isFinite(requested) || requested <= 0) {
+                continue;
+            }
+            const normalized = Math.floor(requested);
+            if (normalized < effective[key].bytes) {
+                effective[key] = {
+                    bytes: normalized,
+                    source: 'policy',
+                };
+            }
+        }
+        return effective;
+    }
+    buildRuntimeInlineThresholds() {
+        return {
+            storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        };
+    }
     getDeclarationDecision(declaredPermissions, descriptor) {
         if (!this.hasDeclaredPermissions(declaredPermissions)) {
             return null;
@@ -4654,11 +4706,19 @@ class PolicyService {
                 ..._constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS,
                 ...globalFile.defaults,
             },
+            limits: {
+                extensions: {
+                    ...(globalFile.limits?.extensions ?? {}),
+                },
+            },
             updatedAt: globalFile.updatedAt || (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
         };
     }
     async getExtensionPolicies(user, extensionId) {
         return Object.values((await this.getPolicies(user)).extensions[extensionId] ?? {});
+    }
+    async getExtensionLimitPolicy(user, extensionId) {
+        return (await this.getPolicies(user)).limits.extensions[extensionId] ?? null;
     }
     async saveGlobalPolicies(actor, partial) {
         if (!actor.isAdmin) {
@@ -4673,6 +4733,7 @@ class PolicyService {
             partial: {
                 ...(partial.defaults ? { defaults: partial.defaults } : {}),
                 ...(partial.extensions ? { extensions: partial.extensions } : {}),
+                ...(partial.limits ? { limits: partial.limits } : {}),
             },
         });
     }
@@ -4898,7 +4959,7 @@ class SessionService {
         }
         return session;
     }
-    buildSessionResponse(session, grants, policies) {
+    buildSessionResponse(session, grants, policies, limits) {
         return {
             sessionToken: session.token,
             user: {
@@ -4908,6 +4969,7 @@ class SessionService {
             extension: session.extension,
             grants,
             policies,
+            limits,
             features: (0,_constants_js__WEBPACK_IMPORTED_MODULE_0__.buildAuthorityFeatureFlags)(session.isAdmin),
         };
     }

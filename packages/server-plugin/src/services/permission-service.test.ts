@@ -133,6 +133,33 @@ describe('PermissionService', () => {
 
         expect(results.map(result => result.decision)).toEqual(['blocked', 'prompt', 'blocked']);
     });
+
+    it('derives effective inline thresholds from extension limit policy', async () => {
+        const user = createUser(false);
+        const admin = createUser(true);
+        const session = createSession(user);
+        const core = createMockCore();
+        const policies = new PolicyService(core);
+        const permissions = new PermissionService(policies, core);
+
+        await policies.saveGlobalPolicies(admin, {
+            limits: {
+                extensions: {
+                    [session.extension.id]: {
+                        inlineThresholdBytes: {
+                            storageBlobWrite: 1024,
+                            httpFetchResponse: 2048,
+                        },
+                    },
+                },
+            },
+        });
+
+        const limits = await permissions.getEffectiveSessionLimits(user, session.extension.id);
+        expect(limits.effectiveInlineThresholdBytes.storageBlobWrite).toEqual({ bytes: 1024, source: 'policy' });
+        expect(limits.effectiveInlineThresholdBytes.httpFetchResponse).toEqual({ bytes: 2048, source: 'policy' });
+        expect(limits.effectiveInlineThresholdBytes.privateFileRead.source).toBe('runtime');
+    });
 });
 
 function createMockCore(): CoreService {
@@ -140,6 +167,9 @@ function createMockCore(): CoreService {
     let policies: PoliciesState = {
         defaults: { ...DEFAULT_POLICY_STATUS },
         extensions: {},
+        limits: {
+            extensions: {},
+        },
         updatedAt: new Date().toISOString(),
     };
     return {
@@ -174,6 +204,12 @@ function createMockCore(): CoreService {
                 extensions: {
                     ...policies.extensions,
                     ...(request.partial.extensions ?? {}),
+                },
+                limits: {
+                    extensions: {
+                        ...policies.limits.extensions,
+                        ...(request.partial.limits?.extensions ?? {}),
+                    },
                 },
                 updatedAt: new Date().toISOString(),
             };

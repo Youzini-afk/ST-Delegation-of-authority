@@ -59,7 +59,12 @@ export class SessionService {
         return session;
     }
 
-    buildSessionResponse(session: SessionRecord, grants: SessionInitResponse['grants'], policies: SessionInitResponse['policies']): SessionInitResponse {
+    buildSessionResponse(
+        session: SessionRecord,
+        grants: SessionInitResponse['grants'],
+        policies: SessionInitResponse['policies'],
+        limits: SessionInitResponse['limits'],
+    ): SessionInitResponse {
         return {
             sessionToken: session.token,
             user: {
@@ -69,6 +74,7 @@ export class SessionService {
             extension: session.extension,
             grants,
             policies,
+            limits,
             features: buildAuthorityFeatureFlags(session.isAdmin),
         };
     }

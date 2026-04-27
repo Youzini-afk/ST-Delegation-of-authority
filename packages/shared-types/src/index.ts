@@ -82,6 +82,35 @@ export interface AuthorityInitConfig {
     uiLabel?: string;
 }
 
+export type AuthorityInlineThresholdKey =
+    | 'storageBlobWrite'
+    | 'storageBlobRead'
+    | 'privateFileWrite'
+    | 'privateFileRead'
+    | 'httpFetchRequest'
+    | 'httpFetchResponse';
+
+export type AuthorityInlineThresholdOverrides = Partial<Record<AuthorityInlineThresholdKey, number>>;
+
+export interface AuthorityEffectiveBytesLimit {
+    bytes: number;
+    source: AuthorityLimitSource;
+}
+
+export type AuthorityEffectiveInlineThresholds = Record<AuthorityInlineThresholdKey, AuthorityEffectiveBytesLimit>;
+
+export interface AuthorityExtensionLimitsPolicy {
+    inlineThresholdBytes?: AuthorityInlineThresholdOverrides;
+}
+
+export interface AuthorityLimitsPolicyState {
+    extensions: Record<string, AuthorityExtensionLimitsPolicy>;
+}
+
+export interface AuthoritySessionLimits {
+    effectiveInlineThresholdBytes: AuthorityEffectiveInlineThresholds;
+}
+
 export interface AuthorityGrant {
     key: string;
     resource: PermissionResource;
@@ -189,32 +218,7 @@ export interface AuthorityProbeLimits {
     maxDataTransferBytes: number;
     dataTransferChunkBytes: number;
     dataTransferInlineThresholdBytes: number;
-    effectiveInlineThresholdBytes: {
-        storageBlobWrite: {
-            bytes: number;
-            source: AuthorityLimitSource;
-        };
-        storageBlobRead: {
-            bytes: number;
-            source: AuthorityLimitSource;
-        };
-        privateFileWrite: {
-            bytes: number;
-            source: AuthorityLimitSource;
-        };
-        privateFileRead: {
-            bytes: number;
-            source: AuthorityLimitSource;
-        };
-        httpFetchRequest: {
-            bytes: number;
-            source: AuthorityLimitSource;
-        };
-        httpFetchResponse: {
-            bytes: number;
-            source: AuthorityLimitSource;
-        };
-    };
+    effectiveInlineThresholdBytes: AuthorityEffectiveInlineThresholds;
 }
 
 export interface AuthorityProbeCoreHealth {
@@ -293,6 +297,7 @@ export interface SessionInitResponse {
     extension: SessionExtensionInfo;
     grants: AuthorityGrant[];
     policies: AuthorityPolicyEntry[];
+    limits: AuthoritySessionLimits;
     features: AuthorityFeatureFlags;
 }
 
@@ -434,6 +439,7 @@ export interface ControlPoliciesSaveRequest {
     partial: Partial<{
         defaults: Record<PermissionResource, PermissionStatus>;
         extensions: Record<string, Record<string, AuthorityPolicyEntry>>;
+        limits: AuthorityLimitsPolicyState;
         updatedAt: string;
     }>;
 }
@@ -441,6 +447,7 @@ export interface ControlPoliciesSaveRequest {
 export interface ControlPoliciesResponse {
     defaults: Record<PermissionResource, PermissionStatus>;
     extensions: Record<string, Record<string, AuthorityPolicyEntry>>;
+    limits: AuthorityLimitsPolicyState;
     updatedAt: string;
 }
 

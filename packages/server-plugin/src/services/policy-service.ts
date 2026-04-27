@@ -1,3 +1,4 @@
+import type { AuthorityExtensionLimitsPolicy } from '@stdo/shared-types';
 import { DEFAULT_POLICY_STATUS } from '../constants.js';
 import { getGlobalAuthorityPaths } from '../store/authority-paths.js';
 import type { PoliciesState, StoredPolicyEntry, UserContext } from '../types.js';
@@ -19,12 +20,21 @@ export class PolicyService {
                 ...DEFAULT_POLICY_STATUS,
                 ...globalFile.defaults,
             },
+            limits: {
+                extensions: {
+                    ...(globalFile.limits?.extensions ?? {}),
+                },
+            },
             updatedAt: globalFile.updatedAt || nowIso(),
         };
     }
 
     async getExtensionPolicies(user: UserContext, extensionId: string): Promise<StoredPolicyEntry[]> {
         return Object.values((await this.getPolicies(user)).extensions[extensionId] ?? {});
+    }
+
+    async getExtensionLimitPolicy(user: UserContext, extensionId: string): Promise<AuthorityExtensionLimitsPolicy | null> {
+        return (await this.getPolicies(user)).limits.extensions[extensionId] ?? null;
     }
 
     async saveGlobalPolicies(actor: UserContext, partial: Partial<PoliciesState>): Promise<PoliciesState> {
@@ -41,6 +51,7 @@ export class PolicyService {
             partial: {
                 ...(partial.defaults ? { defaults: partial.defaults } : {}),
                 ...(partial.extensions ? { extensions: partial.extensions } : {}),
+                ...(partial.limits ? { limits: partial.limits } : {}),
             },
         });
     }

@@ -812,6 +812,7 @@ struct ControlPoliciesRequest {
 struct ControlPoliciesPartial {
     defaults: Option<HashMap<String, String>>,
     extensions: Option<HashMap<String, HashMap<String, ControlPolicyEntry>>>,
+    limits: Option<ControlLimitsPoliciesDocument>,
 }
 
 #[derive(Deserialize)]
@@ -1013,11 +1014,27 @@ struct ControlPolicyEntry {
     source: String,
 }
 
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlExtensionLimitsPolicy {
+    #[serde(default)]
+    inline_threshold_bytes: HashMap<String, u64>,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlLimitsPoliciesDocument {
+    #[serde(default)]
+    extensions: HashMap<String, ControlExtensionLimitsPolicy>,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ControlPoliciesDocument {
     defaults: HashMap<String, String>,
     extensions: HashMap<String, HashMap<String, ControlPolicyEntry>>,
+    #[serde(default)]
+    limits: ControlLimitsPoliciesDocument,
     updated_at: String,
 }
 
@@ -3795,6 +3812,14 @@ fn handle_control_policies_save(
         }
     }
 
+    if let Some(limits) = request.partial.limits {
+        for (extension_id, policy) in limits.extensions {
+            validate_non_empty("extensionId", &extension_id)?;
+            validate_extension_limits_policy(&policy)?;
+            document.limits.extensions.insert(extension_id, policy);
+        }
+    }
+
     document.updated_at = current_timestamp_iso();
     save_control_policies_document(&connection, &document)?;
     Ok(serde_json::to_value(document).expect("control policies document should serialize"))
@@ -5932,6 +5957,7 @@ fn default_control_policies_document() -> ControlPoliciesDocument {
     ControlPoliciesDocument {
         defaults,
         extensions: HashMap::new(),
+        limits: ControlLimitsPoliciesDocument::default(),
         updated_at: current_timestamp_iso(),
     }
 }
@@ -7994,6 +8020,30 @@ fn validate_policy_entry(entry: &ControlPolicyEntry) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn validate_extension_limits_policy(policy: &ControlExtensionLimitsPolicy) -> Result<(), ApiError> {
+    for (key, value) in &policy.inline_threshold_bytes {
+        validate_one_of(
+            "limits.inlineThresholdBytes.key",
+            key,
+            &[
+                "storageBlobWrite",
+                "storageBlobRead",
+                "privateFileWrite",
+                "privateFileRead",
+                "httpFetchRequest",
+                "httpFetchResponse",
+            ],
+        )?;
+        if *value == 0 {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!("limits.inlineThresholdBytes.{} must be greater than 0", key),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_job_record(job: &ControlJobRecord) -> Result<(), ApiError> {
     validate_non_empty("job.id", &job.id)?;
     validate_non_empty("job.extensionId", &job.extension_id)?;
@@ -9456,6 +9506,44 @@ mod tests {
         assert_eq!(requeued["job"]["payload"]["message"], json!("done"));
         assert_eq!(requeued["job"]["idempotencyKey"], JsonValue::Null);
         assert_ne!(requeued["job"]["id"], json!("job-failed-delay-1"));
+    }
+
+    #[test]
+    fn control_policies_round_trip_extension_limits() {
+        let db_path = test_db_path("control-policies-limits");
+        let saved = handle_control_policies_save(ControlPoliciesSaveRequest {
+            db_path: db_path.clone(),
+            actor: ControlUserInfo {
+                handle: String::from("admin"),
+                is_admin: true,
+            },
+            partial: ControlPoliciesPartial {
+                defaults: None,
+                extensions: None,
+                limits: Some(ControlLimitsPoliciesDocument {
+                    extensions: HashMap::from([(
+                        String::from("third-party/ext-a"),
+                        ControlExtensionLimitsPolicy {
+                            inline_threshold_bytes: HashMap::from([(
+                                String::from("storageBlobWrite"),
+                                1024,
+                            )]),
+                        },
+                    )]),
+                }),
+            },
+        })
+        .expect("control policies save should succeed");
+
+        assert_eq!(saved["limits"]["extensions"]["third-party/ext-a"]["inlineThresholdBytes"]["storageBlobWrite"], json!(1024));
+
+        let loaded = handle_control_policies_get(ControlPoliciesRequest {
+            db_path,
+            user_handle: String::from("alice"),
+        })
+        .expect("control policies get should succeed");
+
+        assert_eq!(loaded["limits"]["extensions"]["third-party/ext-a"]["inlineThresholdBytes"]["storageBlobWrite"], json!(1024));
     }
 
     fn test_db_path(name: &str) -> String {

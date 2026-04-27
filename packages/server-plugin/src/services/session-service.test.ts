@@ -22,7 +22,16 @@ describe('SessionService', () => {
             sessionGrants: new Map(),
         };
 
-        const response = service.buildSessionResponse(session, [], []);
+        const response = service.buildSessionResponse(session, [], [], {
+            effectiveInlineThresholdBytes: {
+                storageBlobWrite: { bytes: 256 * 1024, source: 'runtime' },
+                storageBlobRead: { bytes: 256 * 1024, source: 'runtime' },
+                privateFileWrite: { bytes: 256 * 1024, source: 'runtime' },
+                privateFileRead: { bytes: 256 * 1024, source: 'runtime' },
+                httpFetchRequest: { bytes: 256 * 1024, source: 'runtime' },
+                httpFetchResponse: { bytes: 256 * 1024, source: 'runtime' },
+            },
+        });
 
         expect(response.features.admin).toBe(true);
         expect(response.features.sql.queryPage).toBe(true);

@@ -1,12 +1,16 @@
 import type {
+    AuthorityEffectiveInlineThresholds,
     AuthorityGrant,
+    AuthorityExtensionLimitsPolicy,
+    AuthorityInlineThresholdKey,
     AuthorityPolicyEntry,
+    AuthoritySessionLimits,
     DeclaredPermissions,
     PermissionDecision,
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
 } from '@stdo/shared-types';
-import { DEFAULT_POLICY_STATUS } from '../constants.js';
+import { DATA_TRANSFER_INLINE_THRESHOLD_BYTES, DEFAULT_POLICY_STATUS } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type {
     SessionGrantState,
@@ -19,6 +23,15 @@ import type {
 import { buildPermissionDescriptor, normalizePermissionTarget, nowIso } from '../utils.js';
 import { CoreService } from './core-service.js';
 import { PolicyService } from './policy-service.js';
+
+const INLINE_THRESHOLD_KEYS: AuthorityInlineThresholdKey[] = [
+    'storageBlobWrite',
+    'storageBlobRead',
+    'privateFileWrite',
+    'privateFileRead',
+    'httpFetchRequest',
+    'httpFetchResponse',
+];
 
 export class PermissionService {
     constructor(
@@ -36,6 +49,21 @@ export class PermissionService {
 
     async getPolicyEntries(user: UserContext, extensionId: string): Promise<StoredPolicyEntry[]> {
         return await this.policyService.getExtensionPolicies(user, extensionId);
+    }
+
+    async getEffectiveSessionLimits(user: UserContext, extensionId: string): Promise<AuthoritySessionLimits> {
+        const policy = await this.policyService.getExtensionLimitPolicy(user, extensionId);
+        return {
+            effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(policy),
+        };
+    }
+
+    async getEffectiveInlineThresholdBytes(
+        user: UserContext,
+        extensionId: string,
+        key: AuthorityInlineThresholdKey,
+    ): Promise<number> {
+        return (await this.getEffectiveSessionLimits(user, extensionId)).effectiveInlineThresholdBytes[key].bytes;
     }
 
     async evaluate(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest): Promise<PermissionEvaluateResponse> {
@@ -170,6 +198,42 @@ export class PermissionService {
             extensionId,
             key,
         });
+    }
+
+    private buildEffectiveInlineThresholds(policy: AuthorityExtensionLimitsPolicy | null): AuthorityEffectiveInlineThresholds {
+        const effective = this.buildRuntimeInlineThresholds();
+        const overrides = policy?.inlineThresholdBytes;
+        if (!overrides) {
+            return effective;
+        }
+
+        for (const key of INLINE_THRESHOLD_KEYS) {
+            const requested = overrides[key];
+            if (typeof requested !== 'number' || !Number.isFinite(requested) || requested <= 0) {
+                continue;
+            }
+
+            const normalized = Math.floor(requested);
+            if (normalized < effective[key].bytes) {
+                effective[key] = {
+                    bytes: normalized,
+                    source: 'policy',
+                };
+            }
+        }
+
+        return effective;
+    }
+
+    private buildRuntimeInlineThresholds(): AuthorityEffectiveInlineThresholds {
+        return {
+            storageBlobWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        };
     }
 
     private getDeclarationDecision(

@@ -1267,6 +1267,10 @@ export class AuthorityClient {
         });
     }
     async getEffectiveInlineThresholdBytes(key) {
+        const sessionThreshold = this.session?.limits.effectiveInlineThresholdBytes[key]?.bytes;
+        if (typeof sessionThreshold === 'number' && Number.isFinite(sessionThreshold) && sessionThreshold > 0) {
+            return sessionThreshold;
+        }
         try {
             const probe = this.probeSnapshot ?? await this.ensureProbe();
             return probe.limits.effectiveInlineThresholdBytes[key].bytes;

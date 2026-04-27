@@ -1,10 +1,11 @@
 import type {
-    AuthorityGrant,
     AuthorityJobRegistrySummary,
+    AuthorityLimitsPolicyState,
     AuthorityPolicyEntry,
+    AuthorityGrant,
     DeclaredPermissions,
-    InstallType,
     JobRecord,
+    InstallType,
     PermissionDecision,
     PermissionResource,
     PermissionStatus,
@@ -50,6 +51,7 @@ export interface ExtensionRegistryEntry extends SessionExtensionInfo {
 export interface PoliciesState {
     defaults: Record<PermissionResource, PermissionStatus>;
     extensions: Record<string, Record<string, StoredPolicyEntry>>;
+    limits: AuthorityLimitsPolicyState;
     updatedAt: string;
 }
 
