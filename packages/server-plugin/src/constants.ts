@@ -135,6 +135,7 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
         admin: isAdmin,
         sql: {
             queryPage: true,
+            stat: true,
             migrations: true,
             schemaManifest: true,
         },

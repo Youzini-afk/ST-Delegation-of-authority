@@ -110,6 +110,7 @@ export interface AuthorityFeatureFlags {
     admin: boolean;
     sql: {
         queryPage: boolean;
+        stat: boolean;
         migrations: boolean;
         schemaManifest: boolean;
     };
@@ -805,11 +806,30 @@ export interface JobListResponse {
 export type SqlValue = string | number | boolean | null;
 export type SqlStatementMode = 'query' | 'exec';
 
+export interface SqlRuntimeConfigDiagnostics {
+    journalMode: string;
+    synchronous: string;
+    foreignKeys: boolean;
+    busyTimeoutMs: number;
+    pagedQueryRequiresOrderBy: boolean;
+}
+
+export interface SqlSlowQueryDiagnostics {
+    count: number;
+    lastOccurredAt: string | null;
+    lastElapsedMs: number | null;
+    lastStatementPreview: string | null;
+}
+
 export interface SqlQueryRequest {
     database?: string;
     statement: string;
     params?: SqlValue[];
     page?: CursorPageRequest;
+}
+
+export interface SqlStatRequest {
+    database?: string;
 }
 
 export interface SqlExecRequest {
@@ -918,11 +938,19 @@ export interface SqlDatabaseRecord {
     name: string;
     fileName: string;
     sizeBytes: number;
-    updatedAt: string;
+    updatedAt: string | null;
+    runtimeConfig: SqlRuntimeConfigDiagnostics;
+    slowQuery: SqlSlowQueryDiagnostics;
 }
 
 export interface SqlListDatabasesResponse {
     databases: SqlDatabaseRecord[];
+}
+
+export interface SqlStatResponse extends SqlDatabaseRecord {
+    database: string;
+    filePath: string;
+    exists: boolean;
 }
 
 export type TriviumDType = 'f32' | 'f16' | 'u64';

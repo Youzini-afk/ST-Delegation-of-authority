@@ -45,7 +45,7 @@ export function buildOverviewModel(state) {
 export function getDatabaseGroupSummaries(extensions, details) {
     return extensions.map(extension => {
         const databases = [...(details.get(extension.id)?.databases ?? [])]
-            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+            .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const triviumDatabases = [...(details.get(extension.id)?.triviumDatabases ?? [])]
             .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const latestUpdatedAt = [

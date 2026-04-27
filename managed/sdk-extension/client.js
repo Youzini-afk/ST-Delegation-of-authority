@@ -1,6 +1,29 @@
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt } from './permission-prompt.js';
 import { openSecurityCenter } from './security-center.js';
+export class AuthorityPermissionError extends Error {
+    details;
+    code;
+    decision;
+    key;
+    riskLevel;
+    target;
+    resource;
+    constructor(message, details) {
+        super(message);
+        this.details = details;
+        this.name = 'AuthorityPermissionError';
+        this.code = details.code;
+        this.decision = details.decision;
+        this.key = details.key;
+        this.riskLevel = details.riskLevel;
+        this.target = details.target;
+        this.resource = details.resource;
+    }
+}
+export function isAuthorityPermissionError(error) {
+    return error instanceof AuthorityPermissionError;
+}
 function isTerminalJobStatus(status) {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
@@ -363,6 +386,22 @@ export class AuthorityClient {
                     reason: `迁移 SQL 数据库 ${database}`,
                 });
                 return await this.requestWithSession('/sql/migrate', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            stat: async (input = {}) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.requireFeature('sql.stat', 'Authority 当前版本尚未提供 SQL 运行时诊断能力');
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `查看 SQL 数据库诊断 ${database}`,
+                });
+                return await this.requestWithSession('/sql/stat', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -834,6 +873,21 @@ export class AuthorityClient {
                     },
                 });
             },
+            compact: async (input = {}) => {
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `压实 Trivium 数据库 ${database}`,
+                });
+                await this.requestWithSession('/trivium/compact', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
             flush: async (input = {}) => {
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
@@ -1119,7 +1173,14 @@ export class AuthorityClient {
             if (resolved.decision === 'denied' || resolved.decision === 'blocked') {
                 void openSecurityCenter({ focusExtensionId: this.config.extensionId });
             }
-            throw new Error(message);
+            throw new AuthorityPermissionError(message, {
+                code: getAuthorityPermissionErrorCode(resolved.decision),
+                decision: resolved.decision,
+                key: resolved.key,
+                riskLevel: resolved.riskLevel,
+                target: resolved.target,
+                resource: resolved.resource,
+            });
         }
         return resolved;
     }
@@ -1755,6 +1816,8 @@ function getFeatureAvailability(features, feature) {
             return features.admin;
         case 'sql.queryPage':
             return features.sql.queryPage;
+        case 'sql.stat':
+            return features.sql.stat;
         case 'sql.migrations':
             return features.sql.migrations;
         case 'sql.schemaManifest':
@@ -1823,6 +1886,15 @@ function getPermissionFailureMessage(displayName, resource, target, decision) {
         return `${displayName} 对 ${resourceLabel} 的请求被平台安全规则或管理员策略封锁。`;
     }
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
+}
+function getAuthorityPermissionErrorCode(decision) {
+    if (decision === 'denied') {
+        return 'permission_denied';
+    }
+    if (decision === 'blocked') {
+        return 'permission_blocked';
+    }
+    return 'permission_not_granted';
 }
 function getPermissionResourceLabel(resource) {
     switch (resource) {

@@ -69,6 +69,13 @@ const MAX_HTTP_REDIRECTS: usize = 5;
 const SLOW_SQL_LOG_MS: u128 = 250;
 const SLOW_TRIVIUM_LOG_MS: u128 = 250;
 const SLOW_JOB_LOG_MS: u128 = 1_000;
+const SQL_BUSY_TIMEOUT_MS: u64 = 5_000;
+const SQL_PAGED_QUERY_REQUIRES_ORDER_BY: bool = true;
+const SQL_META_TABLE: &str = "_authority_sql_meta";
+const SQL_LAST_SLOW_QUERY_AT_META_KEY: &str = "last_slow_query_at";
+const SQL_LAST_SLOW_QUERY_ELAPSED_MS_META_KEY: &str = "last_slow_query_elapsed_ms";
+const SQL_LAST_SLOW_QUERY_STATEMENT_PREVIEW_META_KEY: &str = "last_slow_query_statement_preview";
+const SQL_SLOW_QUERY_COUNT_META_KEY: &str = "slow_query_count";
 
 #[cfg(test)]
 static HTTP_FETCH_ALLOW_LOCAL_TARGETS: AtomicBool = AtomicBool::new(false);
@@ -155,6 +162,12 @@ struct SqlRequest {
     page: Option<CursorPageRequest>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlStatRequest {
+    db_path: String,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum SqlStatementMode {
@@ -210,6 +223,39 @@ struct SqlExecResult {
     kind: &'static str,
     rows_affected: usize,
     last_insert_rowid: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlRuntimeConfigDiagnostics {
+    journal_mode: String,
+    synchronous: String,
+    foreign_keys: bool,
+    busy_timeout_ms: u64,
+    paged_query_requires_order_by: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlSlowQueryDiagnostics {
+    count: u64,
+    last_occurred_at: Option<String>,
+    last_elapsed_ms: Option<u64>,
+    last_statement_preview: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlStatResponse {
+    database: String,
+    name: String,
+    file_name: String,
+    file_path: String,
+    exists: bool,
+    size_bytes: u64,
+    updated_at: Option<String>,
+    runtime_config: SqlRuntimeConfigDiagnostics,
+    slow_query: SqlSlowQueryDiagnostics,
 }
 
 #[derive(Serialize)]
@@ -1292,6 +1338,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/sql/batch", post(v1_sql_batch))
         .route("/sql/transaction", post(v1_sql_transaction))
         .route("/sql/migrate", post(v1_sql_migrate))
+        .route("/sql/stat", post(v1_sql_stat))
         .route("/trivium/insert", post(v1_trivium_insert))
         .route("/trivium/insert-with-id", post(v1_trivium_insert_with_id))
         .route("/trivium/bulk-upsert", post(v1_trivium_bulk_upsert))
@@ -1955,6 +2002,12 @@ async fn v1_sql_migrate(
 ) -> Result<Json<JsonValue>, ApiError> {
     spawn_blocking_handler(body, handle_sql_migrate).await
 }
+async fn v1_sql_stat(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<SqlStatRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_sql_stat).await
+}
 async fn v1_trivium_insert(
     State(_config): State<Arc<Config>>,
     Json(body): Json<TriviumInsertRequest>,
@@ -2253,11 +2306,13 @@ where
 
 fn handle_sql_query(request: SqlRequest) -> Result<JsonValue, ApiError> {
     let started = Instant::now();
+    validate_paged_sql_query(&request.statement, request.page.as_ref())?;
     let connection = open_connection(&request.db_path)?;
     let mut result = run_query(&connection, &request.statement, &request.params)?;
     let (rows, page) = slice_vec_page(result.rows, request.page.as_ref(), 100, 1000)?;
     result.rows = rows;
     result.page = page;
+    let _ = record_slow_sql_if_needed(&connection, started.elapsed(), &request.statement);
     emit_if_slow(
         "sql_query_slow",
         started.elapsed(),
@@ -2270,18 +2325,56 @@ fn handle_sql_query(request: SqlRequest) -> Result<JsonValue, ApiError> {
 }
 
 fn handle_sql_exec(request: SqlRequest) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
     let connection = open_connection(&request.db_path)?;
     let result = run_exec(&connection, &request.statement, &request.params)?;
+    let _ = record_slow_sql_if_needed(&connection, started.elapsed(), &request.statement);
+    emit_if_slow(
+        "sql_exec_slow",
+        started.elapsed(),
+        SLOW_SQL_LOG_MS,
+        json!({
+            "statement": request.statement,
+        }),
+    );
     Ok(serde_json::to_value(result).expect("sql exec result should serialize"))
 }
 
 fn handle_sql_batch(request: SqlBatchRequest) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
     let results = execute_transactional_statements(&request.db_path, &request.statements)?;
+    let elapsed = started.elapsed();
+    let statement_preview = preview_sql_batch_statements(&request.statements);
+    let connection = open_connection(&request.db_path)?;
+    let _ = record_slow_sql_if_needed(&connection, elapsed, &statement_preview);
+    emit_if_slow(
+        "sql_batch_slow",
+        elapsed,
+        SLOW_SQL_LOG_MS,
+        json!({
+            "statement": statement_preview,
+            "statementCount": request.statements.len(),
+        }),
+    );
     Ok(json!({ "results": results }))
 }
 
 fn handle_sql_transaction(request: SqlBatchRequest) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
     let results = execute_transactional_statements(&request.db_path, &request.statements)?;
+    let elapsed = started.elapsed();
+    let statement_preview = preview_sql_batch_statements(&request.statements);
+    let connection = open_connection(&request.db_path)?;
+    let _ = record_slow_sql_if_needed(&connection, elapsed, &statement_preview);
+    emit_if_slow(
+        "sql_transaction_slow",
+        elapsed,
+        SLOW_SQL_LOG_MS,
+        json!({
+            "statement": statement_preview,
+            "statementCount": request.statements.len(),
+        }),
+    );
     let response = SqlTransactionResponse {
         committed: true,
         results,
@@ -2357,6 +2450,53 @@ fn handle_sql_migrate(request: SqlMigrateRequest) -> Result<JsonValue, ApiError>
         latest_id,
     };
     Ok(serde_json::to_value(response).expect("sql migrate response should serialize"))
+}
+
+fn handle_sql_stat(request: SqlStatRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("dbPath", &request.db_path)?;
+
+    let db_path = Path::new(&request.db_path);
+    let file_name = db_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(&request.db_path)
+        .to_string();
+    let database = db_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("default")
+        .to_string();
+    let exists = db_path.exists();
+
+    if !exists {
+        let response = SqlStatResponse {
+            database: database.clone(),
+            name: database,
+            file_name,
+            file_path: request.db_path,
+            exists: false,
+            size_bytes: 0,
+            updated_at: None,
+            runtime_config: default_sql_runtime_config(),
+            slow_query: default_sql_slow_query_diagnostics(),
+        };
+        return Ok(serde_json::to_value(response).expect("sql stat response should serialize"));
+    }
+
+    let metadata = fs::metadata(db_path).map_err(to_internal_error)?;
+    let connection = open_connection(&request.db_path)?;
+    let response = SqlStatResponse {
+        database: database.clone(),
+        name: database,
+        file_name,
+        file_path: request.db_path,
+        exists: true,
+        size_bytes: metadata.len(),
+        updated_at: metadata.modified().ok().and_then(system_time_to_iso),
+        runtime_config: read_sql_runtime_config(&connection)?,
+        slow_query: read_sql_slow_query_diagnostics(&connection)?,
+    };
+    Ok(serde_json::to_value(response).expect("sql stat response should serialize"))
 }
 
 fn handle_trivium_insert(request: TriviumInsertRequest) -> Result<JsonValue, ApiError> {
@@ -4633,14 +4773,16 @@ fn execute_transactional_statements(
     let transaction = connection.transaction().map_err(to_sql_error)?;
     let mut results = Vec::with_capacity(statements.len());
 
-    for statement in statements {
+    for (index, statement) in statements.iter().enumerate() {
         let result = match statement.mode {
             SqlStatementMode::Query => {
-                let value = run_query(&transaction, &statement.statement, &statement.params)?;
+                let value = run_query(&transaction, &statement.statement, &statement.params)
+                    .map_err(|error| with_sql_statement_error(index, &statement.statement, error))?;
                 serde_json::to_value(value).expect("sql batch query result should serialize")
             }
             SqlStatementMode::Exec => {
-                let value = run_exec(&transaction, &statement.statement, &statement.params)?;
+                let value = run_exec(&transaction, &statement.statement, &statement.params)
+                    .map_err(|error| with_sql_statement_error(index, &statement.statement, error))?;
                 serde_json::to_value(value).expect("sql batch exec result should serialize")
             }
         };
@@ -4718,6 +4860,46 @@ fn run_exec(
     })
 }
 
+fn validate_paged_sql_query(
+    statement_text: &str,
+    page: Option<&CursorPageRequest>,
+) -> Result<(), ApiError> {
+    if page.is_none() || !SQL_PAGED_QUERY_REQUIRES_ORDER_BY {
+        return Ok(());
+    }
+    if sql_statement_has_order_by(statement_text) {
+        return Ok(());
+    }
+    Err(ApiError {
+        status_code: 400,
+        message: format!(
+            "sql_error: paged query requires ORDER BY for deterministic pagination [statement: {}]",
+            preview_sql_statement(statement_text),
+        ),
+    })
+}
+
+fn sql_statement_has_order_by(statement_text: &str) -> bool {
+    statement_text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .contains("order by")
+}
+
+fn preview_sql_batch_statements(statements: &[SqlBatchStatement]) -> String {
+    match statements.first() {
+        Some(statement) if statements.len() == 1 => preview_sql_statement(&statement.statement),
+        Some(statement) => format!(
+            "{} [+{} more statements]",
+            preview_sql_statement(&statement.statement),
+            statements.len().saturating_sub(1),
+        ),
+        None => String::from("<empty sql batch>"),
+    }
+}
+
 fn open_connection(db_path: &str) -> Result<Connection, ApiError> {
     if db_path.trim().is_empty() {
         return Err(ApiError {
@@ -4735,12 +4917,173 @@ fn open_connection(db_path: &str) -> Result<Connection, ApiError> {
 
     let connection = Connection::open(path).map_err(to_sql_error)?;
     connection
-        .busy_timeout(Duration::from_secs(5))
+        .busy_timeout(Duration::from_millis(SQL_BUSY_TIMEOUT_MS))
         .map_err(to_sql_error)?;
     connection
-        .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
+        .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;")
         .map_err(to_sql_error)?;
     Ok(connection)
+}
+
+fn default_sql_runtime_config() -> SqlRuntimeConfigDiagnostics {
+    SqlRuntimeConfigDiagnostics {
+        journal_mode: String::from("wal"),
+        synchronous: String::from("normal"),
+        foreign_keys: true,
+        busy_timeout_ms: SQL_BUSY_TIMEOUT_MS,
+        paged_query_requires_order_by: SQL_PAGED_QUERY_REQUIRES_ORDER_BY,
+    }
+}
+
+fn default_sql_slow_query_diagnostics() -> SqlSlowQueryDiagnostics {
+    SqlSlowQueryDiagnostics {
+        count: 0,
+        last_occurred_at: None,
+        last_elapsed_ms: None,
+        last_statement_preview: None,
+    }
+}
+
+fn read_sql_runtime_config(connection: &Connection) -> Result<SqlRuntimeConfigDiagnostics, ApiError> {
+    let journal_mode: String = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .map_err(to_sql_error)?;
+    let synchronous: i64 = connection
+        .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        .map_err(to_sql_error)?;
+    let foreign_keys: i64 = connection
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .map_err(to_sql_error)?;
+    let busy_timeout_ms: i64 = connection
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .map_err(to_sql_error)?;
+
+    Ok(SqlRuntimeConfigDiagnostics {
+        journal_mode: journal_mode.to_ascii_lowercase(),
+        synchronous: sql_synchronous_mode_to_string(synchronous),
+        foreign_keys: foreign_keys != 0,
+        busy_timeout_ms: u64::try_from(busy_timeout_ms.max(0)).unwrap_or(SQL_BUSY_TIMEOUT_MS),
+        paged_query_requires_order_by: SQL_PAGED_QUERY_REQUIRES_ORDER_BY,
+    })
+}
+
+fn sql_synchronous_mode_to_string(value: i64) -> String {
+    match value {
+        0 => String::from("off"),
+        1 => String::from("normal"),
+        2 => String::from("full"),
+        3 => String::from("extra"),
+        other => other.to_string(),
+    }
+}
+
+fn sql_meta_table_exists(connection: &Connection) -> Result<bool, ApiError> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+            params![SQL_META_TABLE],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(to_sql_error)?
+        .unwrap_or(false))
+}
+
+fn ensure_sql_meta_table(connection: &Connection) -> Result<(), ApiError> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS _authority_sql_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn read_sql_meta_value(connection: &Connection, key: &str) -> Result<Option<String>, ApiError> {
+    if !sql_meta_table_exists(connection)? {
+        return Ok(None);
+    }
+
+    connection
+        .query_row(
+            "SELECT value FROM _authority_sql_meta WHERE key = ?1 LIMIT 1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(to_sql_error)
+}
+
+fn write_sql_meta_value(connection: &Connection, key: &str, value: &str) -> Result<(), ApiError> {
+    ensure_sql_meta_table(connection)?;
+    connection
+        .execute(
+            "INSERT INTO _authority_sql_meta (key, value, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![key, value, current_timestamp_iso()],
+        )
+        .map_err(to_sql_error)?;
+    Ok(())
+}
+
+fn read_sql_slow_query_diagnostics(connection: &Connection) -> Result<SqlSlowQueryDiagnostics, ApiError> {
+    Ok(SqlSlowQueryDiagnostics {
+        count: read_sql_meta_value(connection, SQL_SLOW_QUERY_COUNT_META_KEY)?
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0),
+        last_occurred_at: read_sql_meta_value(connection, SQL_LAST_SLOW_QUERY_AT_META_KEY)?,
+        last_elapsed_ms: read_sql_meta_value(connection, SQL_LAST_SLOW_QUERY_ELAPSED_MS_META_KEY)?
+            .and_then(|value| value.parse::<u64>().ok()),
+        last_statement_preview: read_sql_meta_value(connection, SQL_LAST_SLOW_QUERY_STATEMENT_PREVIEW_META_KEY)?,
+    })
+}
+
+fn record_slow_sql_if_needed(
+    connection: &Connection,
+    elapsed: Duration,
+    statement_text: &str,
+) -> Result<(), ApiError> {
+    if elapsed.as_millis() < SLOW_SQL_LOG_MS {
+        return Ok(());
+    }
+
+    let preview = preview_sql_statement(statement_text);
+    let diagnostics = read_sql_slow_query_diagnostics(connection)?;
+    write_sql_meta_value(connection, SQL_LAST_SLOW_QUERY_AT_META_KEY, &current_timestamp_iso())?;
+    write_sql_meta_value(
+        connection,
+        SQL_LAST_SLOW_QUERY_ELAPSED_MS_META_KEY,
+        &u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX).to_string(),
+    )?;
+    write_sql_meta_value(
+        connection,
+        SQL_LAST_SLOW_QUERY_STATEMENT_PREVIEW_META_KEY,
+        &preview,
+    )?;
+    write_sql_meta_value(
+        connection,
+        SQL_SLOW_QUERY_COUNT_META_KEY,
+        &diagnostics.count.saturating_add(1).to_string(),
+    )?;
+    Ok(())
+}
+
+fn with_sql_statement_error(index: usize, statement: &str, error: ApiError) -> ApiError {
+    let detail = error
+        .message
+        .strip_prefix("sql_error: ")
+        .unwrap_or(&error.message)
+        .to_string();
+    ApiError {
+        status_code: error.status_code,
+        message: format!(
+            "sql_error: statementIndex {index} failed: {detail} [statement: {}]",
+            preview_sql_statement(statement),
+        ),
+    }
 }
 
 fn parse_trivium_dtype(value: Option<&str>) -> Result<TriviumDTypeTag, ApiError> {
@@ -7915,6 +8258,115 @@ mod tests {
 
         assert!(error.message.contains("migration 002_broken failed"));
         assert!(error.message.contains("CREATE TABL broken_records"));
+    }
+
+    #[test]
+    fn sql_paged_query_requires_order_by() {
+        let db_path = test_db_path("sql-paged-query-order-by");
+        handle_sql_exec(SqlRequest {
+            db_path: db_path.clone(),
+            statement: String::from("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+            params: vec![],
+            page: None,
+        })
+        .expect("create table should succeed");
+        handle_sql_exec(SqlRequest {
+            db_path: db_path.clone(),
+            statement: String::from("INSERT INTO records (value) VALUES ('alpha'), ('beta')"),
+            params: vec![],
+            page: None,
+        })
+        .expect("insert should succeed");
+
+        let error = handle_sql_query(SqlRequest {
+            db_path,
+            statement: String::from("SELECT id, value FROM records"),
+            params: vec![],
+            page: Some(CursorPageRequest {
+                cursor: None,
+                limit: Some(1),
+            }),
+        })
+        .expect_err("paged query without order by should fail");
+
+        assert!(error.message.contains("requires ORDER BY"));
+    }
+
+    #[test]
+    fn sql_batch_errors_include_statement_index() {
+        let db_path = test_db_path("sql-batch-statement-index");
+        let error = handle_sql_batch(SqlBatchRequest {
+            db_path,
+            statements: vec![
+                SqlBatchStatement {
+                    mode: SqlStatementMode::Exec,
+                    statement: String::from("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+                    params: vec![],
+                },
+                SqlBatchStatement {
+                    mode: SqlStatementMode::Exec,
+                    statement: String::from("INSRT INTO records (value) VALUES ('broken')"),
+                    params: vec![],
+                },
+            ],
+        })
+        .expect_err("broken batch should fail");
+
+        assert!(error.message.contains("statementIndex 1"));
+        assert!(error.message.contains("INSRT INTO records"));
+    }
+
+    #[test]
+    fn sql_stat_reports_runtime_defaults() {
+        let db_path = test_db_path("sql-stat-runtime-defaults");
+        handle_sql_exec(SqlRequest {
+            db_path: db_path.clone(),
+            statement: String::from("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+            params: vec![],
+            page: None,
+        })
+        .expect("create table should succeed");
+
+        let stat = handle_sql_stat(SqlStatRequest {
+            db_path,
+        })
+        .expect("sql stat should succeed");
+
+        assert_eq!(stat["exists"], json!(true));
+        assert_eq!(stat["runtimeConfig"]["journalMode"], json!("wal"));
+        assert_eq!(stat["runtimeConfig"]["synchronous"], json!("normal"));
+        assert_eq!(stat["runtimeConfig"]["foreignKeys"], json!(true));
+        assert_eq!(stat["runtimeConfig"]["busyTimeoutMs"], json!(SQL_BUSY_TIMEOUT_MS));
+        assert_eq!(stat["runtimeConfig"]["pagedQueryRequiresOrderBy"], json!(true));
+        assert_eq!(stat["slowQuery"]["count"], json!(0));
+    }
+
+    #[test]
+    fn sql_stat_reads_persisted_slow_query_diagnostics() {
+        let db_path = test_db_path("sql-stat-slow-query-diagnostics");
+        handle_sql_exec(SqlRequest {
+            db_path: db_path.clone(),
+            statement: String::from("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"),
+            params: vec![],
+            page: None,
+        })
+        .expect("create table should succeed");
+
+        let connection = open_connection(&db_path).expect("database should open");
+        record_slow_sql_if_needed(&connection, Duration::from_millis(300), "SELECT id FROM records ORDER BY id")
+            .expect("slow sql diagnostics should persist");
+
+        let stat = handle_sql_stat(SqlStatRequest {
+            db_path,
+        })
+        .expect("sql stat should succeed");
+
+        assert_eq!(stat["slowQuery"]["count"], json!(1));
+        assert_eq!(stat["slowQuery"]["lastElapsedMs"], json!(300));
+        assert!(stat["slowQuery"]["lastStatementPreview"]
+            .as_str()
+            .expect("statement preview should exist")
+            .contains("SELECT id FROM records ORDER BY id"));
     }
 
     #[test]

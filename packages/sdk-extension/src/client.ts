@@ -45,6 +45,8 @@ import type {
     SqlExecResult,
     SqlQueryRequest,
     SqlQueryResult,
+    SqlStatRequest,
+    SqlStatResponse,
     SqlTransactionRequest,
     SqlTransactionResponse,
     TriviumBulkFailure,
@@ -307,6 +309,7 @@ export type AuthorityFeaturePath =
     | 'securityCenter'
     | 'admin'
     | 'sql.queryPage'
+    | 'sql.stat'
     | 'sql.migrations'
     | 'sql.schemaManifest'
     | 'trivium.resolveId'
@@ -436,6 +439,7 @@ export class AuthorityClient {
         batch: (input: SqlBatchRequest) => Promise<SqlBatchResponse>;
         transaction: (input: SqlTransactionRequest) => Promise<SqlTransactionResponse>;
         migrate: (input: SqlMigrateRequest) => Promise<SqlMigrateResponse>;
+        stat: (input?: SqlStatRequest) => Promise<SqlStatResponse>;
         listMigrationsPage: (input?: SqlListMigrationsRequest) => Promise<SqlListMigrationsResponse>;
         listSchemaPage: (input?: SqlListSchemaRequest) => Promise<SqlListSchemaResponse>;
         listDatabases: () => Promise<SqlListDatabasesResponse>;
@@ -773,6 +777,22 @@ export class AuthorityClient {
                     reason: `迁移 SQL 数据库 ${database}`,
                 });
                 return await this.requestWithSession<SqlMigrateResponse>('/sql/migrate', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            stat: async (input = {}) => {
+                const database = getSqlDatabaseName(input.database);
+                await this.requireFeature('sql.stat', 'Authority 当前版本尚未提供 SQL 运行时诊断能力');
+                await this.ensurePermission({
+                    resource: 'sql.private',
+                    target: database,
+                    reason: `查看 SQL 数据库诊断 ${database}`,
+                });
+                return await this.requestWithSession<SqlStatResponse>('/sql/stat', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -2332,6 +2352,8 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
             return features.admin;
         case 'sql.queryPage':
             return features.sql.queryPage;
+        case 'sql.stat':
+            return features.sql.stat;
         case 'sql.migrations':
             return features.sql.migrations;
         case 'sql.schemaManifest':

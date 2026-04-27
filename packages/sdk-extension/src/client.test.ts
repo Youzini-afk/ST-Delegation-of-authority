@@ -648,6 +648,60 @@ describe('AuthorityClient', () => {
         })).rejects.toThrow('Authority sql.pageAll exceeded maxPages=1');
     });
 
+    it('routes sql.stat through the SQL diagnostics endpoint', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async () => ({
+            database: 'graph',
+            name: 'graph',
+            fileName: 'graph.sqlite',
+            filePath: 'C:/authority/graph.sqlite',
+            exists: true,
+            sizeBytes: 1024,
+            updatedAt: '2026-04-27T00:00:00.000Z',
+            runtimeConfig: {
+                journalMode: 'wal',
+                synchronous: 'normal',
+                foreignKeys: true,
+                busyTimeoutMs: 5000,
+                pagedQueryRequiresOrderBy: true,
+            },
+            slowQuery: {
+                count: 1,
+                lastOccurredAt: '2026-04-27T00:00:01.000Z',
+                lastElapsedMs: 312,
+                lastStatementPreview: 'SELECT * FROM notes ORDER BY id',
+            },
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const result = await client.sql.stat({
+            database: 'graph',
+        });
+
+        expect(result.runtimeConfig.journalMode).toBe('wal');
+        expect(result.slowQuery.count).toBe(1);
+        expect(requestWithSession).toHaveBeenCalledWith('/sql/stat', {
+            method: 'POST',
+            body: {
+                database: 'graph',
+            },
+        });
+    });
+
     it('routes resolveMany and listMappingsPage through the new Trivium endpoints', async () => {
         const { AuthorityClient } = await import('./client.js');
 
@@ -895,6 +949,7 @@ function buildProbe(overrides: Partial<{
 }> = {}): AuthorityProbeResponse {
     const sqlFeatures = {
         queryPage: true,
+        stat: true,
         migrations: true,
         schemaManifest: true,
     } as unknown as AuthorityProbeResponse['features']['sql'];

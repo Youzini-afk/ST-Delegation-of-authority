@@ -254,10 +254,12 @@ export function renderDatabaseList(items, emptyText) {
                     <div>
                         <strong>${escapeHtml(item.name)}</strong>
                         <div class="authority-muted">${escapeHtml(item.fileName)}</div>
+                        <div class="authority-muted">${escapeHtml(`${item.runtimeConfig.journalMode.toUpperCase()} · sync ${item.runtimeConfig.synchronous} · FK ${item.runtimeConfig.foreignKeys ? 'ON' : 'OFF'}`)}</div>
                     </div>
                     <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--runtime">${escapeHtml(getSqlSlowQueryLabel(item))}</span>
                         <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.sizeBytes))}</span>
-                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt))}</span>
+                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt ?? undefined))}</span>
                     </div>
                 </div>
             `).join('')}
@@ -275,6 +277,8 @@ export function renderDatabaseTable(items, emptyText) {
                     <tr>
                         <th>数据库</th>
                         <th>文件</th>
+                        <th>运行时</th>
+                        <th>慢查询诊断</th>
                         <th>体积</th>
                         <th>更新时间</th>
                     </tr>
@@ -284,14 +288,40 @@ export function renderDatabaseTable(items, emptyText) {
                         <tr>
                             <td><strong>${escapeHtml(item.name)}</strong></td>
                             <td>${escapeHtml(item.fileName)}</td>
+                            <td>
+                                ${escapeHtml(getSqlRuntimeConfigLabel(item))}
+                                <div class="authority-muted">${escapeHtml(getSqlRuntimeConfigMeta(item))}</div>
+                            </td>
+                            <td>
+                                <span class="authority-pill authority-pill--runtime">${escapeHtml(getSqlSlowQueryLabel(item))}</span>
+                                <div class="authority-muted">${escapeHtml(getSqlSlowQueryMeta(item))}</div>
+                            </td>
                             <td>${escapeHtml(formatBytes(item.sizeBytes))}</td>
-                            <td>${escapeHtml(formatDate(item.updatedAt))}</td>
+                            <td>${escapeHtml(formatDate(item.updatedAt ?? undefined))}</td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>
         </div>
     `;
+}
+function getSqlRuntimeConfigLabel(item) {
+    return `${item.runtimeConfig.journalMode.toUpperCase()} · sync ${item.runtimeConfig.synchronous}`;
+}
+function getSqlRuntimeConfigMeta(item) {
+    return `busy ${item.runtimeConfig.busyTimeoutMs}ms · FK ${item.runtimeConfig.foreignKeys ? 'ON' : 'OFF'} · page ORDER BY ${item.runtimeConfig.pagedQueryRequiresOrderBy ? 'required' : 'optional'}`;
+}
+function getSqlSlowQueryLabel(item) {
+    if (item.slowQuery.count === 0) {
+        return '无慢查询';
+    }
+    return `慢查询 ${item.slowQuery.count} 次`;
+}
+function getSqlSlowQueryMeta(item) {
+    if (item.slowQuery.count === 0) {
+        return '尚未记录到 slow SQL';
+    }
+    return `${item.slowQuery.lastElapsedMs ?? '未知'}ms · ${item.slowQuery.lastStatementPreview ?? '未记录'} · ${formatDate(item.slowQuery.lastOccurredAt ?? undefined)}`;
 }
 export function renderTriviumDatabaseList(items, emptyText) {
     if (items.length === 0) {
@@ -307,6 +337,7 @@ export function renderTriviumDatabaseList(items, emptyText) {
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--runtime">${escapeHtml(item.storageMode ?? '未知模式')}</span>
+                        <span class="authority-pill authority-pill--${escapeHtml(getTriviumIndexHealthTone(item))}">${escapeHtml(getTriviumIndexHealthLabel(item))}</span>
                         <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.totalSizeBytes))}</span>
                         <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt ?? undefined))}</span>
                     </div>
@@ -327,6 +358,7 @@ export function renderTriviumDatabaseTable(items, emptyText) {
                         <th>记忆库</th>
                         <th>文件</th>
                         <th>维度 / 类型</th>
+                        <th>索引健康</th>
                         <th>存储</th>
                         <th>体积</th>
                         <th>更新时间</th>
@@ -338,6 +370,10 @@ export function renderTriviumDatabaseTable(items, emptyText) {
                             <td><strong>${escapeHtml(item.name)}</strong></td>
                             <td>${escapeHtml(item.fileName)}</td>
                             <td>${escapeHtml(item.dim ? `${item.dim} · ${item.dtype ?? '未知类型'}` : item.dtype ?? '未记录')}</td>
+                            <td>
+                                <span class="authority-pill authority-pill--${escapeHtml(getTriviumIndexHealthTone(item))}">${escapeHtml(getTriviumIndexHealthLabel(item))}</span>
+                                <div class="authority-muted">${escapeHtml(getTriviumIndexHealthMeta(item))}</div>
+                            </td>
                             <td>${escapeHtml(item.storageMode ?? '未记录')}</td>
                             <td>${escapeHtml(formatBytes(item.totalSizeBytes))}</td>
                             <td>${escapeHtml(formatDate(item.updatedAt ?? undefined))}</td>
@@ -382,6 +418,42 @@ export function renderDatabaseAssetSections(databases, triviumDatabases, emptyTe
             </section>
         </div>
     `;
+}
+function getTriviumIndexHealthTone(item) {
+    switch (item.indexHealth?.status) {
+        case 'fresh':
+            return 'granted';
+        case 'stale':
+            return 'warning';
+        default:
+            return 'prompt';
+    }
+}
+function getTriviumIndexHealthLabel(item) {
+    switch (item.indexHealth?.status) {
+        case 'fresh':
+            return '索引新鲜';
+        case 'stale':
+            return '需重建';
+        default:
+            return '未建索引';
+    }
+}
+function getTriviumIndexHealthMeta(item) {
+    const health = item.indexHealth;
+    if (!health) {
+        return '暂无索引诊断';
+    }
+    if (health.reason) {
+        return health.reason;
+    }
+    if (health.lastTextRebuildAt) {
+        return `最近重建：${formatDate(health.lastTextRebuildAt)}`;
+    }
+    if (health.lastTextWriteAt) {
+        return `最近写入：${formatDate(health.lastTextWriteAt)}`;
+    }
+    return '暂无索引诊断';
 }
 export function renderDatabaseGroupList(items, emptyText) {
     if (items.length === 0) {

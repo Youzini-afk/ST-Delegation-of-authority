@@ -308,10 +308,12 @@ export function renderDatabaseList(items: SqlDatabaseRecord[], emptyText: string
                     <div>
                         <strong>${escapeHtml(item.name)}</strong>
                         <div class="authority-muted">${escapeHtml(item.fileName)}</div>
+                        <div class="authority-muted">${escapeHtml(`${item.runtimeConfig.journalMode.toUpperCase()} · sync ${item.runtimeConfig.synchronous} · FK ${item.runtimeConfig.foreignKeys ? 'ON' : 'OFF'}`)}</div>
                     </div>
                     <div class="authority-list-card__actions">
+                        <span class="authority-pill authority-pill--runtime">${escapeHtml(getSqlSlowQueryLabel(item))}</span>
                         <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(item.sizeBytes))}</span>
-                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt))}</span>
+                        <span class="authority-muted">${escapeHtml(formatDate(item.updatedAt ?? undefined))}</span>
                     </div>
                 </div>
             `).join('')}
@@ -331,6 +333,8 @@ export function renderDatabaseTable(items: SqlDatabaseRecord[], emptyText: strin
                     <tr>
                         <th>数据库</th>
                         <th>文件</th>
+                        <th>运行时</th>
+                        <th>慢查询诊断</th>
                         <th>体积</th>
                         <th>更新时间</th>
                     </tr>
@@ -340,14 +344,44 @@ export function renderDatabaseTable(items: SqlDatabaseRecord[], emptyText: strin
                         <tr>
                             <td><strong>${escapeHtml(item.name)}</strong></td>
                             <td>${escapeHtml(item.fileName)}</td>
+                            <td>
+                                ${escapeHtml(getSqlRuntimeConfigLabel(item))}
+                                <div class="authority-muted">${escapeHtml(getSqlRuntimeConfigMeta(item))}</div>
+                            </td>
+                            <td>
+                                <span class="authority-pill authority-pill--runtime">${escapeHtml(getSqlSlowQueryLabel(item))}</span>
+                                <div class="authority-muted">${escapeHtml(getSqlSlowQueryMeta(item))}</div>
+                            </td>
                             <td>${escapeHtml(formatBytes(item.sizeBytes))}</td>
-                            <td>${escapeHtml(formatDate(item.updatedAt))}</td>
+                            <td>${escapeHtml(formatDate(item.updatedAt ?? undefined))}</td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>
         </div>
     `;
+}
+
+function getSqlRuntimeConfigLabel(item: SqlDatabaseRecord): string {
+    return `${item.runtimeConfig.journalMode.toUpperCase()} · sync ${item.runtimeConfig.synchronous}`;
+}
+
+function getSqlRuntimeConfigMeta(item: SqlDatabaseRecord): string {
+    return `busy ${item.runtimeConfig.busyTimeoutMs}ms · FK ${item.runtimeConfig.foreignKeys ? 'ON' : 'OFF'} · page ORDER BY ${item.runtimeConfig.pagedQueryRequiresOrderBy ? 'required' : 'optional'}`;
+}
+
+function getSqlSlowQueryLabel(item: SqlDatabaseRecord): string {
+    if (item.slowQuery.count === 0) {
+        return '无慢查询';
+    }
+    return `慢查询 ${item.slowQuery.count} 次`;
+}
+
+function getSqlSlowQueryMeta(item: SqlDatabaseRecord): string {
+    if (item.slowQuery.count === 0) {
+        return '尚未记录到 slow SQL';
+    }
+    return `${item.slowQuery.lastElapsedMs ?? '未知'}ms · ${item.slowQuery.lastStatementPreview ?? '未记录'} · ${formatDate(item.slowQuery.lastOccurredAt ?? undefined)}`;
 }
 
 export function renderTriviumDatabaseList(items: TriviumDatabaseRecord[], emptyText: string): string {

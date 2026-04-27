@@ -25,6 +25,7 @@ import type {
     PrivateFileWriteRequest,
     PrivateFileStatRequest,
     SqlBatchRequest,
+    SqlDatabaseRecord,
     SqlExecRequest,
     SqlListDatabasesResponse,
     SqlListMigrationsRequest,
@@ -36,6 +37,8 @@ import type {
     SqlQueryRequest,
     SqlSchemaObjectRecord,
     SqlSchemaObjectType,
+    SqlStatRequest,
+    SqlStatResponse,
     SqlTransactionRequest,
     TriviumBulkDeleteRequest,
     TriviumBulkLinkRequest,
@@ -341,25 +344,43 @@ async function listPrivateTriviumDatabases(
     return await runtime.trivium.listDatabases(user, extensionId);
 }
 
-function listPrivateSqlDatabases(user: ReturnType<typeof getUserContext>, extensionId: string): SqlListDatabasesResponse {
+async function statPrivateSqlDatabase(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    extensionId: string,
+    databaseName: string,
+): Promise<SqlStatResponse> {
+    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, databaseName);
+    return await runtime.core.statSql(dbPath, { database: databaseName });
+}
+
+async function listPrivateSqlDatabases(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    extensionId: string,
+): Promise<SqlListDatabasesResponse> {
     const databaseDir = resolvePrivateSqlDatabaseDir(user, extensionId);
     if (!fs.existsSync(databaseDir)) {
         return { databases: [] };
     }
 
-    const databases = fs.readdirSync(databaseDir, { withFileTypes: true })
-        .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
-        .map(entry => {
-            const filePath = path.join(databaseDir, entry.name);
-            const stats = fs.statSync(filePath);
-            return {
-                name: entry.name.slice(0, -'.sqlite'.length),
-                fileName: entry.name,
-                sizeBytes: stats.size,
-                updatedAt: stats.mtime.toISOString(),
-            };
-        })
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const databases = (await Promise.all(
+        fs.readdirSync(databaseDir, { withFileTypes: true })
+            .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
+            .map(async entry => {
+                const databaseName = entry.name.slice(0, -'.sqlite'.length);
+                const stat = await statPrivateSqlDatabase(runtime, user, extensionId, databaseName);
+                return {
+                    name: stat.name,
+                    fileName: stat.fileName,
+                    sizeBytes: stat.sizeBytes,
+                    updatedAt: stat.updatedAt,
+                    runtimeConfig: stat.runtimeConfig,
+                    slowQuery: stat.slowQuery,
+                } satisfies SqlDatabaseRecord;
+            }),
+    ))
+        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
 
     return { databases };
 }
@@ -394,7 +415,7 @@ async function buildExtensionStorageSummary(
     runtime: AuthorityRuntime,
     user: ReturnType<typeof getUserContext>,
     extensionId: string,
-    sqlDatabases = listPrivateSqlDatabases(user, extensionId).databases,
+    sqlDatabases?: SqlDatabaseRecord[],
     triviumDatabases?: TriviumDatabaseRecord[],
 ): Promise<{
     kvEntries: number;
@@ -413,9 +434,10 @@ async function buildExtensionStorageSummary(
         runtime.storage.listBlobs(user, extensionId),
         runtime.files.getUsageSummary(user, extensionId),
     ]);
+    const resolvedSqlDatabases = sqlDatabases ?? (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
     const resolvedTriviumDatabases = triviumDatabases ?? (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
     const blobSummary = summarizeBlobRecords(blobs);
-    const sqlDatabaseSummary = summarizeDatabases(sqlDatabases);
+    const sqlDatabaseSummary = summarizeDatabases(resolvedSqlDatabases);
     const triviumDatabaseSummary = summarizeTriviumDatabases(resolvedTriviumDatabases);
 
     return {
@@ -550,7 +572,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const user = getUserContext(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async extension => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
-                const sqlDatabases = listPrivateSqlDatabases(user, extension.id).databases;
+                const sqlDatabases = (await listPrivateSqlDatabases(runtime, user, extension.id)).databases;
                 const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extension.id)).databases;
                 return {
                     ...extension,
@@ -574,7 +596,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Extension not found');
             }
 
-            const databases = listPrivateSqlDatabases(user, extensionId).databases;
+            const databases = (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
             const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
             const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
             const jobsPage = await runtime.jobs.listPage(user, extensionId);
@@ -1188,9 +1210,32 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error('Permission not granted: sql.private');
             }
 
-            const result = listPrivateSqlDatabases(user, session.extension.id);
+            const result = await listPrivateSqlDatabases(runtime, user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'SQL list databases', {
                 count: result.databases.length,
+            });
+            ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+
+    router.post('/sql/stat', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as SqlStatRequest;
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+
+            const result = await statPrivateSqlDatabase(runtime, user, session.extension.id, database);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL stat', {
+                database,
+                exists: result.exists,
+                sizeBytes: result.sizeBytes,
+                slowQueryCount: result.slowQuery.count,
             });
             ok(res, result);
         } catch (error) {

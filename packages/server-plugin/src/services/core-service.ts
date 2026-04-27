@@ -74,6 +74,8 @@ import type {
     SqlMigrateResponse,
     SqlQueryRequest,
     SqlQueryResult,
+    SqlStatRequest,
+    SqlStatResponse,
     SqlTransactionRequest,
     SqlTransactionResponse,
     ControlTriviumBulkDeleteRequest,
@@ -384,6 +386,12 @@ export class CoreService {
             migrations: request.migrations,
             tableName: request.tableName,
         } satisfies CoreSqlMigrateRequestPayload);
+    }
+
+    async statSql(dbPath: string, _request: SqlStatRequest = {}): Promise<SqlStatResponse> {
+        return await this.request('/v1/sql/stat', {
+            dbPath,
+        });
     }
 
     async insertTrivium(dbPath: string, request: TriviumInsertRequest): Promise<TriviumInsertResponse> {

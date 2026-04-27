@@ -8,11 +8,17 @@ export const SESSION_HEADER = 'x-authority-session-token';
 export class AuthorityApiError extends Error {
     status;
     payload;
+    code;
+    details;
     constructor(message, status, payload) {
         super(message);
         this.status = status;
         this.payload = payload;
         this.name = 'AuthorityApiError';
+        if (isAuthorityErrorPayload(payload)) {
+            this.code = payload.code;
+            this.details = payload.details;
+        }
     }
 }
 export async function authorityRequest(path, options = {}) {
@@ -74,5 +80,11 @@ function getErrorMessage(payload, fallback) {
         return String(payload.error);
     }
     return fallback || '权限中心请求失败';
+}
+function isAuthorityErrorPayload(payload) {
+    return typeof payload === 'object'
+        && payload !== null
+        && 'error' in payload
+        && typeof payload.error === 'string';
 }
 //# sourceMappingURL=api.js.map

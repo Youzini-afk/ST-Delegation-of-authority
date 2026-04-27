@@ -717,7 +717,7 @@ class SecurityCenterView {
         const warnings = [...detail.activity.warnings].sort(sortByTimestampDesc).slice(0, 10);
         const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
         const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
-        const databases = [...detail.databases].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const databases = [...detail.databases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const triviumDatabases = [...detail.triviumDatabases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const storage = detail.storage;
         const risk = getExtensionRiskLevel(detail.extension);

@@ -72,7 +72,7 @@ export function buildOverviewModel(state: SecurityCenterState): OverviewModel {
 export function getDatabaseGroupSummaries(extensions: ExtensionSummary[], details: Map<string, ExtensionDetailResponse>): DatabaseGroupSummary[] {
     return extensions.map(extension => {
         const databases = [...(details.get(extension.id)?.databases ?? [])]
-            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+            .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const triviumDatabases = [...(details.get(extension.id)?.triviumDatabases ?? [])]
             .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         const latestUpdatedAt = [

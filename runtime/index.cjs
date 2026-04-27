@@ -161,6 +161,7 @@ function buildAuthorityFeatureFlags(isAdmin) {
         admin: isAdmin,
         sql: {
             queryPage: true,
+            stat: true,
             migrations: true,
             schemaManifest: true,
         },
@@ -301,10 +302,12 @@ function ok(res, data) {
 }
 function fail(runtime, req, res, extensionId, error) {
     const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error);
+    const permissionErrorPayload = buildPermissionErrorPayload(message);
     try {
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-        if (message.startsWith('Permission not granted:')) {
+        if (permissionErrorPayload) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
+                ...permissionErrorPayload.details,
                 message,
             }).catch(() => undefined);
         }
@@ -315,7 +318,43 @@ function fail(runtime, req, res, extensionId, error) {
     catch {
         // ignore errors raised before auth is available
     }
+    if (permissionErrorPayload) {
+        res.status(403).json(permissionErrorPayload);
+        return;
+    }
     res.status(400).json({ error: message });
+}
+function buildPermissionErrorPayload(message) {
+    const match = /^Permission not granted: ([a-z.]+)(?: for (.+))?$/.exec(message);
+    if (!match) {
+        return null;
+    }
+    const resource = match[1]?.trim();
+    if (!resource || !isPermissionResource(resource)) {
+        return null;
+    }
+    const target = match[2]?.trim();
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.buildPermissionDescriptor)(resource, target);
+    return {
+        error: message,
+        code: 'permission_not_granted',
+        details: {
+            resource: descriptor.resource,
+            target: descriptor.target,
+            key: descriptor.key,
+            riskLevel: descriptor.riskLevel,
+        },
+    };
+}
+function isPermissionResource(value) {
+    return value === 'storage.kv'
+        || value === 'storage.blob'
+        || value === 'fs.private'
+        || value === 'sql.private'
+        || value === 'trivium.private'
+        || value === 'http.fetch'
+        || value === 'jobs.background'
+        || value === 'events.stream';
 }
 function parseAdminUpdateAction(value) {
     return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
@@ -457,79 +496,33 @@ function resolvePrivateTriviumDatabaseDir(user, extensionId) {
 function resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
     return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
 }
-function readTriviumDimension(filePath) {
-    try {
-        const handle = node_fs__WEBPACK_IMPORTED_MODULE_0___default().openSync(filePath, 'r');
-        try {
-            const header = Buffer.alloc(10);
-            const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readSync(handle, header, 0, 10, 0);
-            if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
-                return null;
-            }
-            return header.readUInt32LE(6);
-        }
-        finally {
-            node_fs__WEBPACK_IMPORTED_MODULE_0___default().closeSync(handle);
-        }
-    }
-    catch {
-        return null;
-    }
+async function listPrivateTriviumDatabases(runtime, user, extensionId) {
+    return await runtime.trivium.listDatabases(user, extensionId);
 }
-function buildTriviumDatabaseRecord(filePath, entryName) {
-    const mainStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
-    const walPath = `${filePath}.wal`;
-    const vecPath = `${filePath}.vec`;
-    const walStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(walPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(walPath) : null;
-    const vecStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(vecPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(vecPath) : null;
-    const storageMode = vecStats ? 'mmap' : 'rom';
-    const timestamps = [mainStats, walStats, vecStats]
-        .filter((value) => value !== null)
-        .map(stats => stats.mtime.toISOString())
-        .sort((left, right) => left.localeCompare(right));
-    return {
-        name: entryName.slice(0, -'.tdb'.length),
-        fileName: entryName,
-        dim: readTriviumDimension(filePath),
-        dtype: null,
-        syncMode: null,
-        storageMode,
-        sizeBytes: mainStats.size,
-        walSizeBytes: walStats?.size ?? 0,
-        vecSizeBytes: vecStats?.size ?? 0,
-        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
-        updatedAt: timestamps.at(-1) ?? null,
-    };
+async function statPrivateSqlDatabase(runtime, user, extensionId, databaseName) {
+    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, databaseName);
+    return await runtime.core.statSql(dbPath, { database: databaseName });
 }
-function listPrivateTriviumDatabases(user, extensionId) {
-    const databaseDir = resolvePrivateTriviumDatabaseDir(user, extensionId);
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(databaseDir)) {
-        return { databases: [] };
-    }
-    const databases = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(databaseDir, { withFileTypes: true })
-        .filter(entry => entry.isFile() && entry.name.endsWith('.tdb'))
-        .map(entry => buildTriviumDatabaseRecord(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(databaseDir, entry.name), entry.name))
-        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
-    return { databases };
-}
-function listPrivateSqlDatabases(user, extensionId) {
+async function listPrivateSqlDatabases(runtime, user, extensionId) {
     const databaseDir = resolvePrivateSqlDatabaseDir(user, extensionId);
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(databaseDir)) {
         return { databases: [] };
     }
-    const databases = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(databaseDir, { withFileTypes: true })
+    const databases = (await Promise.all(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(databaseDir, { withFileTypes: true })
         .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
-        .map(entry => {
-        const filePath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(databaseDir, entry.name);
-        const stats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
+        .map(async (entry) => {
+        const databaseName = entry.name.slice(0, -'.sqlite'.length);
+        const stat = await statPrivateSqlDatabase(runtime, user, extensionId, databaseName);
         return {
-            name: entry.name.slice(0, -'.sqlite'.length),
-            fileName: entry.name,
-            sizeBytes: stats.size,
-            updatedAt: stats.mtime.toISOString(),
+            name: stat.name,
+            fileName: stat.fileName,
+            sizeBytes: stat.sizeBytes,
+            updatedAt: stat.updatedAt,
+            runtimeConfig: stat.runtimeConfig,
+            slowQuery: stat.slowQuery,
         };
-    })
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    })))
+        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
     return { databases };
 }
 function previewSqlStatement(statement) {
@@ -554,15 +547,17 @@ function summarizeTriviumDatabases(databases) {
         totalSizeBytes: databases.reduce((sum, record) => sum + record.totalSizeBytes, 0),
     };
 }
-async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatabases = listPrivateSqlDatabases(user, extensionId).databases, triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases) {
+async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatabases, triviumDatabases) {
     const [kvEntries, blobs, files] = await Promise.all([
         runtime.storage.listKv(user, extensionId),
         runtime.storage.listBlobs(user, extensionId),
         runtime.files.getUsageSummary(user, extensionId),
     ]);
+    const resolvedSqlDatabases = sqlDatabases ?? (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
+    const resolvedTriviumDatabases = triviumDatabases ?? (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
     const blobSummary = summarizeBlobRecords(blobs);
-    const sqlDatabaseSummary = summarizeDatabases(sqlDatabases);
-    const triviumDatabaseSummary = summarizeTriviumDatabases(triviumDatabases);
+    const sqlDatabaseSummary = summarizeDatabases(resolvedSqlDatabases);
+    const triviumDatabaseSummary = summarizeTriviumDatabases(resolvedTriviumDatabases);
     return {
         kvEntries: Object.keys(kvEntries).length,
         blobCount: blobSummary.count,
@@ -688,8 +683,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
-                const sqlDatabases = listPrivateSqlDatabases(user, extension.id).databases;
-                const triviumDatabases = listPrivateTriviumDatabases(user, extension.id).databases;
+                const sqlDatabases = (await listPrivateSqlDatabases(runtime, user, extension.id)).databases;
+                const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extension.id)).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
@@ -711,8 +706,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!extension) {
                 throw new Error('Extension not found');
             }
-            const databases = listPrivateSqlDatabases(user, extensionId).databases;
-            const triviumDatabases = listPrivateTriviumDatabases(user, extensionId).databases;
+            const databases = (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
+            const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
             const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
             const jobsPage = await runtime.jobs.listPage(user, extensionId);
             ok(res, {
@@ -1283,9 +1278,31 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private' }, false)) {
                 throw new Error('Permission not granted: sql.private');
             }
-            const result = listPrivateSqlDatabases(user, session.extension.id);
+            const result = await listPrivateSqlDatabases(runtime, user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'SQL list databases', {
                 count: result.databases.length,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/stat', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const result = await statPrivateSqlDatabase(runtime, user, session.extension.id, database);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL stat', {
+                database,
+                exists: result.exists,
+                sizeBytes: result.sizeBytes,
+                slowQueryCount: result.slowQuery.count,
             });
             ok(res, result);
         }
@@ -1302,16 +1319,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.insertTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            const response = await runtime.trivium.insert(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert', {
                 database,
-                id: result.id,
+                id: response.id,
             });
-            ok(res, result);
+            ok(res, response);
         }
         catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
@@ -1326,11 +1339,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.insertTriviumWithId(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.insertWithId(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium insert with id', {
                 database,
                 id: payload.id,
@@ -1457,11 +1466,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.updateTriviumPayload(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.updatePayload(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium update payload', {
                 database,
                 id: payload.id,
@@ -1765,11 +1770,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.indexTextTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.indexText(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium index text', {
                 database,
                 id: payload.id,
@@ -1789,11 +1790,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.indexKeywordTrivium(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.indexKeyword(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium index keyword', {
                 database,
                 id: payload.id,
@@ -1813,12 +1810,27 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.buildTextIndexTrivium(dbPath, {
-                ...payload,
+            await runtime.trivium.buildTextIndex(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium build text index', {
                 database,
             });
-            await runtime.audit.logUsage(user, session.extension.id, 'Trivium build text index', {
+            ok(res, { ok: true });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+    router.post('/trivium/compact', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            await runtime.trivium.compact(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium compact', {
                 database,
             });
             ok(res, { ok: true });
@@ -1941,7 +1953,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private' }, false)) {
                 throw new Error('Permission not granted: trivium.private');
             }
-            const result = listPrivateTriviumDatabases(user, session.extension.id);
+            const result = await listPrivateTriviumDatabases(runtime, user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium list databases', {
                 count: result.databases.length,
             });
@@ -2643,6 +2655,11 @@ class CoreService {
             tableName: request.tableName,
         });
     }
+    async statSql(dbPath, _request = {}) {
+        return await this.request('/v1/sql/stat', {
+            dbPath,
+        });
+    }
     async insertTrivium(dbPath, request) {
         return await this.request('/v1/trivium/insert', {
             ...buildTriviumOpenPayload(dbPath, request),
@@ -2823,6 +2840,9 @@ class CoreService {
     }
     async buildTextIndexTrivium(dbPath, request = {}) {
         await this.request('/v1/trivium/build-text-index', buildTriviumOpenPayload(dbPath, request));
+    }
+    async compactTrivium(dbPath, request = {}) {
+        await this.request('/v1/trivium/compact', buildTriviumOpenPayload(dbPath, request));
     }
     async flushTrivium(dbPath, request = {}) {
         await this.request('/v1/trivium/flush', buildTriviumOpenPayload(dbPath, request));
@@ -4829,6 +4849,15 @@ __webpack_require__.r(__webpack_exports__);
 const EXTERNAL_IDS_TABLE = 'authority_trivium_external_ids';
 const META_TABLE = 'authority_trivium_meta';
 const LAST_FLUSH_META_KEY = 'last_flush_at';
+const DATABASE_DIM_META_KEY = 'database_dim';
+const DATABASE_DTYPE_META_KEY = 'database_dtype';
+const DATABASE_SYNC_MODE_META_KEY = 'database_sync_mode';
+const DATABASE_STORAGE_MODE_META_KEY = 'database_storage_mode';
+const LAST_CONTENT_MUTATION_META_KEY = 'last_content_mutation_at';
+const LAST_TEXT_INDEX_WRITE_META_KEY = 'last_text_index_write_at';
+const LAST_TEXT_INDEX_REBUILD_META_KEY = 'last_text_index_rebuild_at';
+const LAST_COMPACTION_META_KEY = 'last_compaction_at';
+const LAST_INDEX_LIFECYCLE_EVENT_META_KEY = 'last_index_lifecycle_event_at';
 const DEFAULT_CURSOR_PAGE_LIMIT = 50;
 const MAX_CURSOR_PAGE_LIMIT = 500;
 const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
@@ -4838,6 +4867,75 @@ class TriviumService {
     schemaReady = new Map();
     constructor(core) {
         this.core = core;
+    }
+    async listDatabases(user, extensionId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.getUserAuthorityPaths)(user);
+        const directory = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(directory)) {
+            return { databases: [] };
+        }
+        const databases = await Promise.all(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(directory, { withFileTypes: true })
+            .filter(entry => entry.isFile() && entry.name.endsWith('.tdb'))
+            .map(async (entry) => {
+            const database = entry.name.slice(0, -'.tdb'.length);
+            const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+            const [meta, indexHealth] = await Promise.all([
+                this.readDatabaseConfigMeta(mappingDbPath),
+                this.readIndexHealth(mappingDbPath, true),
+            ]);
+            return buildTriviumDatabaseRecord(dbPath, entry.name, meta, indexHealth);
+        }));
+        databases.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+        return { databases };
+    }
+    async insert(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        const response = await this.core.insertTrivium(dbPath, { ...request, database });
+        await this.markContentMutation(mappingDbPath);
+        return response;
+    }
+    async insertWithId(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.insertTriviumWithId(dbPath, { ...request, database });
+        await this.markContentMutation(mappingDbPath);
+    }
+    async updatePayload(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.core.updateTriviumPayload(dbPath, { ...request, database });
+        await this.markContentMutation(mappingDbPath);
+    }
+    async indexText(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.indexTextTrivium(dbPath, { ...request, database });
+        await this.markTextIndexWrite(mappingDbPath);
+    }
+    async indexKeyword(user, extensionId, request) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.indexKeywordTrivium(dbPath, { ...request, database });
+        await this.markTextIndexWrite(mappingDbPath);
+    }
+    async buildTextIndex(user, extensionId, request = {}) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.buildTextIndexTrivium(dbPath, { ...request, database });
+        await this.markTextIndexRebuild(mappingDbPath);
+    }
+    async compact(user, extensionId, request = {}) {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.core.compactTrivium(dbPath, { ...request, database });
+        await this.markCompaction(mappingDbPath);
     }
     async resolveId(user, extensionId, request) {
         const database = getTriviumDatabaseName(request.database);
@@ -4927,6 +5025,7 @@ class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.ensureSchema(mappingDbPath);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
         const failures = [];
         const prepared = [];
         for (const [index, item] of request.items.entries()) {
@@ -4980,6 +5079,9 @@ class TriviumService {
             })
                 .filter((item) => item !== null)
                 .sort((left, right) => left.index - right.index);
+            if (successItems.length > 0) {
+                await this.markContentMutation(mappingDbPath);
+            }
         }
         return {
             totalCount: request.items.length,
@@ -5074,6 +5176,7 @@ class TriviumService {
             .map(item => item.id);
         if (deletedIds.length > 0) {
             await this.deleteMappingsByInternalIds(mappingDbPath, deletedIds);
+            await this.markContentMutation(mappingDbPath);
         }
         return response;
     }
@@ -5151,14 +5254,21 @@ class TriviumService {
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.core.flushTrivium(dbPath, { ...request, database });
         await this.ensureSchema(mappingDbPath);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath)) {
+            await this.rememberDatabaseConfig(mappingDbPath, request);
+        }
         await this.writeMetaValue(mappingDbPath, LAST_FLUSH_META_KEY, new Date().toISOString());
     }
     async stat(user, extensionId, request = {}) {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath)) {
+            await this.rememberDatabaseConfig(mappingDbPath, request);
+        }
         const stat = await this.core.statTrivium(dbPath, { ...request, database });
         const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
         const mappingCount = await this.countMappings(mappingDbPath);
+        const indexHealth = await this.readIndexHealth(mappingDbPath, stat.exists);
         const orphanMappingCount = request.includeMappingIntegrity
             ? await this.countOrphanMappings(dbPath, mappingDbPath, database)
             : null;
@@ -5167,6 +5277,7 @@ class TriviumService {
             lastFlushAt,
             mappingCount,
             orphanMappingCount,
+            indexHealth,
         };
     }
     async checkMappingsIntegrity(user, extensionId, request = {}) {
@@ -5569,6 +5680,125 @@ class TriviumService {
             params: [key, value, timestamp],
         });
     }
+    async rememberDatabaseConfig(mappingDbPath, request) {
+        await this.ensureSchema(mappingDbPath);
+        const writes = [];
+        if (request.dim !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_DIM_META_KEY, String(request.dim)));
+        }
+        if (request.dtype !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_DTYPE_META_KEY, request.dtype));
+        }
+        if (request.syncMode !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_SYNC_MODE_META_KEY, request.syncMode));
+        }
+        if (request.storageMode !== undefined) {
+            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_STORAGE_MODE_META_KEY, request.storageMode));
+        }
+        await Promise.all(writes);
+    }
+    async readDatabaseConfigMeta(mappingDbPath) {
+        const [dim, dtype, syncMode, storageMode] = await Promise.all([
+            this.readMetaValue(mappingDbPath, DATABASE_DIM_META_KEY),
+            this.readMetaValue(mappingDbPath, DATABASE_DTYPE_META_KEY),
+            this.readMetaValue(mappingDbPath, DATABASE_SYNC_MODE_META_KEY),
+            this.readMetaValue(mappingDbPath, DATABASE_STORAGE_MODE_META_KEY),
+        ]);
+        return {
+            dim: parseOptionalPositiveInteger(dim),
+            dtype: parseOptionalTriviumDType(dtype),
+            syncMode: parseOptionalTriviumSyncMode(syncMode),
+            storageMode: parseOptionalTriviumStorageMode(storageMode),
+        };
+    }
+    async readIndexHealth(mappingDbPath, exists) {
+        if (!exists) {
+            return null;
+        }
+        const lifecycle = await this.readIndexLifecycleMeta(mappingDbPath);
+        const requiresRebuild = lifecycle.lastContentMutationAt != null
+            && (lifecycle.lastTextRebuildAt == null || lifecycle.lastContentMutationAt > lifecycle.lastTextRebuildAt);
+        const hasIndexSignal = lifecycle.lastTextRebuildAt != null || lifecycle.lastTextWriteAt != null;
+        if (requiresRebuild) {
+            return {
+                status: 'stale',
+                reason: lifecycle.lastTextRebuildAt
+                    ? 'Trivium payload 数据在最近一次全文索引重建之后发生了变化'
+                    : 'Trivium 已发生内容变更，但尚未执行全文索引重建',
+                requiresRebuild: true,
+                staleSince: lifecycle.lastContentMutationAt,
+                lastContentMutationAt: lifecycle.lastContentMutationAt,
+                lastTextWriteAt: lifecycle.lastTextWriteAt,
+                lastTextRebuildAt: lifecycle.lastTextRebuildAt,
+                lastCompactionAt: lifecycle.lastCompactionAt,
+            };
+        }
+        if (hasIndexSignal) {
+            return {
+                status: 'fresh',
+                reason: null,
+                requiresRebuild: false,
+                staleSince: null,
+                lastContentMutationAt: lifecycle.lastContentMutationAt,
+                lastTextWriteAt: lifecycle.lastTextWriteAt,
+                lastTextRebuildAt: lifecycle.lastTextRebuildAt,
+                lastCompactionAt: lifecycle.lastCompactionAt,
+            };
+        }
+        return {
+            status: 'missing',
+            reason: 'Trivium 尚未建立全文索引',
+            requiresRebuild: false,
+            staleSince: null,
+            lastContentMutationAt: lifecycle.lastContentMutationAt,
+            lastTextWriteAt: lifecycle.lastTextWriteAt,
+            lastTextRebuildAt: lifecycle.lastTextRebuildAt,
+            lastCompactionAt: lifecycle.lastCompactionAt,
+        };
+    }
+    async readIndexLifecycleMeta(mappingDbPath) {
+        const [lastContentMutationAt, lastTextWriteAt, lastTextRebuildAt, lastCompactionAt] = await Promise.all([
+            this.readMetaValue(mappingDbPath, LAST_CONTENT_MUTATION_META_KEY),
+            this.readMetaValue(mappingDbPath, LAST_TEXT_INDEX_WRITE_META_KEY),
+            this.readMetaValue(mappingDbPath, LAST_TEXT_INDEX_REBUILD_META_KEY),
+            this.readMetaValue(mappingDbPath, LAST_COMPACTION_META_KEY),
+        ]);
+        return {
+            lastContentMutationAt,
+            lastTextWriteAt,
+            lastTextRebuildAt,
+            lastCompactionAt,
+        };
+    }
+    async markContentMutation(mappingDbPath) {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_CONTENT_MUTATION_META_KEY);
+    }
+    async markTextIndexWrite(mappingDbPath) {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_TEXT_INDEX_WRITE_META_KEY);
+    }
+    async markTextIndexRebuild(mappingDbPath) {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_TEXT_INDEX_REBUILD_META_KEY);
+    }
+    async markCompaction(mappingDbPath) {
+        await this.writeMetaTimestamp(mappingDbPath, LAST_COMPACTION_META_KEY);
+    }
+    async writeMetaTimestamp(mappingDbPath, key) {
+        await this.ensureSchema(mappingDbPath);
+        const timestamp = await this.nextLifecycleTimestamp(mappingDbPath);
+        await Promise.all([
+            this.writeMetaValue(mappingDbPath, key, timestamp),
+            this.writeMetaValue(mappingDbPath, LAST_INDEX_LIFECYCLE_EVENT_META_KEY, timestamp),
+        ]);
+    }
+    async nextLifecycleTimestamp(mappingDbPath) {
+        const current = new Date();
+        const last = await this.readMetaValue(mappingDbPath, LAST_INDEX_LIFECYCLE_EVENT_META_KEY);
+        const lastMs = last ? Date.parse(last) : Number.NaN;
+        if (Number.isFinite(lastMs) && current.getTime() <= lastMs) {
+            return new Date(lastMs + 1).toISOString();
+        }
+        return current.toISOString();
+    }
     async enrichSearchHits(mappingDbPath, hits) {
         const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, hits.map(hit => hit.id));
         return hits.map(hit => ({
@@ -5609,6 +5839,50 @@ class TriviumService {
 function getTriviumDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
+function buildTriviumDatabaseRecord(filePath, entryName, meta, indexHealth) {
+    const mainStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
+    const walPath = `${filePath}.wal`;
+    const vecPath = `${filePath}.vec`;
+    const walStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(walPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(walPath) : null;
+    const vecStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(vecPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(vecPath) : null;
+    const timestamps = [mainStats, walStats, vecStats]
+        .filter((value) => value !== null)
+        .map(stats => stats.mtime.toISOString())
+        .sort((left, right) => left.localeCompare(right));
+    return {
+        name: entryName.slice(0, -'.tdb'.length),
+        fileName: entryName,
+        dim: readTriviumDimension(filePath) ?? meta.dim,
+        dtype: meta.dtype,
+        syncMode: meta.syncMode,
+        storageMode: meta.storageMode ?? (vecStats ? 'mmap' : 'rom'),
+        sizeBytes: mainStats.size,
+        walSizeBytes: walStats?.size ?? 0,
+        vecSizeBytes: vecStats?.size ?? 0,
+        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
+        updatedAt: timestamps.at(-1) ?? null,
+        indexHealth,
+    };
+}
+function readTriviumDimension(filePath) {
+    try {
+        const handle = node_fs__WEBPACK_IMPORTED_MODULE_0___default().openSync(filePath, 'r');
+        try {
+            const header = Buffer.alloc(10);
+            const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readSync(handle, header, 0, 10, 0);
+            if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
+                return null;
+            }
+            return header.readUInt32LE(6);
+        }
+        finally {
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().closeSync(handle);
+        }
+    }
+    catch {
+        return null;
+    }
+}
 function getTriviumNamespace(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
@@ -5638,6 +5912,22 @@ function getNonNegativeInteger(value) {
         }
     }
     return 0;
+}
+function parseOptionalPositiveInteger(value) {
+    if (!value) {
+        return null;
+    }
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+function parseOptionalTriviumDType(value) {
+    return value === 'f32' || value === 'f16' || value === 'u64' ? value : null;
+}
+function parseOptionalTriviumSyncMode(value) {
+    return value === 'full' || value === 'normal' || value === 'off' ? value : null;
+}
+function parseOptionalTriviumStorageMode(value) {
+    return value === 'mmap' || value === 'rom' ? value : null;
 }
 function getBoundedPositiveInteger(value, defaultValue, maxValue, label) {
     if (value == null) {
