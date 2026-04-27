@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AUTHORITY_VERSION } from './version.js';
 import { registerRoutes } from './routes.js';
 import type { AuthorityRuntime } from './runtime.js';
 import { AuthorityServiceError } from './utils.js';
@@ -231,10 +232,10 @@ describe('registerRoutes', () => {
             },
             install: {
                 getStatus: vi.fn(() => ({
-                    pluginVersion: '0.1.0',
-                    sdkBundledVersion: '0.1.0',
-                    sdkDeployedVersion: '0.1.0',
-                    coreBundledVersion: '0.1.0',
+                    pluginVersion: AUTHORITY_VERSION,
+                    sdkBundledVersion: AUTHORITY_VERSION,
+                    sdkDeployedVersion: AUTHORITY_VERSION,
+                    coreBundledVersion: AUTHORITY_VERSION,
                     coreArtifactPlatform: 'win32-x64',
                     coreArtifactPlatforms: ['win32-x64'],
                     coreArtifactHash: 'hash',

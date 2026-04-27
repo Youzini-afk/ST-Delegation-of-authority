@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AUTHORITY_VERSION } from '../version.js';
 import { SessionService } from './session-service.js';
 import type { CoreService } from './core-service.js';
 import type { SessionRecord } from '../types.js';
@@ -15,7 +16,7 @@ describe('SessionService', () => {
                 id: 'third-party/ext-a',
                 installType: 'local',
                 displayName: 'Ext A',
-                version: '0.1.0',
+                version: AUTHORITY_VERSION,
                 firstSeenAt: new Date().toISOString(),
             },
             declaredPermissions: {},

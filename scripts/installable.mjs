@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readAuthorityVersion } from './versioning.mjs';
 
 const [, , mode] = process.argv;
 const TEXT_HASH_EXTENSIONS = new Set([
@@ -67,8 +68,7 @@ function choosePrimaryCoreArtifactPlatform(coreArtifactPlatforms) {
 }
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-const rootPackage = readJson(path.join(repoRoot, 'package.json'));
-const pluginVersion = String(rootPackage.version ?? '0.0.0-dev');
+const pluginVersion = readAuthorityVersion();
 const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-installable-'));
 
 try {

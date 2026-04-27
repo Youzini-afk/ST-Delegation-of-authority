@@ -1,3 +1,5 @@
+export { AUTHORITY_VERSION } from './version.js';
+
 export type InstallType = 'system' | 'local' | 'global';
 
 export type PermissionResource =

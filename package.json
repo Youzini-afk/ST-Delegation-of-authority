@@ -1,20 +1,22 @@
 {
   "name": "st-delegation-of-authority",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "main": "runtime/index.cjs",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @stdo/shared-types && npm run build:core && npm run build --workspace @stdo/server-plugin && npm run build --workspace @stdo/sdk-extension && npm run build --workspace @stdo/example-extension",
+    "version:sync": "node ./scripts/versioning.mjs sync",
+    "version:bump": "node ./scripts/versioning.mjs bump",
+    "build": "npm run version:sync && npm run build --workspace @stdo/shared-types && npm run build:core && npm run build --workspace @stdo/server-plugin && npm run build --workspace @stdo/sdk-extension && npm run build --workspace @stdo/example-extension",
     "build:core": "node ./scripts/build-core.mjs",
     "bench:core": "node ./scripts/benchmark-core.mjs",
-    "typecheck": "tsc -b",
-    "test": "vitest run && cargo test --manifest-path crates/authority-core/Cargo.toml",
+    "typecheck": "npm run version:sync && tsc -b",
+    "test": "npm run version:sync && vitest run && cargo test --manifest-path crates/authority-core/Cargo.toml",
     "sync:installable": "npm run typecheck && npm run build && npm test && node ./scripts/installable.mjs sync",
-    "check:installable": "node ./scripts/installable.mjs check",
+    "check:installable": "npm run version:sync && node ./scripts/installable.mjs check",
     "dev:link": "npm run build && node ./scripts/link-dev.mjs",
     "dev:unlink": "node ./scripts/unlink-dev.mjs"
   },

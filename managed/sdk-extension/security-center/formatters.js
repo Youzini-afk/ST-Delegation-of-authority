@@ -37,8 +37,8 @@ export function getJobTypeLabel(type) {
     switch (type) {
         case 'delay': return '延时任务';
         case 'sql.backup': return 'SQL 备份';
-        case 'trivium.flush': return 'Trivium 刷盘';
-        case 'fs.import-jsonl': return 'JSONL 导入';
+        case 'trivium.flush': return 'Trivium 落盘';
+        case 'fs.import-jsonl': return '导入 JSONL 文件';
         default: return type;
     }
 }
@@ -63,7 +63,7 @@ export function getActivityMessageLabel(message) {
         case 'SQL transaction': return '已执行数据库事务';
         case 'SQL migrate': return '已执行数据库迁移';
         case 'SQL list databases': return '已读取数据库列表';
-        case 'HTTP fetch': return '已发起网络请求';
+        case 'HTTP fetch': return '已发起 HTTP 请求';
         case 'Job created': return '已创建后台任务';
         case 'Job cancelled': return '已取消后台任务';
         case 'Job requeued': return '已安全重新排队后台任务';
@@ -113,16 +113,16 @@ export function getSystemMessageLabel(message) {
         return 'JSONL 导入任务默认不允许安全重新排队，以避免覆盖目标文件。';
     }
     if (message === 'Authority SDK deployment has not run yet.') {
-        return '权限中心组件还没有部署。';
+        return '前端组件还没有部署。';
     }
     if (message === 'Managed Authority SDK bundle is not embedded in this plugin build.') {
-        return '当前插件构建里没有打包权限中心组件。';
+        return '当前插件包里没有带上前端组件。';
     }
     if (message === 'Unable to resolve the SillyTavern root for managed SDK deployment.') {
-        return '无法定位 SillyTavern 根目录，暂时不能部署权限中心组件。';
+        return '找不到 SillyTavern 根目录，暂时不能部署前端组件。';
     }
     if (message === 'Authority release metadata is missing.') {
-        return '缺少权限中心的发布元数据。';
+        return '缺少当前插件的发布信息。';
     }
     if (message === 'Managed authority-core binary hash does not match its metadata.') {
         return '后台服务文件校验失败：与本地元数据不一致。';
@@ -134,7 +134,7 @@ export function getSystemMessageLabel(message) {
         return '后台服务文件校验失败：与发布元数据不一致。';
     }
     if (message.startsWith('Authority SDK target already exists and is not managed by ')) {
-        return '权限中心目标目录已存在，但不是由当前插件管理，不能自动覆盖。';
+        return '前端组件目录已经存在，但不是当前插件在管理，不能自动覆盖。';
     }
     if (message.startsWith('Managed authority-core artifacts target ')) {
         return '内置后台服务支持的平台与当前运行环境不匹配。';
@@ -155,13 +155,13 @@ export function getSystemMessageLabel(message) {
         return '缺少后台服务可执行文件。';
     }
     if (message.startsWith('Authority SDK deployed to ')) {
-        return localizeInstallMessage(message, 'Authority SDK deployed to ', '权限中心组件已部署到 ');
+        return localizeInstallMessage(message, 'Authority SDK deployed to ', '前端组件已部署到 ');
     }
     if (message.startsWith('Authority SDK refreshed at ')) {
-        return localizeInstallMessage(message, 'Authority SDK refreshed at ', '权限中心组件已更新到 ');
+        return localizeInstallMessage(message, 'Authority SDK refreshed at ', '前端组件已更新到 ');
     }
     if (message.startsWith('Authority SDK is already available at ')) {
-        return localizeInstallMessage(message, 'Authority SDK is already available at ', '权限中心组件已存在于 ');
+        return localizeInstallMessage(message, 'Authority SDK is already available at ', '前端组件已存在于 ');
     }
     return message;
 }
@@ -199,9 +199,9 @@ export function getDeclaredPermissionLabels(declaredPermissions) {
     if (declaredPermissions.sql?.private)
         labels.push(Array.isArray(declaredPermissions.sql.private) ? `私有数据库（${declaredPermissions.sql.private.join('、')}）` : '私有数据库');
     if (declaredPermissions.trivium?.private)
-        labels.push(Array.isArray(declaredPermissions.trivium.private) ? `私有记忆数据库（${declaredPermissions.trivium.private.join('、')}）` : '私有记忆数据库');
+        labels.push(Array.isArray(declaredPermissions.trivium.private) ? `Trivium 私有记忆库（${declaredPermissions.trivium.private.join('、')}）` : 'Trivium 私有记忆库');
     if (declaredPermissions.http?.allow?.length)
-        labels.push(`网络访问（${declaredPermissions.http.allow.join('、')}）`);
+        labels.push(`HTTP 访问（${declaredPermissions.http.allow.join('、')}）`);
     if (declaredPermissions.jobs?.background)
         labels.push(Array.isArray(declaredPermissions.jobs.background) ? `后台任务（${declaredPermissions.jobs.background.join('、')}）` : '后台任务');
     if (declaredPermissions.events?.channels)
@@ -214,8 +214,8 @@ export function getResourceLabel(resource) {
         case 'storage.blob': return '文件存储';
         case 'fs.private': return '私有文件';
         case 'sql.private': return '私有数据库';
-        case 'trivium.private': return '私有记忆数据库';
-        case 'http.fetch': return '网络访问';
+        case 'trivium.private': return 'Trivium 私有记忆库';
+        case 'http.fetch': return 'HTTP 访问';
         case 'jobs.background': return '后台任务';
         case 'events.stream': return '消息通道';
         default: return '未分类能力';

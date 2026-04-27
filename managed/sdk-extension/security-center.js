@@ -14,12 +14,12 @@ const DEFAULT_OVERVIEW_SECTION_STATE = {
     recentActivity: true,
 };
 const LIMIT_OPERATION_OPTIONS = [
-    { key: 'storageBlobWrite', label: 'Blob 写入' },
-    { key: 'storageBlobRead', label: 'Blob 读取' },
+    { key: 'storageBlobWrite', label: '存储文件写入' },
+    { key: 'storageBlobRead', label: '存储文件读取' },
     { key: 'privateFileWrite', label: '私有文件写入' },
     { key: 'privateFileRead', label: '私有文件读取' },
-    { key: 'httpFetchRequest', label: 'HTTP 请求体' },
-    { key: 'httpFetchResponse', label: 'HTTP 响应体' },
+    { key: 'httpFetchRequest', label: 'HTTP 请求发送' },
+    { key: 'httpFetchResponse', label: 'HTTP 响应接收' },
 ];
 export function bootstrapSecurityCenter() {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
@@ -43,6 +43,7 @@ class SecurityCenterView {
             isAdmin: false,
             probe: null,
             session: null,
+            usageSummary: null,
             extensions: [],
             details: new Map(),
             selectedExtensionId: focusExtensionId ?? null,
@@ -51,6 +52,8 @@ class SecurityCenterView {
             extensionFilter: '',
             policies: null,
             policyEditorExtensionId: focusExtensionId ?? null,
+            packageOperations: [],
+            packageActionInProgress: false,
             updateResult: null,
             updateInProgress: false,
         };
@@ -132,6 +135,32 @@ class SecurityCenterView {
             const exportDiagnosticBundleButton = target.closest('[data-action="export-diagnostic-bundle"]');
             if (exportDiagnosticBundleButton) {
                 void this.exportDiagnosticBundle();
+                return;
+            }
+            const exportDiagnosticArchiveButton = target.closest('[data-action="export-diagnostic-archive"]');
+            if (exportDiagnosticArchiveButton) {
+                void this.exportDiagnosticArchive();
+                return;
+            }
+            const exportPackageButton = target.closest('[data-action="export-portable-package"]');
+            if (exportPackageButton) {
+                void this.exportPortablePackage();
+                return;
+            }
+            const importPackageButton = target.closest('[data-action="import-portable-package"]');
+            if (importPackageButton) {
+                void this.importPortablePackage();
+                return;
+            }
+            const resumePackageButton = target.closest('[data-action="resume-package-operation"]');
+            if (resumePackageButton?.dataset.operationId) {
+                void this.resumePackageOperation(resumePackageButton.dataset.operationId);
+                return;
+            }
+            const downloadPackageButton = target.closest('[data-action="download-package-operation"]');
+            if (downloadPackageButton?.dataset.operationId) {
+                void this.downloadPackageOperation(downloadPackageButton.dataset.operationId);
+                return;
             }
         });
         this.root.addEventListener('input', event => {
@@ -178,9 +207,21 @@ class SecurityCenterView {
             this.state.details = new Map(detailEntries);
             this.state.selectedExtensionId = this.resolveSelectedExtensionId();
             this.state.policyEditorExtensionId = this.resolvePolicyEditorExtensionId();
-            this.state.policies = this.state.isAdmin
-                ? await authorityRequest('/admin/policies')
-                : null;
+            if (this.state.isAdmin) {
+                const [policies, usageSummary, packageOperations] = await Promise.all([
+                    authorityRequest('/admin/policies'),
+                    authorityRequest('/admin/usage-summary'),
+                    authorityRequest('/admin/import-export/operations'),
+                ]);
+                this.state.policies = policies;
+                this.state.usageSummary = usageSummary;
+                this.state.packageOperations = packageOperations.operations;
+            }
+            else {
+                this.state.policies = null;
+                this.state.usageSummary = null;
+                this.state.packageOperations = [];
+            }
             if (!this.state.isAdmin && (this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
                 this.state.selectedTab = 'overview';
             }
@@ -231,6 +272,136 @@ class SecurityCenterView {
         }
         catch (error) {
             toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+    }
+    async exportDiagnosticArchive() {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const response = await authorityRequest('/admin/diagnostic-bundle/archive', { method: 'POST' });
+            await this.downloadArtifact(response);
+            toastr.success('诊断归档已导出', TOAST_TITLE);
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async exportPortablePackage() {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const operation = await authorityRequest('/admin/import-export/export', {
+                method: 'POST',
+                body: {},
+            });
+            toastr.success(`导出任务已开始：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+            this.state.selectedTab = 'updates';
+            void this.render();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async importPortablePackage() {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+        const fileInput = this.root.querySelector('[data-role="import-package-file"]');
+        const modeSelect = this.root.querySelector('[data-role="import-package-mode"]');
+        const file = fileInput?.files?.[0] ?? null;
+        if (!file) {
+            toastr.warning('请先选择要导入的数据包文件', TOAST_TITLE);
+            return;
+        }
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const transfer = await authorityRequest('/admin/import-export/import-transfer/init', {
+                method: 'POST',
+                body: { sizeBytes: file.size },
+            });
+            await this.uploadFileToTransfer(file, transfer);
+            const mode = (modeSelect?.value === 'merge' ? 'merge' : 'replace');
+            const operation = await authorityRequest('/admin/import-export/import', {
+                method: 'POST',
+                body: {
+                    transferId: transfer.transferId,
+                    mode,
+                    fileName: file.name,
+                },
+            });
+            if (fileInput) {
+                fileInput.value = '';
+            }
+            toastr.success(`导入任务已开始：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+            this.state.selectedTab = 'updates';
+            void this.render();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async resumePackageOperation(operationId) {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const operation = await authorityRequest(`/admin/import-export/operations/${encodeURIComponent(operationId)}/resume`, {
+                method: 'POST',
+            });
+            toastr.success(`任务已恢复：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+            void this.render();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async downloadPackageOperation(operationId) {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const response = await authorityRequest(`/admin/import-export/operations/${encodeURIComponent(operationId)}/open-download`, {
+                method: 'POST',
+            });
+            await this.downloadArtifact(response);
+            toastr.success('导出包已下载', TOAST_TITLE);
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
         }
     }
     async selectExtension(extensionId, tab) {
@@ -484,7 +655,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>核心诊断与完整性</h3>
-                                <div class="authority-muted">后台服务、SDK 接入与本地平台校验</div>
+                                <div class="authority-muted">后台服务、前端界面接入和本机环境检查</div>
                             </div>
                         </div>
                         <div class="authority-diagnostics-grid">
@@ -514,11 +685,11 @@ class SecurityCenterView {
                                 <strong>${escapeHtml(core?.version ?? MISSING_TEXT)}</strong>
                             </div>
                             <div>
-                                <span>构建标识</span>
+                                <span>构建编号</span>
                                 <strong>${escapeHtml(core?.health?.buildHash ?? this.state.probe?.coreBinarySha256 ?? MISSING_TEXT)}</strong>
                             </div>
                             <div>
-                                <span>数据根目录</span>
+                                <span>数据目录</span>
                                 <strong>${escapeHtml(this.state.probe?.storageRoot ?? MISSING_TEXT)}</strong>
                             </div>
                             <div>
@@ -542,11 +713,11 @@ class SecurityCenterView {
                                 <strong>${escapeHtml(core?.health ? String(core.health.queuedJobCount) : MISSING_TEXT)}</strong>
                             </div>
                             <div>
-                                <span>Worker 数量</span>
+                                <span>工作线程</span>
                                 <strong>${escapeHtml(core?.health ? String(core.health.workerCount) : MISSING_TEXT)}</strong>
                             </div>
                             <div>
-                                <span>Job Registry</span>
+                                <span>可用任务类型</span>
                                 <strong>${escapeHtml(core?.health ? `${core.health.jobRegistrySummary.registered} / ${core.health.jobRegistrySummary.jobTypes.join(', ')}` : MISSING_TEXT)}</strong>
                             </div>
                         </div>
@@ -564,15 +735,15 @@ class SecurityCenterView {
                             ${renderMetricTile('最近告警', String(overview.recentWarnings.length), '队列压力 / 慢任务 / 重试线索', overview.recentWarnings.length > 0 ? 'warning' : 'neutral')}
                             ${renderMetricTile('最近错误', String(overview.recentErrors.length), '需要排查的异常', overview.recentErrors.length > 0 ? 'error' : 'neutral')}
                         </div>`)}
-                    ${this.renderOverviewCollapsibleSection('capabilityMatrix', 'authority-section-block', '能力矩阵', '当前可由权限中心管理的系统能力', renderCapabilityMatrix(RESOURCE_OPTIONS))}
-                    ${this.renderOverviewCollapsibleSection('recentActivity', 'authority-log-panel', '近期活动日志', '权限请求、能力调用与异常记录', renderActivityLogRows(overview.recentActivity, '暂无活动记录。'))}
+                    ${this.renderOverviewCollapsibleSection('capabilityMatrix', 'authority-section-block', '可管理的功能', '这里列出当前能由权限中心管理的系统功能', renderCapabilityMatrix(RESOURCE_OPTIONS))}
+                    ${this.renderOverviewCollapsibleSection('recentActivity', 'authority-log-panel', '近期活动', '权限请求、能力调用与异常记录', renderActivityLogRows(overview.recentActivity, '暂无活动记录。'))}
                 </div>
                 <aside class="authority-inspector">
                     <section class="authority-card">
                         <div class="authority-section-heading">
                             <div>
                                 <h3>资源与存储</h3>
-                                <div class="authority-muted">当前用户数据资产</div>
+                                <div class="authority-muted">当前用户已占用的数据</div>
                             </div>
                         </div>
                         <div class="authority-resource-stack">
@@ -581,7 +752,7 @@ class SecurityCenterView {
                                 <strong>${this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)}</strong>
                             </div>
                             <div class="authority-resource-row">
-                                <span>文件体积</span>
+                                <span>存储文件</span>
                                 <strong>${escapeHtml(formatBytes(overview.totalBlobBytes))}</strong>
                             </div>
                             <div class="authority-resource-row">
@@ -597,7 +768,7 @@ class SecurityCenterView {
                     <section class="authority-card">
                         <div class="authority-section-heading">
                             <div>
-                                <h3>后台任务摘要</h3>
+                                <h3>后台任务概况</h3>
                                 <div class="authority-muted">排队中与执行中的任务</div>
                             </div>
                         </div>
@@ -650,7 +821,7 @@ class SecurityCenterView {
         }
         const detail = this.getSelectedDetail();
         if (!detail) {
-            container.innerHTML = '<div class="authority-empty">从左侧选择一个扩展以查看详细授权、任务和错误信息。</div>';
+            container.innerHTML = '<div class="authority-empty">先从左侧选一个扩展，再看它的权限、数据和运行情况。</div>';
             return;
         }
         const granted = detail.grants.filter(item => item.status === 'granted');
@@ -689,8 +860,8 @@ class SecurityCenterView {
                 <section class="authority-section-block">
                     <div class="authority-section-heading">
                         <div>
-                            <h3>运行档案</h3>
-                            <div class="authority-muted">扩展接入时间、最近活跃与数据使用</div>
+                            <h3>基本情况</h3>
+                            <div class="authority-muted">这个扩展是什么时候接入的、最近有没有活动、占了多少数据</div>
                         </div>
                         <button type="button" class="authority-action-button authority-action-button--primary" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
                     </div>
@@ -705,8 +876,8 @@ class SecurityCenterView {
                 <section class="authority-section-block">
                     <div class="authority-section-heading">
                         <div>
-                            <h3>权限管控</h3>
-                            <div class="authority-muted">当前授权、拒绝记录与声明能力</div>
+                            <h3>权限情况</h3>
+                            <div class="authority-muted">这里能看到它申请过什么权限、当前被允许了哪些、又被拦了哪些</div>
                         </div>
                     </div>
                     ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展还没有声明任何权限。')}
@@ -716,8 +887,8 @@ class SecurityCenterView {
                 <section class="authority-section-block">
                     <div class="authority-section-heading">
                         <div>
-                            <h3>数据资产</h3>
-                            <div class="authority-muted">该扩展创建的 SQL 数据库与 Trivium 记忆库</div>
+                            <h3>数据占用</h3>
+                            <div class="authority-muted">这个扩展创建的 SQL 数据库和 Trivium 记忆库都在这里</div>
                         </div>
                     </div>
                     ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
@@ -736,7 +907,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近能力调用</h3>
-                                <div class="authority-muted">扩展调用系统能力的记录</div>
+                                <div class="authority-muted">这个扩展最近都实际用了哪些功能</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(usage, '暂无能力调用记录。')}
@@ -746,8 +917,8 @@ class SecurityCenterView {
                     <div class="authority-card">
                         <div class="authority-section-heading">
                             <div>
-                                <h3>最近任务</h3>
-                                <div class="authority-muted">后台任务队列状态</div>
+                                <h3>最近后台任务</h3>
+                                <div class="authority-muted">这个扩展最近创建过的后台任务</div>
                             </div>
                         </div>
                         ${renderJobTable(jobs, '暂无后台任务。')}
@@ -756,7 +927,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近告警</h3>
-                                <div class="authority-muted">队列压力、慢任务与重试记录</div>
+                                <div class="authority-muted">例如排队过多、执行变慢、自动重试</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(warnings, '暂无运行告警记录。')}
@@ -765,7 +936,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近错误</h3>
-                                <div class="authority-muted">需要排查的内部异常</div>
+                                <div class="authority-muted">这里显示需要尽快排查的问题</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(errors, '暂无内部错误记录。')}
@@ -787,8 +958,8 @@ class SecurityCenterView {
                 <div class="authority-page-header">
                     <div>
                         <div class="authority-eyebrow">数据资产</div>
-                        <h2>扩展私有数据库</h2>
-                        <p>按扩展汇总当前用户的 SQL 私有数据库与 Trivium 私有记忆库。</p>
+                        <h2>各扩展的数据存储</h2>
+                        <p>按扩展查看当前用户的 SQL 数据库和 Trivium 记忆库。</p>
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>
@@ -820,9 +991,9 @@ class SecurityCenterView {
             <div class="authority-page-stack">
                 <div class="authority-page-header">
                     <div>
-                        <div class="authority-eyebrow">审计日志</div>
-                        <h2>活动日志</h2>
-                        <p>权限请求、能力调用与错误排障记录。</p>
+                        <div class="authority-eyebrow">操作记录</div>
+                        <h2>活动记录</h2>
+                        <p>这里会显示权限请求、功能使用和错误记录。</p>
                     </div>
                 </div>
                 <div class="authority-log-layout">
@@ -830,7 +1001,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近活动</h3>
-                                <div class="authority-muted">按时间倒序显示权限中心记录</div>
+                                <div class="authority-muted">按时间倒序显示最近发生的事情</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(items, '暂无活动记录。')}
@@ -839,7 +1010,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>运行告警</h3>
-                                <div class="authority-muted">慢任务、队列压力与重试线索</div>
+                                <div class="authority-muted">例如任务变慢、排队过多或反复重试</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(warnings, '暂无告警记录。')}
@@ -847,8 +1018,8 @@ class SecurityCenterView {
                     <section class="authority-log-panel">
                         <div class="authority-section-heading">
                             <div>
-                                <h3>错误排障</h3>
-                                <div class="authority-muted">仅显示错误类型记录</div>
+                                <h3>错误记录</h3>
+                                <div class="authority-muted">这里只显示错误类型的记录</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(errors, '暂无错误记录。')}
@@ -879,19 +1050,19 @@ class SecurityCenterView {
                 <div class="authority-page-header">
                     <div>
                         <div class="authority-eyebrow">管理员策略</div>
-                        <h2>全局访问控制策略</h2>
-                        <p>管理员策略会覆盖扩展请求与用户授权，请谨慎设置高风险能力。</p>
+                        <h2>管理员统一规则</h2>
+                        <p>这里的规则会覆盖扩展自己的请求和用户之前点过的允许/拒绝，请谨慎修改。</p>
                     </div>
                     <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button" data-action="add-policy-row">新增覆盖规则</button>
+                        <button type="button" class="authority-action-button" data-action="add-policy-row">新增单独规则</button>
                         <button type="button" class="authority-action-button authority-action-button--primary" data-action="save-policies">保存策略</button>
                     </div>
                 </div>
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
-                            <h3>全局默认权限矩阵</h3>
-                            <div class="authority-muted">为每类能力设置默认处理方式</div>
+                            <h3>默认处理规则</h3>
+                            <div class="authority-muted">先给每类功能设一个默认处理方式</div>
                         </div>
                         <span class="authority-pill authority-pill--admin">默认规则 ${RESOURCE_OPTIONS.length}</span>
                     </div>
@@ -900,7 +1071,7 @@ class SecurityCenterView {
                             <thead>
                                 <tr>
                                     <th>能力</th>
-                                    <th>标识</th>
+                                    <th>内部名称</th>
                                     <th>风险</th>
                                     <th>默认处理</th>
                                 </tr>
@@ -925,11 +1096,11 @@ class SecurityCenterView {
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
-                            <h3>扩展单独规则</h3>
-                            <div class="authority-muted">按扩展和目标覆盖全局默认设置</div>
+                            <h3>按扩展单独设置</h3>
+                            <div class="authority-muted">可以按扩展、按目标单独覆盖上面的默认规则</div>
                         </div>
                         <label class="authority-policy-field authority-policy-field--inline">
-                            <span>编辑扩展</span>
+                            <span>选择扩展</span>
                             <select data-policy-editor-extension>
                                 ${this.state.extensions.map(extension => `<option value="${escapeHtml(extension.id)}" ${extension.id === extensionId ? 'selected' : ''}>${escapeHtml(extension.displayName)}</option>`).join('')}
                             </select>
@@ -950,8 +1121,8 @@ class SecurityCenterView {
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
-                            <h3>扩展 Limits Policy</h3>
-                            <div class="authority-muted">留空表示沿用 runtime / probe 基线；填写正整数表示对该扩展下压生效值。</div>
+                            <h3>单独的大小限制</h3>
+                            <div class="authority-muted">留空表示跟系统默认值走；填写正整数表示给这个扩展单独设上限。</div>
                         </div>
                         <span class="authority-pill authority-pill--admin">${escapeHtml(extensionId || '未选择扩展')}</span>
                     </div>
@@ -959,9 +1130,9 @@ class SecurityCenterView {
                         <table class="authority-data-table authority-policy-matrix">
                             <thead>
                                 <tr>
-                                    <th>操作</th>
-                                    <th>Inline 阈值（bytes）</th>
-                                    <th>Transfer 上限（bytes）</th>
+                                    <th>场景</th>
+                                    <th>可直接返回的大小（字节）</th>
+                                    <th>分段传输上限（字节）</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -977,8 +1148,8 @@ class SecurityCenterView {
                     </div>
                     <div class="authority-policy-footer">
                         <div class="authority-chip-row">
-                            <span class="authority-pill authority-pill--prompt">留空 = runtime</span>
-                            <span class="authority-pill authority-pill--runtime">probe/session 会显示 source</span>
+                            <span class="authority-pill authority-pill--prompt">留空 = 跟随默认值</span>
+                            <span class="authority-pill authority-pill--runtime">页面里会显示实际来源</span>
                         </div>
                     </div>
                 </section>
@@ -991,41 +1162,48 @@ class SecurityCenterView {
             return;
         }
         if (!this.state.isAdmin) {
-            container.innerHTML = '<div class="authority-empty">只有管理员可执行插件与前端 SDK 更新。</div>';
+            container.innerHTML = '<div class="authority-empty">只有管理员可以使用这里的维护、备份和迁移功能。</div>';
             return;
         }
         const probe = this.state.probe;
         const result = this.state.updateResult;
+        const usageSummary = this.state.usageSummary;
+        const packageOperations = [...this.state.packageOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         const installPath = result?.git?.pluginRoot ?? '未获取';
-        const pullButtonLabel = this.state.updateInProgress ? '更新中…' : '更新服务端插件';
-        const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端插件';
+        const pullButtonLabel = this.state.updateInProgress ? '处理中…' : '拉取最新代码';
+        const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端界面';
+        const packageButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导出数据包';
+        const diagnosticArchiveLabel = this.state.packageActionInProgress ? '处理中…' : '导出诊断压缩包';
+        const importButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导入数据包';
         container.innerHTML = `
             <div class="authority-page-stack">
                 <div class="authority-page-header authority-page-header--updates">
                     <div>
-                        <div class="authority-eyebrow">更新管理</div>
-                        <h2>服务端插件与前端插件更新</h2>
-                        <p>手动拉取 Authority 服务端插件最新提交、重新部署它携带的前端 SDK 扩展，或导出默认脱敏的诊断包 JSON。</p>
+                        <div class="authority-eyebrow">维护工具</div>
+                        <h2>更新、备份与迁移</h2>
+                        <p>这里可以拉取最新代码、重新部署前端界面、导出或导入数据包，也能下载诊断信息。</p>
                     </div>
                     <div class="authority-page-actions authority-page-actions--updates">
                         <button type="button" class="authority-action-button authority-action-button--primary authority-action-button--wide" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
                         <button type="button" class="authority-action-button authority-action-button--wide" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
-                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-bundle">导出诊断包 JSON</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${packageButtonLabel}</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-archive" ${this.state.packageActionInProgress ? 'disabled' : ''}>${diagnosticArchiveLabel}</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-bundle">导出诊断 JSON</button>
                     </div>
                 </div>
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
                             <h3>当前安装状态</h3>
-                            <div class="authority-muted">当前运行中的 Authority 插件与 bundled SDK 摘要</div>
+                            <div class="authority-muted">当前插件、前端界面和后台服务的安装情况</div>
                         </div>
                         <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
                     </div>
                     <div class="authority-kv-grid">
                         <div><strong>服务端插件版本</strong><div>${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)}</div></div>
-                        <div><strong>Bundled SDK 版本</strong><div>${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)}</div></div>
-                        <div><strong>已部署 SDK 版本</strong><div>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</div></div>
-                        <div><strong>Core 版本</strong><div>${escapeHtml(probe?.core.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>插件内置前端版本</strong><div>${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>当前启用的前端版本</strong><div>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>后台服务版本</strong><div>${escapeHtml(probe?.core.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</div></div>
                         <div><strong>插件目录</strong><div>${escapeHtml(installPath)}</div></div>
                         <div><strong>最近操作</strong><div>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</div></div>
                     </div>
@@ -1033,22 +1211,130 @@ class SecurityCenterView {
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
-                            <h3>操作说明</h3>
-                            <div class="authority-muted">请根据你的部署方式选择对应动作</div>
+                            <h3>数据占用概览</h3>
+                            <div class="authority-muted">按扩展查看当前占了多少数据，方便决定要不要备份、迁移或清理。</div>
+                        </div>
+                    </div>
+                    ${usageSummary ? `
+                        <div class="authority-kv-grid">
+                            <div><strong>扩展数</strong><div>${escapeHtml(String(usageSummary.totals.extensionCount))}</div></div>
+                            <div><strong>存储文件</strong><div>${escapeHtml(String(usageSummary.totals.blobCount))} · ${escapeHtml(formatBytes(usageSummary.totals.blobBytes))}</div></div>
+                            <div><strong>SQL / Trivium</strong><div>${escapeHtml(String(usageSummary.totals.databaseCount))} · ${escapeHtml(formatBytes(usageSummary.totals.databaseBytes))}</div></div>
+                            <div><strong>私有文件</strong><div>${escapeHtml(String(usageSummary.totals.files.fileCount))} · ${escapeHtml(formatBytes(usageSummary.totals.files.totalSizeBytes))}</div></div>
+                            <div><strong>键值数据</strong><div>${escapeHtml(String(usageSummary.totals.kvEntries))}</div></div>
+                            <div><strong>生成时间</strong><div>${escapeHtml(formatDate(usageSummary.generatedAt))}</div></div>
+                        </div>
+                        <div class="authority-table-wrap">
+                            <table class="authority-data-table authority-policy-matrix">
+                                <thead>
+                                    <tr>
+                                        <th>扩展</th>
+                                        <th>键值</th>
+                                        <th>存储文件</th>
+                                        <th>SQL / Trivium</th>
+                                        <th>私有文件</th>
+                                        <th>授权</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${usageSummary.extensions.map(entry => `
+                                        <tr>
+                                            <td><strong>${escapeHtml(entry.extension.displayName || entry.extension.id)}</strong><div class="authority-muted">${escapeHtml(entry.extension.id)}</div></td>
+                                            <td>${escapeHtml(String(entry.storage.kvEntries))}</td>
+                                            <td>${escapeHtml(String(entry.storage.blobCount))} · ${escapeHtml(formatBytes(entry.storage.blobBytes))}</td>
+                                            <td>${escapeHtml(String(entry.storage.databaseCount))} · ${escapeHtml(formatBytes(entry.storage.databaseBytes))}</td>
+                                            <td>${escapeHtml(String(entry.storage.files.fileCount))} · ${escapeHtml(formatBytes(entry.storage.files.totalSizeBytes))}</td>
+                                            <td>${escapeHtml(String(entry.grantedCount))} / ${escapeHtml(String(entry.deniedCount))}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    ` : '<div class="authority-empty">暂时还没拿到数据占用概览。</div>'}
+                </section>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>数据包导入导出</h3>
+                            <div class="authority-muted">把授权、规则、文件和数据库打成一个备份包，并记录后台处理进度。</div>
                         </div>
                     </div>
                     <div class="authority-stack">
                         <div class="authority-list-card authority-list-card--column">
-                            <strong>更新服务端插件</strong>
-                            <div class="authority-muted">适用于以 Git 仓库形式安装的 \`plugins/authority\`。会执行 \`git pull --ff-only\`，然后重新部署 bundled SDK，并重启 Authority core。</div>
+                            <strong>导入方式</strong>
+                            <div class="authority-page-actions">
+                                <select data-role="import-package-mode" ${this.state.packageActionInProgress ? 'disabled' : ''}>
+                                    <option value="replace">覆盖导入 · 先清空现有数据，再导入包里的内容</option>
+                                    <option value="merge">合并导入 · 保留现有数据，再补充包里的内容</option>
+                                </select>
+                                <input type="file" data-role="import-package-file" accept=".zip,.authoritypkg.zip,.json,.gz,.authoritypkg,.authoritypkg.json.gz,application/zip,application/json,application/gzip" ${this.state.packageActionInProgress ? 'disabled' : ''} />
+                                <button type="button" class="authority-action-button authority-action-button--primary" data-action="import-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${importButtonLabel}</button>
+                            </div>
+                            <div class="authority-muted">导出完成后可以在下方列表下载；如果失败，也可以重新执行。</div>
+                        </div>
+                        ${packageOperations.length > 0 ? `
+                            <div class="authority-table-wrap">
+                                <table class="authority-data-table authority-policy-matrix">
+                                    <thead>
+                                        <tr>
+                                            <th>任务</th>
+                                            <th>状态</th>
+                                            <th>进度</th>
+                                            <th>结果</th>
+                                            <th>更新时间</th>
+                                            <th>动作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${packageOperations.map(operation => `
+                                            <tr>
+                                                <td>
+                                                    <strong>${escapeHtml(operation.kind === 'export' ? '导出' : '导入')}</strong>
+                                                    <div class="authority-muted">${escapeHtml(operation.id)}</div>
+                                                    ${operation.sourceFileName ? `<div class="authority-muted">来源文件：${escapeHtml(operation.sourceFileName)}</div>` : ''}
+                                                </td>
+                                                <td><span class="authority-pill authority-pill--${escapeHtml(this.getPackageOperationPill(operation.status))}">${escapeHtml(this.getPackageOperationStatusLabel(operation.status))}</span></td>
+                                                <td>${escapeHtml(String(operation.progress))}%</td>
+                                                <td>
+                                                    <div>${escapeHtml(operation.summary ?? '未开始')}</div>
+                                                    ${operation.error ? `<div class="authority-muted">${escapeHtml(operation.error)}</div>` : ''}
+                                                    ${operation.artifact ? `<div class="authority-muted">${escapeHtml(operation.artifact.fileName)} · ${escapeHtml(formatBytes(operation.artifact.sizeBytes))}</div>` : ''}
+                                                    ${operation.importSummary ? `<div class="authority-muted">扩展 ${escapeHtml(String(operation.importSummary.extensionCount))} 个 · 存储文件 ${escapeHtml(String(operation.importSummary.blobCount))} 个 · 私有文件 ${escapeHtml(String(operation.importSummary.fileCount))} 个</div>` : ''}
+                                                </td>
+                                                <td>${escapeHtml(formatDate(operation.updatedAt))}</td>
+                                                <td>
+                                                    <div class="authority-page-actions authority-page-actions--inline">
+                                                        ${operation.artifact ? `<button type="button" class="authority-action-button" data-action="download-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>下载</button>` : ''}
+                                                        ${operation.status === 'failed' ? `<button type="button" class="authority-action-button" data-action="resume-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>恢复</button>` : ''}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : '<div class="authority-empty">暂时还没有导入或导出任务。</div>'}
+                    </div>
+                </section>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>这些按钮分别做什么</h3>
+                            <div class="authority-muted">如果不确定选哪个，可以先看这里</div>
+                        </div>
+                    </div>
+                    <div class="authority-stack">
+                        <div class="authority-list-card authority-list-card--column">
+                            <strong>拉取最新代码</strong>
+                            <div class="authority-muted">适用于用 Git 安装的 \`plugins/authority\`。会执行 \`git pull --ff-only\`，再重新部署插件自带的前端界面，并尝试重启后台服务。</div>
                         </div>
                         <div class="authority-list-card authority-list-card--column">
-                            <strong>重新部署前端插件</strong>
-                            <div class="authority-muted">只刷新 \`third-party/st-authority-sdk\` 到最新 bundled 版本，不访问远端，不改服务端插件代码。</div>
+                            <strong>重新部署前端界面</strong>
+                            <div class="authority-muted">只刷新 \`third-party/st-authority-sdk\` 到插件自带的最新版本，不会联网，也不会改服务端代码。</div>
                         </div>
                         <div class="authority-list-card authority-list-card--column">
                             <strong>重启提示</strong>
-                            <div class="authority-muted">如果 \`git pull\` 拉到了新的 Node 服务端代码，当前运行中的 server plugin 模块通常仍需重启 SillyTavern 才会完全切换到新代码。</div>
+                            <div class="authority-muted">如果 \`git pull\` 拉到了新的 Node 服务端代码，通常还需要重启 SillyTavern，才能完全切换到新代码。</div>
                         </div>
                     </div>
                 </section>
@@ -1056,12 +1342,12 @@ class SecurityCenterView {
                     <section class="authority-card authority-card--flat">
                         <div class="authority-card__header">
                             <div>
-                                <h3>最近一次更新结果</h3>
+                                <h3>最近一次更新记录</h3>
                                 <div class="authority-muted">${escapeHtml(result.message)}</div>
                             </div>
                             <div class="authority-page-actions">
                                 <span class="authority-pill authority-pill--${result.requiresRestart ? 'warning' : 'granted'}">${escapeHtml(result.requiresRestart ? '需要重启 ST' : '无需重启 ST')}</span>
-                                <span class="authority-pill authority-pill--runtime">${escapeHtml(result.action === 'git-pull' ? '服务端插件更新' : '前端插件重部署')}</span>
+                                <span class="authority-pill authority-pill--runtime">${escapeHtml(result.action === 'git-pull' ? '已拉取最新代码' : '已重新部署前端界面')}</span>
                             </div>
                         </div>
                         <div class="authority-kv-grid">
@@ -1075,7 +1361,7 @@ class SecurityCenterView {
                         ${result.git ? `
                             <div class="authority-stack">
                                 <div class="authority-list-card authority-list-card--column">
-                                    <strong>Git 分支 / 提交</strong>
+                                    <strong>Git 分支 / 提交号</strong>
                                     <div class="authority-muted">${escapeHtml(result.git.branch ?? '未获取')} · ${escapeHtml(result.git.previousRevision ?? '未知')} → ${escapeHtml(result.git.currentRevision ?? '未知')}</div>
                                 </div>
                                 ${result.git.stdout ? `<pre class="authority-code-block">${escapeHtml(result.git.stdout)}</pre>` : ''}
@@ -1086,6 +1372,73 @@ class SecurityCenterView {
                 ` : ''}
             </div>
         `;
+    }
+    getPackageOperationPill(status) {
+        switch (status) {
+            case 'completed':
+                return 'granted';
+            case 'failed':
+                return 'warning';
+            case 'running':
+                return 'runtime';
+            default:
+                return 'prompt';
+        }
+    }
+    getRequiredSessionToken() {
+        const sessionToken = this.state.session?.sessionToken;
+        if (!sessionToken) {
+            throw new Error('Security Center session is not initialized');
+        }
+        return sessionToken;
+    }
+    async downloadArtifact(response) {
+        const sessionToken = this.getRequiredSessionToken();
+        const chunks = [];
+        let offset = 0;
+        try {
+            while (true) {
+                const chunk = await authorityRequest(`/transfers/${encodeURIComponent(response.transfer.transferId)}/read`, {
+                    method: 'POST',
+                    body: {
+                        offset,
+                        limit: response.transfer.chunkSize,
+                    },
+                    sessionToken,
+                });
+                const bytes = base64ToBytes(chunk.content);
+                const copy = new Uint8Array(bytes.byteLength);
+                copy.set(bytes);
+                chunks.push(copy.buffer);
+                offset += bytes.byteLength;
+                if (chunk.eof) {
+                    break;
+                }
+            }
+            downloadBlobFile(response.artifact.fileName, new Blob(chunks, { type: response.artifact.mediaType }));
+        }
+        finally {
+            await authorityRequest(`/transfers/${encodeURIComponent(response.transfer.transferId)}/discard`, {
+                method: 'POST',
+                sessionToken,
+            }).catch(() => undefined);
+        }
+    }
+    async uploadFileToTransfer(file, transfer) {
+        const sessionToken = this.getRequiredSessionToken();
+        let offset = 0;
+        while (offset < file.size) {
+            const chunk = new Uint8Array(await file.slice(offset, offset + transfer.chunkSize).arrayBuffer());
+            await authorityRequest(`/transfers/${encodeURIComponent(transfer.transferId)}/append`, {
+                method: 'POST',
+                body: {
+                    offset,
+                    content: bytesToBase64(chunk),
+                },
+                sessionToken,
+            });
+            offset += chunk.byteLength;
+        }
     }
     buildPolicyRowMarkup(entry) {
         return `
@@ -1111,23 +1464,22 @@ class SecurityCenterView {
             <section class="authority-card authority-card--flat">
                 <div class="authority-section-heading">
                     <div>
-                        <h3>Effective Limits</h3>
-                        <div class="authority-muted">展示当前 session 生效值、probe 基线值以及 policy source。新逻辑应优先使用按操作 effective limits。</div>
+                        <h3>当前生效的大小限制</h3>
+                        <div class="authority-muted">这里会显示本次会话实际生效的大小限制，以及系统默认值。</div>
                     </div>
                 </div>
                 <div class="authority-chip-row">
-                    <span class="authority-pill authority-pill--prompt">transfer chunk ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
+                    <span class="authority-pill authority-pill--prompt">分段传输每块 ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
                 </div>
-                <div class="authority-muted">兼容字段仍保留给旧客户端：inline ${escapeHtml(formatBytes(probeLimits.dataTransferInlineThresholdBytes))} · transfer ${escapeHtml(formatBytes(probeLimits.maxDataTransferBytes))}。</div>
                 <div class="authority-table-wrap">
                     <table class="authority-data-table authority-policy-matrix">
                         <thead>
                             <tr>
                                 <th>操作</th>
-                                <th>Session Inline</th>
-                                <th>Session Transfer</th>
-                                <th>Probe Inline</th>
-                                <th>Probe Transfer</th>
+                                <th>当前会话：直接返回</th>
+                                <th>当前会话：分段传输</th>
+                                <th>系统默认：直接返回</th>
+                                <th>系统默认：分段传输</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1147,7 +1499,7 @@ class SecurityCenterView {
         `;
     }
     formatEffectiveLimitValue(limit) {
-        return `${formatBytes(limit.bytes)} · ${limit.source}`;
+        return `${formatBytes(limit.bytes)} · ${this.getLimitSourceLabel(limit.source)}`;
     }
     renderOverviewCollapsibleSection(key, className, title, description, content) {
         const isOpen = this.state.overviewSectionState[key];
@@ -1171,7 +1523,7 @@ class SecurityCenterView {
             return '';
         }
         if (registry.entries.length === 0) {
-            return '<div class="authority-muted">当前未提供 Job Registry 明细。</div>';
+            return '<div class="authority-muted">当前没有提供可用任务类型的详细说明。</div>';
         }
         return `
             <div class="authority-stack">
@@ -1189,17 +1541,17 @@ class SecurityCenterView {
                 <div class="authority-muted">${escapeHtml(entry.description)}</div>
                 <div class="authority-kv-grid">
                     <div><strong>默认超时</strong><div>${escapeHtml(entry.defaultTimeoutMs == null ? '未设置' : `${entry.defaultTimeoutMs}ms`)}</div></div>
-                    <div><strong>默认重试</strong><div>${escapeHtml(String(entry.defaultMaxAttempts))}</div></div>
-                    <div><strong>Payload 字段</strong><div>${escapeHtml(entry.payloadFields.length === 0 ? '无' : String(entry.payloadFields.length))}</div></div>
-                    <div><strong>Progress 字段</strong><div>${escapeHtml(entry.progressFields.length === 0 ? '无' : String(entry.progressFields.length))}</div></div>
+                    <div><strong>默认重试次数</strong><div>${escapeHtml(String(entry.defaultMaxAttempts))}</div></div>
+                    <div><strong>需要的参数</strong><div>${escapeHtml(entry.payloadFields.length === 0 ? '无' : String(entry.payloadFields.length))}</div></div>
+                    <div><strong>进度 / 结果字段</strong><div>${escapeHtml(entry.progressFields.length === 0 ? '无' : String(entry.progressFields.length))}</div></div>
                 </div>
                 <div class="authority-stack authority-stack--compact">
                     <div>
-                        <strong>Payload</strong>
+                        <strong>参数说明</strong>
                         <div class="authority-muted">${escapeHtml(this.renderJobRegistryFieldSummary(entry.payloadFields))}</div>
                     </div>
                     <div>
-                        <strong>Progress / Result</strong>
+                        <strong>进度 / 结果说明</strong>
                         <div class="authority-muted">${escapeHtml(this.renderJobRegistryFieldSummary(entry.progressFields))}</div>
                     </div>
                 </div>
@@ -1210,7 +1562,28 @@ class SecurityCenterView {
         if (fields.length === 0) {
             return '无字段';
         }
-        return fields.map(field => `${field.name}${field.required ? '' : ' ?'}: ${field.type} — ${field.description}`).join('；');
+        return fields.map(field => `${field.name}${field.required ? '' : '（可选）'}：${field.type}——${field.description}`).join('；');
+    }
+    getPackageOperationStatusLabel(status) {
+        switch (status) {
+            case 'completed':
+                return '已完成';
+            case 'failed':
+                return '失败';
+            case 'running':
+                return '处理中';
+            default:
+                return '排队中';
+        }
+    }
+    getLimitSourceLabel(source) {
+        if (source === 'policy') {
+            return '管理员规则';
+        }
+        if (source === 'runtime') {
+            return '系统默认';
+        }
+        return source;
     }
     toggleSections() {
         for (const section of this.root.querySelectorAll('[data-section]')) {
@@ -1294,6 +1667,29 @@ function parsePositiveIntOrNull(value) {
         return null;
     }
     return parsed;
+}
+function base64ToBytes(content) {
+    const binary = atob(content);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+}
+function bytesToBase64(bytes) {
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 1) {
+        binary += String.fromCharCode(bytes[index] ?? 0);
+    }
+    return btoa(binary);
+}
+function downloadBlobFile(fileName, blob) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
 }
 function downloadJsonFile(fileName, value) {
     const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });

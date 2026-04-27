@@ -1,9 +1,10 @@
 import { getRequestHeaders } from '/script.js';
+import { AUTHORITY_VERSION } from './version.js';
 export const AUTHORITY_API_BASE = '/api/plugins/authority';
 export const AUTHORITY_EXTENSION_NAME = 'third-party/st-authority-sdk';
 export const AUTHORITY_EXTENSION_ID = 'third-party/st-authority-sdk';
 export const AUTHORITY_EXTENSION_DISPLAY_NAME = '扩展权限中心';
-export const AUTHORITY_EXTENSION_VERSION = '0.1.0';
+export const AUTHORITY_EXTENSION_VERSION = AUTHORITY_VERSION;
 export const SESSION_HEADER = 'x-authority-session-token';
 export class AuthorityApiError extends Error {
     status;

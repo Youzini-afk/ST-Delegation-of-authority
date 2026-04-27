@@ -1,13 +1,12 @@
 {
   "name": "@stdo/sdk-extension",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@stdo/shared-types": "0.1.0"
+    "@stdo/shared-types": "workspace:*"
   },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node ../../scripts/copy-static.mjs . static dist/extension"
   }
 }
-

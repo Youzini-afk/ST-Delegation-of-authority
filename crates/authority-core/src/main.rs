@@ -9396,7 +9396,7 @@ mod tests {
                 config: ControlInitConfig {
                     extension_id: String::from("third-party/example"),
                     display_name: String::from("Example"),
-                    version: String::from("0.1.0"),
+                    version: String::from(env!("CARGO_PKG_VERSION")),
                     install_type: String::from("local"),
                     declared_permissions: json!({}),
                     ui_label: None,

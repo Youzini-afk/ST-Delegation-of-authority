@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTHORITY_VERSION } from './version.js';
 import type {
     AuthorityProbeResponse,
     TriviumBulkDeleteRequest,
@@ -54,7 +55,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -73,7 +74,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -89,7 +90,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -133,7 +134,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -195,7 +196,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -224,7 +225,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -261,7 +262,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -295,7 +296,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -332,7 +333,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -373,7 +374,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -408,7 +409,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -530,7 +531,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -632,7 +633,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -722,7 +723,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -784,7 +785,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -819,7 +820,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -850,7 +851,7 @@ describe('AuthorityClient', () => {
             const client = new AuthorityClient({
                 extensionId: 'third-party/ext-a',
                 displayName: 'Ext A',
-                version: '0.1.0',
+                version: AUTHORITY_VERSION,
                 installType: 'local',
                 declaredPermissions: {},
             });
@@ -916,7 +917,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -938,7 +939,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -966,7 +967,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1000,7 +1001,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1049,7 +1050,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1105,7 +1106,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1138,7 +1139,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1192,7 +1193,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1248,7 +1249,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1315,7 +1316,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1348,7 +1349,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1387,7 +1388,7 @@ describe('AuthorityClient', () => {
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             installType: 'local',
             declaredPermissions: {},
         });
@@ -1445,13 +1446,13 @@ function buildProbe(overrides: Partial<{
     return {
         id: 'authority',
         online: true,
-        version: '0.1.0',
+        version: AUTHORITY_VERSION,
         pluginId: 'authority',
         sdkExtensionId: 'third-party/st-authority-sdk',
-        pluginVersion: '0.1.0',
-        sdkBundledVersion: '0.1.0',
-        sdkDeployedVersion: '0.1.0',
-        coreBundledVersion: '0.1.0',
+        pluginVersion: AUTHORITY_VERSION,
+        sdkBundledVersion: AUTHORITY_VERSION,
+        sdkDeployedVersion: AUTHORITY_VERSION,
+        coreBundledVersion: AUTHORITY_VERSION,
         coreArtifactPlatform: 'win32-x64',
         coreArtifactPlatforms: ['win32-x64'],
         coreArtifactHash: 'hash',
@@ -1543,13 +1544,13 @@ function buildProbe(overrides: Partial<{
             state: 'running',
             port: 1234,
             pid: 1,
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             startedAt: new Date().toISOString(),
             lastError: null,
             health: {
                 name: 'authority-core',
                 apiVersion: 'authority-core/v1',
-                version: '0.1.0',
+                version: AUTHORITY_VERSION,
                 buildHash: null,
                 platform: 'win32-x64',
                 pid: 1,
@@ -1605,7 +1606,7 @@ function buildSession() {
             id: 'third-party/ext-a',
             installType: 'local',
             displayName: 'Ext A',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             firstSeenAt: '2026-01-01T00:00:00.000Z',
         },
         grants: [],

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AUTHORITY_VERSION } from '../version.js';
 import {
     AUTHORITY_MANAGED_CORE_DIR,
     AUTHORITY_MANAGED_FILE,
@@ -49,11 +50,11 @@ describe('InstallService', () => {
         const managed = readJson<AuthorityManagedMetadata>(path.join(targetDir, AUTHORITY_MANAGED_FILE));
 
         expect(status.installStatus).toBe('installed');
-        expect(status.sdkDeployedVersion).toBe('0.1.0');
+        expect(status.sdkDeployedVersion).toBe(AUTHORITY_VERSION);
         expect(status.coreVerified).toBe(true);
         expect(fs.existsSync(path.join(targetDir, 'index.js'))).toBe(true);
         expect(managed.managedBy).toBe(AUTHORITY_PLUGIN_ID);
-        expect(managed.sdkVersion).toBe('0.1.0');
+        expect(managed.sdkVersion).toBe(AUTHORITY_VERSION);
     });
 
     it('is idempotent when the bundled SDK is already deployed', async () => {
@@ -64,12 +65,12 @@ describe('InstallService', () => {
         const status = await service.bootstrap();
 
         expect(status.installStatus).toBe('ready');
-        expect(status.sdkDeployedVersion).toBe('0.1.0');
+        expect(status.sdkDeployedVersion).toBe(AUTHORITY_VERSION);
         expect(status.coreVerified).toBe(true);
     });
 
     it('updates the deployed SDK when the bundled version changes', async () => {
-        const setup = createInstallFixture({ sdkVersion: '0.1.0', sdkScript: 'window.STAuthority={version:"0.1.0"};\n' });
+        const setup = createInstallFixture({ sdkVersion: AUTHORITY_VERSION, sdkScript: `window.STAuthority={version:"${AUTHORITY_VERSION}"};\n` });
         const initialService = createService(setup);
         await initialService.bootstrap();
 
@@ -111,11 +112,11 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('updated');
         expect(status.coreVerified).toBe(true);
-        expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain('0.1.0');
+        expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain(AUTHORITY_VERSION);
     });
 
     it('restores the previous managed SDK when an update copy fails', async () => {
-        const setup = createInstallFixture({ sdkVersion: '0.1.0', sdkScript: 'window.STAuthority={version:"0.1.0"};\n' });
+        const setup = createInstallFixture({ sdkVersion: AUTHORITY_VERSION, sdkScript: `window.STAuthority={version:"${AUTHORITY_VERSION}"};\n` });
         const service = createService(setup);
         await service.bootstrap();
         const targetDir = getTargetDir(setup.sillyTavernRoot);
@@ -129,8 +130,8 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('error');
         expect(status.coreVerified).toBe(false);
-        expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain('0.1.0');
-        expect(readJson<AuthorityManagedMetadata>(path.join(targetDir, AUTHORITY_MANAGED_FILE)).sdkVersion).toBe('0.1.0');
+        expect(fs.readFileSync(path.join(targetDir, 'index.js'), 'utf8')).toContain(AUTHORITY_VERSION);
+        expect(readJson<AuthorityManagedMetadata>(path.join(targetDir, AUTHORITY_MANAGED_FILE)).sdkVersion).toBe(AUTHORITY_VERSION);
     });
 
     it('deploys the SDK but reports a core warning when the bundled core artifact is absent', async () => {
@@ -231,8 +232,8 @@ function createInstallFixture(options: { sdkVersion?: string; sdkScript?: string
 
     writeBundledSdk(
         pluginRoot,
-        options.sdkVersion ?? '0.1.0',
-        options.sdkScript ?? 'window.STAuthority={version:"0.1.0"};\n',
+        options.sdkVersion ?? AUTHORITY_VERSION,
+        options.sdkScript ?? `window.STAuthority={version:"${AUTHORITY_VERSION}"};\n`,
     );
 
     return {

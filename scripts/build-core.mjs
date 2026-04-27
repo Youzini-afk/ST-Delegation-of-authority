@@ -4,11 +4,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { readAuthorityVersion } from './versioning.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const manifestPath = path.join(repoRoot, 'crates', 'authority-core', 'Cargo.toml');
-const rootPackage = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-const version = String(rootPackage.version ?? '0.0.0-dev');
+const version = readAuthorityVersion();
 const profile = process.env.AUTHORITY_CORE_PROFILE === 'debug' ? 'debug' : 'release';
 const targetPlatform = process.env.AUTHORITY_CORE_TARGET_PLATFORM || process.platform;
 const targetArch = process.env.AUTHORITY_CORE_TARGET_ARCH || process.arch;

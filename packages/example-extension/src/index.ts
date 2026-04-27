@@ -1,9 +1,10 @@
 import { renderExtensionTemplateAsync } from '/scripts/extensions.js';
 import { Popup, POPUP_TYPE } from '/scripts/popup.js';
+import { AUTHORITY_VERSION } from './version.js';
 
 const EXTENSION_NAME = 'third-party/st-authority-example';
 const DISPLAY_NAME = 'Authority Example';
-const VERSION = '0.1.0';
+const VERSION = AUTHORITY_VERSION;
 const DEFAULT_HTTP_URL = 'https://jsonplaceholder.typicode.com/todos/1';
 const POPUP_TEXT_TYPE = POPUP_TYPE.TEXT ?? 0;
 

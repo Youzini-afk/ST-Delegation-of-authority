@@ -306,6 +306,7 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+const ADMIN_PACKAGE_MAX_BYTES = 256 * 1024 * 1024;
 function ok(res, data) {
     res.json(data);
 }
@@ -862,11 +863,50 @@ async function buildDiagnosticBundle(runtime, user) {
         policies,
         usageSummary,
         jobs,
+        releaseMetadata: readReleaseMetadataSnapshot(runtime),
         extensions,
     });
 }
+function readReleaseMetadataSnapshot(runtime) {
+    const filePath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(runtime.install.getPluginRoot(), _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_RELEASE_FILE);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(filePath)) {
+        return null;
+    }
+    try {
+        const parsed = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(filePath, 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
 function sanitizeDiagnosticPayload(value) {
     return sanitizeDiagnosticValue(undefined, value);
+}
+function assertAdminUser(user) {
+    if (!user.isAdmin) {
+        throw new Error('Forbidden');
+    }
+}
+function parseAdminPackageSizeBytes(value) {
+    const sizeBytes = Number(value ?? 0);
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+        throw new Error('sizeBytes must be a positive number');
+    }
+    if (sizeBytes > ADMIN_PACKAGE_MAX_BYTES) {
+        throw new Error(`Admin package upload exceeds ${ADMIN_PACKAGE_MAX_BYTES} bytes`);
+    }
+    return Math.floor(sizeBytes);
+}
+async function openAdminArtifactDownload(runtime, user, filePath, sizeBytes, artifact) {
+    return {
+        artifact,
+        transfer: await runtime.transfers.openRead(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
+            resource: 'fs.private',
+            purpose: 'privateFileRead',
+            sourcePath: filePath,
+        }, Math.max(1, sizeBytes)),
+    };
 }
 function sanitizeDiagnosticValue(key, value) {
     if (typeof value === 'string') {
@@ -2540,10 +2580,97 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/admin/usage-summary', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            if (!user.isAdmin) {
-                throw new Error('Forbidden');
-            }
+            assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/admin/import-export/operations', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, {
+                operations: runtime.adminPackages.listOperations(user),
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/export', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
+                operationId: operation.id,
+                kind: operation.kind,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/import-transfer/init', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
+                resource: 'fs.private',
+                purpose: 'privateFileWrite',
+            }, parseAdminPackageSizeBytes(req.body?.sizeBytes)));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/import', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {});
+            const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
+            const operation = runtime.adminPackages.startImport(user, payload, transfer.filePath);
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import package started', {
+                operationId: operation.id,
+                transferId: transfer.transferId,
+                mode: operation.importMode,
+            });
+            await runtime.transfers.discard(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
+                operationId: operation.id,
+                kind: operation.kind,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
+                fileName: artifact.artifact.fileName,
+                sizeBytes: artifact.artifact.sizeBytes,
+            });
+            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -2552,10 +2679,23 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            if (!user.isAdmin) {
-                throw new Error('Forbidden');
-            }
+            assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
+                fileName: artifact.artifact.fileName,
+                sizeBytes: artifact.artifact.sizeBytes,
+            });
+            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -2642,19 +2782,21 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   createAuthorityRuntime: () => (/* binding */ createAuthorityRuntime)
 /* harmony export */ });
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
-/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
-/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
-/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
+/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
+/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
+/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -2670,21 +2812,23 @@ __webpack_require__.r(__webpack_exports__);
 
 
 function createAuthorityRuntime() {
-    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_2__.CoreService();
+    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__.CoreService();
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
-    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_1__.AuditService(core);
-    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_3__.DataTransferService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_4__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_6__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_9__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_8__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_11__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_12__.StorageService(core);
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_10__.PrivateFsService(core);
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_5__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_7__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_13__.TriviumService(core);
+    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__.AuditService(core);
+    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__.DataTransferService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__.ExtensionService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_10__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_9__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__.StorageService(core);
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_11__.PrivateFsService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_14__.TriviumService(core);
+    const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     return {
+        adminPackages,
         events,
         audit,
         core,
@@ -2700,6 +2844,1108 @@ function createAuthorityRuntime() {
         jobs,
         trivium,
     };
+}
+
+
+/***/ },
+
+/***/ "./src/services/admin-package-service.ts"
+/*!***********************************************!*\
+  !*** ./src/services/admin-package-service.ts ***!
+  \***********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AdminPackageService: () => (/* binding */ AdminPackageService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:zlib */ "node:zlib");
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_zlib__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _zip_archive_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./zip-archive.js */ "./src/services/zip-archive.ts");
+
+
+
+
+
+
+
+const PORTABLE_PACKAGE_FORMAT = 'authority-portable-package-v1';
+const PORTABLE_PACKAGE_ARCHIVE_FORMAT = 'authority-portable-package-archive-v2';
+const PORTABLE_PACKAGE_ARCHIVE_MANIFEST_PATH = 'manifest.json';
+const DIAGNOSTIC_ARCHIVE_FORMAT = 'authority-diagnostic-bundle-archive-v1';
+const OPERATION_RECOVERY_ERROR = 'operation_recovery_required';
+class AdminPackageService {
+    core;
+    extensions;
+    permissions;
+    policies;
+    storage;
+    files;
+    trivium;
+    recoveredUsers = new Set();
+    constructor(core, extensions, permissions, policies, storage, files, trivium) {
+        this.core = core;
+        this.extensions = extensions;
+        this.permissions = permissions;
+        this.policies = policies;
+        this.storage = storage;
+        this.files = files;
+        this.trivium = trivium;
+    }
+    listOperations(user) {
+        this.recoverUserOperations(user);
+        return this.loadOperations(user)
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+            .map(operation => this.toPublicOperation(operation));
+    }
+    getOperation(user, operationId) {
+        this.recoverUserOperations(user);
+        const operation = this.loadOperation(user, operationId);
+        return operation ? this.toPublicOperation(operation) : null;
+    }
+    startExport(user, request = {}) {
+        this.recoverUserOperations(user);
+        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        const operation = {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            kind: 'export',
+            status: 'queued',
+            progress: 0,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            exportRequest: normalizeExportRequest(request),
+            warnings: [],
+        };
+        this.saveOperation(user, operation);
+        this.runOperation(user, operation.id);
+        return this.toPublicOperation(operation);
+    }
+    startImport(user, request, sourcePath) {
+        this.recoverUserOperations(user);
+        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        const operationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const workDir = this.getOperationWorkDir(user, operationId);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(workDir);
+        const sourceFileName = sanitizeArtifactFileName((request.fileName ?? node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(sourcePath)) || 'authority-package.authoritypkg.zip');
+        const storedSourcePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(workDir, sourceFileName);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(sourcePath, storedSourcePath);
+        const operation = {
+            id: operationId,
+            kind: 'import',
+            status: 'queued',
+            progress: 0,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            importMode: request.mode === 'merge' ? 'merge' : 'replace',
+            sourceFileName,
+            sourcePath: storedSourcePath,
+            warnings: [],
+        };
+        this.saveOperation(user, operation);
+        this.runOperation(user, operation.id);
+        return this.toPublicOperation(operation);
+    }
+    resume(user, operationId) {
+        this.recoverUserOperations(user);
+        const operation = this.requireOperation(user, operationId);
+        if (operation.status !== 'failed') {
+            throw new Error('Only failed import/export operations can be resumed');
+        }
+        const resetOperation = {
+            ...operation,
+            status: 'queued',
+            progress: 0,
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            warnings: [],
+        };
+        delete resetOperation.summary;
+        delete resetOperation.error;
+        delete resetOperation.startedAt;
+        delete resetOperation.finishedAt;
+        if (operation.kind === 'export') {
+            delete resetOperation.artifact;
+            delete resetOperation.artifactPath;
+            delete resetOperation.importSummary;
+            delete resetOperation.sourceFileName;
+        }
+        if (operation.artifactPath) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(operation.artifactPath, { force: true });
+        }
+        this.saveOperation(user, resetOperation);
+        this.runOperation(user, operationId);
+        return this.toPublicOperation(resetOperation);
+    }
+    getArtifact(user, operationId) {
+        this.recoverUserOperations(user);
+        const operation = this.requireOperation(user, operationId);
+        if (!operation.artifact || !operation.artifactPath || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(operation.artifactPath)) {
+            throw new Error('Operation artifact is not available');
+        }
+        return {
+            artifact: operation.artifact,
+            filePath: operation.artifactPath,
+        };
+    }
+    createDiagnosticArchive(user, bundle) {
+        this.recoverUserOperations(user);
+        const generatedAt = bundle.generatedAt || (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        const archive = {
+            format: DIAGNOSTIC_ARCHIVE_FORMAT,
+            generatedAt,
+            files: this.buildDiagnosticArchiveFiles(bundle),
+        };
+        const fileName = `authority-diagnostic-bundle-${sanitizeTimestamp(generatedAt)}.json.gz`;
+        return this.writeStandaloneArtifact(user, 'diagnostic', fileName, archive);
+    }
+    runOperation(user, operationId) {
+        void Promise.resolve().then(async () => {
+            const current = this.requireOperation(user, operationId);
+            if (current.kind === 'export') {
+                await this.executeExport(user, current);
+                return;
+            }
+            await this.executeImport(user, current);
+        }).catch(() => undefined);
+    }
+    async executeExport(user, operation) {
+        let current = this.markRunning(user, operation);
+        try {
+            const request = normalizeExportRequest(current.exportRequest);
+            const extensions = await this.resolveExportExtensions(user, request.extensionIds);
+            const totalSteps = Math.max(3, extensions.length * 6 + 2);
+            let completedSteps = 0;
+            current = this.updateProgress(user, current.id, completedSteps, totalSteps, '正在收集高层导出包元数据');
+            const nextPackage = {
+                manifest: {
+                    format: PORTABLE_PACKAGE_FORMAT,
+                    generatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+                    extensionIds: extensions.map(extension => extension.id),
+                    includesPolicies: request.includePolicies !== false,
+                    includesUsageSummary: request.includeUsageSummary !== false,
+                },
+                extensions: [],
+            };
+            if (request.includePolicies !== false) {
+                nextPackage.policies = await this.policies.getPolicies(user);
+            }
+            completedSteps += 1;
+            current = this.updateProgress(user, current.id, completedSteps, totalSteps, '已读取管理员策略');
+            if (request.includeUsageSummary !== false) {
+                nextPackage.usageSummary = await this.buildUsageSummary(user, extensions);
+            }
+            completedSteps += 1;
+            current = this.updateProgress(user, current.id, completedSteps, totalSteps, '已读取 usage summary');
+            for (const extension of extensions) {
+                const extensionPackage = await this.exportExtensionPackage(user, extension, phase => {
+                    completedSteps += 1;
+                    current = this.updateProgress(user, current.id, completedSteps, totalSteps, `${extension.displayName || extension.id} · ${phase}`);
+                });
+                nextPackage.extensions.push(extensionPackage);
+            }
+            const artifact = this.writePortablePackageArtifact(user, current.id, nextPackage);
+            current = this.completeOperation(user, current.id, {
+                progress: 100,
+                summary: `已生成 ${nextPackage.extensions.length} 个扩展的高层导出包`,
+                artifact: artifact.artifact,
+                artifactPath: artifact.filePath,
+            });
+        }
+        catch (error) {
+            this.failOperation(user, current.id, error);
+        }
+    }
+    async executeImport(user, operation) {
+        let current = this.markRunning(user, operation);
+        try {
+            if (!current.sourcePath || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(current.sourcePath)) {
+                throw new Error('Import source package is not available');
+            }
+            const readResult = this.readPortablePackage(current.sourcePath);
+            const portablePackage = readResult.portablePackage;
+            const totalSteps = Math.max(2, portablePackage.extensions.length * 5 + (portablePackage.policies ? 1 : 0));
+            let completedSteps = 0;
+            const mode = current.importMode === 'merge' ? 'merge' : 'replace';
+            const summary = {
+                extensionCount: portablePackage.extensions.length,
+                grantCount: 0,
+                kvEntryCount: 0,
+                blobCount: 0,
+                fileCount: 0,
+                sqlDatabaseCount: 0,
+                triviumDatabaseCount: 0,
+                policyExtensionCount: portablePackage.policies ? Object.keys(portablePackage.policies.extensions).length : 0,
+            };
+            const warnings = [...readResult.warnings];
+            if (portablePackage.policies) {
+                if (mode === 'replace') {
+                    await this.replacePolicies(user, portablePackage.policies);
+                }
+                else {
+                    await this.mergePolicies(user, portablePackage.policies);
+                }
+                completedSteps += 1;
+                current = this.updateProgress(user, current.id, completedSteps, totalSteps, '已回放管理员策略');
+            }
+            for (const extensionPackage of portablePackage.extensions) {
+                if (mode === 'replace') {
+                    await this.clearExtensionState(user, extensionPackage.extension.id);
+                }
+                await this.importExtensionPackage(user, extensionPackage, summary, warnings);
+                completedSteps += 5;
+                current = this.updateProgress(user, current.id, completedSteps, totalSteps, `${extensionPackage.extension.displayName || extensionPackage.extension.id} · 已回放`);
+            }
+            this.completeOperation(user, current.id, {
+                progress: 100,
+                summary: `已导入 ${summary.extensionCount} 个扩展的高层包`,
+                importSummary: summary,
+                warnings,
+            });
+        }
+        catch (error) {
+            this.failOperation(user, current.id, error);
+        }
+    }
+    async exportExtensionPackage(user, extension, advance) {
+        const grants = await this.permissions.listPersistentGrants(user, extension.id);
+        advance('grants');
+        const kvEntries = await this.storage.listKv(user, extension.id);
+        advance('kv');
+        const blobs = await this.exportBlobs(user, extension.id, await this.storage.listBlobs(user, extension.id));
+        advance('blobs');
+        const files = this.exportPrivateFiles(user, extension.id);
+        advance('files');
+        const sqlDatabases = await this.exportSqlDatabases(user, extension.id, await this.listPrivateSqlDatabases(user, extension.id));
+        advance('sql');
+        const triviumDatabases = await this.exportTriviumDatabases(user, extension.id, (await this.trivium.listDatabases(user, extension.id)).databases);
+        advance('trivium');
+        return {
+            extension,
+            grants,
+            kvEntries,
+            blobs,
+            files,
+            sqlDatabases,
+            triviumDatabases,
+        };
+    }
+    async importExtensionPackage(user, extensionPackage, summary, warnings) {
+        const extensionId = extensionPackage.extension.id;
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
+        for (const grant of extensionPackage.grants) {
+            await this.core.upsertControlGrant(paths.controlDbFile, {
+                userHandle: user.handle,
+                extensionId,
+                grant,
+            });
+        }
+        summary.grantCount += extensionPackage.grants.length;
+        for (const [key, value] of Object.entries(extensionPackage.kvEntries)) {
+            await this.storage.setKv(user, extensionId, key, value);
+        }
+        summary.kvEntryCount += Object.keys(extensionPackage.kvEntries).length;
+        for (const blob of extensionPackage.blobs) {
+            const payload = decodeBase64Checked(blob.contentBase64, blob.checksumSha256, `blob ${blob.record.name}`);
+            await this.storage.putBlob(user, extensionId, blob.record.name, payload.toString('base64'), 'base64', blob.record.contentType);
+        }
+        summary.blobCount += extensionPackage.blobs.length;
+        for (const file of extensionPackage.files) {
+            decodeBase64Checked(file.contentBase64, file.checksumSha256, `private file ${file.path}`);
+            await this.files.writeFile(user, extensionId, {
+                path: file.path,
+                content: file.contentBase64,
+                encoding: 'base64',
+                createParents: true,
+            });
+        }
+        summary.fileCount += extensionPackage.files.length;
+        for (const database of extensionPackage.sqlDatabases) {
+            const bytes = decodeBase64Checked(database.contentBase64, database.checksumSha256, `sql database ${database.record.name}`);
+            const dbPath = this.resolvePrivateSqlDatabasePath(user, extensionId, database.record.name);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(dbPath));
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(dbPath, bytes);
+        }
+        summary.sqlDatabaseCount += extensionPackage.sqlDatabases.length;
+        for (const database of extensionPackage.triviumDatabases) {
+            const bytes = decodeBase64Checked(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
+            const dbPath = this.resolvePrivateTriviumDatabasePath(user, extensionId, database.record.name);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(dbPath));
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(dbPath, bytes);
+            const mappingPath = this.resolvePrivateTriviumMappingPath(user, extensionId, database.record.name);
+            if (database.mappingContentBase64 && database.mappingChecksumSha256) {
+                const mappingBytes = decodeBase64Checked(database.mappingContentBase64, database.mappingChecksumSha256, `trivium mapping ${database.record.name}`);
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(mappingPath));
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(mappingPath, mappingBytes);
+            }
+            else {
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(mappingPath, { force: true });
+            }
+        }
+        summary.triviumDatabaseCount += extensionPackage.triviumDatabases.length;
+        if (!extensionPackage.extension.displayName?.trim()) {
+            warnings.push(`扩展 ${extensionId} 在导出包中没有 displayName，导入后会等待扩展自身再次上报元数据。`);
+        }
+    }
+    async buildUsageSummary(user, extensions) {
+        const generatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        const entries = await Promise.all(extensions.map(async (extension) => {
+            const grants = await this.permissions.listPersistentGrants(user, extension.id);
+            const sqlDatabases = await this.listPrivateSqlDatabases(user, extension.id);
+            const triviumDatabases = (await this.trivium.listDatabases(user, extension.id)).databases;
+            const storage = await this.buildExtensionStorageSummary(user, extension.id, sqlDatabases, triviumDatabases);
+            return {
+                extension,
+                grantedCount: grants.filter(grant => grant.status === 'granted').length,
+                deniedCount: grants.filter(grant => grant.status === 'denied' || grant.status === 'blocked').length,
+                storage,
+            };
+        }));
+        const totals = entries.reduce((aggregate, entry) => ({
+            extensionCount: aggregate.extensionCount + 1,
+            kvEntries: aggregate.kvEntries + entry.storage.kvEntries,
+            blobCount: aggregate.blobCount + entry.storage.blobCount,
+            blobBytes: aggregate.blobBytes + entry.storage.blobBytes,
+            databaseCount: aggregate.databaseCount + entry.storage.databaseCount,
+            databaseBytes: aggregate.databaseBytes + entry.storage.databaseBytes,
+            sqlDatabaseCount: aggregate.sqlDatabaseCount + entry.storage.sqlDatabaseCount,
+            sqlDatabaseBytes: aggregate.sqlDatabaseBytes + entry.storage.sqlDatabaseBytes,
+            triviumDatabaseCount: aggregate.triviumDatabaseCount + entry.storage.triviumDatabaseCount,
+            triviumDatabaseBytes: aggregate.triviumDatabaseBytes + entry.storage.triviumDatabaseBytes,
+            files: {
+                fileCount: aggregate.files.fileCount + entry.storage.files.fileCount,
+                directoryCount: aggregate.files.directoryCount + entry.storage.files.directoryCount,
+                totalSizeBytes: aggregate.files.totalSizeBytes + entry.storage.files.totalSizeBytes,
+                latestUpdatedAt: newestTimestamp(aggregate.files.latestUpdatedAt, entry.storage.files.latestUpdatedAt),
+            },
+        }), {
+            extensionCount: 0,
+            kvEntries: 0,
+            blobCount: 0,
+            blobBytes: 0,
+            databaseCount: 0,
+            databaseBytes: 0,
+            sqlDatabaseCount: 0,
+            sqlDatabaseBytes: 0,
+            triviumDatabaseCount: 0,
+            triviumDatabaseBytes: 0,
+            files: {
+                fileCount: 0,
+                directoryCount: 0,
+                totalSizeBytes: 0,
+                latestUpdatedAt: null,
+            },
+        });
+        return {
+            generatedAt,
+            totals,
+            extensions: entries,
+        };
+    }
+    async buildExtensionStorageSummary(user, extensionId, sqlDatabases, triviumDatabases) {
+        const [kvEntries, blobs, files] = await Promise.all([
+            this.storage.listKv(user, extensionId),
+            this.storage.listBlobs(user, extensionId),
+            this.files.getUsageSummary(user, extensionId),
+        ]);
+        return {
+            kvEntries: Object.keys(kvEntries).length,
+            blobCount: blobs.length,
+            blobBytes: blobs.reduce((sum, blob) => sum + blob.size, 0),
+            databaseCount: sqlDatabases.length + triviumDatabases.length,
+            databaseBytes: sqlDatabases.reduce((sum, database) => sum + database.sizeBytes, 0)
+                + triviumDatabases.reduce((sum, database) => sum + database.totalSizeBytes, 0),
+            sqlDatabaseCount: sqlDatabases.length,
+            sqlDatabaseBytes: sqlDatabases.reduce((sum, database) => sum + database.sizeBytes, 0),
+            triviumDatabaseCount: triviumDatabases.length,
+            triviumDatabaseBytes: triviumDatabases.reduce((sum, database) => sum + database.totalSizeBytes, 0),
+            files,
+        };
+    }
+    async exportBlobs(user, extensionId, records) {
+        return await Promise.all(records.map(async (record) => {
+            const opened = await this.storage.openBlobRead(user, extensionId, record.id);
+            const bytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(opened.sourcePath);
+            return {
+                record,
+                contentBase64: bytes.toString('base64'),
+                checksumSha256: hashBytes(bytes),
+            };
+        }));
+    }
+    exportPrivateFiles(user, extensionId) {
+        const rootDir = this.resolvePrivateFilesRoot(user, extensionId);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(rootDir)) {
+            return [];
+        }
+        const entries = [];
+        const walk = (currentDir, virtualPrefix) => {
+            for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(currentDir, { withFileTypes: true })) {
+                const fullPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(currentDir, entry.name);
+                const stats = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(fullPath);
+                if (stats.isSymbolicLink()) {
+                    continue;
+                }
+                const virtualPath = `${virtualPrefix}/${entry.name}`.replace(/\\/g, '/');
+                if (entry.isDirectory()) {
+                    walk(fullPath, virtualPath);
+                    continue;
+                }
+                if (!entry.isFile()) {
+                    continue;
+                }
+                const bytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(fullPath);
+                entries.push({
+                    path: virtualPath,
+                    sizeBytes: bytes.byteLength,
+                    updatedAt: new Date(stats.mtimeMs).toISOString(),
+                    contentBase64: bytes.toString('base64'),
+                    checksumSha256: hashBytes(bytes),
+                });
+            }
+        };
+        walk(rootDir, '');
+        entries.sort((left, right) => left.path.localeCompare(right.path));
+        return entries;
+    }
+    async exportSqlDatabases(user, extensionId, records) {
+        return await Promise.all(records.map(async (record) => {
+            const filePath = this.resolvePrivateSqlDatabasePath(user, extensionId, record.name);
+            const bytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath) : Buffer.alloc(0);
+            return {
+                record,
+                contentBase64: bytes.toString('base64'),
+                checksumSha256: hashBytes(bytes),
+            };
+        }));
+    }
+    async exportTriviumDatabases(user, extensionId, records) {
+        return await Promise.all(records.map(async (record) => {
+            const dbPath = this.resolvePrivateTriviumDatabasePath(user, extensionId, record.name);
+            const mappingPath = this.resolvePrivateTriviumMappingPath(user, extensionId, record.name);
+            const databaseBytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(dbPath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(dbPath) : Buffer.alloc(0);
+            const mappingBytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(mappingPath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(mappingPath) : null;
+            return {
+                record,
+                databaseContentBase64: databaseBytes.toString('base64'),
+                databaseChecksumSha256: hashBytes(databaseBytes),
+                ...(mappingBytes
+                    ? {
+                        mappingContentBase64: mappingBytes.toString('base64'),
+                        mappingChecksumSha256: hashBytes(mappingBytes),
+                    }
+                    : {}),
+            };
+        }));
+    }
+    async listPrivateSqlDatabases(user, extensionId) {
+        const databaseDir = this.resolvePrivateSqlDatabaseDir(user, extensionId);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(databaseDir)) {
+            return [];
+        }
+        const databases = await Promise.all(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(databaseDir, { withFileTypes: true })
+            .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
+            .map(async (entry) => {
+            const databaseName = entry.name.slice(0, -'.sqlite'.length);
+            const stat = await this.core.statSql(this.resolvePrivateSqlDatabasePath(user, extensionId, databaseName), {
+                database: databaseName,
+            });
+            return {
+                name: stat.name,
+                fileName: stat.fileName,
+                sizeBytes: stat.sizeBytes,
+                updatedAt: stat.updatedAt,
+                runtimeConfig: stat.runtimeConfig,
+                slowQuery: stat.slowQuery,
+            };
+        }));
+        databases.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+        return databases;
+    }
+    async clearExtensionState(user, extensionId) {
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
+        await this.permissions.resetPersistentGrants(user, extensionId);
+        const blobs = await this.storage.listBlobs(user, extensionId);
+        for (const blob of blobs) {
+            await this.storage.deleteBlob(user, extensionId, blob.id);
+        }
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateFilesRoot(user, extensionId), { recursive: true, force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(paths.kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId)}.sqlite`), { force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateSqlDatabaseDir(user, extensionId), { recursive: true, force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateTriviumDatabaseDir(user, extensionId), { recursive: true, force: true });
+    }
+    async mergePolicies(user, document) {
+        await this.policies.saveGlobalPolicies(user, {
+            defaults: document.defaults,
+            extensions: document.extensions,
+            limits: document.limits,
+        });
+    }
+    async replacePolicies(user, document) {
+        await this.core.getControlPolicies((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getGlobalAuthorityPaths)().controlDbFile, { userHandle: user.handle });
+        await this.core.execSql((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getGlobalAuthorityPaths)().controlDbFile, {
+            statement: `DELETE FROM authority_policy_documents WHERE name = 'global'`,
+        });
+        await this.mergePolicies(user, document);
+    }
+    readPortablePackage(filePath) {
+        const rawBytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath);
+        if ((0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_6__.isZipArchive)(rawBytes)) {
+            return this.readPortablePackageArchive(rawBytes);
+        }
+        const text = tryGunzip(rawBytes).toString('utf8');
+        const payload = JSON.parse(text);
+        if (payload?.manifest?.format !== PORTABLE_PACKAGE_FORMAT) {
+            throw new Error(`Unsupported package format: ${String(payload?.manifest?.format ?? 'unknown')}`);
+        }
+        return {
+            portablePackage: payload,
+            warnings: ['导入源包使用 legacy 单文件 .json.gz 格式；建议重新导出为新的 .authoritypkg.zip 多文件包。'],
+        };
+    }
+    readPortablePackageArchive(rawBytes) {
+        const archiveFiles = (0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_6__.readZipArchive)(rawBytes);
+        const manifest = this.parseArchiveJson(archiveFiles, PORTABLE_PACKAGE_ARCHIVE_MANIFEST_PATH, 'portable package archive manifest');
+        if (manifest?.format !== PORTABLE_PACKAGE_ARCHIVE_FORMAT) {
+            throw new Error(`Unsupported package archive format: ${String(manifest?.format ?? 'unknown')}`);
+        }
+        if (manifest.packageManifest?.format !== PORTABLE_PACKAGE_FORMAT) {
+            throw new Error(`Unsupported logical package format inside archive: ${String(manifest.packageManifest?.format ?? 'unknown')}`);
+        }
+        this.validatePortablePackageArchiveManifest(manifest, archiveFiles);
+        const portablePackage = {
+            manifest: manifest.packageManifest,
+            extensions: [],
+        };
+        if (manifest.policiesPath) {
+            portablePackage.policies = this.parseArchiveJson(archiveFiles, manifest.policiesPath, 'portable package policies');
+        }
+        if (manifest.usageSummaryPath) {
+            portablePackage.usageSummary = this.parseArchiveJson(archiveFiles, manifest.usageSummaryPath, 'portable package usage summary');
+        }
+        for (const extensionRef of manifest.extensions) {
+            const extension = this.parseArchiveJson(archiveFiles, extensionRef.extensionPath, `extension ${extensionRef.extensionId} metadata`);
+            if (extension.id !== extensionRef.extensionId) {
+                throw new Error(`Portable package extension metadata mismatch: expected ${extensionRef.extensionId}, received ${extension.id}`);
+            }
+            const grants = this.parseArchiveJson(archiveFiles, extensionRef.grantsPath, `extension ${extension.id} grants`);
+            const kvEntries = this.parseArchiveJson(archiveFiles, extensionRef.kvEntriesPath, `extension ${extension.id} kv entries`);
+            const blobs = extensionRef.blobs.map(blob => {
+                const bytes = this.requireArchiveBinary(archiveFiles, blob.archivePath, blob.checksumSha256, `blob ${blob.record.name}`);
+                return {
+                    record: blob.record,
+                    contentBase64: bytes.toString('base64'),
+                    checksumSha256: blob.checksumSha256,
+                };
+            });
+            const files = extensionRef.files.map(file => {
+                const bytes = this.requireArchiveBinary(archiveFiles, file.archivePath, file.checksumSha256, `private file ${file.path}`);
+                return {
+                    path: file.path,
+                    sizeBytes: file.sizeBytes,
+                    updatedAt: file.updatedAt,
+                    contentBase64: bytes.toString('base64'),
+                    checksumSha256: file.checksumSha256,
+                };
+            });
+            const sqlDatabases = extensionRef.sqlDatabases.map(database => {
+                const bytes = this.requireArchiveBinary(archiveFiles, database.archivePath, database.checksumSha256, `sql database ${database.record.name}`);
+                return {
+                    record: database.record,
+                    contentBase64: bytes.toString('base64'),
+                    checksumSha256: database.checksumSha256,
+                };
+            });
+            const triviumDatabases = extensionRef.triviumDatabases.map(database => {
+                const databaseBytes = this.requireArchiveBinary(archiveFiles, database.databaseArchivePath, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
+                const nextDatabase = {
+                    record: database.record,
+                    databaseContentBase64: databaseBytes.toString('base64'),
+                    databaseChecksumSha256: database.databaseChecksumSha256,
+                };
+                if (database.mappingArchivePath && database.mappingChecksumSha256) {
+                    const mappingBytes = this.requireArchiveBinary(archiveFiles, database.mappingArchivePath, database.mappingChecksumSha256, `trivium mapping ${database.record.name}`);
+                    nextDatabase.mappingContentBase64 = mappingBytes.toString('base64');
+                    nextDatabase.mappingChecksumSha256 = database.mappingChecksumSha256;
+                }
+                return nextDatabase;
+            });
+            portablePackage.extensions.push({
+                extension,
+                grants,
+                kvEntries,
+                blobs,
+                files,
+                sqlDatabases,
+                triviumDatabases,
+            });
+        }
+        return {
+            portablePackage,
+            warnings: [],
+        };
+    }
+    validatePortablePackageArchiveManifest(manifest, archiveFiles) {
+        const seen = new Set();
+        for (const entry of manifest.entries) {
+            if (seen.has(entry.path)) {
+                throw new Error(`Portable package archive contains duplicate manifest entry: ${entry.path}`);
+            }
+            seen.add(entry.path);
+            const bytes = archiveFiles.get(entry.path);
+            if (!bytes) {
+                throw new Error(`Portable package archive is missing file: ${entry.path}`);
+            }
+            if (bytes.byteLength !== entry.sizeBytes) {
+                throw new Error(`Portable package archive file size mismatch: ${entry.path}`);
+            }
+            const checksum = hashBytes(bytes);
+            if (checksum !== entry.checksumSha256) {
+                throw new Error(`Portable package archive file checksum mismatch: ${entry.path}`);
+            }
+        }
+        const referencedPaths = new Set();
+        if (manifest.policiesPath) {
+            referencedPaths.add(manifest.policiesPath);
+        }
+        if (manifest.usageSummaryPath) {
+            referencedPaths.add(manifest.usageSummaryPath);
+        }
+        for (const extension of manifest.extensions) {
+            referencedPaths.add(extension.extensionPath);
+            referencedPaths.add(extension.grantsPath);
+            referencedPaths.add(extension.kvEntriesPath);
+            for (const blob of extension.blobs) {
+                referencedPaths.add(blob.archivePath);
+            }
+            for (const file of extension.files) {
+                referencedPaths.add(file.archivePath);
+            }
+            for (const database of extension.sqlDatabases) {
+                referencedPaths.add(database.archivePath);
+            }
+            for (const database of extension.triviumDatabases) {
+                referencedPaths.add(database.databaseArchivePath);
+                if (database.mappingArchivePath) {
+                    referencedPaths.add(database.mappingArchivePath);
+                }
+            }
+        }
+        for (const referencedPath of referencedPaths) {
+            if (!seen.has(referencedPath)) {
+                throw new Error(`Portable package archive manifest is missing entry metadata for: ${referencedPath}`);
+            }
+        }
+    }
+    parseArchiveJson(archiveFiles, archivePath, label) {
+        const bytes = archiveFiles.get(archivePath);
+        if (!bytes) {
+            throw new Error(`${label} is missing from the portable package archive`);
+        }
+        return JSON.parse(bytes.toString('utf8'));
+    }
+    requireArchiveBinary(archiveFiles, archivePath, checksumSha256, label) {
+        const bytes = archiveFiles.get(archivePath);
+        if (!bytes) {
+            throw new Error(`${label} is missing from the portable package archive`);
+        }
+        const checksum = hashBytes(bytes);
+        if (checksum !== checksumSha256) {
+            throw new Error(`${label} checksum mismatch: expected ${checksumSha256}, received ${checksum}`);
+        }
+        return bytes;
+    }
+    writePortablePackageArtifact(user, operationId, portablePackage) {
+        const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getOperationWorkDir(user, operationId), sanitizeArtifactFileName(`authority-export-package-${sanitizeTimestamp(portablePackage.manifest.generatedAt)}.authoritypkg.zip`));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+        const { manifest, files } = this.buildPortablePackageArchive(portablePackage);
+        const archiveBytes = (0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_6__.createZipArchive)([
+            {
+                path: PORTABLE_PACKAGE_ARCHIVE_MANIFEST_PATH,
+                bytes: Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
+                compression: 'deflate',
+            },
+            ...files.map(file => ({
+                path: file.path,
+                bytes: file.bytes,
+                compression: file.mediaType === 'application/json' ? 'deflate' : 'auto',
+            })),
+        ]);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, archiveBytes);
+        return {
+            artifact: buildArtifactSummary(node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(filePath), archiveBytes, 'application/zip'),
+            filePath,
+        };
+    }
+    buildPortablePackageArchive(portablePackage) {
+        const files = [];
+        const pushJsonFile = (archivePath, value) => {
+            files.push({
+                path: archivePath,
+                mediaType: 'application/json',
+                bytes: Buffer.from(JSON.stringify(value, null, 2), 'utf8'),
+            });
+            return archivePath;
+        };
+        const pushBinaryFile = (archivePath, bytes, mediaType = 'application/octet-stream') => {
+            files.push({
+                path: archivePath,
+                mediaType,
+                bytes,
+            });
+            return archivePath;
+        };
+        const policiesPath = portablePackage.policies ? pushJsonFile('policies.json', portablePackage.policies) : undefined;
+        const usageSummaryPath = portablePackage.usageSummary ? pushJsonFile('usage-summary.json', portablePackage.usageSummary) : undefined;
+        const extensions = portablePackage.extensions.map((extensionPackage, extensionIndex) => {
+            const extensionDir = `extensions/${String(extensionIndex).padStart(3, '0')}-${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionPackage.extension.id)}`;
+            const extensionPath = pushJsonFile(`${extensionDir}/extension.json`, extensionPackage.extension);
+            const grantsPath = pushJsonFile(`${extensionDir}/grants.json`, extensionPackage.grants);
+            const kvEntriesPath = pushJsonFile(`${extensionDir}/kv.json`, extensionPackage.kvEntries);
+            const blobs = extensionPackage.blobs.map((blob, blobIndex) => {
+                const bytes = decodeBase64Checked(blob.contentBase64, blob.checksumSha256, `blob ${blob.record.name}`);
+                const archivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/blobs`, blobIndex, blob.record.name || blob.record.id || 'blob.bin'), bytes, blob.record.contentType || 'application/octet-stream');
+                return {
+                    record: blob.record,
+                    archivePath,
+                    sizeBytes: bytes.byteLength,
+                    checksumSha256: hashBytes(bytes),
+                };
+            });
+            const privateFiles = extensionPackage.files.map((file, fileIndex) => {
+                const bytes = decodeBase64Checked(file.contentBase64, file.checksumSha256, `private file ${file.path}`);
+                const archivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/files`, fileIndex, file.path || 'file.bin'), bytes);
+                return {
+                    path: file.path,
+                    archivePath,
+                    sizeBytes: bytes.byteLength,
+                    updatedAt: file.updatedAt,
+                    checksumSha256: hashBytes(bytes),
+                };
+            });
+            const sqlDatabases = extensionPackage.sqlDatabases.map((database, databaseIndex) => {
+                const bytes = decodeBase64Checked(database.contentBase64, database.checksumSha256, `sql database ${database.record.name}`);
+                const archivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/sql`, databaseIndex, database.record.fileName || `${database.record.name}.sqlite`), bytes);
+                return {
+                    record: database.record,
+                    archivePath,
+                    sizeBytes: bytes.byteLength,
+                    checksumSha256: hashBytes(bytes),
+                };
+            });
+            const triviumDatabases = extensionPackage.triviumDatabases.map((database, databaseIndex) => {
+                const databaseBytes = decodeBase64Checked(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
+                const databaseArchivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/trivium`, databaseIndex, database.record.fileName || `${database.record.name}.tdb`), databaseBytes);
+                const nextDatabase = {
+                    record: database.record,
+                    databaseArchivePath,
+                    databaseSizeBytes: databaseBytes.byteLength,
+                    databaseChecksumSha256: hashBytes(databaseBytes),
+                };
+                if (database.mappingContentBase64 && database.mappingChecksumSha256) {
+                    const mappingBytes = decodeBase64Checked(database.mappingContentBase64, database.mappingChecksumSha256, `trivium mapping ${database.record.name}`);
+                    nextDatabase.mappingArchivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/trivium`, databaseIndex, `${database.record.name}.mapping.sqlite`), mappingBytes);
+                    nextDatabase.mappingSizeBytes = mappingBytes.byteLength;
+                    nextDatabase.mappingChecksumSha256 = hashBytes(mappingBytes);
+                }
+                return nextDatabase;
+            });
+            return {
+                extensionId: extensionPackage.extension.id,
+                extensionPath,
+                grantsPath,
+                kvEntriesPath,
+                blobs,
+                files: privateFiles,
+                sqlDatabases,
+                triviumDatabases,
+            };
+        });
+        const manifest = {
+            format: PORTABLE_PACKAGE_ARCHIVE_FORMAT,
+            generatedAt: portablePackage.manifest.generatedAt,
+            packageManifest: portablePackage.manifest,
+            entries: files.map(file => buildArchiveFileEntry(file)),
+            ...(policiesPath ? { policiesPath } : {}),
+            ...(usageSummaryPath ? { usageSummaryPath } : {}),
+            extensions,
+        };
+        return {
+            manifest,
+            files,
+        };
+    }
+    buildDiagnosticArchiveFiles(bundle) {
+        const files = [];
+        files.push(this.buildUtf8ArchiveFile('bundle.json', bundle));
+        files.push(this.buildUtf8ArchiveFile('probe.json', bundle.probe));
+        files.push(this.buildUtf8ArchiveFile('policies.json', bundle.policies));
+        files.push(this.buildUtf8ArchiveFile('usage-summary.json', bundle.usageSummary));
+        files.push(this.buildUtf8ArchiveFile('jobs.json', bundle.jobs));
+        files.push(this.buildUtf8ArchiveFile('extensions/index.json', bundle.extensions.map(extension => ({
+            id: extension.extension.id,
+            displayName: extension.extension.displayName,
+            storage: extension.storage,
+            jobs: extension.jobsPage,
+        }))));
+        for (const extension of bundle.extensions) {
+            files.push(this.buildUtf8ArchiveFile(`extensions/${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extension.extension.id)}.json`, extension));
+        }
+        if (bundle.releaseMetadata) {
+            files.push(this.buildUtf8ArchiveFile('release-metadata.json', bundle.releaseMetadata));
+        }
+        return files;
+    }
+    buildUtf8ArchiveFile(pathName, value) {
+        const content = JSON.stringify(value, null, 2);
+        return {
+            path: pathName,
+            mediaType: 'application/json',
+            encoding: 'utf8',
+            content,
+            sizeBytes: Buffer.byteLength(content),
+            checksumSha256: hashText(content),
+        };
+    }
+    resolveExportExtensions(user, extensionIds) {
+        return extensionIds && extensionIds.length > 0
+            ? Promise.all(extensionIds.map(async (extensionId) => {
+                const extension = await this.extensions.getExtension(user, extensionId);
+                if (!extension) {
+                    throw new Error(`Extension not found: ${extensionId}`);
+                }
+                return extension;
+            }))
+            : this.extensions.listExtensions(user);
+    }
+    recoverUserOperations(user) {
+        const recoveryKey = `${user.handle}\u0000${user.rootDir}`;
+        if (this.recoveredUsers.has(recoveryKey)) {
+            return;
+        }
+        for (const operation of this.loadOperations(user)) {
+            if (operation.status !== 'queued' && operation.status !== 'running') {
+                continue;
+            }
+            const recovered = {
+                ...operation,
+                status: 'failed',
+                progress: 0,
+                summary: '运行中的导入导出任务在服务重启后需要手动恢复',
+                error: OPERATION_RECOVERY_ERROR,
+                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+                finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            };
+            this.saveOperation(user, recovered);
+        }
+        this.recoveredUsers.add(recoveryKey);
+    }
+    markRunning(user, operation) {
+        const running = {
+            ...operation,
+            status: 'running',
+            progress: 1,
+            summary: operation.kind === 'export' ? '正在构建高层导出包' : '正在回放高层导入包',
+            startedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            warnings: [],
+        };
+        delete running.error;
+        delete running.finishedAt;
+        this.saveOperation(user, running);
+        return running;
+    }
+    updateProgress(user, operationId, completedSteps, totalSteps, summary) {
+        const operation = this.requireOperation(user, operationId);
+        const next = {
+            ...operation,
+            progress: Math.max(1, Math.min(99, Math.round((completedSteps / Math.max(1, totalSteps)) * 100))),
+            summary,
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+        };
+        this.saveOperation(user, next);
+        return next;
+    }
+    completeOperation(user, operationId, patch) {
+        const operation = this.requireOperation(user, operationId);
+        const completed = {
+            ...operation,
+            ...patch,
+            status: 'completed',
+            progress: 100,
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+        };
+        delete completed.error;
+        this.saveOperation(user, completed);
+        return completed;
+    }
+    failOperation(user, operationId, error) {
+        const operation = this.requireOperation(user, operationId);
+        const failed = {
+            ...operation,
+            status: 'failed',
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            error: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error),
+            summary: operation.kind === 'export' ? '高层导出包生成失败' : '高层导入包回放失败',
+        };
+        this.saveOperation(user, failed);
+    }
+    writeOperationArtifact(user, operationId, fileName, payload) {
+        const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getOperationWorkDir(user, operationId), sanitizeArtifactFileName(fileName));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+        const bytes = node_zlib__WEBPACK_IMPORTED_MODULE_3___default().gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, bytes);
+        return {
+            artifact: buildArtifactSummary(node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(filePath), bytes, 'application/gzip'),
+            filePath,
+        };
+    }
+    writeStandaloneArtifact(user, prefix, fileName, payload) {
+        const artifactId = `${prefix}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`;
+        const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getStandaloneArtifactsDir(user), artifactId, sanitizeArtifactFileName(fileName));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+        const bytes = node_zlib__WEBPACK_IMPORTED_MODULE_3___default().gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, bytes);
+        return {
+            artifact: buildArtifactSummary(node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(filePath), bytes, 'application/gzip'),
+            filePath,
+        };
+    }
+    loadOperations(user) {
+        const dirPath = this.getOperationsDir(user);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(dirPath)) {
+            return [];
+        }
+        return node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(dirPath)
+            .filter(entry => entry.endsWith('.json'))
+            .map(entry => (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(dirPath, entry), null))
+            .filter((entry) => Boolean(entry));
+    }
+    loadOperation(user, operationId) {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(this.getOperationStatePath(user, operationId), null);
+    }
+    requireOperation(user, operationId) {
+        const operation = this.loadOperation(user, operationId);
+        if (!operation) {
+            throw new Error('Import/export operation not found');
+        }
+        return operation;
+    }
+    saveOperation(user, operation) {
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
+    }
+    toPublicOperation(operation) {
+        const { artifactPath: _artifactPath, sourcePath: _sourcePath, ...publicOperation } = operation;
+        return publicOperation;
+    }
+    getOperationsDir(user) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getPackagesRoot(user), 'operations');
+    }
+    getStandaloneArtifactsDir(user) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getPackagesRoot(user), 'standalone');
+    }
+    getOperationStatePath(user, operationId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getOperationsDir(user), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId)}.json`);
+    }
+    getOperationWorkDir(user, operationId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getPackagesRoot(user), 'work', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId));
+    }
+    getPackagesRoot(user) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).controlDbFile), 'admin-packages');
+    }
+    resolvePrivateFilesRoot(user, extensionId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+    }
+    resolvePrivateSqlDatabaseDir(user, extensionId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+    }
+    resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
+    }
+    resolvePrivateTriviumDatabaseDir(user, extensionId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+    }
+    resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
+    }
+    resolvePrivateTriviumMappingPath(user, extensionId, databaseName) {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
+    }
+}
+function normalizeExportRequest(request) {
+    return {
+        ...(request?.extensionIds?.length ? { extensionIds: [...new Set(request.extensionIds.map(value => value.trim()).filter(Boolean))] } : {}),
+        includePolicies: request?.includePolicies !== false,
+        includeUsageSummary: request?.includeUsageSummary !== false,
+    };
+}
+function sanitizeArtifactFileName(value) {
+    const trimmed = value.trim();
+    return trimmed ? trimmed.replace(/[^a-zA-Z0-9._-]/g, '_') : `artifact-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.json.gz`;
+}
+function sanitizeTimestamp(value) {
+    return value.replace(/[:.]/g, '-');
+}
+function buildArtifactSummary(fileName, bytes, mediaType) {
+    return {
+        fileName,
+        mediaType,
+        sizeBytes: bytes.byteLength,
+        checksumSha256: hashBytes(bytes),
+    };
+}
+function buildArchiveFileEntry(file) {
+    return {
+        path: file.path,
+        mediaType: file.mediaType,
+        sizeBytes: file.bytes.byteLength,
+        checksumSha256: hashBytes(file.bytes),
+    };
+}
+function buildIndexedArchivePath(directory, index, sourceName) {
+    const normalizedSource = sourceName.replace(/\\/g, '/');
+    const baseName = node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.basename(normalizedSource) || 'entry.bin';
+    const safeBaseName = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(baseName) || 'entry.bin';
+    return `${directory}/${String(index).padStart(4, '0')}-${safeBaseName}`;
+}
+function hashBytes(value) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value).digest('hex');
+}
+function hashText(value) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value, 'utf8').digest('hex');
+}
+function tryGunzip(value) {
+    try {
+        return node_zlib__WEBPACK_IMPORTED_MODULE_3___default().gunzipSync(value);
+    }
+    catch {
+        return value;
+    }
+}
+function decodeBase64Checked(contentBase64, checksumSha256, label) {
+    const bytes = Buffer.from(contentBase64, 'base64');
+    const actual = hashBytes(bytes);
+    if (actual !== checksumSha256) {
+        throw new Error(`${label} checksum mismatch: expected ${checksumSha256}, received ${actual}`);
+    }
+    return bytes;
+}
+function newestTimestamp(left, right) {
+    if (!left) {
+        return right;
+    }
+    if (!right) {
+        return left;
+    }
+    return left.localeCompare(right) >= 0 ? left : right;
 }
 
 
@@ -6660,6 +7906,255 @@ function readResolvedReference(row) {
 
 /***/ },
 
+/***/ "./src/services/zip-archive.ts"
+/*!*************************************!*\
+  !*** ./src/services/zip-archive.ts ***!
+  \*************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   createZipArchive: () => (/* binding */ createZipArchive),
+/* harmony export */   isZipArchive: () => (/* binding */ isZipArchive),
+/* harmony export */   readZipArchive: () => (/* binding */ readZipArchive)
+/* harmony export */ });
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:zlib */ "node:zlib");
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_zlib__WEBPACK_IMPORTED_MODULE_1__);
+
+
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+const ZIP_UTF8_FLAG = 0x0800;
+const ZIP_STORE_METHOD = 0;
+const ZIP_DEFLATE_METHOD = 8;
+const ZIP_VERSION = 20;
+const ZIP_MAX_EOCD_SEARCH = 0xffff + 22;
+const CRC32_TABLE = buildCrc32Table();
+function isZipArchive(bytes) {
+    const buffer = Buffer.from(bytes);
+    return buffer.byteLength >= 4 && buffer.readUInt32LE(0) === ZIP_LOCAL_FILE_HEADER_SIGNATURE;
+}
+function createZipArchive(files) {
+    const normalizedFiles = files.map(file => normalizeInputFile(file));
+    const seen = new Set();
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    for (const file of normalizedFiles) {
+        if (seen.has(file.path)) {
+            throw new Error(`Duplicate zip entry path: ${file.path}`);
+        }
+        seen.add(file.path);
+        const encodedPath = Buffer.from(file.path, 'utf8');
+        const rawBytes = Buffer.from(file.bytes);
+        const compressed = selectCompressedBytes(rawBytes, file.compression);
+        const crc = crc32(rawBytes);
+        const { date, time } = toDosDateTime(file.modifiedAt ?? new Date());
+        const localHeader = Buffer.alloc(30);
+        localHeader.writeUInt32LE(ZIP_LOCAL_FILE_HEADER_SIGNATURE, 0);
+        localHeader.writeUInt16LE(ZIP_VERSION, 4);
+        localHeader.writeUInt16LE(ZIP_UTF8_FLAG, 6);
+        localHeader.writeUInt16LE(compressed.method, 8);
+        localHeader.writeUInt16LE(time, 10);
+        localHeader.writeUInt16LE(date, 12);
+        localHeader.writeUInt32LE(crc >>> 0, 14);
+        localHeader.writeUInt32LE(compressed.bytes.byteLength, 18);
+        localHeader.writeUInt32LE(rawBytes.byteLength, 22);
+        localHeader.writeUInt16LE(encodedPath.byteLength, 26);
+        localHeader.writeUInt16LE(0, 28);
+        localParts.push(localHeader, encodedPath, compressed.bytes);
+        const centralHeader = Buffer.alloc(46);
+        centralHeader.writeUInt32LE(ZIP_CENTRAL_DIRECTORY_SIGNATURE, 0);
+        centralHeader.writeUInt16LE(ZIP_VERSION, 4);
+        centralHeader.writeUInt16LE(ZIP_VERSION, 6);
+        centralHeader.writeUInt16LE(ZIP_UTF8_FLAG, 8);
+        centralHeader.writeUInt16LE(compressed.method, 10);
+        centralHeader.writeUInt16LE(time, 12);
+        centralHeader.writeUInt16LE(date, 14);
+        centralHeader.writeUInt32LE(crc >>> 0, 16);
+        centralHeader.writeUInt32LE(compressed.bytes.byteLength, 20);
+        centralHeader.writeUInt32LE(rawBytes.byteLength, 24);
+        centralHeader.writeUInt16LE(encodedPath.byteLength, 28);
+        centralHeader.writeUInt16LE(0, 30);
+        centralHeader.writeUInt16LE(0, 32);
+        centralHeader.writeUInt16LE(0, 34);
+        centralHeader.writeUInt16LE(0, 36);
+        centralHeader.writeUInt32LE(0, 38);
+        centralHeader.writeUInt32LE(offset, 42);
+        centralParts.push(centralHeader, encodedPath);
+        offset += localHeader.byteLength + encodedPath.byteLength + compressed.bytes.byteLength;
+    }
+    const centralDirectory = Buffer.concat(centralParts);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE, 0);
+    end.writeUInt16LE(0, 4);
+    end.writeUInt16LE(0, 6);
+    end.writeUInt16LE(normalizedFiles.length, 8);
+    end.writeUInt16LE(normalizedFiles.length, 10);
+    end.writeUInt32LE(centralDirectory.byteLength, 12);
+    end.writeUInt32LE(offset, 16);
+    end.writeUInt16LE(0, 20);
+    return Buffer.concat([...localParts, centralDirectory, end]);
+}
+function readZipArchive(bytes) {
+    const buffer = Buffer.from(bytes);
+    const endRecordOffset = findEndOfCentralDirectoryOffset(buffer);
+    const entryCount = buffer.readUInt16LE(endRecordOffset + 10);
+    const centralDirectoryOffset = buffer.readUInt32LE(endRecordOffset + 16);
+    const files = new Map();
+    let offset = centralDirectoryOffset;
+    for (let index = 0; index < entryCount; index += 1) {
+        if (offset + 46 > buffer.byteLength || buffer.readUInt32LE(offset) !== ZIP_CENTRAL_DIRECTORY_SIGNATURE) {
+            throw new Error('Invalid zip central directory');
+        }
+        const flags = buffer.readUInt16LE(offset + 8);
+        if ((flags & 0x0001) !== 0) {
+            throw new Error('Encrypted zip entries are not supported');
+        }
+        const method = buffer.readUInt16LE(offset + 10);
+        const crc = buffer.readUInt32LE(offset + 16);
+        const compressedSize = buffer.readUInt32LE(offset + 20);
+        const uncompressedSize = buffer.readUInt32LE(offset + 24);
+        const fileNameLength = buffer.readUInt16LE(offset + 28);
+        const extraLength = buffer.readUInt16LE(offset + 30);
+        const commentLength = buffer.readUInt16LE(offset + 32);
+        const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+        const fileNameStart = offset + 46;
+        const fileNameEnd = fileNameStart + fileNameLength;
+        const fileName = buffer.subarray(fileNameStart, fileNameEnd).toString('utf8');
+        const normalizedPath = normalizeArchivePath(fileName);
+        offset = fileNameEnd + extraLength + commentLength;
+        if (!normalizedPath) {
+            continue;
+        }
+        if (files.has(normalizedPath)) {
+            throw new Error(`Duplicate zip entry path: ${normalizedPath}`);
+        }
+        if (localHeaderOffset + 30 > buffer.byteLength || buffer.readUInt32LE(localHeaderOffset) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+            throw new Error(`Invalid zip local header for entry: ${normalizedPath}`);
+        }
+        const localFileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+        const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+        const compressedStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+        const compressedEnd = compressedStart + compressedSize;
+        if (compressedEnd > buffer.byteLength) {
+            throw new Error(`Zip entry exceeds archive size: ${normalizedPath}`);
+        }
+        const compressed = buffer.subarray(compressedStart, compressedEnd);
+        const rawBytes = decompressZipEntry(compressed, method, normalizedPath);
+        if (rawBytes.byteLength !== uncompressedSize) {
+            throw new Error(`Zip entry size mismatch: ${normalizedPath}`);
+        }
+        if ((crc32(rawBytes) >>> 0) !== (crc >>> 0)) {
+            throw new Error(`Zip entry checksum mismatch: ${normalizedPath}`);
+        }
+        files.set(normalizedPath, rawBytes);
+    }
+    return files;
+}
+function normalizeInputFile(file) {
+    return {
+        path: requireArchivePath(file.path),
+        bytes: Buffer.from(file.bytes),
+        modifiedAt: file.modifiedAt ?? new Date(),
+        compression: file.compression ?? 'auto',
+    };
+}
+function requireArchivePath(value) {
+    const normalized = normalizeArchivePath(value);
+    if (!normalized) {
+        throw new Error(`Invalid zip entry path: ${value}`);
+    }
+    return normalized;
+}
+function normalizeArchivePath(value) {
+    const replaced = value.replace(/\\/g, '/').trim();
+    if (!replaced) {
+        return null;
+    }
+    const trimmedLeading = replaced.replace(/^\/+/, '');
+    if (!trimmedLeading) {
+        return null;
+    }
+    if (trimmedLeading.endsWith('/')) {
+        const directoryPath = trimmedLeading.replace(/\/+$/, '');
+        return directoryPath ? null : null;
+    }
+    const normalized = node_path__WEBPACK_IMPORTED_MODULE_0___default().posix.normalize(trimmedLeading);
+    if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
+        throw new Error(`Invalid zip entry path: ${value}`);
+    }
+    return normalized;
+}
+function selectCompressedBytes(bytes, compression) {
+    if (compression === 'store') {
+        return {
+            method: ZIP_STORE_METHOD,
+            bytes,
+        };
+    }
+    const deflated = node_zlib__WEBPACK_IMPORTED_MODULE_1___default().deflateRawSync(bytes);
+    if (compression === 'deflate' || deflated.byteLength < bytes.byteLength) {
+        return {
+            method: ZIP_DEFLATE_METHOD,
+            bytes: deflated,
+        };
+    }
+    return {
+        method: ZIP_STORE_METHOD,
+        bytes,
+    };
+}
+function decompressZipEntry(bytes, method, pathName) {
+    if (method === ZIP_STORE_METHOD) {
+        return Buffer.from(bytes);
+    }
+    if (method === ZIP_DEFLATE_METHOD) {
+        return node_zlib__WEBPACK_IMPORTED_MODULE_1___default().inflateRawSync(bytes);
+    }
+    throw new Error(`Unsupported zip compression method ${method} for entry: ${pathName}`);
+}
+function findEndOfCentralDirectoryOffset(buffer) {
+    const start = Math.max(0, buffer.byteLength - ZIP_MAX_EOCD_SEARCH);
+    for (let offset = buffer.byteLength - 22; offset >= start; offset -= 1) {
+        if (buffer.readUInt32LE(offset) === ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+            return offset;
+        }
+    }
+    throw new Error('Zip end of central directory not found');
+}
+function toDosDateTime(value) {
+    const year = Math.min(2107, Math.max(1980, value.getFullYear()));
+    return {
+        date: ((year - 1980) << 9) | ((value.getMonth() + 1) << 5) | value.getDate(),
+        time: (value.getHours() << 11) | (value.getMinutes() << 5) | Math.floor(value.getSeconds() / 2),
+    };
+}
+function crc32(bytes) {
+    let crc = 0xffffffff;
+    for (const byte of bytes) {
+        crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ byte) & 0xff];
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+}
+function buildCrc32Table() {
+    const table = new Uint32Array(256);
+    for (let index = 0; index < 256; index += 1) {
+        let value = index;
+        for (let bit = 0; bit < 8; bit += 1) {
+            value = (value & 1) !== 0 ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+        }
+        table[index] = value >>> 0;
+    }
+    return table;
+}
+
+
+/***/ },
+
 /***/ "./src/store/authority-paths.ts"
 /*!**************************************!*\
   !*** ./src/store/authority-paths.ts ***!
@@ -6997,6 +8492,16 @@ module.exports = require("node:path");
 (module) {
 
 module.exports = require("node:process");
+
+/***/ },
+
+/***/ "node:zlib"
+/*!****************************!*\
+  !*** external "node:zlib" ***!
+  \****************************/
+(module) {
+
+module.exports = require("node:zlib");
 
 /***/ }
 

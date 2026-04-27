@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { AUTHORITY_VERSION } from '../version.js';
 import { DEFAULT_POLICY_STATUS } from '../constants.js';
 import { PermissionService } from './permission-service.js';
 import { PolicyService } from './policy-service.js';
@@ -268,7 +269,7 @@ function createSession(user: UserContext, declaredPermissions: SessionRecord['de
             id: 'third-party/test-extension',
             installType: 'local',
             displayName: 'Test Extension',
-            version: '0.1.0',
+            version: AUTHORITY_VERSION,
             firstSeenAt: new Date().toISOString(),
         },
         declaredPermissions,
