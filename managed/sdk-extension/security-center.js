@@ -13,14 +13,6 @@ const DEFAULT_OVERVIEW_SECTION_STATE = {
     capabilityMatrix: true,
     recentActivity: true,
 };
-const LIMIT_OPERATION_OPTIONS = [
-    { key: 'storageBlobWrite', label: '存储文件写入' },
-    { key: 'storageBlobRead', label: '存储文件读取' },
-    { key: 'privateFileWrite', label: '私有文件写入' },
-    { key: 'privateFileRead', label: '私有文件读取' },
-    { key: 'httpFetchRequest', label: 'HTTP 请求发送' },
-    { key: 'httpFetchResponse', label: 'HTTP 响应接收' },
-];
 export function bootstrapSecurityCenter() {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
 }
@@ -432,7 +424,6 @@ class SecurityCenterView {
         }
         try {
             const nextExtensions = { ...this.state.policies.extensions };
-            const nextLimitExtensions = { ...this.state.policies.limits.extensions };
             const extensionId = this.state.policyEditorExtensionId;
             if (extensionId) {
                 const entries = this.collectOverridePolicies();
@@ -442,22 +433,12 @@ class SecurityCenterView {
                 else {
                     delete nextExtensions[extensionId];
                 }
-                const limitPolicy = this.collectExtensionLimitPolicy();
-                if (limitPolicy) {
-                    nextLimitExtensions[extensionId] = limitPolicy;
-                }
-                else {
-                    delete nextLimitExtensions[extensionId];
-                }
             }
             this.state.policies = await authorityRequest('/admin/policies', {
                 method: 'POST',
                 body: {
                     defaults: this.collectDefaultPolicies(),
                     extensions: nextExtensions,
-                    limits: {
-                        extensions: nextLimitExtensions,
-                    },
                 },
             });
             toastr.success('管理员策略已保存', TOAST_TITLE);
@@ -498,20 +479,6 @@ class SecurityCenterView {
             };
         }
         return result;
-    }
-    collectExtensionLimitPolicy() {
-        const inlineThresholdBytes = {};
-        for (const { key } of LIMIT_OPERATION_OPTIONS) {
-            const inlineInput = this.root.querySelector(`[data-limit-kind="inlineThresholdBytes"][data-limit-key="${key}"]`);
-            const inlineValue = parsePositiveIntOrNull(inlineInput?.value ?? '');
-            if (inlineValue !== null) {
-                inlineThresholdBytes[key] = inlineValue;
-            }
-        }
-        if (Object.keys(inlineThresholdBytes).length === 0) {
-            return null;
-        }
-        return { inlineThresholdBytes };
     }
     addPolicyOverrideRow(entry) {
         const container = this.root.querySelector('[data-role="policy-rows"]');
@@ -713,7 +680,6 @@ class SecurityCenterView {
                             </div>
                         </div>
                     </section>
-                    ${this.renderEffectiveLimitsCard()}
                     ${this.renderOverviewCollapsibleSection('governance', 'authority-section-block', '权限治理', '授权、拒绝、策略覆盖与后台任务', `<div class="authority-governance-grid">
                             ${renderMetricTile('已接入扩展', String(this.state.extensions.length), '注册到权限中心', 'primary')}
                             ${renderMetricTile('已允许授权', String(grantedCount), '持久授权记录', 'success')}
@@ -1034,7 +1000,6 @@ class SecurityCenterView {
         }
         const extensionId = this.state.policyEditorExtensionId ?? this.state.selectedExtensionId ?? this.state.extensions[0]?.id ?? '';
         const overrides = extensionId ? Object.values(policies.extensions[extensionId] ?? {}) : [];
-        const limitPolicy = extensionId ? policies.limits.extensions[extensionId] : null;
         container.innerHTML = `
             <div class="authority-page-stack">
                 <div class="authority-page-header">
@@ -1106,39 +1071,6 @@ class SecurityCenterView {
                             <span class="authority-pill authority-pill--blocked">管理员封锁</span>
                         </div>
                         <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>
-                    </div>
-                </section>
-                <section class="authority-card authority-card--flat">
-                    <div class="authority-card__header">
-                        <div>
-                            <h3>单独的大小限制</h3>
-                            <div class="authority-muted">留空表示跟系统默认值走；填写正整数表示给这个扩展单独设上限。</div>
-                        </div>
-                        <span class="authority-pill authority-pill--admin">${escapeHtml(extensionId || '未选择扩展')}</span>
-                    </div>
-                    <div class="authority-table-wrap">
-                        <table class="authority-data-table authority-policy-matrix">
-                            <thead>
-                                <tr>
-                                    <th>场景</th>
-                                    <th>内联阈值（字节）</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${LIMIT_OPERATION_OPTIONS.map(({ key, label }) => `
-                                    <tr>
-                                        <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
-                                        <td><input type="number" min="1" step="1" data-limit-kind="inlineThresholdBytes" data-limit-key="${escapeHtml(key)}" value="${escapeHtml(String(limitPolicy?.inlineThresholdBytes?.[key] ?? ''))}" placeholder="例如 262144" /></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="authority-policy-footer">
-                        <div class="authority-chip-row">
-                            <span class="authority-pill authority-pill--prompt">留空 = 跟随默认值</span>
-                            <span class="authority-pill authority-pill--runtime">页面里会显示实际来源</span>
-                        </div>
                     </div>
                 </section>
             </div>
@@ -1442,49 +1374,6 @@ class SecurityCenterView {
             </div>
         `;
     }
-    renderEffectiveLimitsCard() {
-        const probeLimits = this.state.probe?.limits;
-        const sessionLimits = this.state.session?.limits;
-        if (!probeLimits || !sessionLimits) {
-            return '';
-        }
-        return `
-            <section class="authority-card authority-card--flat">
-                <div class="authority-section-heading">
-                    <div>
-                        <h3>当前生效的大小限制</h3>
-                        <div class="authority-muted">这里会显示本次会话实际生效的大小限制，以及系统默认值。</div>
-                    </div>
-                </div>
-                <div class="authority-chip-row">
-                    <span class="authority-pill authority-pill--prompt">分段传输每块 ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
-                </div>
-                <div class="authority-table-wrap">
-                    <table class="authority-data-table authority-policy-matrix">
-                        <thead>
-                            <tr>
-                                <th>操作</th>
-                                <th>当前会话：内联阈值</th>
-                                <th>系统默认：内联阈值</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${LIMIT_OPERATION_OPTIONS.map(({ key, label }) => `
-                                <tr>
-                                    <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
-                                    <td>${escapeHtml(this.formatEffectiveLimitValue(sessionLimits.effectiveInlineThresholdBytes[key]))}</td>
-                                    <td>${escapeHtml(this.formatEffectiveLimitValue(probeLimits.effectiveInlineThresholdBytes[key]))}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-        `;
-    }
-    formatEffectiveLimitValue(limit) {
-        return `${formatBytes(limit.bytes)} · ${this.getLimitSourceLabel(limit.source)}`;
-    }
     renderOverviewCollapsibleSection(key, className, title, description, content) {
         const isOpen = this.state.overviewSectionState[key];
         return `
@@ -1512,15 +1401,6 @@ class SecurityCenterView {
             default:
                 return '排队中';
         }
-    }
-    getLimitSourceLabel(source) {
-        if (source === 'policy') {
-            return '管理员规则';
-        }
-        if (source === 'runtime') {
-            return '系统默认';
-        }
-        return source;
     }
     toggleSections() {
         for (const section of this.root.querySelectorAll('[data-section]')) {
@@ -1593,17 +1473,6 @@ class SecurityCenterView {
         }
         return this.state.details.get(this.state.selectedExtensionId) ?? null;
     }
-}
-function parsePositiveIntOrNull(value) {
-    const trimmed = value.trim();
-    if (!trimmed) {
-        return null;
-    }
-    const parsed = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-        return null;
-    }
-    return parsed;
 }
 function base64ToBytes(content) {
     const binary = atob(content);
