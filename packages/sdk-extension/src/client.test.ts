@@ -15,6 +15,15 @@ const toastrMock = vi.hoisted(() => ({
 (globalThis as typeof globalThis & { toastr: typeof toastrMock }).toastr = toastrMock;
 
 vi.mock('./api.js', () => ({
+    AuthorityLimitError: class AuthorityLimitError extends Error {
+        constructor(message: string, public readonly status: number, payload?: { code?: string }) {
+            super(message);
+            this.name = 'AuthorityLimitError';
+            this.code = payload?.code;
+        }
+
+        readonly code: string | undefined;
+    },
     authorityRequest: authorityRequestMock,
     buildEventStreamUrl: vi.fn(() => 'http://localhost/events'),
     hostnameFromUrl: vi.fn(() => 'example.com'),
@@ -315,6 +324,41 @@ describe('AuthorityClient', () => {
 
         expect(authorityRequestMock).not.toHaveBeenCalled();
         expect(putBlobWithTransfer).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails fast with AuthorityLimitError when session-scoped transfer ceiling is exceeded', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const session = buildSession();
+        session.limits.effectiveInlineThresholdBytes.storageBlobWrite = { bytes: 8, source: 'policy' };
+        session.limits.effectiveTransferMaxBytes.storageBlobWrite = { bytes: 8, source: 'policy' };
+        const initializeTransfer = vi.fn();
+
+        Object.assign(client as object, {
+            session,
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            initializeTransfer,
+        });
+
+        await expect(client.storage.blob.put({
+            name: 'payload.txt',
+            content: 'hello world!',
+            encoding: 'utf8',
+        })).rejects.toMatchObject({
+            name: 'AuthorityLimitError',
+            status: 413,
+            code: 'limit_exceeded',
+        });
+
+        expect(initializeTransfer).not.toHaveBeenCalled();
     });
 
     it('uses probe inline thresholds when deciding private file write transfer routing', async () => {

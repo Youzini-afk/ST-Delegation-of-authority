@@ -14,7 +14,7 @@
 - **默认内容类型**：JSON
 - **会话 Header**：`x-authority-session-token`
 - **会话 Query**：`authoritySessionToken`
-- **错误格式**：通常为 `{ "error": "..." }`
+- **错误格式**：结构化 `AuthorityErrorPayload`，基础形态为 `{ "error": "...", "code": "...", "category": "...", "details": ... }`
 
 ## 2. 认证与会话
 
@@ -31,6 +31,7 @@
 - `extension`
 - 当前 grants
 - 当前 policies
+- 当前 limits
 - features
 
 ## 2.2 读取当前会话
@@ -38,6 +39,13 @@
 - `GET /session/current`
 
 要求带 `x-authority-session-token`。
+
+返回结构与 `POST /session/init` 对齐，也包含：
+
+- `grants`
+- `policies`
+- `limits`
+- `features`
 
 ## 2.3 谁需要 session
 
@@ -58,6 +66,7 @@
 - `POST /session/init`
 - `GET /session/current`
 - `POST /permissions/evaluate`
+- `POST /permissions/evaluate-batch`
 - `POST /permissions/resolve`
 
 ## 3.2 扩展与控制面视图
@@ -72,8 +81,14 @@
 - `POST /storage/kv/set`
 - `POST /storage/kv/delete`
 - `POST /storage/kv/list`
+- `POST /transfers/init`
+- `POST /transfers/:id/append`
+- `POST /transfers/:id/read`
+- `POST /transfers/:id/discard`
 - `POST /storage/blob/put`
+- `POST /storage/blob/commit-transfer`
 - `POST /storage/blob/get`
+- `POST /storage/blob/open-read`
 - `POST /storage/blob/delete`
 - `POST /storage/blob/list`
 
@@ -82,7 +97,9 @@
 - `POST /fs/private/mkdir`
 - `POST /fs/private/read-dir`
 - `POST /fs/private/write-file`
+- `POST /fs/private/write-file-transfer`
 - `POST /fs/private/read-file`
+- `POST /fs/private/open-read`
 - `POST /fs/private/delete`
 - `POST /fs/private/stat`
 
@@ -93,11 +110,13 @@
 - `POST /sql/batch`
 - `POST /sql/transaction`
 - `POST /sql/migrate`
+- `POST /sql/list-migrations`
 - `GET /sql/databases`
 
 ## 3.6 Trivium
 
 - `POST /trivium/resolve-id`
+- `POST /trivium/resolve-many`
 - `POST /trivium/insert`
 - `POST /trivium/insert-with-id`
 - `POST /trivium/upsert`
@@ -122,11 +141,15 @@
 - `POST /trivium/build-text-index`
 - `POST /trivium/flush`
 - `POST /trivium/stat`
+- `POST /trivium/compact`
+- `POST /trivium/delete-orphan-mappings`
+- `POST /trivium/list-mappings`
 - `GET /trivium/databases`
 
 ## 3.7 HTTP / Jobs / Events
 
 - `POST /http/fetch`
+- `POST /http/fetch-open`
 - `POST /jobs/create`
 - `GET /jobs`
 - `GET /jobs/:id`
@@ -163,6 +186,7 @@
 - `coreMessage`
 - `installStatus`
 - `installMessage`
+- `limits`
 - `core`
 
 `core` 内又包含：
@@ -173,6 +197,30 @@
 - `version`
 - `startedAt`
 - `health`
+
+`limits` 内除了公开 compatibility fields，还包括：
+
+- `effectiveInlineThresholdBytes`
+- `effectiveTransferMaxBytes`
+
+它们都是按操作暴露的 map，当前 key 包括：
+
+- `storageBlobWrite`
+- `storageBlobRead`
+- `privateFileWrite`
+- `privateFileRead`
+- `httpFetchRequest`
+- `httpFetchResponse`
+
+其中：
+
+- `effectiveInlineThresholdBytes`
+  - 用于决定 inline vs transfer routing
+  - 当前 source 可能为 `runtime` 或 `policy`
+
+- `effectiveTransferMaxBytes`
+  - 用于决定 transfer staging 的最大 payload
+  - 当前 source 为 `runtime`
 
 ## 4.2 `POST /permissions/evaluate`
 
@@ -194,7 +242,21 @@
 - `riskLevel`
 - `grant`
 
-## 4.3 `POST /permissions/resolve`
+## 4.3 `POST /permissions/evaluate-batch`
+
+输入：`PermissionEvaluateBatchRequest`
+
+作用：
+
+- 一次请求评估多条权限描述符
+- 不写入 grant
+- 适合 SDK 或 UI 在一次交互前预判一批能力
+
+返回：`PermissionEvaluateBatchResponse`
+
+- `results: PermissionEvaluateResponse[]`
+
+## 4.4 `POST /permissions/resolve`
 
 输入：`PermissionResolveRequest`
 
@@ -211,7 +273,7 @@
 - 把用户选择落成 session grant 或 persistent grant
 - 写审计日志
 
-## 4.4 `GET /extensions`
+## 4.5 `GET /extensions`
 
 返回的是 **控制面聚合视图**，不是简单扩展列表。
 
@@ -229,7 +291,7 @@
 
 这个接口主要给 Security Center 用。
 
-## 4.5 `GET /extensions/:id`
+## 4.6 `GET /extensions/:id`
 
 返回某扩展的聚合详情：
 
@@ -252,7 +314,7 @@
 
 这个接口主要给 Security Center 用，所以它会比普通扩展工作流接口多一层聚合和分页元数据。
 
-## 4.6 `POST /extensions/:id/grants/reset`
+## 4.7 `POST /extensions/:id/grants/reset`
 
 作用：
 
@@ -292,10 +354,26 @@
 - 当前实现没有 target 维度
 - 权限资源固定为 `storage.kv`
 
-## 6.2 Blob
+## 6.2 Transfer transport API
+
+- `POST /transfers/init`
+- `POST /transfers/:id/append`
+- `POST /transfers/:id/read`
+- `POST /transfers/:id/discard`
+
+说明：
+
+- 这是大对象 transport layer，不是新的权限资源
+- 当前支持的 `resource` 为：`storage.blob`、`fs.private`、`http.fetch`
+- `init` / `open-read` 路径内部会记录可选 `purpose`
+- `purpose` 用于匹配按操作拆分的 transfer ceiling，例如 `httpFetchRequest` / `httpFetchResponse`
+
+## 6.3 Blob
 
 - `POST /storage/blob/put`
+- `POST /storage/blob/commit-transfer`
 - `POST /storage/blob/get`
+- `POST /storage/blob/open-read`
 - `POST /storage/blob/delete`
 - `POST /storage/blob/list`
 
@@ -306,12 +384,27 @@
 - `encoding`
 - `contentType`
 
+补充：
+
+- `put`
+  - 常规 inline 写入
+
+- `commit-transfer`
+  - 将已 staged 的 `storage.blob` transfer 提交为 blob
+
+- `open-read`
+  - 会根据 `session.limits.effectiveInlineThresholdBytes.storageBlobRead` 决定返回
+  - `mode: inline` 时直接带内容
+  - `mode: transfer` 时返回 `transfer`
+
 ## 7. 私有文件 API
 
 - `POST /fs/private/mkdir`
 - `POST /fs/private/read-dir`
 - `POST /fs/private/write-file`
+- `POST /fs/private/write-file-transfer`
 - `POST /fs/private/read-file`
+- `POST /fs/private/open-read`
 - `POST /fs/private/delete`
 - `POST /fs/private/stat`
 
@@ -323,6 +416,8 @@
 - 路径会被限制在扩展私有 root 内
 - symlink 会被拒绝
 - 路径穿越会被拒绝
+- `write-file-transfer` 用于把 staged transfer 提交成私有文件
+- `open-read` 会根据 `session.limits.effectiveInlineThresholdBytes.privateFileRead` 决定 `inline` 或 `transfer`
 
 ## 8. SQL API
 
@@ -345,6 +440,7 @@
 - `batch`：多语句按顺序执行
 - `transaction`：事务执行，多语句失败则回滚
 - `migrate`：幂等迁移，默认 migration table 为 `_authority_migrations`
+- `list-migrations`：按 migration table 顺序读取当前数据库的已应用迁移记录
 - `databases`：列出当前扩展的私有 SQL 文件
 
 分页补充：
@@ -374,7 +470,10 @@ Trivium 公开 API 相对完整，支持：
 - query
 - text / keyword 索引
 - flush
+- compact
 - stat
+- delete orphan mappings
+- list mappings
 - list databases
 
 重要边界：
@@ -393,7 +492,7 @@ Trivium 公开 API 相对完整，支持：
 - 当提供 `page` 时，响应会带 `page: CursorPageInfo`
 - 默认 limit 为 100，最大 limit 为 1000
 
-## 10. `POST /http/fetch`
+## 10. `POST /http/fetch` / `POST /http/fetch-open`
 
 输入：
 
@@ -401,6 +500,15 @@ Trivium 公开 API 相对完整，支持：
 - `method?`
 - `headers?`
 - `body?`
+
+`fetch-open` 还支持：
+
+- `bodyTransferId?`
+
+并返回：
+
+- `mode: inline | transfer`
+- 当 `mode = transfer` 时返回 `transfer`
 
 权限 target：
 
@@ -418,6 +526,16 @@ http.fetch + hostname
 https://api.openai.com/v1/...
 => target = api.openai.com
 ```
+
+补充：
+
+- `POST /http/fetch`
+  - 适合直接 inline body / inline response 的普通路径
+
+- `POST /http/fetch-open`
+  - 会根据 request / response effective limits 决定是否经过 transfer staging
+  - request body 可以来自 `bodyTransferId`
+  - response 可能直接 inline，也可能返回可读 transfer
 
 ## 11. Jobs API
 
@@ -468,6 +586,7 @@ https://api.openai.com/v1/...
 
 - 全局默认策略
 - 扩展级覆盖策略
+- extension-scoped limits policy
 - `updatedAt`
 
 ## 13.2 `POST /admin/policies`
@@ -475,6 +594,12 @@ https://api.openai.com/v1/...
 作用：
 
 - 保存全局管理员策略
+
+当前 `partial` 可包含：
+
+- `defaults`
+- `extensions`
+- `limits`
 
 ## 13.3 `POST /admin/update`
 
@@ -522,8 +647,34 @@ https://api.openai.com/v1/...
 当前公开 Node adapter 的错误大多会被包装为：
 
 ```json
-{ "error": "..." }
+{
+  "error": "...",
+  "code": "validation_error",
+  "category": "validation",
+  "details": {}
+}
 ```
+
+当前常见 `category` 包括：
+
+- `permission`
+- `auth`
+- `session`
+- `validation`
+- `limit`
+- `timeout`
+- `core`
+
+当前常见 `code` 包括：
+
+- `unauthorized`
+- `invalid_session`
+- `session_user_mismatch`
+- `validation_error`
+- `limit_exceeded`
+- `timeout`
+- `core_unavailable`
+- `core_request_failed`
 
 ## 15. 给开发者和 AI 的建议
 

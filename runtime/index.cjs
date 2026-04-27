@@ -475,6 +475,27 @@ function buildEffectiveTransferMaxBytes() {
 function getEffectiveInlineThresholdBytes(key) {
     return buildEffectiveInlineThresholds()[key].bytes;
 }
+function getTransferInitLimitKey(resource, purpose) {
+    switch (resource) {
+        case 'storage.blob':
+            if (purpose && purpose !== 'storageBlobWrite') {
+                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+            }
+            return 'storageBlobWrite';
+        case 'fs.private':
+            if (purpose && purpose !== 'privateFileWrite') {
+                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+            }
+            return 'privateFileWrite';
+        case 'http.fetch':
+            if (purpose && purpose !== 'httpFetchRequest') {
+                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+            }
+            return 'httpFetchRequest';
+        default:
+            throw new Error(`Unsupported transfer resource: ${String(resource)}`);
+    }
+}
 function parseAdminUpdateAction(value) {
     return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
 }
@@ -952,7 +973,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (payload.resource !== 'http.fetch' && !await runtime.permissions.authorize(user, session, { resource: payload.resource })) {
                 throw new Error(`Permission not granted: ${payload.resource}`);
             }
-            ok(res, await runtime.transfers.init(user, session.extension.id, payload));
+            const limitKey = getTransferInitLimitKey(payload.resource, payload.purpose);
+            const maxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, limitKey);
+            ok(res, await runtime.transfers.init(user, session.extension.id, payload, maxBytes));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -1054,15 +1077,15 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 });
                 return;
             }
+            const transferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'storageBlobRead');
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'storage.blob',
                 purpose: 'storageBlobRead',
                 sourcePath: opened.sourcePath,
-            });
+            }, transferMaxBytes);
+            await runtime.audit.logUsage(user, session.extension.id, 'Blob read via transfer', { id: blobId, sizeBytes: opened.record.size });
             ok(res, {
                 mode: 'transfer',
-                record: opened.record,
-                encoding: 'base64',
                 transfer,
             });
         }
@@ -1202,12 +1225,13 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 });
                 return;
             }
+            const transferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'privateFileRead');
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'fs.private',
                 purpose: 'privateFileRead',
                 sourcePath: opened.sourcePath,
-            });
-            await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path, via: 'transfer' });
+            }, transferMaxBytes);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read via transfer', { path: payload.path, sizeBytes: opened.entry.sizeBytes });
             ok(res, {
                 mode: 'transfer',
                 entry: opened.entry,
@@ -2144,10 +2168,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 ? runtime.transfers.get(user, session.extension.id, payload.bodyTransferId, 'http.fetch')
                 : undefined;
             bodyTransferIdToDiscard = payload.bodyTransferId;
+            const responseTransferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'httpFetchResponse');
             const responseTransfer = await runtime.transfers.init(user, session.extension.id, {
                 resource: 'http.fetch',
                 purpose: 'httpFetchResponse',
-            });
+            }, responseTransferMaxBytes);
             responseTransferIdToDiscard = responseTransfer.transferId;
             const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
             const result = await runtime.http.openFetch(user, {
@@ -3554,7 +3579,7 @@ __webpack_require__.r(__webpack_exports__);
 
 class DataTransferService {
     transfers = new Map();
-    async init(user, extensionId, request) {
+    async init(user, extensionId, request, maxBytesOverride) {
         const resource = normalizeTransferResource(request.resource);
         const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
@@ -3571,7 +3596,7 @@ class DataTransferService {
             ...(purpose ? { purpose } : {}),
             filePath,
             sizeBytes: 0,
-            maxBytes: getTransferMaxBytes(resource, purpose),
+            maxBytes: resolveTransferMaxBytes(resource, purpose, maxBytesOverride),
             createdAt: timestamp,
             updatedAt: timestamp,
             direction: 'upload',
@@ -3602,10 +3627,10 @@ class DataTransferService {
             updatedAt: record.updatedAt,
         };
     }
-    async openRead(user, extensionId, request) {
+    async openRead(user, extensionId, request, maxBytesOverride) {
         const resource = normalizeTransferResource(request.resource);
         const purpose = normalizeTransferPurpose(resource, request.purpose);
-        const maxBytes = getTransferMaxBytes(resource, purpose);
+        const maxBytes = resolveTransferMaxBytes(resource, purpose, maxBytesOverride);
         const { filePath, sizeBytes } = validateReadableTransferFile(request.sourcePath);
         if (sizeBytes > maxBytes) {
             throw new Error(`Transfer exceeds ${maxBytes} bytes`);
@@ -3775,6 +3800,16 @@ function getTransferMaxBytes(resource, purpose) {
                     return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES;
             }
     }
+}
+function resolveTransferMaxBytes(resource, purpose, maxBytesOverride) {
+    const runtimeMaxBytes = getTransferMaxBytes(resource, purpose);
+    if (typeof maxBytesOverride !== 'number' || !Number.isFinite(maxBytesOverride)) {
+        return runtimeMaxBytes;
+    }
+    if (maxBytesOverride <= 0) {
+        throw new Error('Transfer maxBytes must be a positive integer');
+    }
+    return Math.min(Math.floor(maxBytesOverride), runtimeMaxBytes);
 }
 function decodeTransferChunk(content) {
     try {
@@ -4510,11 +4545,14 @@ class PermissionService {
         const policy = await this.policyService.getExtensionLimitPolicy(user, extensionId);
         return {
             effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(policy),
-            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(),
+            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(policy),
         };
     }
     async getEffectiveInlineThresholdBytes(user, extensionId, key) {
         return (await this.getEffectiveSessionLimits(user, extensionId)).effectiveInlineThresholdBytes[key].bytes;
+    }
+    async getEffectiveTransferMaxBytes(user, extensionId, key) {
+        return (await this.getEffectiveSessionLimits(user, extensionId)).effectiveTransferMaxBytes[key].bytes;
     }
     async evaluate(user, session, request) {
         const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.buildPermissionDescriptor)(request.resource, request.target);
@@ -4635,7 +4673,30 @@ class PermissionService {
     }
     buildEffectiveInlineThresholds(policy) {
         const effective = this.buildRuntimeInlineThresholds();
-        const overrides = policy?.inlineThresholdBytes;
+        return this.applyByteLimitOverrides(effective, policy?.inlineThresholdBytes);
+    }
+    buildRuntimeInlineThresholds() {
+        return {
+            storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        };
+    }
+    buildEffectiveTransferMaxBytes(policy) {
+        const effective = {
+            storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
+        };
+        return this.applyByteLimitOverrides(effective, policy?.transferMaxBytes);
+    }
+    applyByteLimitOverrides(effective, overrides) {
         if (!overrides) {
             return effective;
         }
@@ -4653,26 +4714,6 @@ class PermissionService {
             }
         }
         return effective;
-    }
-    buildRuntimeInlineThresholds() {
-        return {
-            storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-        };
-    }
-    buildEffectiveTransferMaxBytes() {
-        return {
-            storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
-            storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
-            privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
-            privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
-            httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
-            httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
-        };
     }
     getDeclarationDecision(declaredPermissions, descriptor) {
         if (!this.hasDeclaredPermissions(declaredPermissions)) {

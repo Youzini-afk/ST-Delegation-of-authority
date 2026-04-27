@@ -92,6 +92,15 @@ Node adapter 会在启动 core 前设置这些环境变量：
 
 Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 
+要注意：`/health.limits` 是 **core 内部 hard ceiling 诊断**。
+
+公开 Node adapter 另外还会通过 `/probe` 与 session 返回暴露：
+
+- `effectiveInlineThresholdBytes`
+- `effectiveTransferMaxBytes`
+
+这两类 limits 属于 adapter/public contract，不直接来自 core `/health`。
+
 ## 5. 当前内部端点清单
 
 当前 `authority-core` 对 Node adapter 暴露的内部端点如下。
@@ -242,9 +251,11 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 
 - `MAX_REQUEST_SIZE = 1 MiB`
 - `MAX_KV_VALUE_BYTES = 128 KiB`
-- `MAX_BLOB_BYTES = 2 MiB`
-- `MAX_HTTP_BODY_BYTES = 512 KiB`
-- `MAX_HTTP_RESPONSE_BYTES = 2 MiB`
+- `MAX_BLOB_BYTES = 16 MiB`
+- `MAX_HTTP_INLINE_BODY_BYTES = 512 KiB`
+- `MAX_HTTP_INLINE_RESPONSE_BYTES = 2 MiB`
+- `MAX_HTTP_BODY_BYTES = 16 MiB`
+- `MAX_HTTP_RESPONSE_BYTES = 16 MiB`
 - `MAX_EVENT_POLL_LIMIT = 200`
 - `MAX_PRIVATE_READ_DIR_LIMIT = 200`
 
@@ -252,8 +263,14 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 
 - 大对象不要塞进 KV
 - Blob 不要假设可以无限大
-- HTTP fetch 不要假设能拉无限响应体
+- HTTP fetch 要区分 inline 模式与 open/transfer 模式
 - 事件轮询和目录枚举都有上限
+
+当前实际公开层的 HTTP / transfer 行为还要再叠一层 Node adapter 限制：
+
+- core `fetch-open` 的 hard ceiling 可以高于公开 adapter 当前选择暴露的 ceiling
+- 公开 adapter 当前会把 request/response transfer ceiling 按操作收敛到 probe/session contract
+- 因此排障时要分清：**是 core 执行层硬上限触发，还是 adapter transport strategy 先触发**
 
 ## 9. Trivium open 参数
 

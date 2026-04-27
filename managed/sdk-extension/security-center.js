@@ -491,6 +491,7 @@ class SecurityCenterView {
                         </div>
                         ${this.renderJobRegistryDetails()}
                     </section>
+                    ${this.renderEffectiveLimitsCard()}
                     ${this.renderOverviewCollapsibleSection('governance', 'authority-section-block', '权限治理', '授权、拒绝、策略覆盖与后台任务', `<div class="authority-governance-grid">
                             ${renderMetricTile('已接入扩展', String(this.state.extensions.length), '注册到权限中心', 'primary')}
                             ${renderMetricTile('已允许授权', String(grantedCount), '持久授权记录', 'success')}
@@ -1001,6 +1002,63 @@ class SecurityCenterView {
                 <button type="button" class="menu_button" data-action="remove-policy-row">移除</button>
             </div>
         `;
+    }
+    renderEffectiveLimitsCard() {
+        const probeLimits = this.state.probe?.limits;
+        const sessionLimits = this.state.session?.limits;
+        if (!probeLimits || !sessionLimits) {
+            return '';
+        }
+        const operations = [
+            { key: 'storageBlobWrite', label: 'Blob 写入' },
+            { key: 'storageBlobRead', label: 'Blob 读取' },
+            { key: 'privateFileWrite', label: '私有文件写入' },
+            { key: 'privateFileRead', label: '私有文件读取' },
+            { key: 'httpFetchRequest', label: 'HTTP 请求体' },
+            { key: 'httpFetchResponse', label: 'HTTP 响应体' },
+        ];
+        return `
+            <section class="authority-card authority-card--flat">
+                <div class="authority-section-heading">
+                    <div>
+                        <h3>Effective Limits</h3>
+                        <div class="authority-muted">展示当前 session 生效值、probe 基线值以及 policy source。</div>
+                    </div>
+                </div>
+                <div class="authority-chip-row">
+                    <span class="authority-pill authority-pill--prompt">chunk ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
+                    <span class="authority-pill authority-pill--prompt">legacy inline ${escapeHtml(formatBytes(probeLimits.dataTransferInlineThresholdBytes))}</span>
+                    <span class="authority-pill authority-pill--prompt">legacy transfer ${escapeHtml(formatBytes(probeLimits.maxDataTransferBytes))}</span>
+                </div>
+                <div class="authority-table-wrap">
+                    <table class="authority-data-table authority-policy-matrix">
+                        <thead>
+                            <tr>
+                                <th>操作</th>
+                                <th>Session Inline</th>
+                                <th>Session Transfer</th>
+                                <th>Probe Inline</th>
+                                <th>Probe Transfer</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${operations.map(({ key, label }) => `
+                                <tr>
+                                    <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
+                                    <td>${escapeHtml(this.formatEffectiveLimitValue(sessionLimits.effectiveInlineThresholdBytes[key]))}</td>
+                                    <td>${escapeHtml(this.formatEffectiveLimitValue(sessionLimits.effectiveTransferMaxBytes[key]))}</td>
+                                    <td>${escapeHtml(this.formatEffectiveLimitValue(probeLimits.effectiveInlineThresholdBytes[key]))}</td>
+                                    <td>${escapeHtml(this.formatEffectiveLimitValue(probeLimits.effectiveTransferMaxBytes[key]))}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        `;
+    }
+    formatEffectiveLimitValue(limit) {
+        return `${formatBytes(limit.bytes)} · ${limit.source}`;
     }
     renderOverviewCollapsibleSection(key, className, title, description, content) {
         const isOpen = this.state.overviewSectionState[key];

@@ -294,6 +294,36 @@ extension:<extensionId>
 - 事件订阅是按 channel 控制的
 - 权限也是按 channel 细分的
 
+## 7.9 limits 与 transfer 模型
+
+这里有一个很容易被误解的点：
+
+- `storage.blob`、`fs.private`、`http.fetch` 是 **权限资源**
+- `storage.blob`、`fs.private`、`http.fetch` 也可能经过 `transfers/*` 这套 **运输层**
+- 但 `transfers/*` 本身不是新的公开权限资源，只是大对象路径的 transport strategy
+
+当前对外暴露的 limits 需要按三层理解：
+
+- **core hard ceiling**
+  - 由 `authority-core` 编译时常量决定
+  - 主要通过 `core.health.limits` 暴露诊断
+
+- **adapter transfer ceiling**
+  - 由 Node adapter / `DataTransferService` 控制
+  - 现在按操作拆成 `storageBlob*`、`privateFile*`、`httpFetch*`
+  - 通过 `probe.limits.effectiveTransferMaxBytes` 与 `session.limits.effectiveTransferMaxBytes` 暴露
+
+- **effective inline threshold**
+  - 决定结果是 inline 还是 transfer
+  - 通过 `probe.limits.effectiveInlineThresholdBytes` 与 `session.limits.effectiveInlineThresholdBytes` 暴露
+  - 当前 source 可能为 `runtime` 或 `policy`
+
+当前 limits policy surface 的真实边界是：
+
+- inline threshold 可被 extension-scoped policy 下压
+- transfer ceiling 仍然是 runtime-only
+- 公开兼容字段 `maxDataTransferBytes` 仍保留，但它只是 generic compatibility max，不再代表每个操作都共享同一 ceiling
+
 ## 8. 私有文件安全边界
 
 `fs.private` 这部分最需要写清楚，因为它最容易被误用。

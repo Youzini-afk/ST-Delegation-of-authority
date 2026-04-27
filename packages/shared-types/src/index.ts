@@ -90,7 +90,10 @@ export type AuthorityInlineThresholdKey =
     | 'httpFetchRequest'
     | 'httpFetchResponse';
 
-export type AuthorityInlineThresholdOverrides = Partial<Record<AuthorityInlineThresholdKey, number>>;
+export type AuthorityOperationByteOverrides = Partial<Record<AuthorityInlineThresholdKey, number>>;
+
+export type AuthorityInlineThresholdOverrides = AuthorityOperationByteOverrides;
+export type AuthorityTransferMaxOverrides = AuthorityOperationByteOverrides;
 
 export interface AuthorityEffectiveBytesLimit {
     bytes: number;
@@ -103,6 +106,7 @@ export type AuthorityEffectiveInlineThresholds = AuthorityEffectiveOperationByte
 
 export interface AuthorityExtensionLimitsPolicy {
     inlineThresholdBytes?: AuthorityInlineThresholdOverrides;
+    transferMaxBytes?: AuthorityTransferMaxOverrides;
 }
 
 export interface AuthorityLimitsPolicyState {

@@ -47,7 +47,7 @@ interface DataTransferRecord {
 export class DataTransferService {
     private readonly transfers = new Map<string, DataTransferRecord>();
 
-    async init(user: UserContext, extensionId: string, request: DataTransferInitRequest): Promise<DataTransferInitResponse> {
+    async init(user: UserContext, extensionId: string, request: DataTransferInitRequest, maxBytesOverride?: number): Promise<DataTransferInitResponse> {
         const resource = normalizeTransferResource(request.resource);
         const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = crypto.randomUUID();
@@ -65,7 +65,7 @@ export class DataTransferService {
             ...(purpose ? { purpose } : {}),
             filePath,
             sizeBytes: 0,
-            maxBytes: getTransferMaxBytes(resource, purpose),
+            maxBytes: resolveTransferMaxBytes(resource, purpose, maxBytesOverride),
             createdAt: timestamp,
             updatedAt: timestamp,
             direction: 'upload',
@@ -99,10 +99,10 @@ export class DataTransferService {
         };
     }
 
-    async openRead(user: UserContext, extensionId: string, request: DataTransferOpenReadRequest): Promise<DataTransferInitResponse> {
+    async openRead(user: UserContext, extensionId: string, request: DataTransferOpenReadRequest, maxBytesOverride?: number): Promise<DataTransferInitResponse> {
         const resource = normalizeTransferResource(request.resource);
         const purpose = normalizeTransferPurpose(resource, request.purpose);
-        const maxBytes = getTransferMaxBytes(resource, purpose);
+        const maxBytes = resolveTransferMaxBytes(resource, purpose, maxBytesOverride);
         const { filePath, sizeBytes } = validateReadableTransferFile(request.sourcePath);
         if (sizeBytes > maxBytes) {
             throw new Error(`Transfer exceeds ${maxBytes} bytes`);
@@ -295,6 +295,21 @@ function getTransferMaxBytes(resource: DataTransferResource, purpose?: Authority
                     return MAX_DATA_TRANSFER_BYTES;
             }
     }
+}
+
+function resolveTransferMaxBytes(
+    resource: DataTransferResource,
+    purpose?: AuthorityInlineThresholdKey,
+    maxBytesOverride?: number,
+): number {
+    const runtimeMaxBytes = getTransferMaxBytes(resource, purpose);
+    if (typeof maxBytesOverride !== 'number' || !Number.isFinite(maxBytesOverride)) {
+        return runtimeMaxBytes;
+    }
+    if (maxBytesOverride <= 0) {
+        throw new Error('Transfer maxBytes must be a positive integer');
+    }
+    return Math.min(Math.floor(maxBytesOverride), runtimeMaxBytes);
 }
 
 function decodeTransferChunk(content: string): Buffer {

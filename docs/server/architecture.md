@@ -49,6 +49,7 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 - 注册 SillyTavern 插件路由
 - 会话创建与校验
 - 权限决策组合
+- limits 决策组合（effective inline thresholds / transfer ceilings）
 - 审计日志写入
 - 存储路径解析
 - 聚合扩展详情、活动与作业视图
@@ -97,6 +98,7 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 - `events`
 - `audit`
 - `core`
+- `transfers`
 - `extensions`
 - `install`
 - `policies`
@@ -106,6 +108,7 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 - `files`
 - `http`
 - `jobs`
+- `trivium`
 
 这意味着：
 
@@ -157,7 +160,32 @@ browser EventSource
 - 当前公开层只提供 **订阅**，没有公开的“任意事件发布”HTTP 路由
 - SSE 是基于控制面事件轮询桥接，不是纯内存广播
 
-## 5.4 Security Center 扩展详情
+## 5.4 大对象读写与动态 inline / transfer 分流
+
+```text
+AuthoritySDK.storage.blob.get() / fs.readFile() / http.fetch()
+  -> Node adapter 先做 session + permission
+  -> PermissionService 返回 session-scoped effective limits
+  -> 若 payload / response 小于 effective inline threshold
+       -> 直接走 inline 响应
+  -> 否则
+       -> 走 DataTransferService staging + read/discard
+```
+
+这里要区分三件事：
+
+- `effectiveInlineThresholdBytes`
+  - 决定某个操作应返回 inline 还是 transfer
+  - 当前可能来自 `runtime` 或 extension-scoped `policy`
+
+- `effectiveTransferMaxBytes`
+  - 决定某个操作允许使用多大的 transfer payload
+  - 当前来源为 `runtime`
+
+- `core.health.limits`
+  - 是内部执行层的 hard ceiling 诊断，不等于公开 adapter 一定完全暴露这些上限
+
+## 5.5 Security Center 扩展详情
 
 ```text
 Security Center
@@ -272,6 +300,23 @@ prompt
 ```
 
 这意味着如果没有管理员策略、没有持久授权、没有会话授权，公开 API 会把该能力视为“需要提示/未直接放行”。
+
+同一条请求还有一条独立但相关的 limits 决策链：
+
+- **access policy / grant**
+  - 决定这条请求是否允许执行
+
+- **effective inline thresholds**
+  - 决定执行后是否走 inline vs transfer
+
+- **effective transfer ceilings**
+  - 决定 transfer 路径本身的最大 payload
+
+当前实现中：
+
+- inline threshold 可以被 extension-scoped limits policy 下压
+- transfer ceiling 仍然是 runtime-only
+- 这两类 effective limits 会通过 `/probe` 与 session 返回对外暴露
 
 ## 9. 控制面数据与数据面数据
 

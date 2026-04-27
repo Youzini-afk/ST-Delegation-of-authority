@@ -107,6 +107,36 @@
 - 不要为 audit / jobs / events / SQL / Trivium 再发明一套新的分页 envelope
 - 区分“公开工作流接口”和“控制面聚合接口”的分页语义
 
+## 2.7 修改 limits / transfer 行为
+
+优先看：
+
+- `packages/shared-types/src/index.ts`
+- `packages/server-plugin/src/constants.ts`
+- `packages/server-plugin/src/services/permission-service.ts`
+- `packages/server-plugin/src/services/data-transfer-service.ts`
+- `packages/server-plugin/src/routes.ts`
+- `packages/sdk-extension/src/client.ts`
+- `crates/authority-core/src/main.rs`
+
+先分清你改的是哪一层：
+
+- **core hard ceiling**
+  - 例如 core 内部请求、blob、HTTP、event poll 的编译时上限
+
+- **adapter transfer ceiling**
+  - 例如 `effectiveTransferMaxBytes` / `purpose` 驱动的 transfer max bytes
+
+- **effective inline threshold**
+  - 例如 `effectiveInlineThresholdBytes` 决定 inline vs transfer 的阈值
+
+最常见误区：
+
+- 只改了常量，没改 `/probe` / session 合同
+- 只改了 probe，没改 SDK routing
+- 只改了 routing，没改 `DataTransferService`
+- 把 public adapter limits 和 core `/health.limits` 混为一谈
+
 ## 3. 对 AI 最重要的接口边界
 
 ## 3.1 前端应调用什么
@@ -162,6 +192,7 @@
 - **Security Center 是否要显示它？**
 - **是否需要审计日志？**
 - **是否需要聚合进扩展详情页的 storage/activity/jobs？**
+- **如果它影响 payload 路径，是否还要更新 `/probe` / session limits 合同？**
 
 ## 5. 何时必须更新 installable
 

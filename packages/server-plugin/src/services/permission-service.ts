@@ -63,7 +63,7 @@ export class PermissionService {
         const policy = await this.policyService.getExtensionLimitPolicy(user, extensionId);
         return {
             effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(policy),
-            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(),
+            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(policy),
         };
     }
 
@@ -73,6 +73,14 @@ export class PermissionService {
         key: AuthorityInlineThresholdKey,
     ): Promise<number> {
         return (await this.getEffectiveSessionLimits(user, extensionId)).effectiveInlineThresholdBytes[key].bytes;
+    }
+
+    async getEffectiveTransferMaxBytes(
+        user: UserContext,
+        extensionId: string,
+        key: AuthorityInlineThresholdKey,
+    ): Promise<number> {
+        return (await this.getEffectiveSessionLimits(user, extensionId)).effectiveTransferMaxBytes[key].bytes;
     }
 
     async evaluate(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest): Promise<PermissionEvaluateResponse> {
@@ -211,7 +219,37 @@ export class PermissionService {
 
     private buildEffectiveInlineThresholds(policy: AuthorityExtensionLimitsPolicy | null): AuthorityEffectiveInlineThresholds {
         const effective = this.buildRuntimeInlineThresholds();
-        const overrides = policy?.inlineThresholdBytes;
+        return this.applyByteLimitOverrides(effective, policy?.inlineThresholdBytes);
+    }
+
+    private buildRuntimeInlineThresholds(): AuthorityEffectiveInlineThresholds {
+        return {
+            storageBlobWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        };
+    }
+
+    private buildEffectiveTransferMaxBytes(policy: AuthorityExtensionLimitsPolicy | null): AuthorityEffectiveOperationByteLimits {
+        const effective: AuthorityEffectiveOperationByteLimits = {
+            storageBlobWrite: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
+        };
+
+        return this.applyByteLimitOverrides(effective, policy?.transferMaxBytes);
+    }
+
+    private applyByteLimitOverrides(
+        effective: AuthorityEffectiveOperationByteLimits,
+        overrides: AuthorityExtensionLimitsPolicy['inlineThresholdBytes'] | AuthorityExtensionLimitsPolicy['transferMaxBytes'] | undefined,
+    ): AuthorityEffectiveOperationByteLimits {
         if (!overrides) {
             return effective;
         }
@@ -232,28 +270,6 @@ export class PermissionService {
         }
 
         return effective;
-    }
-
-    private buildRuntimeInlineThresholds(): AuthorityEffectiveInlineThresholds {
-        return {
-            storageBlobWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            storageBlobRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            privateFileWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            privateFileRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            httpFetchRequest: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-            httpFetchResponse: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
-        };
-    }
-
-    private buildEffectiveTransferMaxBytes(): AuthorityEffectiveOperationByteLimits {
-        return {
-            storageBlobWrite: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
-            storageBlobRead: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
-            privateFileWrite: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
-            privateFileRead: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
-            httpFetchRequest: { bytes: MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
-            httpFetchResponse: { bytes: MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
-        };
     }
 
     private getDeclarationDecision(

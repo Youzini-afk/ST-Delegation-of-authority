@@ -1019,6 +1019,8 @@ struct ControlPolicyEntry {
 struct ControlExtensionLimitsPolicy {
     #[serde(default)]
     inline_threshold_bytes: HashMap<String, u64>,
+    #[serde(default)]
+    transfer_max_bytes: HashMap<String, u64>,
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -8021,9 +8023,18 @@ fn validate_policy_entry(entry: &ControlPolicyEntry) -> Result<(), ApiError> {
 }
 
 fn validate_extension_limits_policy(policy: &ControlExtensionLimitsPolicy) -> Result<(), ApiError> {
-    for (key, value) in &policy.inline_threshold_bytes {
+    validate_extension_limits_entries("limits.inlineThresholdBytes", &policy.inline_threshold_bytes)?;
+    validate_extension_limits_entries("limits.transferMaxBytes", &policy.transfer_max_bytes)?;
+    Ok(())
+}
+
+fn validate_extension_limits_entries(
+    field_name: &str,
+    entries: &HashMap<String, u64>,
+) -> Result<(), ApiError> {
+    for (key, value) in entries {
         validate_one_of(
-            "limits.inlineThresholdBytes.key",
+            &format!("{}.key", field_name),
             key,
             &[
                 "storageBlobWrite",
@@ -8037,10 +8048,11 @@ fn validate_extension_limits_policy(policy: &ControlExtensionLimitsPolicy) -> Re
         if *value == 0 {
             return Err(ApiError {
                 status_code: 400,
-                message: format!("limits.inlineThresholdBytes.{} must be greater than 0", key),
+                message: format!("{}.{} must be greater than 0", field_name, key),
             });
         }
     }
+
     Ok(())
 }
 
@@ -9528,6 +9540,10 @@ mod tests {
                                 String::from("storageBlobWrite"),
                                 1024,
                             )]),
+                            transfer_max_bytes: HashMap::from([(
+                                String::from("httpFetchResponse"),
+                                2048,
+                            )]),
                         },
                     )]),
                 }),
@@ -9536,6 +9552,7 @@ mod tests {
         .expect("control policies save should succeed");
 
         assert_eq!(saved["limits"]["extensions"]["third-party/ext-a"]["inlineThresholdBytes"]["storageBlobWrite"], json!(1024));
+        assert_eq!(saved["limits"]["extensions"]["third-party/ext-a"]["transferMaxBytes"]["httpFetchResponse"], json!(2048));
 
         let loaded = handle_control_policies_get(ControlPoliciesRequest {
             db_path,
@@ -9544,6 +9561,7 @@ mod tests {
         .expect("control policies get should succeed");
 
         assert_eq!(loaded["limits"]["extensions"]["third-party/ext-a"]["inlineThresholdBytes"]["storageBlobWrite"], json!(1024));
+        assert_eq!(loaded["limits"]["extensions"]["third-party/ext-a"]["transferMaxBytes"]["httpFetchResponse"], json!(2048));
     }
 
     fn test_db_path(name: &str) -> String {

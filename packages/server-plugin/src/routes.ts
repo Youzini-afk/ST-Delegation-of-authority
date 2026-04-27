@@ -308,6 +308,28 @@ function getEffectiveInlineThresholdBytes(key: InlineThresholdKey): number {
     return buildEffectiveInlineThresholds()[key].bytes;
 }
 
+function getTransferInitLimitKey(resource: DataTransferInitRequest['resource'], purpose?: InlineThresholdKey): InlineThresholdKey {
+    switch (resource) {
+        case 'storage.blob':
+            if (purpose && purpose !== 'storageBlobWrite') {
+                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+            }
+            return 'storageBlobWrite';
+        case 'fs.private':
+            if (purpose && purpose !== 'privateFileWrite') {
+                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+            }
+            return 'privateFileWrite';
+        case 'http.fetch':
+            if (purpose && purpose !== 'httpFetchRequest') {
+                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+            }
+            return 'httpFetchRequest';
+        default:
+            throw new Error(`Unsupported transfer resource: ${String(resource)}`);
+    }
+}
+
 function parseAdminUpdateAction(value: unknown): AdminUpdateAction {
     return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
 }
@@ -876,7 +898,9 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: ${payload.resource}`);
             }
 
-            ok(res, await runtime.transfers.init(user, session.extension.id, payload));
+            const limitKey = getTransferInitLimitKey(payload.resource, payload.purpose);
+            const maxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, limitKey);
+            ok(res, await runtime.transfers.init(user, session.extension.id, payload, maxBytes));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -996,15 +1020,15 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 return;
             }
 
+            const transferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'storageBlobRead');
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'storage.blob',
                 purpose: 'storageBlobRead',
                 sourcePath: opened.sourcePath,
-            });
+            }, transferMaxBytes);
+            await runtime.audit.logUsage(user, session.extension.id, 'Blob read via transfer', { id: blobId, sizeBytes: opened.record.size });
             ok(res, {
                 mode: 'transfer',
-                record: opened.record,
-                encoding: 'base64',
                 transfer,
             });
         } catch (error) {
@@ -1153,12 +1177,13 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 return;
             }
 
+            const transferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'privateFileRead');
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'fs.private',
                 purpose: 'privateFileRead',
                 sourcePath: opened.sourcePath,
-            });
-            await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path, via: 'transfer' });
+            }, transferMaxBytes);
+            await runtime.audit.logUsage(user, session.extension.id, 'Private file read via transfer', { path: payload.path, sizeBytes: opened.entry.sizeBytes });
             ok(res, {
                 mode: 'transfer',
                 entry: opened.entry,
@@ -2140,10 +2165,11 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 : undefined;
             bodyTransferIdToDiscard = payload.bodyTransferId;
 
+            const responseTransferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'httpFetchResponse');
             const responseTransfer = await runtime.transfers.init(user, session.extension.id, {
                 resource: 'http.fetch',
                 purpose: 'httpFetchResponse',
-            });
+            }, responseTransferMaxBytes);
             responseTransferIdToDiscard = responseTransfer.transferId;
             const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
             const result = await runtime.http.openFetch(user, {

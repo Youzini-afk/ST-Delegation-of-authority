@@ -160,6 +160,34 @@ describe('PermissionService', () => {
         expect(limits.effectiveInlineThresholdBytes.httpFetchResponse).toEqual({ bytes: 2048, source: 'policy' });
         expect(limits.effectiveInlineThresholdBytes.privateFileRead.source).toBe('runtime');
     });
+
+    it('derives effective transfer ceilings from extension limit policy', async () => {
+        const user = createUser(false);
+        const admin = createUser(true);
+        const session = createSession(user);
+        const core = createMockCore();
+        const policies = new PolicyService(core);
+        const permissions = new PermissionService(policies, core);
+
+        await policies.saveGlobalPolicies(admin, {
+            limits: {
+                extensions: {
+                    [session.extension.id]: {
+                        transferMaxBytes: {
+                            storageBlobWrite: 1024,
+                            httpFetchResponse: 2048,
+                            privateFileRead: Number.MAX_SAFE_INTEGER,
+                        },
+                    },
+                },
+            },
+        });
+
+        const limits = await permissions.getEffectiveSessionLimits(user, session.extension.id);
+        expect(limits.effectiveTransferMaxBytes.storageBlobWrite).toEqual({ bytes: 1024, source: 'policy' });
+        expect(limits.effectiveTransferMaxBytes.httpFetchResponse).toEqual({ bytes: 2048, source: 'policy' });
+        expect(limits.effectiveTransferMaxBytes.privateFileRead.source).toBe('runtime');
+    });
 });
 
 function createMockCore(): CoreService {

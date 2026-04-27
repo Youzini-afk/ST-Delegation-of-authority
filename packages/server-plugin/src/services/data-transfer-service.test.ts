@@ -67,6 +67,35 @@ describe('DataTransferService', () => {
         })).rejects.toThrow(`Transfer exceeds ${MAX_HTTP_RESPONSE_BYTES} bytes`);
     });
 
+    it('enforces effective maxBytes overrides for staged upload transfers', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+
+        const initialized = await transfers.init(user, 'third-party/ext-a', {
+            resource: 'storage.blob',
+            purpose: 'storageBlobWrite',
+        }, 8);
+
+        expect(initialized.maxBytes).toBe(8);
+        await expect(transfers.append(user, 'third-party/ext-a', initialized.transferId, {
+            offset: 0,
+            content: Buffer.from('hello authority', 'utf8').toString('base64'),
+        })).rejects.toThrow('Transfer exceeds 8 bytes');
+    });
+
+    it('enforces effective maxBytes overrides for open-read transfers', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+        const sourcePath = path.join(user.rootDir, 'policy-limited-download.bin');
+        fs.writeFileSync(sourcePath, Buffer.from('hello authority', 'utf8'));
+
+        await expect(transfers.openRead(user, 'third-party/ext-a', {
+            resource: 'storage.blob',
+            purpose: 'storageBlobRead',
+            sourcePath,
+        }, 8)).rejects.toThrow('Transfer exceeds 8 bytes');
+    });
+
     it('reads chunked payloads from existing files without deleting the source file', async () => {
         const user = createUser(dirs);
         const transfers = new DataTransferService();
