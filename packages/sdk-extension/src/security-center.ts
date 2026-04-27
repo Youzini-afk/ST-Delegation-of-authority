@@ -3,6 +3,8 @@ import type {
     AuthorityInlineThresholdKey,
     AuthorityJobRegistryEntry,
     AuthorityPolicyEntry,
+    DataTransferInitResponse,
+    DataTransferReadResponse,
     PermissionResource,
     PermissionStatus,
     SessionInitResponse,
@@ -46,15 +48,19 @@ import type {
     CenterTab,
     AdminUpdateAction,
     AdminUpdateResponse,
+    ArtifactDownloadResponse,
     DiagnosticBundleResponse,
     ExtensionDetailResponse,
     OverviewSectionKey,
     OverviewSectionState,
+    PackageImportMode,
+    PackageOperation,
     ExtensionSummary,
     PoliciesResponse,
     ProbeResponse,
     SecurityCenterOpenOptions,
     SecurityCenterState,
+    UsageSummaryResponse,
 } from './security-center/types.js';
 import {
     bootstrapSecurityCenter as bootstrapSecurityCenterHost,
@@ -104,6 +110,7 @@ class SecurityCenterView {
             isAdmin: false,
             probe: null,
             session: null,
+            usageSummary: null,
             extensions: [],
             details: new Map(),
             selectedExtensionId: focusExtensionId ?? null,
@@ -112,6 +119,8 @@ class SecurityCenterView {
             extensionFilter: '',
             policies: null,
             policyEditorExtensionId: focusExtensionId ?? null,
+            packageOperations: [],
+            packageActionInProgress: false,
             updateResult: null,
             updateInProgress: false,
         };
@@ -206,6 +215,37 @@ class SecurityCenterView {
             const exportDiagnosticBundleButton = target.closest<HTMLElement>('[data-action="export-diagnostic-bundle"]');
             if (exportDiagnosticBundleButton) {
                 void this.exportDiagnosticBundle();
+                return;
+            }
+
+            const exportDiagnosticArchiveButton = target.closest<HTMLElement>('[data-action="export-diagnostic-archive"]');
+            if (exportDiagnosticArchiveButton) {
+                void this.exportDiagnosticArchive();
+                return;
+            }
+
+            const exportPackageButton = target.closest<HTMLElement>('[data-action="export-portable-package"]');
+            if (exportPackageButton) {
+                void this.exportPortablePackage();
+                return;
+            }
+
+            const importPackageButton = target.closest<HTMLElement>('[data-action="import-portable-package"]');
+            if (importPackageButton) {
+                void this.importPortablePackage();
+                return;
+            }
+
+            const resumePackageButton = target.closest<HTMLElement>('[data-action="resume-package-operation"]');
+            if (resumePackageButton?.dataset.operationId) {
+                void this.resumePackageOperation(resumePackageButton.dataset.operationId);
+                return;
+            }
+
+            const downloadPackageButton = target.closest<HTMLElement>('[data-action="download-package-operation"]');
+            if (downloadPackageButton?.dataset.operationId) {
+                void this.downloadPackageOperation(downloadPackageButton.dataset.operationId);
+                return;
             }
         });
 
@@ -259,9 +299,20 @@ class SecurityCenterView {
             this.state.details = new Map(detailEntries);
             this.state.selectedExtensionId = this.resolveSelectedExtensionId();
             this.state.policyEditorExtensionId = this.resolvePolicyEditorExtensionId();
-            this.state.policies = this.state.isAdmin
-                ? await authorityRequest<PoliciesResponse>('/admin/policies')
-                : null;
+            if (this.state.isAdmin) {
+                const [policies, usageSummary, packageOperations] = await Promise.all([
+                    authorityRequest<PoliciesResponse>('/admin/policies'),
+                    authorityRequest<UsageSummaryResponse>('/admin/usage-summary'),
+                    authorityRequest<{ operations: PackageOperation[] }>('/admin/import-export/operations'),
+                ]);
+                this.state.policies = policies;
+                this.state.usageSummary = usageSummary;
+                this.state.packageOperations = packageOperations.operations;
+            } else {
+                this.state.policies = null;
+                this.state.usageSummary = null;
+                this.state.packageOperations = [];
+            }
 
             if (!this.state.isAdmin && (this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
                 this.state.selectedTab = 'overview';
@@ -313,6 +364,142 @@ class SecurityCenterView {
             toastr.success('诊断包已导出', TOAST_TITLE);
         } catch (error) {
             toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+    }
+
+    private async exportDiagnosticArchive(): Promise<void> {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+
+        try {
+            const response = await authorityRequest<ArtifactDownloadResponse>('/admin/diagnostic-bundle/archive', { method: 'POST' });
+            await this.downloadArtifact(response);
+            toastr.success('诊断归档已导出', TOAST_TITLE);
+        } catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        } finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+
+    private async exportPortablePackage(): Promise<void> {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+
+        try {
+            const operation = await authorityRequest<PackageOperation>('/admin/import-export/export', {
+                method: 'POST',
+                body: {},
+            });
+            toastr.success(`导出任务已启动：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+            this.state.selectedTab = 'updates';
+            void this.render();
+        } catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        } finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+
+    private async importPortablePackage(): Promise<void> {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+
+        const fileInput = this.root.querySelector<HTMLInputElement>('[data-role="import-package-file"]');
+        const modeSelect = this.root.querySelector<HTMLSelectElement>('[data-role="import-package-mode"]');
+        const file = fileInput?.files?.[0] ?? null;
+        if (!file) {
+            toastr.warning('请先选择要导入的高层包文件', TOAST_TITLE);
+            return;
+        }
+
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+
+        try {
+            const transfer = await authorityRequest<DataTransferInitResponse>('/admin/import-export/import-transfer/init', {
+                method: 'POST',
+                body: { sizeBytes: file.size },
+            });
+            await this.uploadFileToTransfer(file, transfer);
+            const mode = (modeSelect?.value === 'merge' ? 'merge' : 'replace') as PackageImportMode;
+            const operation = await authorityRequest<PackageOperation>('/admin/import-export/import', {
+                method: 'POST',
+                body: {
+                    transferId: transfer.transferId,
+                    mode,
+                    fileName: file.name,
+                },
+            });
+            if (fileInput) {
+                fileInput.value = '';
+            }
+            toastr.success(`导入任务已启动：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+            this.state.selectedTab = 'updates';
+            void this.render();
+        } catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        } finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+
+    private async resumePackageOperation(operationId: string): Promise<void> {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+
+        try {
+            const operation = await authorityRequest<PackageOperation>(`/admin/import-export/operations/${encodeURIComponent(operationId)}/resume`, {
+                method: 'POST',
+            });
+            toastr.success(`任务已恢复：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+            void this.render();
+        } catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        } finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+
+    private async downloadPackageOperation(operationId: string): Promise<void> {
+        if (!this.state.isAdmin || this.state.packageActionInProgress) {
+            return;
+        }
+
+        this.state.packageActionInProgress = true;
+        void this.renderUpdatesSection();
+
+        try {
+            const response = await authorityRequest<ArtifactDownloadResponse>(`/admin/import-export/operations/${encodeURIComponent(operationId)}/open-download`, {
+                method: 'POST',
+            });
+            await this.downloadArtifact(response);
+            toastr.success('导出包已下载', TOAST_TITLE);
+        } catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        } finally {
+            this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
         }
     }
 
@@ -1138,9 +1325,14 @@ class SecurityCenterView {
 
         const probe = this.state.probe;
         const result = this.state.updateResult;
+        const usageSummary = this.state.usageSummary;
+        const packageOperations = [...this.state.packageOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         const installPath = result?.git?.pluginRoot ?? '未获取';
         const pullButtonLabel = this.state.updateInProgress ? '更新中…' : '更新服务端插件';
         const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端插件';
+        const packageButtonLabel = this.state.packageActionInProgress ? '处理中…' : '生成高层导出包';
+        const diagnosticArchiveLabel = this.state.packageActionInProgress ? '处理中…' : '导出诊断归档';
+        const importButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导入高层包';
 
         container.innerHTML = `
             <div class="authority-page-stack">
@@ -1148,11 +1340,13 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">更新管理</div>
                         <h2>服务端插件与前端插件更新</h2>
-                        <p>手动拉取 Authority 服务端插件最新提交、重新部署它携带的前端 SDK 扩展，或导出默认脱敏的诊断包 JSON。</p>
+                        <p>手动拉取 Authority 服务端插件最新提交、重新部署它携带的前端 SDK 扩展，导出/导入高层 portable package，以及下载增强诊断归档。</p>
                     </div>
                     <div class="authority-page-actions authority-page-actions--updates">
                         <button type="button" class="authority-action-button authority-action-button--primary authority-action-button--wide" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
                         <button type="button" class="authority-action-button authority-action-button--wide" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${packageButtonLabel}</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-archive" ${this.state.packageActionInProgress ? 'disabled' : ''}>${diagnosticArchiveLabel}</button>
                         <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-bundle">导出诊断包 JSON</button>
                     </div>
                 </div>
@@ -1171,6 +1365,114 @@ class SecurityCenterView {
                         <div><strong>Core 版本</strong><div>${escapeHtml(probe?.core.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</div></div>
                         <div><strong>插件目录</strong><div>${escapeHtml(installPath)}</div></div>
                         <div><strong>最近操作</strong><div>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</div></div>
+                    </div>
+                </section>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>Usage Summary</h3>
+                            <div class="authority-muted">按扩展聚合的当前占用概览，可作为 portable package 和清理策略的决策入口。</div>
+                        </div>
+                    </div>
+                    ${usageSummary ? `
+                        <div class="authority-kv-grid">
+                            <div><strong>扩展数</strong><div>${escapeHtml(String(usageSummary.totals.extensionCount))}</div></div>
+                            <div><strong>Blob</strong><div>${escapeHtml(String(usageSummary.totals.blobCount))} · ${escapeHtml(formatBytes(usageSummary.totals.blobBytes))}</div></div>
+                            <div><strong>SQL + Trivium</strong><div>${escapeHtml(String(usageSummary.totals.databaseCount))} · ${escapeHtml(formatBytes(usageSummary.totals.databaseBytes))}</div></div>
+                            <div><strong>私有文件</strong><div>${escapeHtml(String(usageSummary.totals.files.fileCount))} · ${escapeHtml(formatBytes(usageSummary.totals.files.totalSizeBytes))}</div></div>
+                            <div><strong>KV</strong><div>${escapeHtml(String(usageSummary.totals.kvEntries))}</div></div>
+                            <div><strong>生成时间</strong><div>${escapeHtml(formatDate(usageSummary.generatedAt))}</div></div>
+                        </div>
+                        <div class="authority-table-wrap">
+                            <table class="authority-data-table authority-policy-matrix">
+                                <thead>
+                                    <tr>
+                                        <th>扩展</th>
+                                        <th>KV</th>
+                                        <th>Blob</th>
+                                        <th>数据库</th>
+                                        <th>私有文件</th>
+                                        <th>授权</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${usageSummary.extensions.map(entry => `
+                                        <tr>
+                                            <td><strong>${escapeHtml(entry.extension.displayName || entry.extension.id)}</strong><div class="authority-muted">${escapeHtml(entry.extension.id)}</div></td>
+                                            <td>${escapeHtml(String(entry.storage.kvEntries))}</td>
+                                            <td>${escapeHtml(String(entry.storage.blobCount))} · ${escapeHtml(formatBytes(entry.storage.blobBytes))}</td>
+                                            <td>${escapeHtml(String(entry.storage.databaseCount))} · ${escapeHtml(formatBytes(entry.storage.databaseBytes))}</td>
+                                            <td>${escapeHtml(String(entry.storage.files.fileCount))} · ${escapeHtml(formatBytes(entry.storage.files.totalSizeBytes))}</td>
+                                            <td>${escapeHtml(String(entry.grantedCount))} / ${escapeHtml(String(entry.deniedCount))}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    ` : '<div class="authority-empty">暂未获取 usage summary。</div>'}
+                </section>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>Portable Package</h3>
+                            <div class="authority-muted">统一导出 grants / policies / Blob / 私有文件 / SQL / Trivium，并通过后台 operation 持久跟踪进度与失败状态。</div>
+                        </div>
+                    </div>
+                    <div class="authority-stack">
+                        <div class="authority-list-card authority-list-card--column">
+                            <strong>导入模式</strong>
+                            <div class="authority-page-actions">
+                                <select data-role="import-package-mode" ${this.state.packageActionInProgress ? 'disabled' : ''}>
+                                    <option value="replace">replace · 先清空扩展侧状态再回放</option>
+                                    <option value="merge">merge · 仅追加 / 覆盖包中内容</option>
+                                </select>
+                                <input type="file" data-role="import-package-file" accept=".zip,.authoritypkg.zip,.json,.gz,.authoritypkg,.authoritypkg.json.gz,application/zip,application/json,application/gzip" ${this.state.packageActionInProgress ? 'disabled' : ''} />
+                                <button type="button" class="authority-action-button authority-action-button--primary" data-action="import-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${importButtonLabel}</button>
+                            </div>
+                            <div class="authority-muted">导出任务完成后可在下方 operation 列表下载 artifact；失败任务支持 resume。</div>
+                        </div>
+                        ${packageOperations.length > 0 ? `
+                            <div class="authority-table-wrap">
+                                <table class="authority-data-table authority-policy-matrix">
+                                    <thead>
+                                        <tr>
+                                            <th>任务</th>
+                                            <th>状态</th>
+                                            <th>进度</th>
+                                            <th>结果</th>
+                                            <th>更新时间</th>
+                                            <th>动作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${packageOperations.map(operation => `
+                                            <tr>
+                                                <td>
+                                                    <strong>${escapeHtml(operation.kind === 'export' ? 'export' : 'import')}</strong>
+                                                    <div class="authority-muted">${escapeHtml(operation.id)}</div>
+                                                    ${operation.sourceFileName ? `<div class="authority-muted">source: ${escapeHtml(operation.sourceFileName)}</div>` : ''}
+                                                </td>
+                                                <td><span class="authority-pill authority-pill--${escapeHtml(this.getPackageOperationPill(operation.status))}">${escapeHtml(operation.status)}</span></td>
+                                                <td>${escapeHtml(String(operation.progress))}%</td>
+                                                <td>
+                                                    <div>${escapeHtml(operation.summary ?? '未开始')}</div>
+                                                    ${operation.error ? `<div class="authority-muted">${escapeHtml(operation.error)}</div>` : ''}
+                                                    ${operation.artifact ? `<div class="authority-muted">${escapeHtml(operation.artifact.fileName)} · ${escapeHtml(formatBytes(operation.artifact.sizeBytes))}</div>` : ''}
+                                                    ${operation.importSummary ? `<div class="authority-muted">extensions ${escapeHtml(String(operation.importSummary.extensionCount))} · blobs ${escapeHtml(String(operation.importSummary.blobCount))} · files ${escapeHtml(String(operation.importSummary.fileCount))}</div>` : ''}
+                                                </td>
+                                                <td>${escapeHtml(formatDate(operation.updatedAt))}</td>
+                                                <td>
+                                                    <div class="authority-page-actions authority-page-actions--inline">
+                                                        ${operation.artifact ? `<button type="button" class="authority-action-button" data-action="download-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>下载</button>` : ''}
+                                                        ${operation.status === 'failed' ? `<button type="button" class="authority-action-button" data-action="resume-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>恢复</button>` : ''}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : '<div class="authority-empty">暂无高层 import/export operation。</div>'}
                     </div>
                 </section>
                 <section class="authority-card authority-card--flat">
@@ -1231,6 +1533,76 @@ class SecurityCenterView {
         `;
     }
 
+    private getPackageOperationPill(status: PackageOperation['status']): 'granted' | 'warning' | 'runtime' | 'prompt' {
+        switch (status) {
+            case 'completed':
+                return 'granted';
+            case 'failed':
+                return 'warning';
+            case 'running':
+                return 'runtime';
+            default:
+                return 'prompt';
+        }
+    }
+
+    private getRequiredSessionToken(): string {
+        const sessionToken = this.state.session?.sessionToken;
+        if (!sessionToken) {
+            throw new Error('Security Center session is not initialized');
+        }
+        return sessionToken;
+    }
+
+    private async downloadArtifact(response: ArtifactDownloadResponse): Promise<void> {
+        const sessionToken = this.getRequiredSessionToken();
+        const chunks: ArrayBuffer[] = [];
+        let offset = 0;
+        try {
+            while (true) {
+                const chunk = await authorityRequest<DataTransferReadResponse>(`/transfers/${encodeURIComponent(response.transfer.transferId)}/read`, {
+                    method: 'POST',
+                    body: {
+                        offset,
+                        limit: response.transfer.chunkSize,
+                    },
+                    sessionToken,
+                });
+                const bytes = base64ToBytes(chunk.content);
+                const copy = new Uint8Array(bytes.byteLength);
+                copy.set(bytes);
+                chunks.push(copy.buffer);
+                offset += bytes.byteLength;
+                if (chunk.eof) {
+                    break;
+                }
+            }
+            downloadBlobFile(response.artifact.fileName, new Blob(chunks, { type: response.artifact.mediaType }));
+        } finally {
+            await authorityRequest(`/transfers/${encodeURIComponent(response.transfer.transferId)}/discard`, {
+                method: 'POST',
+                sessionToken,
+            }).catch(() => undefined);
+        }
+    }
+
+    private async uploadFileToTransfer(file: File, transfer: DataTransferInitResponse): Promise<void> {
+        const sessionToken = this.getRequiredSessionToken();
+        let offset = 0;
+        while (offset < file.size) {
+            const chunk = new Uint8Array(await file.slice(offset, offset + transfer.chunkSize).arrayBuffer());
+            await authorityRequest(`/transfers/${encodeURIComponent(transfer.transferId)}/append`, {
+                method: 'POST',
+                body: {
+                    offset,
+                    content: bytesToBase64(chunk),
+                },
+                sessionToken,
+            });
+            offset += chunk.byteLength;
+        }
+    }
+
     private buildPolicyRowMarkup(entry?: AuthorityPolicyEntry): string {
         return `
             <div class="authority-policy-row">
@@ -1264,7 +1636,6 @@ class SecurityCenterView {
                 <div class="authority-chip-row">
                     <span class="authority-pill authority-pill--prompt">transfer chunk ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
                 </div>
-                <div class="authority-muted">兼容字段仍保留给旧客户端：inline ${escapeHtml(formatBytes(probeLimits.dataTransferInlineThresholdBytes))} · transfer ${escapeHtml(formatBytes(probeLimits.maxDataTransferBytes))}。</div>
                 <div class="authority-table-wrap">
                     <table class="authority-data-table authority-policy-matrix">
                         <thead>
@@ -1467,6 +1838,32 @@ function parsePositiveIntOrNull(value: string): number | null {
         return null;
     }
     return parsed;
+}
+
+function base64ToBytes(content: string): Uint8Array {
+    const binary = atob(content);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 1) {
+        binary += String.fromCharCode(bytes[index] ?? 0);
+    }
+    return btoa(binary);
+}
+
+function downloadBlobFile(fileName: string, blob: Blob): void {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
 }
 
 function downloadJsonFile(fileName: string, value: unknown): void {

@@ -27,6 +27,7 @@ describe('registerRoutes', () => {
             '/jobs/:id',
             '/events/stream',
             '/admin/policies',
+            '/admin/import-export/operations',
             '/admin/usage-summary',
             '/admin/diagnostic-bundle',
         ]));
@@ -63,6 +64,12 @@ describe('registerRoutes', () => {
             '/http/fetch-open',
             '/fs/private/delete',
             '/fs/private/stat',
+            '/admin/import-export/export',
+            '/admin/import-export/import-transfer/init',
+            '/admin/import-export/import',
+            '/admin/import-export/operations/:id/resume',
+            '/admin/import-export/operations/:id/open-download',
+            '/admin/diagnostic-bundle/archive',
             '/admin/update',
         ]));
     });

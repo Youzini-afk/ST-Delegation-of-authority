@@ -647,6 +647,8 @@ POST /api/plugins/authority/probe
 - `effectiveInlineThresholdBytes`
 - `effectiveTransferMaxBytes`
 
+其中 `maxDataTransferBytes` 与 `dataTransferInlineThresholdBytes` 继续作为兼容字段保留给旧客户端；新的 inline-vs-transfer 决策与上限展示应优先使用按操作暴露的 `effectiveInlineThresholdBytes` / `effectiveTransferMaxBytes`。
+
 `POST /session/init` 与 `GET /session/current` 也会返回：
 
 - `limits.effectiveInlineThresholdBytes`
@@ -853,6 +855,7 @@ extension:<extensionId>
 - 不支持任意服务端代码托管。
 - 不支持任意 shell / VM 执行。
 - 不支持把 REST 直连接口作为普通扩展的一等接入方式。
+- portable package 已升级为 `.authoritypkg.zip` 多文件归档；当前仍然会兼容导入旧的单文件 `.json.gz` 包。
 
 ## 路线方向
 
@@ -862,5 +865,5 @@ extension:<extensionId>
 - 更细分的错误分类和指标导出。
 - 更多内建 job 类型。
 - 更完善的事件订阅模型。
-- Security Center 深度运维视图。
+- Security Center 深度运维视图与更细粒度的包选择器。
 - 公开发布后的升级和迁移策略。

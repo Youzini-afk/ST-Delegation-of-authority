@@ -1,12 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+    AuthorityArtifactDownloadResponse,
     AuthorityErrorPayload,
     AuthorityDiagnosticBundleResponse,
     AuthorityDiagnosticExtensionSnapshot,
+    AuthorityExportPackageRequest,
     AuthorityExtensionStorageSummary,
     AuthorityProbeResponse,
     AuthorityInitConfig,
+    AuthorityPackageImportRequest,
+    AuthorityPackageOperationListResponse,
     AuthorityUsageSummaryExtension,
     AuthorityUsageSummaryResponse,
     AuthorityUsageSummaryTotals,
@@ -85,6 +89,7 @@ import type {
 import {
     AUTHORITY_DATA_FOLDER,
     AUTHORITY_PLUGIN_ID,
+    AUTHORITY_RELEASE_FILE,
     AUTHORITY_SDK_EXTENSION_ID,
     BUILTIN_JOB_REGISTRY_SUMMARY,
     BUILTIN_JOB_TYPES,
@@ -118,6 +123,8 @@ type InlineThresholdKey =
     | 'privateFileRead'
     | 'httpFetchRequest'
     | 'httpFetchResponse';
+
+const ADMIN_PACKAGE_MAX_BYTES = 256 * 1024 * 1024;
 
 function ok(res: AuthorityResponse, data: unknown): void {
     res.json(data);
@@ -797,12 +804,61 @@ async function buildDiagnosticBundle(runtime: AuthorityRuntime, user: ReturnType
         policies,
         usageSummary,
         jobs,
+        releaseMetadata: readReleaseMetadataSnapshot(runtime),
         extensions,
     });
 }
 
+function readReleaseMetadataSnapshot(runtime: AuthorityRuntime): Record<string, unknown> | null {
+    const filePath = path.join(runtime.install.getPluginRoot(), AUTHORITY_RELEASE_FILE);
+    if (!fs.existsSync(filePath)) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    } catch {
+        return null;
+    }
+}
+
 function sanitizeDiagnosticPayload<T>(value: T): T {
     return sanitizeDiagnosticValue(undefined, value) as T;
+}
+
+function assertAdminUser(user: ReturnType<typeof getUserContext>): void {
+    if (!user.isAdmin) {
+        throw new Error('Forbidden');
+    }
+}
+
+function parseAdminPackageSizeBytes(value: unknown): number {
+    const sizeBytes = Number(value ?? 0);
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+        throw new Error('sizeBytes must be a positive number');
+    }
+    if (sizeBytes > ADMIN_PACKAGE_MAX_BYTES) {
+        throw new Error(`Admin package upload exceeds ${ADMIN_PACKAGE_MAX_BYTES} bytes`);
+    }
+    return Math.floor(sizeBytes);
+}
+
+async function openAdminArtifactDownload(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    filePath: string,
+    sizeBytes: number,
+    artifact: AuthorityArtifactDownloadResponse['artifact'],
+): Promise<AuthorityArtifactDownloadResponse> {
+    return {
+        artifact,
+        transfer: await runtime.transfers.openRead(user, AUTHORITY_SDK_EXTENSION_ID, {
+            resource: 'fs.private',
+            purpose: 'privateFileRead',
+            sourcePath: filePath,
+        }, Math.max(1, sizeBytes)),
+    };
 }
 
 function sanitizeDiagnosticValue(key: string | undefined, value: unknown): unknown {
@@ -2567,10 +2623,97 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     router.get('/admin/usage-summary', async (req, res) => {
         try {
             const user = getUserContext(req);
-            if (!user.isAdmin) {
-                throw new Error('Forbidden');
-            }
+            assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.get('/admin/import-export/operations', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            ok(res, {
+                operations: runtime.adminPackages.listOperations(user),
+            } satisfies AuthorityPackageOperationListResponse);
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/admin/import-export/export', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const operation = runtime.adminPackages.startExport(user, (req.body ?? {}) as AuthorityExportPackageRequest);
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
+                operationId: operation.id,
+                kind: operation.kind,
+            });
+            ok(res, operation);
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/admin/import-export/import-transfer/init', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            ok(res, await runtime.transfers.init(user, AUTHORITY_SDK_EXTENSION_ID, {
+                resource: 'fs.private',
+                purpose: 'privateFileWrite',
+            }, parseAdminPackageSizeBytes((req.body as { sizeBytes?: unknown } | undefined)?.sizeBytes)));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/admin/import-export/import', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {}) as AuthorityPackageImportRequest;
+            const transfer = runtime.transfers.get(user, AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
+            const operation = runtime.adminPackages.startImport(user, payload, transfer.filePath);
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Import package started', {
+                operationId: operation.id,
+                transferId: transfer.transferId,
+                mode: operation.importMode,
+            });
+            await runtime.transfers.discard(user, AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
+            ok(res, operation);
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
+                operationId: operation.id,
+                kind: operation.kind,
+            });
+            ok(res, operation);
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
+                fileName: artifact.artifact.fileName,
+                sizeBytes: artifact.artifact.sizeBytes,
+            });
+            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -2579,10 +2722,23 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
             const user = getUserContext(req);
-            if (!user.isAdmin) {
-                throw new Error('Forbidden');
-            }
+            assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
+                fileName: artifact.artifact.fileName,
+                sizeBytes: artifact.artifact.sizeBytes,
+            });
+            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }

@@ -1,4 +1,5 @@
 import { SseBroker } from './events/sse-broker.js';
+import { AdminPackageService } from './services/admin-package-service.js';
 import { AuditService } from './services/audit-service.js';
 import { CoreService } from './services/core-service.js';
 import { DataTransferService } from './services/data-transfer-service.js';
@@ -14,6 +15,7 @@ import { StorageService } from './services/storage-service.js';
 import { TriviumService } from './services/trivium-service.js';
 
 export interface AuthorityRuntime {
+    adminPackages: AdminPackageService;
     events: SseBroker;
     audit: AuditService;
     core: CoreService;
@@ -45,8 +47,10 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const http = new HttpService(core);
     const jobs = new JobService(core);
     const trivium = new TriviumService(core);
+    const adminPackages = new AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
 
     return {
+        adminPackages,
         events,
         audit,
         core,

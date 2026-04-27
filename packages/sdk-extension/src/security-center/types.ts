@@ -1,7 +1,10 @@
 import type {
+    AuthorityArtifactDownloadResponse,
     AuthorityDiagnosticBundleResponse,
     AuthorityDiagnosticExtensionSnapshot,
     AuthorityExtensionStorageSummary,
+    AuthorityPackageImportMode,
+    AuthorityPackageOperation,
     AuthorityLimitsPolicyState,
     AuthorityInstallStatusCode,
     AuthorityProbeResponse,
@@ -78,6 +81,9 @@ export interface AdminUpdateResponse {
 export type ExtensionDetailResponse = AuthorityDiagnosticExtensionSnapshot;
 export type UsageSummaryResponse = AuthorityUsageSummaryResponse;
 export type DiagnosticBundleResponse = AuthorityDiagnosticBundleResponse;
+export type ArtifactDownloadResponse = AuthorityArtifactDownloadResponse;
+export type PackageOperation = AuthorityPackageOperation;
+export type PackageImportMode = AuthorityPackageImportMode;
 
 export interface DatabaseGroupSummary {
     extension: ExtensionSummary;
@@ -101,6 +107,7 @@ export interface SecurityCenterState {
     isAdmin: boolean;
     probe: ProbeResponse | null;
     session: SessionInitResponse | null;
+    usageSummary: UsageSummaryResponse | null;
     extensions: ExtensionSummary[];
     details: Map<string, ExtensionDetailResponse>;
     selectedExtensionId: string | null;
@@ -109,6 +116,8 @@ export interface SecurityCenterState {
     extensionFilter: string;
     policies: PoliciesResponse | null;
     policyEditorExtensionId: string | null;
+    packageOperations: PackageOperation[];
+    packageActionInProgress: boolean;
     updateResult: AdminUpdateResponse | null;
     updateInProgress: boolean;
 }

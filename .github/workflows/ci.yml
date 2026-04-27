@@ -30,3 +30,9 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Benchmark gate
+        env:
+          AUTHORITY_BENCH_MAX_AVG_MS: '150'
+          AUTHORITY_BENCH_MAX_P95_MS: '300'
+        run: npm run bench:core
