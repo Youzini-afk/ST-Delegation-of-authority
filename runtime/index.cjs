@@ -444,6 +444,19 @@ function normalizeAuthorityError(error) {
         },
     };
 }
+function buildEffectiveInlineThresholds() {
+    return {
+        storageBlobWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        storageBlobRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        privateFileWrite: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        privateFileRead: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        httpFetchRequest: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+        httpFetchResponse: { bytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' },
+    };
+}
+function getEffectiveInlineThresholdBytes(key) {
+    return buildEffectiveInlineThresholds()[key].bytes;
+}
 function parseAdminUpdateAction(value) {
     return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
 }
@@ -666,6 +679,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         const install = runtime.install.getStatus();
         const core = runtime.core.getStatus();
         const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin);
+        const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
         const response = {
             id: 'authority',
             online: true,
@@ -696,6 +710,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 maxDataTransferBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_DATA_TRANSFER_BYTES,
                 dataTransferChunkBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_CHUNK_BYTES,
                 dataTransferInlineThresholdBytes: _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+                effectiveInlineThresholdBytes,
             },
             jobs: {
                 builtinTypes: [..._constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES],
@@ -1009,7 +1024,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             }
             const blobId = String(req.body?.id ?? '');
             const opened = await runtime.storage.openBlobRead(user, session.extension.id, blobId);
-            if (opened.record.size <= _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+            if (opened.record.size <= getEffectiveInlineThresholdBytes('storageBlobRead')) {
                 ok(res, {
                     mode: 'inline',
                     ...(await runtime.storage.getBlob(user, session.extension.id, blobId)),
@@ -1153,7 +1168,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 throw new Error('Permission not granted: fs.private');
             }
             const opened = await runtime.files.openRead(user, session.extension.id, payload);
-            if (opened.entry.sizeBytes <= _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+            if (opened.entry.sizeBytes <= getEffectiveInlineThresholdBytes('privateFileRead')) {
                 const result = await runtime.files.readFile(user, session.extension.id, payload);
                 await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
                 ok(res, {
@@ -2121,12 +2136,13 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 responsePath: responseTransferRecord.filePath,
             });
             const finalizedTransfer = await runtime.transfers.promoteToDownload(user, session.extension.id, responseTransfer.transferId);
+            const responseInlineThreshold = getEffectiveInlineThresholdBytes('httpFetchResponse');
             await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', {
                 hostname,
                 ...(bodyTransfer ? { requestVia: 'transfer' } : {}),
-                ...(finalizedTransfer.sizeBytes > _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES ? { responseVia: 'transfer' } : {}),
+                ...(finalizedTransfer.sizeBytes > responseInlineThreshold ? { responseVia: 'transfer' } : {}),
             });
-            if (finalizedTransfer.sizeBytes <= _constants_js__WEBPACK_IMPORTED_MODULE_2__.DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+            if (finalizedTransfer.sizeBytes <= responseInlineThreshold) {
                 const bytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(responseTransferRecord.filePath);
                 await runtime.transfers.discard(user, session.extension.id, responseTransfer.transferId).catch(() => undefined);
                 responseTransferIdToDiscard = undefined;

@@ -100,6 +100,14 @@ type RouterLike = {
     post(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
 };
 
+type InlineThresholdKey =
+    | 'storageBlobWrite'
+    | 'storageBlobRead'
+    | 'privateFileWrite'
+    | 'privateFileRead'
+    | 'httpFetchRequest'
+    | 'httpFetchResponse';
+
 function ok(res: AuthorityResponse, data: unknown): void {
     res.json(data);
 }
@@ -268,6 +276,21 @@ function normalizeAuthorityError(error: unknown): NormalizedAuthorityError {
             category: 'core',
         },
     };
+}
+
+function buildEffectiveInlineThresholds() {
+    return {
+        storageBlobWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
+        storageBlobRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
+        privateFileWrite: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
+        privateFileRead: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
+        httpFetchRequest: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
+        httpFetchResponse: { bytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES, source: 'runtime' as const },
+    };
+}
+
+function getEffectiveInlineThresholdBytes(key: InlineThresholdKey): number {
+    return buildEffectiveInlineThresholds()[key].bytes;
 }
 
 function parseAdminUpdateAction(value: unknown): AdminUpdateAction {
@@ -571,6 +594,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         const install = runtime.install.getStatus();
         const core = runtime.core.getStatus();
         const features = buildAuthorityFeatureFlags(user.isAdmin);
+        const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
         const response: AuthorityProbeResponse = {
             id: 'authority',
             online: true,
@@ -601,6 +625,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 maxDataTransferBytes: MAX_DATA_TRANSFER_BYTES,
                 dataTransferChunkBytes: DATA_TRANSFER_CHUNK_BYTES,
                 dataTransferInlineThresholdBytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+                effectiveInlineThresholdBytes,
             },
             jobs: {
                 builtinTypes: [...BUILTIN_JOB_TYPES],
@@ -942,7 +967,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
             const blobId = String(req.body?.id ?? '');
             const opened = await runtime.storage.openBlobRead(user, session.extension.id, blobId);
-            if (opened.record.size <= DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+            if (opened.record.size <= getEffectiveInlineThresholdBytes('storageBlobRead')) {
                 ok(res, {
                     mode: 'inline',
                     ...(await runtime.storage.getBlob(user, session.extension.id, blobId)),
@@ -1095,7 +1120,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             }
 
             const opened = await runtime.files.openRead(user, session.extension.id, payload);
-            if (opened.entry.sizeBytes <= DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+            if (opened.entry.sizeBytes <= getEffectiveInlineThresholdBytes('privateFileRead')) {
                 const result = await runtime.files.readFile(user, session.extension.id, payload);
                 await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path });
                 ok(res, {
@@ -2109,13 +2134,14 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 responsePath: responseTransferRecord.filePath,
             });
             const finalizedTransfer = await runtime.transfers.promoteToDownload(user, session.extension.id, responseTransfer.transferId);
+            const responseInlineThreshold = getEffectiveInlineThresholdBytes('httpFetchResponse');
             await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', {
                 hostname,
                 ...(bodyTransfer ? { requestVia: 'transfer' } : {}),
-                ...(finalizedTransfer.sizeBytes > DATA_TRANSFER_INLINE_THRESHOLD_BYTES ? { responseVia: 'transfer' } : {}),
+                ...(finalizedTransfer.sizeBytes > responseInlineThreshold ? { responseVia: 'transfer' } : {}),
             });
 
-            if (finalizedTransfer.sizeBytes <= DATA_TRANSFER_INLINE_THRESHOLD_BYTES) {
+            if (finalizedTransfer.sizeBytes <= responseInlineThreshold) {
                 const bytes = fs.readFileSync(responseTransferRecord.filePath);
                 await runtime.transfers.discard(user, session.extension.id, responseTransfer.transferId).catch(() => undefined);
                 responseTransferIdToDiscard = undefined;

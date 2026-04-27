@@ -162,7 +162,8 @@ export class AuthorityClient {
                 put: async (input) => {
                     await this.ensurePermission({ resource: 'storage.blob', reason: `写入 Blob ${input.name}` });
                     const bytes = contentToBytes(input.content, input.encoding ?? 'utf8');
-                    if (bytes.byteLength > SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                    const inlineThreshold = await this.getEffectiveInlineThresholdBytes('storageBlobWrite');
+                    if (bytes.byteLength > inlineThreshold) {
                         return await this.putBlobWithTransfer(input, bytes);
                     }
                     return await this.requestWithSession('/storage/blob/put', {
@@ -224,7 +225,8 @@ export class AuthorityClient {
             writeFile: async (path, content, options = {}) => {
                 await this.ensurePermission({ resource: 'fs.private', reason: `写入私有文件 ${path}` });
                 const bytes = contentToBytes(content, options.encoding ?? 'utf8');
-                if (bytes.byteLength > SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+                const inlineThreshold = await this.getEffectiveInlineThresholdBytes('privateFileWrite');
+                if (bytes.byteLength > inlineThreshold) {
                     return await this.writePrivateFileWithTransfer(path, bytes, options);
                 }
                 const response = await this.requestWithSession('/fs/private/write-file', {
@@ -1264,6 +1266,15 @@ export class AuthorityClient {
             body: request,
         });
     }
+    async getEffectiveInlineThresholdBytes(key) {
+        try {
+            const probe = this.probeSnapshot ?? await this.ensureProbe();
+            return probe.limits.effectiveInlineThresholdBytes[key].bytes;
+        }
+        catch {
+            return SDK_TRANSFER_INLINE_THRESHOLD_BYTES;
+        }
+    }
     async ensureInitialized() {
         if (this.session) {
             return this.session;
@@ -1576,7 +1587,8 @@ export class AuthorityClient {
     async fetchHttpWithTransfer(input) {
         const bodyEncoding = input.bodyEncoding ?? 'utf8';
         const bodyBytes = input.body === undefined ? undefined : contentToBytes(input.body, bodyEncoding);
-        if (!bodyBytes || bodyBytes.byteLength <= SDK_TRANSFER_INLINE_THRESHOLD_BYTES) {
+        const requestInlineThreshold = await this.getEffectiveInlineThresholdBytes('httpFetchRequest');
+        if (!bodyBytes || bodyBytes.byteLength <= requestInlineThreshold) {
             const opened = await this.requestWithSession('/http/fetch-open', {
                 method: 'POST',
                 body: input,

@@ -240,6 +240,141 @@ describe('AuthorityClient', () => {
         expect(explained.message).toBe('Ext A 当前已获得 私有 SQL 数据库 (default) 的访问授权。');
     });
 
+    it('uses probe inline thresholds when deciding blob write transfer routing', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        authorityRequestMock.mockResolvedValueOnce(buildProbe({
+            inlineThresholdBytes: {
+                storageBlobWrite: 8,
+            },
+        }));
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const putBlobWithTransfer = vi.fn(async () => ({
+            id: 'blob-1',
+            name: 'payload.txt',
+            contentType: 'text/plain',
+            sizeBytes: 12,
+            createdAt: 't1',
+        }));
+
+        Object.assign(client as object, {
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            putBlobWithTransfer,
+        });
+
+        await client.storage.blob.put({
+            name: 'payload.txt',
+            content: 'hello world!',
+            encoding: 'utf8',
+        });
+
+        expect(authorityRequestMock).toHaveBeenCalledWith('/probe', { method: 'POST' });
+        expect(putBlobWithTransfer).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses probe inline thresholds when deciding private file write transfer routing', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        authorityRequestMock.mockResolvedValueOnce(buildProbe({
+            inlineThresholdBytes: {
+                privateFileWrite: 4,
+            },
+        }));
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const writePrivateFileWithTransfer = vi.fn(async () => ({
+            name: 'note.txt',
+            path: '/note.txt',
+            kind: 'file',
+            size: 10,
+            updatedAt: 't1',
+        }));
+
+        Object.assign(client as object, {
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            writePrivateFileWithTransfer,
+        });
+
+        await client.fs.writeFile('/note.txt', 'abcdefghij', { encoding: 'utf8' });
+
+        expect(writePrivateFileWithTransfer).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses probe inline thresholds when deciding http.fetch request transfer routing', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        authorityRequestMock.mockResolvedValueOnce(buildProbe({
+            inlineThresholdBytes: {
+                httpFetchRequest: 6,
+            },
+        }));
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const initializeTransfer = vi.fn(async () => ({
+            transferId: 'transfer-1',
+            resource: 'http.fetch',
+            chunkSize: 256,
+            maxBytes: 1024,
+            sizeBytes: 11,
+            updatedAt: 't1',
+        }));
+        const appendTransferBytes = vi.fn(async () => undefined);
+        const requestWithSession = vi.fn(async () => ({
+            mode: 'inline',
+            url: 'https://example.com',
+            hostname: 'example.com',
+            status: 200,
+            ok: true,
+            headers: {},
+            body: 'ok',
+            bodyEncoding: 'utf8',
+            contentType: 'text/plain',
+        }));
+
+        Object.assign(client as object, {
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            initializeTransfer,
+            appendTransferBytes,
+            requestWithSession,
+        });
+
+        await client.http.fetch({
+            url: 'https://example.com',
+            method: 'POST',
+            body: 'hello world',
+            bodyEncoding: 'utf8',
+        });
+
+        expect(initializeTransfer).toHaveBeenCalledWith('http.fetch');
+        expect(appendTransferBytes).toHaveBeenCalledTimes(1);
+        expect(requestWithSession).toHaveBeenCalledWith('/http/fetch-open', expect.objectContaining({
+            method: 'POST',
+            body: expect.objectContaining({ bodyTransferId: 'transfer-1' }),
+        }));
+    });
+
     it('splits items by chunk item count and estimated json bytes', async () => {
         const { splitAuthorityItemsIntoChunks } = await import('./client.js');
 
@@ -1075,6 +1210,10 @@ function buildProbe(overrides: Partial<{
     queryPage: boolean;
     mappingPages: boolean;
     mappingIntegrity: boolean;
+    inlineThresholdBytes: Partial<Record<
+        'storageBlobWrite' | 'storageBlobRead' | 'privateFileWrite' | 'privateFileRead' | 'httpFetchRequest' | 'httpFetchResponse',
+        number
+    >>;
 }> = {}): AuthorityProbeResponse {
     const sqlFeatures = {
         queryPage: true,
@@ -1144,6 +1283,14 @@ function buildProbe(overrides: Partial<{
             maxDataTransferBytes: 1024,
             dataTransferChunkBytes: 256,
             dataTransferInlineThresholdBytes: 256,
+            effectiveInlineThresholdBytes: {
+                storageBlobWrite: { bytes: overrides.inlineThresholdBytes?.storageBlobWrite ?? 256, source: 'runtime' },
+                storageBlobRead: { bytes: overrides.inlineThresholdBytes?.storageBlobRead ?? 256, source: 'runtime' },
+                privateFileWrite: { bytes: overrides.inlineThresholdBytes?.privateFileWrite ?? 256, source: 'runtime' },
+                privateFileRead: { bytes: overrides.inlineThresholdBytes?.privateFileRead ?? 256, source: 'runtime' },
+                httpFetchRequest: { bytes: overrides.inlineThresholdBytes?.httpFetchRequest ?? 256, source: 'runtime' },
+                httpFetchResponse: { bytes: overrides.inlineThresholdBytes?.httpFetchResponse ?? 256, source: 'runtime' },
+            },
         },
         jobs: {
             builtinTypes: ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'],

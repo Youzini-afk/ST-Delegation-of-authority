@@ -14,6 +14,7 @@ export type PermissionStatus = 'granted' | 'denied' | 'prompt' | 'blocked';
 export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type GrantScope = 'session' | 'persistent' | 'policy';
+export type AuthorityLimitSource = 'runtime' | 'policy';
 export type AuthorityErrorCategory = 'permission' | 'auth' | 'session' | 'validation' | 'limit' | 'timeout' | 'core';
 export type AuthorityErrorCode =
     | 'permission_not_granted'
@@ -188,6 +189,32 @@ export interface AuthorityProbeLimits {
     maxDataTransferBytes: number;
     dataTransferChunkBytes: number;
     dataTransferInlineThresholdBytes: number;
+    effectiveInlineThresholdBytes: {
+        storageBlobWrite: {
+            bytes: number;
+            source: AuthorityLimitSource;
+        };
+        storageBlobRead: {
+            bytes: number;
+            source: AuthorityLimitSource;
+        };
+        privateFileWrite: {
+            bytes: number;
+            source: AuthorityLimitSource;
+        };
+        privateFileRead: {
+            bytes: number;
+            source: AuthorityLimitSource;
+        };
+        httpFetchRequest: {
+            bytes: number;
+            source: AuthorityLimitSource;
+        };
+        httpFetchResponse: {
+            bytes: number;
+            source: AuthorityLimitSource;
+        };
+    };
 }
 
 export interface AuthorityProbeCoreHealth {

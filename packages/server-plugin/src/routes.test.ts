@@ -189,4 +189,89 @@ describe('registerRoutes', () => {
             category: 'session',
         });
     });
+
+    it('exposes effective inline thresholds in probe limits', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+
+        const runtime = {
+            core: {
+                refreshHealth: vi.fn().mockResolvedValue(undefined),
+                getStatus: vi.fn(() => ({
+                    health: {
+                        limits: {
+                            maxRequestBytes: 1024,
+                            maxEventPollLimit: 100,
+                        },
+                        jobRegistrySummary: {
+                            registered: 0,
+                            jobTypes: [],
+                            entries: [],
+                        },
+                    },
+                })),
+            },
+            install: {
+                getStatus: vi.fn(() => ({
+                    pluginVersion: '0.1.0',
+                    sdkBundledVersion: '0.1.0',
+                    sdkDeployedVersion: '0.1.0',
+                    coreBundledVersion: '0.1.0',
+                    coreArtifactPlatform: 'win32-x64',
+                    coreArtifactPlatforms: ['win32-x64'],
+                    coreArtifactHash: 'hash',
+                    coreBinarySha256: 'sha256',
+                    coreVerified: true,
+                    coreMessage: null,
+                    installStatus: 'ready',
+                    installMessage: 'ready',
+                })),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const handler = posts.get('/probe');
+        expect(handler).toBeTypeOf('function');
+
+        const response = {
+            status: vi.fn(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+        response.status.mockReturnValue(response);
+
+        await handler?.({
+            user: {
+                profile: {
+                    handle: 'alice',
+                    admin: false,
+                },
+                directories: {
+                    root: 'C:/users/alice',
+                },
+            },
+            body: {},
+            headers: {},
+        }, response);
+
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            limits: expect.objectContaining({
+                effectiveInlineThresholdBytes: expect.objectContaining({
+                    storageBlobWrite: { bytes: 256 * 1024, source: 'runtime' },
+                    privateFileRead: { bytes: 256 * 1024, source: 'runtime' },
+                    httpFetchResponse: { bytes: 256 * 1024, source: 'runtime' },
+                }),
+            }),
+        }));
+    });
 });
