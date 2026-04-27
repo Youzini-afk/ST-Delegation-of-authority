@@ -2,7 +2,6 @@ import type {
     AuthorityEffectiveInlineThresholds,
     AuthorityEffectiveOperationByteLimits,
     AuthorityGrant,
-    AuthorityExtensionLimitsPolicy,
     AuthorityInlineThresholdKey,
     AuthorityPolicyEntry,
     AuthoritySessionLimits,
@@ -14,10 +13,7 @@ import type {
 import {
     DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
     DEFAULT_POLICY_STATUS,
-    MAX_HTTP_REQUEST_TRANSFER_BYTES,
-    MAX_HTTP_RESPONSE_TRANSFER_BYTES,
-    MAX_PRIVATE_FILE_TRANSFER_BYTES,
-    MAX_STORAGE_BLOB_TRANSFER_BYTES,
+    UNMANAGED_TRANSFER_MAX_BYTES,
 } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type {
@@ -60,10 +56,9 @@ export class PermissionService {
     }
 
     async getEffectiveSessionLimits(user: UserContext, extensionId: string): Promise<AuthoritySessionLimits> {
-        const policy = await this.policyService.getExtensionLimitPolicy(user, extensionId);
         return {
-            effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(policy),
-            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(policy),
+            effectiveInlineThresholdBytes: this.buildEffectiveInlineThresholds(),
+            effectiveTransferMaxBytes: this.buildEffectiveTransferMaxBytes(),
         };
     }
 
@@ -217,9 +212,8 @@ export class PermissionService {
         });
     }
 
-    private buildEffectiveInlineThresholds(policy: AuthorityExtensionLimitsPolicy | null): AuthorityEffectiveInlineThresholds {
-        const effective = this.buildRuntimeInlineThresholds();
-        return this.applyByteLimitOverrides(effective, policy?.inlineThresholdBytes);
+    private buildEffectiveInlineThresholds(): AuthorityEffectiveInlineThresholds {
+        return this.buildRuntimeInlineThresholds();
     }
 
     private buildRuntimeInlineThresholds(): AuthorityEffectiveInlineThresholds {
@@ -233,43 +227,15 @@ export class PermissionService {
         };
     }
 
-    private buildEffectiveTransferMaxBytes(policy: AuthorityExtensionLimitsPolicy | null): AuthorityEffectiveOperationByteLimits {
-        const effective: AuthorityEffectiveOperationByteLimits = {
-            storageBlobWrite: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
-            storageBlobRead: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' },
-            privateFileWrite: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
-            privateFileRead: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' },
-            httpFetchRequest: { bytes: MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' },
-            httpFetchResponse: { bytes: MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' },
+    private buildEffectiveTransferMaxBytes(): AuthorityEffectiveOperationByteLimits {
+        return {
+            storageBlobWrite: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+            storageBlobRead: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+            privateFileWrite: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+            privateFileRead: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+            httpFetchRequest: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+            httpFetchResponse: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
         };
-
-        return this.applyByteLimitOverrides(effective, policy?.transferMaxBytes);
-    }
-
-    private applyByteLimitOverrides(
-        effective: AuthorityEffectiveOperationByteLimits,
-        overrides: AuthorityExtensionLimitsPolicy['inlineThresholdBytes'] | AuthorityExtensionLimitsPolicy['transferMaxBytes'] | undefined,
-    ): AuthorityEffectiveOperationByteLimits {
-        if (!overrides) {
-            return effective;
-        }
-
-        for (const key of INLINE_THRESHOLD_KEYS) {
-            const requested = overrides[key];
-            if (typeof requested !== 'number' || !Number.isFinite(requested) || requested <= 0) {
-                continue;
-            }
-
-            const normalized = Math.floor(requested);
-            if (normalized < effective[key].bytes) {
-                effective[key] = {
-                    bytes: normalized,
-                    source: 'policy',
-                };
-            }
-        }
-
-        return effective;
     }
 
     private getDeclarationDecision(

@@ -14,11 +14,6 @@ import type {
 } from '@stdo/shared-types';
 import {
     DATA_TRANSFER_CHUNK_BYTES,
-    MAX_DATA_TRANSFER_BYTES,
-    MAX_HTTP_REQUEST_TRANSFER_BYTES,
-    MAX_HTTP_RESPONSE_TRANSFER_BYTES,
-    MAX_PRIVATE_FILE_TRANSFER_BYTES,
-    MAX_STORAGE_BLOB_TRANSFER_BYTES,
 } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
@@ -70,7 +65,7 @@ export class DataTransferService {
             ...(purpose ? { purpose } : {}),
             filePath,
             sizeBytes: 0,
-            maxBytes: resolveTransferMaxBytes(resource, purpose, maxBytesOverride),
+            maxBytes: resolveTransferMaxBytes(maxBytesOverride),
             createdAt: timestamp,
             updatedAt: timestamp,
             direction: 'upload',
@@ -111,7 +106,7 @@ export class DataTransferService {
     async openRead(user: UserContext, extensionId: string, request: DataTransferOpenReadRequest, maxBytesOverride?: number): Promise<DataTransferInitResponse> {
         const resource = normalizeTransferResource(request.resource);
         const purpose = normalizeTransferPurpose(resource, request.purpose);
-        const maxBytes = resolveTransferMaxBytes(resource, purpose, maxBytesOverride);
+        const maxBytes = resolveTransferMaxBytes(maxBytesOverride);
         const { filePath, sizeBytes } = validateReadableTransferFile(request.sourcePath);
         if (sizeBytes > maxBytes) {
             throw new Error(`Transfer exceeds ${maxBytes} bytes`);
@@ -371,43 +366,16 @@ function normalizeTransferPurpose(
     throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
 }
 
-function getTransferMaxBytes(resource: DataTransferResource, purpose?: AuthorityInlineThresholdKey): number {
-    switch (purpose) {
-        case 'storageBlobWrite':
-        case 'storageBlobRead':
-            return MAX_STORAGE_BLOB_TRANSFER_BYTES;
-        case 'privateFileWrite':
-        case 'privateFileRead':
-            return MAX_PRIVATE_FILE_TRANSFER_BYTES;
-        case 'httpFetchRequest':
-            return MAX_HTTP_REQUEST_TRANSFER_BYTES;
-        case 'httpFetchResponse':
-            return MAX_HTTP_RESPONSE_TRANSFER_BYTES;
-        default:
-            switch (resource) {
-                case 'storage.blob':
-                    return MAX_STORAGE_BLOB_TRANSFER_BYTES;
-                case 'fs.private':
-                    return MAX_PRIVATE_FILE_TRANSFER_BYTES;
-                case 'http.fetch':
-                    return MAX_DATA_TRANSFER_BYTES;
-            }
-    }
-}
-
 function resolveTransferMaxBytes(
-    resource: DataTransferResource,
-    purpose?: AuthorityInlineThresholdKey,
     maxBytesOverride?: number,
 ): number {
-    const runtimeMaxBytes = getTransferMaxBytes(resource, purpose);
     if (typeof maxBytesOverride !== 'number' || !Number.isFinite(maxBytesOverride)) {
-        return runtimeMaxBytes;
+        return Number.MAX_SAFE_INTEGER;
     }
     if (maxBytesOverride <= 0) {
         throw new Error('Transfer maxBytes must be a positive integer');
     }
-    return Math.min(Math.floor(maxBytesOverride), runtimeMaxBytes);
+    return Math.floor(maxBytesOverride);
 }
 
 function decodeTransferChunk(content: string): Buffer {

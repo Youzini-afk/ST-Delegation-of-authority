@@ -135,7 +135,7 @@ describe('PermissionService', () => {
         expect(results.map(result => result.decision)).toEqual(['blocked', 'prompt', 'blocked']);
     });
 
-    it('derives effective inline thresholds from extension limit policy', async () => {
+    it('always returns runtime inline thresholds regardless of extension limit policy', async () => {
         const user = createUser(false);
         const admin = createUser(true);
         const session = createSession(user);
@@ -157,12 +157,12 @@ describe('PermissionService', () => {
         });
 
         const limits = await permissions.getEffectiveSessionLimits(user, session.extension.id);
-        expect(limits.effectiveInlineThresholdBytes.storageBlobWrite).toEqual({ bytes: 1024, source: 'policy' });
-        expect(limits.effectiveInlineThresholdBytes.httpFetchResponse).toEqual({ bytes: 2048, source: 'policy' });
+        expect(limits.effectiveInlineThresholdBytes.storageBlobWrite.source).toBe('runtime');
+        expect(limits.effectiveInlineThresholdBytes.httpFetchResponse.source).toBe('runtime');
         expect(limits.effectiveInlineThresholdBytes.privateFileRead.source).toBe('runtime');
     });
 
-    it('derives effective transfer ceilings from extension limit policy', async () => {
+    it('always returns unmanaged transfer ceilings regardless of extension limit policy', async () => {
         const user = createUser(false);
         const admin = createUser(true);
         const session = createSession(user);
@@ -177,7 +177,6 @@ describe('PermissionService', () => {
                         transferMaxBytes: {
                             storageBlobWrite: 1024,
                             httpFetchResponse: 2048,
-                            privateFileRead: Number.MAX_SAFE_INTEGER,
                         },
                     },
                 },
@@ -185,8 +184,8 @@ describe('PermissionService', () => {
         });
 
         const limits = await permissions.getEffectiveSessionLimits(user, session.extension.id);
-        expect(limits.effectiveTransferMaxBytes.storageBlobWrite).toEqual({ bytes: 1024, source: 'policy' });
-        expect(limits.effectiveTransferMaxBytes.httpFetchResponse).toEqual({ bytes: 2048, source: 'policy' });
+        expect(limits.effectiveTransferMaxBytes.storageBlobWrite).toEqual({ bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' });
+        expect(limits.effectiveTransferMaxBytes.httpFetchResponse).toEqual({ bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' });
         expect(limits.effectiveTransferMaxBytes.privateFileRead.source).toBe('runtime');
     });
 });

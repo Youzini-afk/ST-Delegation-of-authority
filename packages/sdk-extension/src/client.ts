@@ -104,7 +104,7 @@ import type {
     TriviumUpdatePayloadRequest,
     TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
-import { AuthorityLimitError, authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
+import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt, type PermissionPromptContext } from './permission-prompt.js';
 import { openSecurityCenter } from './security-center.js';
 
@@ -1823,47 +1823,9 @@ export class AuthorityClient {
         }
     }
 
-    private async getEffectiveTransferMaxLimit(key: InlineThresholdKey): Promise<{ bytes: number; source: string } | null> {
-        const sessionLimit = this.session?.limits.effectiveTransferMaxBytes[key];
-        if (sessionLimit && Number.isFinite(sessionLimit.bytes) && sessionLimit.bytes > 0) {
-            return sessionLimit;
-        }
-
-        try {
-            const probe = this.probeSnapshot ?? await this.ensureProbe();
-            const probeLimit = probe.limits.effectiveTransferMaxBytes[key];
-            if (probeLimit && Number.isFinite(probeLimit.bytes) && probeLimit.bytes > 0) {
-                return probeLimit;
-            }
-        } catch {
-            return null;
-        }
-
-        return null;
-    }
-
     private async getTransferStatus(transferId: string): Promise<DataTransferStatusResponse> {
         return await this.requestWithSession<DataTransferStatusResponse>(`/transfers/${encodeURIComponent(transferId)}/status`, {
             method: 'POST',
-        });
-    }
-
-    private async assertTransferWithinEffectiveMax(key: InlineThresholdKey, bytes: Uint8Array): Promise<void> {
-        const limit = await this.getEffectiveTransferMaxLimit(key);
-        if (!limit || bytes.byteLength <= limit.bytes) {
-            return;
-        }
-
-        throw new AuthorityLimitError(`Transfer exceeds ${limit.bytes} bytes for ${key}`, 413, {
-            error: `Transfer exceeds ${limit.bytes} bytes for ${key}`,
-            code: 'limit_exceeded',
-            category: 'limit',
-            details: {
-                operation: key,
-                sizeBytes: bytes.byteLength,
-                maxBytes: limit.bytes,
-                source: limit.source,
-            },
         });
     }
 
@@ -2193,7 +2155,6 @@ export class AuthorityClient {
     }
 
     private async putBlobWithTransfer(input: BlobPutRequest, bytes: Uint8Array): Promise<BlobRecord> {
-        await this.assertTransferWithinEffectiveMax('storageBlobWrite', bytes);
         const transfer = await this.initializeTransfer('storage.blob', 'storageBlobWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
@@ -2251,7 +2212,6 @@ export class AuthorityClient {
             return await this.resolveHttpFetchOpenResponse(opened);
         }
 
-        await this.assertTransferWithinEffectiveMax('httpFetchRequest', bodyBytes);
         const transfer = await this.initializeTransfer('http.fetch', 'httpFetchRequest');
         try {
             await this.appendTransferBytes(transfer, bodyBytes);
@@ -2308,7 +2268,6 @@ export class AuthorityClient {
         bytes: Uint8Array,
         options: Omit<PrivateFileWriteRequest, 'path' | 'content'>,
     ): Promise<PrivateFileEntry> {
-        await this.assertTransferWithinEffectiveMax('privateFileWrite', bytes);
         const transfer = await this.initializeTransfer('fs.private', 'privateFileWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);

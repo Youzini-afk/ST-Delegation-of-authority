@@ -1,7 +1,6 @@
 import type {
     AuthorityExtensionLimitsPolicy,
     AuthorityInlineThresholdKey,
-    AuthorityJobRegistryEntry,
     AuthorityPolicyEntry,
     DataTransferInitResponse,
     DataTransferReadResponse,
@@ -605,29 +604,20 @@ class SecurityCenterView {
 
     private collectExtensionLimitPolicy(): AuthorityExtensionLimitsPolicy | null {
         const inlineThresholdBytes: Partial<Record<AuthorityInlineThresholdKey, number>> = {};
-        const transferMaxBytes: Partial<Record<AuthorityInlineThresholdKey, number>> = {};
 
         for (const { key } of LIMIT_OPERATION_OPTIONS) {
             const inlineInput = this.root.querySelector<HTMLInputElement>(`[data-limit-kind="inlineThresholdBytes"][data-limit-key="${key}"]`);
-            const transferInput = this.root.querySelector<HTMLInputElement>(`[data-limit-kind="transferMaxBytes"][data-limit-key="${key}"]`);
             const inlineValue = parsePositiveIntOrNull(inlineInput?.value ?? '');
-            const transferValue = parsePositiveIntOrNull(transferInput?.value ?? '');
             if (inlineValue !== null) {
                 inlineThresholdBytes[key] = inlineValue;
             }
-            if (transferValue !== null) {
-                transferMaxBytes[key] = transferValue;
-            }
         }
 
-        if (Object.keys(inlineThresholdBytes).length === 0 && Object.keys(transferMaxBytes).length === 0) {
+        if (Object.keys(inlineThresholdBytes).length === 0) {
             return null;
         }
 
-        return {
-            ...(Object.keys(inlineThresholdBytes).length > 0 ? { inlineThresholdBytes } : {}),
-            ...(Object.keys(transferMaxBytes).length > 0 ? { transferMaxBytes } : {}),
-        };
+        return { inlineThresholdBytes };
     }
 
     private addPolicyOverrideRow(entry?: AuthorityPolicyEntry): void {
@@ -844,7 +834,6 @@ class SecurityCenterView {
                                 <strong>${escapeHtml(core?.health ? `${core.health.jobRegistrySummary.registered} / ${core.health.jobRegistrySummary.jobTypes.join(', ')}` : MISSING_TEXT)}</strong>
                             </div>
                         </div>
-                        ${this.renderJobRegistryDetails()}
                     </section>
                     ${this.renderEffectiveLimitsCard()}
                     ${this.renderOverviewCollapsibleSection(
@@ -1286,8 +1275,7 @@ class SecurityCenterView {
                             <thead>
                                 <tr>
                                     <th>场景</th>
-                                    <th>可直接返回的大小（字节）</th>
-                                    <th>分段传输上限（字节）</th>
+                                    <th>内联阈值（字节）</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1295,7 +1283,6 @@ class SecurityCenterView {
                                     <tr>
                                         <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
                                         <td><input type="number" min="1" step="1" data-limit-kind="inlineThresholdBytes" data-limit-key="${escapeHtml(key)}" value="${escapeHtml(String(limitPolicy?.inlineThresholdBytes?.[key] ?? ''))}" placeholder="例如 262144" /></td>
-                                        <td><input type="number" min="1" step="1" data-limit-kind="transferMaxBytes" data-limit-key="${escapeHtml(key)}" value="${escapeHtml(String(limitPolicy?.transferMaxBytes?.[key] ?? ''))}" placeholder="例如 1048576" /></td>
                                     </tr>
                                 `).join('')}
                             </tbody>
@@ -1641,10 +1628,8 @@ class SecurityCenterView {
                         <thead>
                             <tr>
                                 <th>操作</th>
-                                <th>当前会话：直接返回</th>
-                                <th>当前会话：分段传输</th>
-                                <th>系统默认：直接返回</th>
-                                <th>系统默认：分段传输</th>
+                                <th>当前会话：内联阈值</th>
+                                <th>系统默认：内联阈值</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1652,9 +1637,7 @@ class SecurityCenterView {
                                 <tr>
                                     <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
                                     <td>${escapeHtml(this.formatEffectiveLimitValue(sessionLimits.effectiveInlineThresholdBytes[key]))}</td>
-                                    <td>${escapeHtml(this.formatEffectiveLimitValue(sessionLimits.effectiveTransferMaxBytes[key]))}</td>
                                     <td>${escapeHtml(this.formatEffectiveLimitValue(probeLimits.effectiveInlineThresholdBytes[key]))}</td>
-                                    <td>${escapeHtml(this.formatEffectiveLimitValue(probeLimits.effectiveTransferMaxBytes[key]))}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1691,56 +1674,6 @@ class SecurityCenterView {
         `;
     }
 
-    private renderJobRegistryDetails(): string {
-        const registry = this.state.probe?.jobs.registry;
-        if (!registry) {
-            return '';
-        }
-        if (registry.entries.length === 0) {
-            return '<div class="authority-muted">当前没有提供可用任务类型的详细说明。</div>';
-        }
-
-        return `
-            <div class="authority-stack">
-                ${registry.entries.map(entry => this.renderJobRegistryEntry(entry)).join('')}
-            </div>
-        `;
-    }
-
-    private renderJobRegistryEntry(entry: AuthorityJobRegistryEntry): string {
-        return `
-            <div class="authority-list-card authority-list-card--column">
-                <div class="authority-page-actions">
-                    <strong>${escapeHtml(entry.type)}</strong>
-                    <span class="authority-pill authority-pill--${entry.cancellable ? 'granted' : 'warning'}">${escapeHtml(entry.cancellable ? '可取消' : '不可取消')}</span>
-                </div>
-                <div class="authority-muted">${escapeHtml(entry.description)}</div>
-                <div class="authority-kv-grid">
-                    <div><strong>默认超时</strong><div>${escapeHtml(entry.defaultTimeoutMs == null ? '未设置' : `${entry.defaultTimeoutMs}ms`)}</div></div>
-                    <div><strong>默认重试次数</strong><div>${escapeHtml(String(entry.defaultMaxAttempts))}</div></div>
-                    <div><strong>需要的参数</strong><div>${escapeHtml(entry.payloadFields.length === 0 ? '无' : String(entry.payloadFields.length))}</div></div>
-                    <div><strong>进度 / 结果字段</strong><div>${escapeHtml(entry.progressFields.length === 0 ? '无' : String(entry.progressFields.length))}</div></div>
-                </div>
-                <div class="authority-stack authority-stack--compact">
-                    <div>
-                        <strong>参数说明</strong>
-                        <div class="authority-muted">${escapeHtml(this.renderJobRegistryFieldSummary(entry.payloadFields))}</div>
-                    </div>
-                    <div>
-                        <strong>进度 / 结果说明</strong>
-                        <div class="authority-muted">${escapeHtml(this.renderJobRegistryFieldSummary(entry.progressFields))}</div>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-
-    private renderJobRegistryFieldSummary(fields: AuthorityJobRegistryEntry['payloadFields']): string {
-        if (fields.length === 0) {
-            return '无字段';
-        }
-        return fields.map(field => `${field.name}${field.required ? '' : '（可选）'}：${field.type}——${field.description}`).join('；');
-    }
 
     private getPackageOperationStatusLabel(status: PackageOperation['status']): string {
         switch (status) {

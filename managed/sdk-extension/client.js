@@ -1,4 +1,4 @@
-import { AuthorityLimitError, authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
+import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt } from './permission-prompt.js';
 import { openSecurityCenter } from './security-center.js';
 export class AuthorityPermissionError extends Error {
@@ -1333,43 +1333,9 @@ export class AuthorityClient {
             return SDK_TRANSFER_INLINE_THRESHOLD_BYTES;
         }
     }
-    async getEffectiveTransferMaxLimit(key) {
-        const sessionLimit = this.session?.limits.effectiveTransferMaxBytes[key];
-        if (sessionLimit && Number.isFinite(sessionLimit.bytes) && sessionLimit.bytes > 0) {
-            return sessionLimit;
-        }
-        try {
-            const probe = this.probeSnapshot ?? await this.ensureProbe();
-            const probeLimit = probe.limits.effectiveTransferMaxBytes[key];
-            if (probeLimit && Number.isFinite(probeLimit.bytes) && probeLimit.bytes > 0) {
-                return probeLimit;
-            }
-        }
-        catch {
-            return null;
-        }
-        return null;
-    }
     async getTransferStatus(transferId) {
         return await this.requestWithSession(`/transfers/${encodeURIComponent(transferId)}/status`, {
             method: 'POST',
-        });
-    }
-    async assertTransferWithinEffectiveMax(key, bytes) {
-        const limit = await this.getEffectiveTransferMaxLimit(key);
-        if (!limit || bytes.byteLength <= limit.bytes) {
-            return;
-        }
-        throw new AuthorityLimitError(`Transfer exceeds ${limit.bytes} bytes for ${key}`, 413, {
-            error: `Transfer exceeds ${limit.bytes} bytes for ${key}`,
-            code: 'limit_exceeded',
-            category: 'limit',
-            details: {
-                operation: key,
-                sizeBytes: bytes.byteLength,
-                maxBytes: limit.bytes,
-                source: limit.source,
-            },
         });
     }
     async ensureInitialized() {
@@ -1639,7 +1605,6 @@ export class AuthorityClient {
         }
     }
     async putBlobWithTransfer(input, bytes) {
-        await this.assertTransferWithinEffectiveMax('storageBlobWrite', bytes);
         const transfer = await this.initializeTransfer('storage.blob', 'storageBlobWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
@@ -1695,7 +1660,6 @@ export class AuthorityClient {
             });
             return await this.resolveHttpFetchOpenResponse(opened);
         }
-        await this.assertTransferWithinEffectiveMax('httpFetchRequest', bodyBytes);
         const transfer = await this.initializeTransfer('http.fetch', 'httpFetchRequest');
         try {
             await this.appendTransferBytes(transfer, bodyBytes);
@@ -1747,7 +1711,6 @@ export class AuthorityClient {
         }
     }
     async writePrivateFileWithTransfer(path, bytes, options) {
-        await this.assertTransferWithinEffectiveMax('privateFileWrite', bytes);
         const transfer = await this.initializeTransfer('fs.private', 'privateFileWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);

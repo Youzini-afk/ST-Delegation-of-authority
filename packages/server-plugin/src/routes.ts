@@ -96,14 +96,8 @@ import {
     DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
     DATA_TRANSFER_CHUNK_BYTES,
     MAX_BLOB_BYTES,
-    MAX_DATA_TRANSFER_BYTES,
-    MAX_HTTP_BODY_BYTES,
-    MAX_HTTP_REQUEST_TRANSFER_BYTES,
-    MAX_HTTP_RESPONSE_BYTES,
-    MAX_HTTP_RESPONSE_TRANSFER_BYTES,
     MAX_KV_VALUE_BYTES,
-    MAX_PRIVATE_FILE_TRANSFER_BYTES,
-    MAX_STORAGE_BLOB_TRANSFER_BYTES,
+    UNMANAGED_TRANSFER_MAX_BYTES,
     buildAuthorityFeatureFlags,
 } from './constants.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
@@ -116,13 +110,6 @@ type RouterLike = {
     post(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
 };
 
-type InlineThresholdKey =
-    | 'storageBlobWrite'
-    | 'storageBlobRead'
-    | 'privateFileWrite'
-    | 'privateFileRead'
-    | 'httpFetchRequest'
-    | 'httpFetchResponse';
 
 const ADMIN_PACKAGE_MAX_BYTES = 256 * 1024 * 1024;
 
@@ -309,39 +296,13 @@ function buildEffectiveInlineThresholds() {
 
 function buildEffectiveTransferMaxBytes() {
     return {
-        storageBlobWrite: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' as const },
-        storageBlobRead: { bytes: MAX_STORAGE_BLOB_TRANSFER_BYTES, source: 'runtime' as const },
-        privateFileWrite: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' as const },
-        privateFileRead: { bytes: MAX_PRIVATE_FILE_TRANSFER_BYTES, source: 'runtime' as const },
-        httpFetchRequest: { bytes: MAX_HTTP_REQUEST_TRANSFER_BYTES, source: 'runtime' as const },
-        httpFetchResponse: { bytes: MAX_HTTP_RESPONSE_TRANSFER_BYTES, source: 'runtime' as const },
+        storageBlobWrite: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' as const },
+        storageBlobRead: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' as const },
+        privateFileWrite: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' as const },
+        privateFileRead: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' as const },
+        httpFetchRequest: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' as const },
+        httpFetchResponse: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' as const },
     };
-}
-
-function getEffectiveInlineThresholdBytes(key: InlineThresholdKey): number {
-    return buildEffectiveInlineThresholds()[key].bytes;
-}
-
-function getTransferInitLimitKey(resource: DataTransferInitRequest['resource'], purpose?: InlineThresholdKey): InlineThresholdKey {
-    switch (resource) {
-        case 'storage.blob':
-            if (purpose && purpose !== 'storageBlobWrite') {
-                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
-            }
-            return 'storageBlobWrite';
-        case 'fs.private':
-            if (purpose && purpose !== 'privateFileWrite') {
-                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
-            }
-            return 'privateFileWrite';
-        case 'http.fetch':
-            if (purpose && purpose !== 'httpFetchRequest') {
-                throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
-            }
-            return 'httpFetchRequest';
-        default:
-            throw new Error(`Unsupported transfer resource: ${String(resource)}`);
-    }
 }
 
 function parseAdminUpdateAction(value: unknown): AdminUpdateAction {
@@ -657,10 +618,10 @@ async function buildProbeResponse(runtime: AuthorityRuntime, user: ReturnType<ty
             maxRequestBytes: core.health?.limits.maxRequestBytes ?? null,
             maxKvValueBytes: MAX_KV_VALUE_BYTES,
             maxBlobBytes: MAX_BLOB_BYTES,
-            maxHttpBodyBytes: MAX_HTTP_BODY_BYTES,
-            maxHttpResponseBytes: MAX_HTTP_RESPONSE_BYTES,
+            maxHttpBodyBytes: core.health?.limits.maxHttpBodyBytes ?? MAX_BLOB_BYTES,
+            maxHttpResponseBytes: core.health?.limits.maxHttpResponseBytes ?? MAX_BLOB_BYTES,
             maxEventPollLimit: core.health?.limits.maxEventPollLimit ?? null,
-            maxDataTransferBytes: MAX_DATA_TRANSFER_BYTES,
+            maxDataTransferBytes: UNMANAGED_TRANSFER_MAX_BYTES,
             dataTransferChunkBytes: DATA_TRANSFER_CHUNK_BYTES,
             dataTransferInlineThresholdBytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
             effectiveInlineThresholdBytes,
@@ -1115,9 +1076,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: ${payload.resource}`);
             }
 
-            const limitKey = getTransferInitLimitKey(payload.resource, payload.purpose);
-            const maxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, limitKey);
-            ok(res, await runtime.transfers.init(user, session.extension.id, payload, maxBytes));
+            ok(res, await runtime.transfers.init(user, session.extension.id, payload));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -1261,12 +1220,11 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 return;
             }
 
-            const transferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'storageBlobRead');
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'storage.blob',
                 purpose: 'storageBlobRead',
                 sourcePath: opened.sourcePath,
-            }, transferMaxBytes);
+            });
             await runtime.audit.logUsage(user, session.extension.id, 'Blob read via transfer', { id: blobId, sizeBytes: opened.record.size });
             ok(res, {
                 mode: 'transfer',
@@ -1421,12 +1379,11 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 return;
             }
 
-            const transferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'privateFileRead');
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'fs.private',
                 purpose: 'privateFileRead',
                 sourcePath: opened.sourcePath,
-            }, transferMaxBytes);
+            });
             await runtime.audit.logUsage(user, session.extension.id, 'Private file read via transfer', { path: payload.path, sizeBytes: opened.entry.sizeBytes });
             ok(res, {
                 mode: 'transfer',
@@ -2409,11 +2366,10 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 : undefined;
             bodyTransferIdToDiscard = payload.bodyTransferId;
 
-            const responseTransferMaxBytes = await runtime.permissions.getEffectiveTransferMaxBytes(user, session.extension.id, 'httpFetchResponse');
             const responseTransfer = await runtime.transfers.init(user, session.extension.id, {
                 resource: 'http.fetch',
                 purpose: 'httpFetchResponse',
-            }, responseTransferMaxBytes);
+            });
             responseTransferIdToDiscard = responseTransfer.transferId;
             const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
             const result = await runtime.http.openFetch(user, {

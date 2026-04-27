@@ -284,10 +284,10 @@ describe('registerRoutes', () => {
                     httpFetchResponse: { bytes: 256 * 1024, source: 'runtime' },
                 }),
                 effectiveTransferMaxBytes: expect.objectContaining({
-                    storageBlobWrite: { bytes: 16 * 1024 * 1024, source: 'runtime' },
-                    privateFileRead: { bytes: 16 * 1024 * 1024, source: 'runtime' },
-                    httpFetchRequest: { bytes: 512 * 1024, source: 'runtime' },
-                    httpFetchResponse: { bytes: 2 * 1024 * 1024, source: 'runtime' },
+                    storageBlobWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                    privateFileRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                    httpFetchRequest: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                    httpFetchResponse: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
                 }),
             }),
         }));

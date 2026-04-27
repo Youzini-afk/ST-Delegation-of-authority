@@ -1,11 +1,11 @@
 {
   "pluginId": "authority",
-  "pluginVersion": "1.0.1",
+  "pluginVersion": "1.0.0",
   "sdkExtensionId": "third-party/st-authority-sdk",
-  "sdkVersion": "1.0.1",
-  "assetHash": "f20dc02e0930ba3899cd2ef8bbd27f955bd817be020e00985a7c1c8a45c7e23d",
-  "coreVersion": "1.0.1",
-  "coreArtifactHash": "75476e11f0aa75bc3c8cd7788fffa594a62fe06c7d2c754721278f05348b10ba",
+  "sdkVersion": "1.0.0",
+  "assetHash": "0600171fb2566b4d2cb3389b604136bdd43a5eaaad6e7d74a04aa03b75ff118d",
+  "coreVersion": "1.0.0",
+  "coreArtifactHash": "b6056f24204e86bc0744dd1d754c03e52a4f02277a25a03a6d61d129f962bcf5",
   "coreArtifactPlatform": "win32-x64",
   "coreArtifactPlatforms": [
     "win32-x64"
@@ -15,10 +15,10 @@
       "platform": "win32",
       "arch": "x64",
       "binaryName": "authority-core.exe",
-      "binarySha256": "b9e59e1d51db23ec5516e36a48fddf7822a63245154b67259dc237cf405012cd",
-      "artifactHash": "5a53a8bd519994686be7c61b6e9629a22cfb1d4d38ac949f93b08422c1ad1d40"
+      "binarySha256": "bf72d686e1d3a7f77b2d373002402b73eb324efaf5a3e89b4f2970fb34b786b6",
+      "artifactHash": "8f7c29d34d1d60b8f2165e82729af8ac60cf174ccfb062d7dae83b44dd519c74"
     }
   },
-  "coreBinarySha256": "b9e59e1d51db23ec5516e36a48fddf7822a63245154b67259dc237cf405012cd",
-  "buildTime": "2026-04-27T12:43:29.826Z"
+  "coreBinarySha256": "bf72d686e1d3a7f77b2d373002402b73eb324efaf5a3e89b4f2970fb34b786b6",
+  "buildTime": "2026-04-27T14:01:04.894Z"
 }

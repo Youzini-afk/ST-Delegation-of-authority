@@ -327,40 +327,6 @@ describe('AuthorityClient', () => {
         expect(putBlobWithTransfer).toHaveBeenCalledTimes(1);
     });
 
-    it('fails fast with AuthorityLimitError when session-scoped transfer ceiling is exceeded', async () => {
-        const { AuthorityClient } = await import('./client.js');
-
-        const client = new AuthorityClient({
-            extensionId: 'third-party/ext-a',
-            displayName: 'Ext A',
-            version: AUTHORITY_VERSION,
-            installType: 'local',
-            declaredPermissions: {},
-        });
-
-        const session = buildSession();
-        session.limits.effectiveInlineThresholdBytes.storageBlobWrite = { bytes: 8, source: 'policy' };
-        session.limits.effectiveTransferMaxBytes.storageBlobWrite = { bytes: 8, source: 'policy' };
-        const initializeTransfer = vi.fn();
-
-        Object.assign(client as object, {
-            session,
-            ensurePermission: vi.fn().mockResolvedValue(undefined),
-            initializeTransfer,
-        });
-
-        await expect(client.storage.blob.put({
-            name: 'payload.txt',
-            content: 'hello world!',
-            encoding: 'utf8',
-        })).rejects.toMatchObject({
-            name: 'AuthorityLimitError',
-            status: 413,
-            code: 'limit_exceeded',
-        });
-
-        expect(initializeTransfer).not.toHaveBeenCalled();
-    });
 
     it('uses probe inline thresholds when deciding private file write transfer routing', async () => {
         const { AuthorityClient } = await import('./client.js');
@@ -1513,12 +1479,12 @@ function buildProbe(overrides: Partial<{
                 httpFetchResponse: { bytes: overrides.inlineThresholdBytes?.httpFetchResponse ?? 256, source: 'runtime' },
             },
             effectiveTransferMaxBytes: {
-                storageBlobWrite: { bytes: 1024, source: 'runtime' },
-                storageBlobRead: { bytes: 1024, source: 'runtime' },
-                privateFileWrite: { bytes: 1024, source: 'runtime' },
-                privateFileRead: { bytes: 1024, source: 'runtime' },
-                httpFetchRequest: { bytes: 1024, source: 'runtime' },
-                httpFetchResponse: { bytes: 1024, source: 'runtime' },
+                storageBlobWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                storageBlobRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                privateFileWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                privateFileRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                httpFetchRequest: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                httpFetchResponse: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
             },
         },
         jobs: {
@@ -1621,12 +1587,12 @@ function buildSession() {
                 httpFetchResponse: { bytes: 256, source: 'runtime' },
             },
             effectiveTransferMaxBytes: {
-                storageBlobWrite: { bytes: 1024, source: 'runtime' },
-                storageBlobRead: { bytes: 1024, source: 'runtime' },
-                privateFileWrite: { bytes: 1024, source: 'runtime' },
-                privateFileRead: { bytes: 1024, source: 'runtime' },
-                httpFetchRequest: { bytes: 1024, source: 'runtime' },
-                httpFetchResponse: { bytes: 1024, source: 'runtime' },
+                storageBlobWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                storageBlobRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                privateFileWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                privateFileRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                httpFetchRequest: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                httpFetchResponse: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
             },
         },
         features: buildProbe().features,
