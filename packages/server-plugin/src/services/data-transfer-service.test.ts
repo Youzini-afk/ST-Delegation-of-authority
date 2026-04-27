@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { MAX_HTTP_BODY_BYTES, MAX_HTTP_RESPONSE_BYTES } from '../constants.js';
 import { DataTransferService } from './data-transfer-service.js';
 import type { UserContext } from '../types.js';
 
@@ -44,6 +45,26 @@ describe('DataTransferService', () => {
         const initialized = await transfers.init(user, 'third-party/ext-a', { resource: 'fs.private' });
 
         expect(() => transfers.get(user, 'third-party/ext-b', initialized.transferId)).toThrow('Transfer not found');
+    });
+
+    it('uses purpose-specific maxBytes ceilings for http.fetch transfers', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+
+        const requestTransfer = await transfers.init(user, 'third-party/ext-a', {
+            resource: 'http.fetch',
+            purpose: 'httpFetchRequest',
+        });
+        expect(requestTransfer.maxBytes).toBe(MAX_HTTP_BODY_BYTES);
+        expect(requestTransfer.purpose).toBe('httpFetchRequest');
+
+        const responseSourcePath = path.join(user.rootDir, 'large-response.bin');
+        fs.writeFileSync(responseSourcePath, Buffer.alloc(MAX_HTTP_RESPONSE_BYTES + 1));
+        await expect(transfers.openRead(user, 'third-party/ext-a', {
+            resource: 'http.fetch',
+            purpose: 'httpFetchResponse',
+            sourcePath: responseSourcePath,
+        })).rejects.toThrow(`Transfer exceeds ${MAX_HTTP_RESPONSE_BYTES} bytes`);
     });
 
     it('reads chunked payloads from existing files without deleting the source file', async () => {

@@ -2072,7 +2072,7 @@ export class AuthorityClient {
     }
 
     private async putBlobWithTransfer(input: BlobPutRequest, bytes: Uint8Array): Promise<BlobRecord> {
-        const transfer = await this.initializeTransfer('storage.blob');
+        const transfer = await this.initializeTransfer('storage.blob', 'storageBlobWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
             const request: BlobTransferCommitRequest = {
@@ -2127,7 +2127,7 @@ export class AuthorityClient {
             return await this.resolveHttpFetchOpenResponse(opened);
         }
 
-        const transfer = await this.initializeTransfer('http.fetch');
+        const transfer = await this.initializeTransfer('http.fetch', 'httpFetchRequest');
         try {
             await this.appendTransferBytes(transfer, bodyBytes);
             const opened = await this.requestWithSession<HttpFetchOpenResponse>('/http/fetch-open', {
@@ -2183,7 +2183,7 @@ export class AuthorityClient {
         bytes: Uint8Array,
         options: Omit<PrivateFileWriteRequest, 'path' | 'content'>,
     ): Promise<PrivateFileEntry> {
-        const transfer = await this.initializeTransfer('fs.private');
+        const transfer = await this.initializeTransfer('fs.private', 'privateFileWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
             const request: PrivateFileTransferCommitRequest = {
@@ -2233,10 +2233,13 @@ export class AuthorityClient {
         }
     }
 
-    private async initializeTransfer(resource: DataTransferResource): Promise<DataTransferInitResponse> {
+    private async initializeTransfer(resource: DataTransferResource, purpose?: InlineThresholdKey): Promise<DataTransferInitResponse> {
         return await this.requestWithSession<DataTransferInitResponse>('/transfers/init', {
             method: 'POST',
-            body: { resource },
+            body: {
+                resource,
+                ...(purpose ? { purpose } : {}),
+            },
         });
     }
 

@@ -1546,7 +1546,7 @@ export class AuthorityClient {
         }
     }
     async putBlobWithTransfer(input, bytes) {
-        const transfer = await this.initializeTransfer('storage.blob');
+        const transfer = await this.initializeTransfer('storage.blob', 'storageBlobWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
             const request = {
@@ -1599,7 +1599,7 @@ export class AuthorityClient {
             });
             return await this.resolveHttpFetchOpenResponse(opened);
         }
-        const transfer = await this.initializeTransfer('http.fetch');
+        const transfer = await this.initializeTransfer('http.fetch', 'httpFetchRequest');
         try {
             await this.appendTransferBytes(transfer, bodyBytes);
             const opened = await this.requestWithSession('/http/fetch-open', {
@@ -1650,7 +1650,7 @@ export class AuthorityClient {
         }
     }
     async writePrivateFileWithTransfer(path, bytes, options) {
-        const transfer = await this.initializeTransfer('fs.private');
+        const transfer = await this.initializeTransfer('fs.private', 'privateFileWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
             const request = {
@@ -1696,10 +1696,13 @@ export class AuthorityClient {
             await this.discardTransferQuietly(opened.transfer.transferId);
         }
     }
-    async initializeTransfer(resource) {
+    async initializeTransfer(resource, purpose) {
         return await this.requestWithSession('/transfers/init', {
             method: 'POST',
-            body: { resource },
+            body: {
+                resource,
+                ...(purpose ? { purpose } : {}),
+            },
         });
     }
     async appendTransferBytes(transfer, bytes) {

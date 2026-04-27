@@ -981,6 +981,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'storage.blob',
+                purpose: 'storageBlobRead',
                 sourcePath: opened.sourcePath,
             });
             ok(res, {
@@ -1137,6 +1138,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'fs.private',
+                purpose: 'privateFileRead',
                 sourcePath: opened.sourcePath,
             });
             await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path, via: 'transfer' });
@@ -2121,7 +2123,10 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 : undefined;
             bodyTransferIdToDiscard = payload.bodyTransferId;
 
-            const responseTransfer = await runtime.transfers.init(user, session.extension.id, { resource: 'http.fetch' });
+            const responseTransfer = await runtime.transfers.init(user, session.extension.id, {
+                resource: 'http.fetch',
+                purpose: 'httpFetchResponse',
+            });
             responseTransferIdToDiscard = responseTransfer.transferId;
             const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
             const result = await runtime.http.openFetch(user, {

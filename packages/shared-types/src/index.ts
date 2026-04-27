@@ -748,11 +748,13 @@ export interface BlobPutRequest {
 
 export interface DataTransferInitRequest {
     resource: DataTransferResource;
+    purpose?: AuthorityInlineThresholdKey;
 }
 
 export interface DataTransferInitResponse {
     transferId: string;
     resource: DataTransferResource;
+    purpose?: AuthorityInlineThresholdKey;
     chunkSize: number;
     maxBytes: number;
     createdAt: string;

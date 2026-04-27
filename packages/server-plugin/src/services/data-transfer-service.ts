@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+    AuthorityInlineThresholdKey,
     DataTransferAppendRequest,
     DataTransferAppendResponse,
     DataTransferInitRequest,
@@ -10,7 +11,14 @@ import type {
     DataTransferReadResponse,
     DataTransferResource,
 } from '@stdo/shared-types';
-import { DATA_TRANSFER_CHUNK_BYTES, MAX_DATA_TRANSFER_BYTES } from '../constants.js';
+import {
+    DATA_TRANSFER_CHUNK_BYTES,
+    MAX_DATA_TRANSFER_BYTES,
+    MAX_HTTP_REQUEST_TRANSFER_BYTES,
+    MAX_HTTP_RESPONSE_TRANSFER_BYTES,
+    MAX_PRIVATE_FILE_TRANSFER_BYTES,
+    MAX_STORAGE_BLOB_TRANSFER_BYTES,
+} from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
 import { sanitizeFileSegment } from '../utils.js';
@@ -18,6 +26,7 @@ import { sanitizeFileSegment } from '../utils.js';
 interface DataTransferOpenReadRequest {
     resource: DataTransferResource;
     sourcePath: string;
+    purpose?: AuthorityInlineThresholdKey;
 }
 
 interface DataTransferRecord {
@@ -25,6 +34,7 @@ interface DataTransferRecord {
     userHandle: string;
     extensionId: string;
     resource: DataTransferResource;
+    purpose?: AuthorityInlineThresholdKey;
     filePath: string;
     sizeBytes: number;
     maxBytes: number;
@@ -39,6 +49,7 @@ export class DataTransferService {
 
     async init(user: UserContext, extensionId: string, request: DataTransferInitRequest): Promise<DataTransferInitResponse> {
         const resource = normalizeTransferResource(request.resource);
+        const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = crypto.randomUUID();
         const timestamp = new Date().toISOString();
         const dirPath = this.getTransferDir(user, extensionId, resource);
@@ -51,9 +62,10 @@ export class DataTransferService {
             userHandle: user.handle,
             extensionId,
             resource,
+            ...(purpose ? { purpose } : {}),
             filePath,
             sizeBytes: 0,
-            maxBytes: MAX_DATA_TRANSFER_BYTES,
+            maxBytes: getTransferMaxBytes(resource, purpose),
             createdAt: timestamp,
             updatedAt: timestamp,
             direction: 'upload',
@@ -89,9 +101,11 @@ export class DataTransferService {
 
     async openRead(user: UserContext, extensionId: string, request: DataTransferOpenReadRequest): Promise<DataTransferInitResponse> {
         const resource = normalizeTransferResource(request.resource);
+        const purpose = normalizeTransferPurpose(resource, request.purpose);
+        const maxBytes = getTransferMaxBytes(resource, purpose);
         const { filePath, sizeBytes } = validateReadableTransferFile(request.sourcePath);
-        if (sizeBytes > MAX_DATA_TRANSFER_BYTES) {
-            throw new Error(`Transfer exceeds ${MAX_DATA_TRANSFER_BYTES} bytes`);
+        if (sizeBytes > maxBytes) {
+            throw new Error(`Transfer exceeds ${maxBytes} bytes`);
         }
 
         const transferId = crypto.randomUUID();
@@ -101,6 +115,7 @@ export class DataTransferService {
             userHandle: user.handle,
             extensionId,
             resource,
+            ...(purpose ? { purpose } : {}),
             filePath,
             sizeBytes,
             maxBytes: sizeBytes,
@@ -120,8 +135,8 @@ export class DataTransferService {
         }
 
         const { filePath, sizeBytes } = validateReadableTransferFile(record.filePath);
-        if (sizeBytes > MAX_DATA_TRANSFER_BYTES) {
-            throw new Error(`Transfer exceeds ${MAX_DATA_TRANSFER_BYTES} bytes`);
+        if (sizeBytes > record.maxBytes) {
+            throw new Error(`Transfer exceeds ${record.maxBytes} bytes`);
         }
 
         record.filePath = filePath;
@@ -221,6 +236,7 @@ function toInitResponse(record: DataTransferRecord): DataTransferInitResponse {
     return {
         transferId: record.transferId,
         resource: record.resource,
+        ...(record.purpose ? { purpose: record.purpose } : {}),
         chunkSize: DATA_TRANSFER_CHUNK_BYTES,
         maxBytes: record.maxBytes,
         createdAt: record.createdAt,
@@ -234,6 +250,51 @@ function normalizeTransferResource(resource: DataTransferInitRequest['resource']
         return resource;
     }
     throw new Error(`Unsupported transfer resource: ${String(resource)}`);
+}
+
+function normalizeTransferPurpose(
+    resource: DataTransferResource,
+    purpose: AuthorityInlineThresholdKey | undefined,
+): AuthorityInlineThresholdKey | undefined {
+    if (!purpose) {
+        return undefined;
+    }
+
+    if (resource === 'storage.blob' && (purpose === 'storageBlobWrite' || purpose === 'storageBlobRead')) {
+        return purpose;
+    }
+    if (resource === 'fs.private' && (purpose === 'privateFileWrite' || purpose === 'privateFileRead')) {
+        return purpose;
+    }
+    if (resource === 'http.fetch' && (purpose === 'httpFetchRequest' || purpose === 'httpFetchResponse')) {
+        return purpose;
+    }
+
+    throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+}
+
+function getTransferMaxBytes(resource: DataTransferResource, purpose?: AuthorityInlineThresholdKey): number {
+    switch (purpose) {
+        case 'storageBlobWrite':
+        case 'storageBlobRead':
+            return MAX_STORAGE_BLOB_TRANSFER_BYTES;
+        case 'privateFileWrite':
+        case 'privateFileRead':
+            return MAX_PRIVATE_FILE_TRANSFER_BYTES;
+        case 'httpFetchRequest':
+            return MAX_HTTP_REQUEST_TRANSFER_BYTES;
+        case 'httpFetchResponse':
+            return MAX_HTTP_RESPONSE_TRANSFER_BYTES;
+        default:
+            switch (resource) {
+                case 'storage.blob':
+                    return MAX_STORAGE_BLOB_TRANSFER_BYTES;
+                case 'fs.private':
+                    return MAX_PRIVATE_FILE_TRANSFER_BYTES;
+                case 'http.fetch':
+                    return MAX_DATA_TRANSFER_BYTES;
+            }
+    }
 }
 
 function decodeTransferChunk(content: string): Buffer {

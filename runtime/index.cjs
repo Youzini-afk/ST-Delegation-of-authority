@@ -26,8 +26,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   MAX_BLOB_BYTES: () => (/* binding */ MAX_BLOB_BYTES),
 /* harmony export */   MAX_DATA_TRANSFER_BYTES: () => (/* binding */ MAX_DATA_TRANSFER_BYTES),
 /* harmony export */   MAX_HTTP_BODY_BYTES: () => (/* binding */ MAX_HTTP_BODY_BYTES),
+/* harmony export */   MAX_HTTP_REQUEST_TRANSFER_BYTES: () => (/* binding */ MAX_HTTP_REQUEST_TRANSFER_BYTES),
 /* harmony export */   MAX_HTTP_RESPONSE_BYTES: () => (/* binding */ MAX_HTTP_RESPONSE_BYTES),
+/* harmony export */   MAX_HTTP_RESPONSE_TRANSFER_BYTES: () => (/* binding */ MAX_HTTP_RESPONSE_TRANSFER_BYTES),
 /* harmony export */   MAX_KV_VALUE_BYTES: () => (/* binding */ MAX_KV_VALUE_BYTES),
+/* harmony export */   MAX_PRIVATE_FILE_TRANSFER_BYTES: () => (/* binding */ MAX_PRIVATE_FILE_TRANSFER_BYTES),
+/* harmony export */   MAX_STORAGE_BLOB_TRANSFER_BYTES: () => (/* binding */ MAX_STORAGE_BLOB_TRANSFER_BYTES),
 /* harmony export */   RESOURCE_RISK: () => (/* binding */ RESOURCE_RISK),
 /* harmony export */   SESSION_HEADER: () => (/* binding */ SESSION_HEADER),
 /* harmony export */   SESSION_QUERY: () => (/* binding */ SESSION_QUERY),
@@ -50,7 +54,11 @@ const MAX_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_AUDIT_LINES = 200;
 const DATA_TRANSFER_CHUNK_BYTES = 256 * 1024;
 const DATA_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
-const MAX_DATA_TRANSFER_BYTES = MAX_BLOB_BYTES;
+const MAX_STORAGE_BLOB_TRANSFER_BYTES = MAX_BLOB_BYTES;
+const MAX_PRIVATE_FILE_TRANSFER_BYTES = MAX_BLOB_BYTES;
+const MAX_HTTP_REQUEST_TRANSFER_BYTES = MAX_HTTP_BODY_BYTES;
+const MAX_HTTP_RESPONSE_TRANSFER_BYTES = MAX_HTTP_RESPONSE_BYTES;
+const MAX_DATA_TRANSFER_BYTES = Math.max(MAX_STORAGE_BLOB_TRANSFER_BYTES, MAX_PRIVATE_FILE_TRANSFER_BYTES, MAX_HTTP_REQUEST_TRANSFER_BYTES, MAX_HTTP_RESPONSE_TRANSFER_BYTES);
 const SUPPORTED_RESOURCES = [
     'storage.kv',
     'storage.blob',
@@ -1036,6 +1044,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             }
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'storage.blob',
+                purpose: 'storageBlobRead',
                 sourcePath: opened.sourcePath,
             });
             ok(res, {
@@ -1183,6 +1192,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             }
             const transfer = await runtime.transfers.openRead(user, session.extension.id, {
                 resource: 'fs.private',
+                purpose: 'privateFileRead',
                 sourcePath: opened.sourcePath,
             });
             await runtime.audit.logUsage(user, session.extension.id, 'Private file read', { path: payload.path, via: 'transfer' });
@@ -2122,7 +2132,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 ? runtime.transfers.get(user, session.extension.id, payload.bodyTransferId, 'http.fetch')
                 : undefined;
             bodyTransferIdToDiscard = payload.bodyTransferId;
-            const responseTransfer = await runtime.transfers.init(user, session.extension.id, { resource: 'http.fetch' });
+            const responseTransfer = await runtime.transfers.init(user, session.extension.id, {
+                resource: 'http.fetch',
+                purpose: 'httpFetchResponse',
+            });
             responseTransferIdToDiscard = responseTransfer.transferId;
             const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
             const result = await runtime.http.openFetch(user, {
@@ -3531,6 +3544,7 @@ class DataTransferService {
     transfers = new Map();
     async init(user, extensionId, request) {
         const resource = normalizeTransferResource(request.resource);
+        const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         const timestamp = new Date().toISOString();
         const dirPath = this.getTransferDir(user, extensionId, resource);
@@ -3542,9 +3556,10 @@ class DataTransferService {
             userHandle: user.handle,
             extensionId,
             resource,
+            ...(purpose ? { purpose } : {}),
             filePath,
             sizeBytes: 0,
-            maxBytes: _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES,
+            maxBytes: getTransferMaxBytes(resource, purpose),
             createdAt: timestamp,
             updatedAt: timestamp,
             direction: 'upload',
@@ -3577,9 +3592,11 @@ class DataTransferService {
     }
     async openRead(user, extensionId, request) {
         const resource = normalizeTransferResource(request.resource);
+        const purpose = normalizeTransferPurpose(resource, request.purpose);
+        const maxBytes = getTransferMaxBytes(resource, purpose);
         const { filePath, sizeBytes } = validateReadableTransferFile(request.sourcePath);
-        if (sizeBytes > _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES) {
-            throw new Error(`Transfer exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES} bytes`);
+        if (sizeBytes > maxBytes) {
+            throw new Error(`Transfer exceeds ${maxBytes} bytes`);
         }
         const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         const timestamp = new Date().toISOString();
@@ -3588,6 +3605,7 @@ class DataTransferService {
             userHandle: user.handle,
             extensionId,
             resource,
+            ...(purpose ? { purpose } : {}),
             filePath,
             sizeBytes,
             maxBytes: sizeBytes,
@@ -3605,8 +3623,8 @@ class DataTransferService {
             throw new Error('Transfer is already readable');
         }
         const { filePath, sizeBytes } = validateReadableTransferFile(record.filePath);
-        if (sizeBytes > _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES) {
-            throw new Error(`Transfer exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES} bytes`);
+        if (sizeBytes > record.maxBytes) {
+            throw new Error(`Transfer exceeds ${record.maxBytes} bytes`);
         }
         record.filePath = filePath;
         record.sizeBytes = sizeBytes;
@@ -3694,6 +3712,7 @@ function toInitResponse(record) {
     return {
         transferId: record.transferId,
         resource: record.resource,
+        ...(record.purpose ? { purpose: record.purpose } : {}),
         chunkSize: _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES,
         maxBytes: record.maxBytes,
         createdAt: record.createdAt,
@@ -3706,6 +3725,44 @@ function normalizeTransferResource(resource) {
         return resource;
     }
     throw new Error(`Unsupported transfer resource: ${String(resource)}`);
+}
+function normalizeTransferPurpose(resource, purpose) {
+    if (!purpose) {
+        return undefined;
+    }
+    if (resource === 'storage.blob' && (purpose === 'storageBlobWrite' || purpose === 'storageBlobRead')) {
+        return purpose;
+    }
+    if (resource === 'fs.private' && (purpose === 'privateFileWrite' || purpose === 'privateFileRead')) {
+        return purpose;
+    }
+    if (resource === 'http.fetch' && (purpose === 'httpFetchRequest' || purpose === 'httpFetchResponse')) {
+        return purpose;
+    }
+    throw new Error(`Unsupported transfer purpose ${purpose} for resource ${resource}`);
+}
+function getTransferMaxBytes(resource, purpose) {
+    switch (purpose) {
+        case 'storageBlobWrite':
+        case 'storageBlobRead':
+            return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_STORAGE_BLOB_TRANSFER_BYTES;
+        case 'privateFileWrite':
+        case 'privateFileRead':
+            return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_PRIVATE_FILE_TRANSFER_BYTES;
+        case 'httpFetchRequest':
+            return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_HTTP_REQUEST_TRANSFER_BYTES;
+        case 'httpFetchResponse':
+            return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_HTTP_RESPONSE_TRANSFER_BYTES;
+        default:
+            switch (resource) {
+                case 'storage.blob':
+                    return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_STORAGE_BLOB_TRANSFER_BYTES;
+                case 'fs.private':
+                    return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_PRIVATE_FILE_TRANSFER_BYTES;
+                case 'http.fetch':
+                    return _constants_js__WEBPACK_IMPORTED_MODULE_3__.MAX_DATA_TRANSFER_BYTES;
+            }
+    }
 }
 function decodeTransferChunk(content) {
     try {

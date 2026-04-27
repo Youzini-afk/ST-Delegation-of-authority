@@ -404,7 +404,7 @@ describe('AuthorityClient', () => {
             bodyEncoding: 'utf8',
         });
 
-        expect(initializeTransfer).toHaveBeenCalledWith('http.fetch');
+        expect(initializeTransfer).toHaveBeenCalledWith('http.fetch', 'httpFetchRequest');
         expect(appendTransferBytes).toHaveBeenCalledTimes(1);
         expect(requestWithSession).toHaveBeenCalledWith('/http/fetch-open', expect.objectContaining({
             method: 'POST',
