@@ -2,14 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type {
     AuthorityErrorPayload,
+    AuthorityDiagnosticBundleResponse,
+    AuthorityDiagnosticExtensionSnapshot,
+    AuthorityExtensionStorageSummary,
     AuthorityProbeResponse,
     AuthorityInitConfig,
+    AuthorityUsageSummaryExtension,
+    AuthorityUsageSummaryResponse,
+    AuthorityUsageSummaryTotals,
     BlobRecord,
     BlobTransferCommitRequest,
+    ControlExtensionRecord,
     CursorPageInfo,
     CursorPageRequest,
     DataTransferAppendRequest,
     DataTransferInitRequest,
+    DataTransferManifestResponse,
     DataTransferReadRequest,
     HttpFetchOpenRequest,
     JobListRequest,
@@ -23,7 +31,6 @@ import type {
     PrivateFileMkdirRequest,
     PrivateFileReadDirRequest,
     PrivateFileReadRequest,
-    PrivateFileUsageSummary,
     PrivateFileWriteRequest,
     PrivateFileStatRequest,
     SqlBatchRequest,
@@ -586,18 +593,7 @@ async function buildExtensionStorageSummary(
     extensionId: string,
     sqlDatabases?: SqlDatabaseRecord[],
     triviumDatabases?: TriviumDatabaseRecord[],
-): Promise<{
-    kvEntries: number;
-    blobCount: number;
-    blobBytes: number;
-    databaseCount: number;
-    databaseBytes: number;
-    sqlDatabaseCount: number;
-    sqlDatabaseBytes: number;
-    triviumDatabaseCount: number;
-    triviumDatabaseBytes: number;
-    files: PrivateFileUsageSummary;
-}> {
+): Promise<AuthorityExtensionStorageSummary> {
     const [kvEntries, blobs, files] = await Promise.all([
         runtime.storage.listKv(user, extensionId),
         runtime.storage.listBlobs(user, extensionId),
@@ -623,56 +619,221 @@ async function buildExtensionStorageSummary(
     };
 }
 
+async function buildProbeResponse(runtime: AuthorityRuntime, user: ReturnType<typeof getUserContext>): Promise<AuthorityProbeResponse> {
+    await runtime.core.refreshHealth();
+    const install = runtime.install.getStatus();
+    const core = runtime.core.getStatus();
+    const features = buildAuthorityFeatureFlags(user.isAdmin);
+    const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
+    const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
+    return {
+        id: 'authority',
+        online: true,
+        version: install.pluginVersion,
+        pluginId: AUTHORITY_PLUGIN_ID,
+        sdkExtensionId: AUTHORITY_SDK_EXTENSION_ID,
+        pluginVersion: install.pluginVersion,
+        sdkBundledVersion: install.sdkBundledVersion,
+        sdkDeployedVersion: install.sdkDeployedVersion,
+        coreBundledVersion: install.coreBundledVersion,
+        coreArtifactPlatform: install.coreArtifactPlatform,
+        coreArtifactPlatforms: install.coreArtifactPlatforms,
+        coreArtifactHash: install.coreArtifactHash,
+        coreBinarySha256: install.coreBinarySha256,
+        coreVerified: install.coreVerified,
+        coreMessage: install.coreMessage,
+        installStatus: install.installStatus,
+        installMessage: install.installMessage,
+        storageRoot: path.join(user.rootDir, AUTHORITY_DATA_FOLDER, 'storage'),
+        features,
+        limits: {
+            maxRequestBytes: core.health?.limits.maxRequestBytes ?? null,
+            maxKvValueBytes: MAX_KV_VALUE_BYTES,
+            maxBlobBytes: MAX_BLOB_BYTES,
+            maxHttpBodyBytes: MAX_HTTP_BODY_BYTES,
+            maxHttpResponseBytes: MAX_HTTP_RESPONSE_BYTES,
+            maxEventPollLimit: core.health?.limits.maxEventPollLimit ?? null,
+            maxDataTransferBytes: MAX_DATA_TRANSFER_BYTES,
+            dataTransferChunkBytes: DATA_TRANSFER_CHUNK_BYTES,
+            dataTransferInlineThresholdBytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
+            effectiveInlineThresholdBytes,
+            effectiveTransferMaxBytes,
+        },
+        jobs: {
+            builtinTypes: [...BUILTIN_JOB_TYPES],
+            registry: core.health?.jobRegistrySummary ?? BUILTIN_JOB_REGISTRY_SUMMARY,
+        },
+        core,
+    };
+}
+
+async function buildUsageSummaryExtension(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    extension: ControlExtensionRecord,
+    sqlDatabases?: SqlDatabaseRecord[],
+    triviumDatabases?: TriviumDatabaseRecord[],
+): Promise<AuthorityUsageSummaryExtension> {
+    const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
+    return {
+        extension,
+        grantedCount: grants.filter(grant => grant.status === 'granted').length,
+        deniedCount: grants.filter(grant => grant.status === 'denied').length,
+        storage: await buildExtensionStorageSummary(runtime, user, extension.id, sqlDatabases, triviumDatabases),
+    };
+}
+
+function buildUsageSummaryTotals(extensions: AuthorityUsageSummaryExtension[]): AuthorityUsageSummaryTotals {
+    const initialTotals: AuthorityUsageSummaryTotals = {
+        extensionCount: 0,
+        kvEntries: 0,
+        blobCount: 0,
+        blobBytes: 0,
+        databaseCount: 0,
+        databaseBytes: 0,
+        sqlDatabaseCount: 0,
+        sqlDatabaseBytes: 0,
+        triviumDatabaseCount: 0,
+        triviumDatabaseBytes: 0,
+        files: {
+            fileCount: 0,
+            directoryCount: 0,
+            totalSizeBytes: 0,
+            latestUpdatedAt: null,
+        },
+    };
+
+    return extensions.reduce<AuthorityUsageSummaryTotals>((totals, entry) => ({
+        extensionCount: totals.extensionCount + 1,
+        kvEntries: totals.kvEntries + entry.storage.kvEntries,
+        blobCount: totals.blobCount + entry.storage.blobCount,
+        blobBytes: totals.blobBytes + entry.storage.blobBytes,
+        databaseCount: totals.databaseCount + entry.storage.databaseCount,
+        databaseBytes: totals.databaseBytes + entry.storage.databaseBytes,
+        sqlDatabaseCount: totals.sqlDatabaseCount + entry.storage.sqlDatabaseCount,
+        sqlDatabaseBytes: totals.sqlDatabaseBytes + entry.storage.sqlDatabaseBytes,
+        triviumDatabaseCount: totals.triviumDatabaseCount + entry.storage.triviumDatabaseCount,
+        triviumDatabaseBytes: totals.triviumDatabaseBytes + entry.storage.triviumDatabaseBytes,
+        files: {
+            fileCount: totals.files.fileCount + entry.storage.files.fileCount,
+            directoryCount: totals.files.directoryCount + entry.storage.files.directoryCount,
+            totalSizeBytes: totals.files.totalSizeBytes + entry.storage.files.totalSizeBytes,
+            latestUpdatedAt: pickLatestIsoTimestamp(totals.files.latestUpdatedAt, entry.storage.files.latestUpdatedAt),
+        },
+    }), initialTotals);
+}
+
+function pickLatestIsoTimestamp(left: string | null, right: string | null): string | null {
+    if (!left) {
+        return right;
+    }
+    if (!right) {
+        return left;
+    }
+    return left >= right ? left : right;
+}
+
+async function buildUsageSummary(runtime: AuthorityRuntime, user: ReturnType<typeof getUserContext>): Promise<AuthorityUsageSummaryResponse> {
+    const extensions = await runtime.extensions.listExtensions(user);
+    const summaries = await Promise.all(extensions.map(async extension => {
+        const sqlDatabases = (await listPrivateSqlDatabases(runtime, user, extension.id)).databases;
+        const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extension.id)).databases;
+        return await buildUsageSummaryExtension(runtime, user, extension, sqlDatabases, triviumDatabases);
+    }));
+    return {
+        generatedAt: new Date().toISOString(),
+        totals: buildUsageSummaryTotals(summaries),
+        extensions: summaries,
+    };
+}
+
+async function buildExtensionDiagnosticSnapshot(
+    runtime: AuthorityRuntime,
+    user: ReturnType<typeof getUserContext>,
+    extensionId: string,
+    extension?: ControlExtensionRecord,
+): Promise<AuthorityDiagnosticExtensionSnapshot> {
+    const resolvedExtension = extension ?? await runtime.extensions.getExtension(user, extensionId);
+    if (!resolvedExtension) {
+        throw new Error('Extension not found');
+    }
+
+    const databases = (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
+    const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
+    const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
+    const jobsPage = await runtime.jobs.listPage(user, extensionId);
+
+    return {
+        extension: resolvedExtension,
+        grants: await runtime.permissions.listPersistentGrants(user, extensionId),
+        policies: await runtime.permissions.getPolicyEntries(user, extensionId),
+        activity,
+        jobs: jobsPage.jobs,
+        jobsPage: jobsPage.page,
+        databases,
+        triviumDatabases,
+        storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),
+    };
+}
+
+async function buildDiagnosticBundle(runtime: AuthorityRuntime, user: ReturnType<typeof getUserContext>): Promise<AuthorityDiagnosticBundleResponse> {
+    const [probe, policies, usageSummary, jobs] = await Promise.all([
+        buildProbeResponse(runtime, user),
+        runtime.policies.getPolicies(user),
+        buildUsageSummary(runtime, user),
+        runtime.jobs.listPage(user),
+    ]);
+
+    const extensions = await Promise.all(usageSummary.extensions.map(async entry => await buildExtensionDiagnosticSnapshot(
+        runtime,
+        user,
+        entry.extension.id,
+        entry.extension,
+    )));
+
+    return sanitizeDiagnosticPayload({
+        generatedAt: new Date().toISOString(),
+        probe,
+        policies,
+        usageSummary,
+        jobs,
+        extensions,
+    });
+}
+
+function sanitizeDiagnosticPayload<T>(value: T): T {
+    return sanitizeDiagnosticValue(undefined, value) as T;
+}
+
+function sanitizeDiagnosticValue(key: string | undefined, value: unknown): unknown {
+    if (typeof value === 'string') {
+        return shouldRedactDiagnosticKey(key) ? '<redacted>' : value;
+    }
+    if (Array.isArray(value)) {
+        return value.map(item => sanitizeDiagnosticValue(undefined, item));
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [
+        entryKey,
+        sanitizeDiagnosticValue(entryKey, entryValue),
+    ]));
+}
+
+function shouldRedactDiagnosticKey(key: string | undefined): boolean {
+    const normalized = key?.toLowerCase() ?? '';
+    return normalized.includes('path')
+        || normalized.includes('root')
+        || normalized.includes('token')
+        || normalized.includes('secret');
+}
+
 export function registerRoutes(router: RouterLike, runtime = createAuthorityRuntime()): AuthorityRuntime {
 
     router.post('/probe', async (req, res) => {
-        await runtime.core.refreshHealth();
         const user = getUserContext(req);
-        const install = runtime.install.getStatus();
-        const core = runtime.core.getStatus();
-        const features = buildAuthorityFeatureFlags(user.isAdmin);
-        const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
-        const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
-        const response: AuthorityProbeResponse = {
-            id: 'authority',
-            online: true,
-            version: install.pluginVersion,
-            pluginId: AUTHORITY_PLUGIN_ID,
-            sdkExtensionId: AUTHORITY_SDK_EXTENSION_ID,
-            pluginVersion: install.pluginVersion,
-            sdkBundledVersion: install.sdkBundledVersion,
-            sdkDeployedVersion: install.sdkDeployedVersion,
-            coreBundledVersion: install.coreBundledVersion,
-            coreArtifactPlatform: install.coreArtifactPlatform,
-            coreArtifactPlatforms: install.coreArtifactPlatforms,
-            coreArtifactHash: install.coreArtifactHash,
-            coreBinarySha256: install.coreBinarySha256,
-            coreVerified: install.coreVerified,
-            coreMessage: install.coreMessage,
-            installStatus: install.installStatus,
-            installMessage: install.installMessage,
-            storageRoot: path.join(user.rootDir, AUTHORITY_DATA_FOLDER, 'storage'),
-            features,
-            limits: {
-                maxRequestBytes: core.health?.limits.maxRequestBytes ?? null,
-                maxKvValueBytes: MAX_KV_VALUE_BYTES,
-                maxBlobBytes: MAX_BLOB_BYTES,
-                maxHttpBodyBytes: MAX_HTTP_BODY_BYTES,
-                maxHttpResponseBytes: MAX_HTTP_RESPONSE_BYTES,
-                maxEventPollLimit: core.health?.limits.maxEventPollLimit ?? null,
-                maxDataTransferBytes: MAX_DATA_TRANSFER_BYTES,
-                dataTransferChunkBytes: DATA_TRANSFER_CHUNK_BYTES,
-                dataTransferInlineThresholdBytes: DATA_TRANSFER_INLINE_THRESHOLD_BYTES,
-                effectiveInlineThresholdBytes,
-                effectiveTransferMaxBytes,
-            },
-            jobs: {
-                builtinTypes: [...BUILTIN_JOB_TYPES],
-                registry: core.health?.jobRegistrySummary ?? BUILTIN_JOB_REGISTRY_SUMMARY,
-            },
-            core,
-        };
-        ok(res, response);
+        ok(res, await buildProbeResponse(runtime, user));
     });
 
     router.post('/session/init', async (req, res) => {
@@ -933,6 +1094,17 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const user = getUserContext(req);
             const session = await runtime.sessions.assertSession(getSessionToken(req), user);
             ok(res, runtime.transfers.status(user, session.extension.id, String(req.params?.id ?? '')));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/transfers/:id/manifest', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const manifest: DataTransferManifestResponse = runtime.transfers.manifest(user, session.extension.id, String(req.params?.id ?? ''));
+            ok(res, manifest);
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -2387,6 +2559,30 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.get('/admin/usage-summary', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            ok(res, await buildUsageSummary(runtime, user));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.get('/admin/diagnostic-bundle', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            ok(res, await buildDiagnosticBundle(runtime, user));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }

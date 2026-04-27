@@ -127,6 +127,28 @@ describe('DataTransferService', () => {
         expect(fs.readFileSync(record.filePath, 'utf8')).toBe('hello authority');
     });
 
+    it('builds a manifest with chunk descriptors and checksums', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+
+        const initialized = await transfers.init(user, 'third-party/ext-a', {
+            resource: 'storage.blob',
+            purpose: 'storageBlobWrite',
+        });
+        await transfers.append(user, 'third-party/ext-a', initialized.transferId, {
+            offset: 0,
+            content: Buffer.from('hello authority manifest', 'utf8').toString('base64'),
+        });
+
+        const manifest = transfers.manifest(user, 'third-party/ext-a', initialized.transferId, 'storage.blob');
+        expect(manifest.chunkCount).toBe(1);
+        expect(manifest.chunks).toHaveLength(1);
+        expect(manifest.chunks[0]?.offset).toBe(0);
+        expect(manifest.chunks[0]?.sizeBytes).toBe(manifest.sizeBytes);
+        expect(manifest.chunks[0]?.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(manifest.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+    });
+
     it('reads chunked payloads from existing files without deleting the source file', async () => {
         const user = createUser(dirs);
         const transfers = new DataTransferService();

@@ -1,15 +1,17 @@
 import type {
+    AuthorityDiagnosticBundleResponse,
+    AuthorityDiagnosticExtensionSnapshot,
+    AuthorityExtensionStorageSummary,
     AuthorityLimitsPolicyState,
     AuthorityInstallStatusCode,
     AuthorityProbeResponse,
     ControlExtensionRecord,
-    CursorPageInfo,
-    PrivateFileUsageSummary,
     SessionInitResponse,
+    AuthorityUsageSummaryResponse,
     SqlDatabaseRecord,
     TriviumDatabaseRecord,
 } from '@stdo/shared-types';
-import type { AuthorityGrant, AuthorityPolicyEntry, JobRecord, PermissionResource, PermissionStatus } from '@stdo/shared-types';
+import type { AuthorityPolicyEntry, PermissionResource, PermissionStatus } from '@stdo/shared-types';
 
 export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies' | 'updates';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
@@ -31,18 +33,7 @@ export interface ExtensionSummary extends ControlExtensionRecord {
     storage: ExtensionStorageSummary;
 }
 
-export interface ExtensionStorageSummary {
-    kvEntries: number;
-    blobCount: number;
-    blobBytes: number;
-    databaseCount: number;
-    databaseBytes: number;
-    sqlDatabaseCount: number;
-    sqlDatabaseBytes: number;
-    triviumDatabaseCount: number;
-    triviumDatabaseBytes: number;
-    files: PrivateFileUsageSummary;
-}
+export type ExtensionStorageSummary = AuthorityExtensionStorageSummary;
 
 export type ProbeResponse = AuthorityProbeResponse;
 
@@ -84,28 +75,9 @@ export interface AdminUpdateResponse {
     updatedAt: string;
 }
 
-export interface ExtensionDetailResponse {
-    extension: ControlExtensionRecord;
-    grants: AuthorityGrant[];
-    policies: AuthorityPolicyEntry[];
-    activity: {
-        permissions: ActivityRecord[];
-        usage: ActivityRecord[];
-        errors: ActivityRecord[];
-        warnings: ActivityRecord[];
-        pages: {
-            permissions: CursorPageInfo;
-            usage: CursorPageInfo;
-            errors: CursorPageInfo;
-            warnings: CursorPageInfo;
-        };
-    };
-    jobs: JobRecord[];
-    jobsPage: CursorPageInfo;
-    databases: SqlDatabaseRecord[];
-    triviumDatabases: TriviumDatabaseRecord[];
-    storage: ExtensionStorageSummary;
-}
+export type ExtensionDetailResponse = AuthorityDiagnosticExtensionSnapshot;
+export type UsageSummaryResponse = AuthorityUsageSummaryResponse;
+export type DiagnosticBundleResponse = AuthorityDiagnosticBundleResponse;
 
 export interface DatabaseGroupSummary {
     extension: ExtensionSummary;

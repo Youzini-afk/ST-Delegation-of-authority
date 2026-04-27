@@ -46,6 +46,7 @@ import type {
     CenterTab,
     AdminUpdateAction,
     AdminUpdateResponse,
+    DiagnosticBundleResponse,
     ExtensionDetailResponse,
     OverviewSectionKey,
     OverviewSectionState,
@@ -199,6 +200,12 @@ class SecurityCenterView {
                 if (action) {
                     void this.runAdminUpdate(action);
                 }
+                return;
+            }
+
+            const exportDiagnosticBundleButton = target.closest<HTMLElement>('[data-action="export-diagnostic-bundle"]');
+            if (exportDiagnosticBundleButton) {
+                void this.exportDiagnosticBundle();
             }
         });
 
@@ -291,6 +298,21 @@ class SecurityCenterView {
         } finally {
             this.state.updateInProgress = false;
             void this.renderUpdatesSection();
+        }
+    }
+
+    private async exportDiagnosticBundle(): Promise<void> {
+        if (!this.state.isAdmin) {
+            return;
+        }
+
+        try {
+            const bundle = await authorityRequest<DiagnosticBundleResponse>('/admin/diagnostic-bundle');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            downloadJsonFile(`authority-diagnostic-bundle-${timestamp}.json`, bundle);
+            toastr.success('诊断包已导出', TOAST_TITLE);
+        } catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
         }
     }
 
@@ -1126,11 +1148,12 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">更新管理</div>
                         <h2>服务端插件与前端插件更新</h2>
-                        <p>手动拉取 Authority 服务端插件最新提交，或重新部署它携带的前端 SDK 扩展。</p>
+                        <p>手动拉取 Authority 服务端插件最新提交、重新部署它携带的前端 SDK 扩展，或导出默认脱敏的诊断包 JSON。</p>
                     </div>
                     <div class="authority-page-actions authority-page-actions--updates">
                         <button type="button" class="authority-action-button authority-action-button--primary authority-action-button--wide" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
                         <button type="button" class="authority-action-button authority-action-button--wide" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
+                        <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-bundle">导出诊断包 JSON</button>
                     </div>
                 </div>
                 <section class="authority-card authority-card--flat">
@@ -1235,14 +1258,13 @@ class SecurityCenterView {
                 <div class="authority-section-heading">
                     <div>
                         <h3>Effective Limits</h3>
-                        <div class="authority-muted">展示当前 session 生效值、probe 基线值以及 policy source。</div>
+                        <div class="authority-muted">展示当前 session 生效值、probe 基线值以及 policy source。新逻辑应优先使用按操作 effective limits。</div>
                     </div>
                 </div>
                 <div class="authority-chip-row">
-                    <span class="authority-pill authority-pill--prompt">chunk ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
-                    <span class="authority-pill authority-pill--prompt">legacy inline ${escapeHtml(formatBytes(probeLimits.dataTransferInlineThresholdBytes))}</span>
-                    <span class="authority-pill authority-pill--prompt">legacy transfer ${escapeHtml(formatBytes(probeLimits.maxDataTransferBytes))}</span>
+                    <span class="authority-pill authority-pill--prompt">transfer chunk ${escapeHtml(formatBytes(probeLimits.dataTransferChunkBytes))}</span>
                 </div>
+                <div class="authority-muted">兼容字段仍保留给旧客户端：inline ${escapeHtml(formatBytes(probeLimits.dataTransferInlineThresholdBytes))} · transfer ${escapeHtml(formatBytes(probeLimits.maxDataTransferBytes))}。</div>
                 <div class="authority-table-wrap">
                     <table class="authority-data-table authority-policy-matrix">
                         <thead>
@@ -1445,4 +1467,14 @@ function parsePositiveIntOrNull(value: string): number | null {
         return null;
     }
     return parsed;
+}
+
+function downloadJsonFile(fileName: string, value: unknown): void {
+    const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
 }

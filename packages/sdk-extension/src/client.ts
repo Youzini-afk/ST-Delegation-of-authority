@@ -12,6 +12,7 @@ import type {
     DataTransferAppendResponse,
     DataTransferInitRequest,
     DataTransferInitResponse,
+    DataTransferManifestResponse,
     DataTransferReadResponse,
     DataTransferResource,
     DataTransferStatusResponse,
@@ -520,6 +521,7 @@ export class AuthorityClient {
     readonly transfers: {
         init: (request: DataTransferInitRequest) => Promise<DataTransferInitResponse>;
         status: (transferId: string) => Promise<DataTransferStatusResponse>;
+        manifest: (transferId: string) => Promise<DataTransferManifestResponse>;
         append: (transferId: string, bytes: Uint8Array, options?: { offset?: number }) => Promise<DataTransferAppendResponse>;
         read: (transferId: string, options?: { offset?: number; limit?: number }) => Promise<AuthorityTransferReadResult>;
         discard: (transferId: string) => Promise<void>;
@@ -1391,6 +1393,11 @@ export class AuthorityClient {
             },
             status: async transferId => {
                 return await this.getTransferStatus(transferId);
+            },
+            manifest: async transferId => {
+                return await this.requestWithSession<DataTransferManifestResponse>(`/transfers/${encodeURIComponent(transferId)}/manifest`, {
+                    method: 'POST',
+                });
             },
             append: async (transferId, bytes, options = {}) => {
                 const offset = options.offset ?? (await this.getTransferStatus(transferId)).sizeBytes;

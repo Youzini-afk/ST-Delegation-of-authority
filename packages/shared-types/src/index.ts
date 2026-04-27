@@ -787,6 +787,29 @@ export interface DataTransferAppendResponse {
 
 export type DataTransferStatusResponse = DataTransferInitResponse;
 
+export interface DataTransferManifestChunk {
+    index: number;
+    offset: number;
+    sizeBytes: number;
+    checksumSha256: string;
+}
+
+export interface DataTransferManifestResponse {
+    transferId: string;
+    resource: DataTransferResource;
+    purpose?: AuthorityInlineThresholdKey;
+    chunkSize: number;
+    maxBytes: number;
+    createdAt: string;
+    updatedAt: string;
+    sizeBytes: number;
+    direction: 'upload' | 'download';
+    checksumSha256?: string;
+    resumable: boolean;
+    chunkCount: number;
+    chunks: DataTransferManifestChunk[];
+}
+
 export interface DataTransferReadRequest {
     offset: number;
     limit?: number;
@@ -1037,6 +1060,57 @@ export interface SqlStatResponse extends SqlDatabaseRecord {
 export type TriviumDType = 'f32' | 'f16' | 'u64';
 export type TriviumSyncMode = 'full' | 'normal' | 'off';
 export type TriviumStorageMode = 'mmap' | 'rom';
+
+export interface AuthorityExtensionStorageSummary {
+    kvEntries: number;
+    blobCount: number;
+    blobBytes: number;
+    databaseCount: number;
+    databaseBytes: number;
+    sqlDatabaseCount: number;
+    sqlDatabaseBytes: number;
+    triviumDatabaseCount: number;
+    triviumDatabaseBytes: number;
+    files: PrivateFileUsageSummary;
+}
+
+export interface AuthorityUsageSummaryExtension {
+    extension: ControlExtensionRecord;
+    grantedCount: number;
+    deniedCount: number;
+    storage: AuthorityExtensionStorageSummary;
+}
+
+export interface AuthorityUsageSummaryTotals extends AuthorityExtensionStorageSummary {
+    extensionCount: number;
+}
+
+export interface AuthorityUsageSummaryResponse {
+    generatedAt: string;
+    totals: AuthorityUsageSummaryTotals;
+    extensions: AuthorityUsageSummaryExtension[];
+}
+
+export interface AuthorityDiagnosticExtensionSnapshot {
+    extension: ControlExtensionRecord;
+    grants: AuthorityGrant[];
+    policies: AuthorityPolicyEntry[];
+    activity: ControlAuditRecentResponse;
+    jobs: JobRecord[];
+    jobsPage: CursorPageInfo;
+    databases: SqlDatabaseRecord[];
+    triviumDatabases: TriviumDatabaseRecord[];
+    storage: AuthorityExtensionStorageSummary;
+}
+
+export interface AuthorityDiagnosticBundleResponse {
+    generatedAt: string;
+    probe: AuthorityProbeResponse;
+    policies: ControlPoliciesResponse;
+    usageSummary: AuthorityUsageSummaryResponse;
+    jobs: JobListResponse;
+    extensions: AuthorityDiagnosticExtensionSnapshot[];
+}
 
 export interface TriviumOpenOptions {
     database?: string;

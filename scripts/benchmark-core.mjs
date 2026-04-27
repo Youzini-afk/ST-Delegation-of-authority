@@ -25,6 +25,8 @@ const config = {
     jobRecords: readPositiveInt('AUTHORITY_BENCH_JOB_RECORDS', 300),
     pageLimit: readPositiveInt('AUTHORITY_BENCH_PAGE_LIMIT', 50),
     healthTimeoutMs: readPositiveInt('AUTHORITY_BENCH_HEALTH_TIMEOUT_MS', 15_000),
+    maxAvgMs: readOptionalPositiveNumber('AUTHORITY_BENCH_MAX_AVG_MS'),
+    maxP95Ms: readOptionalPositiveNumber('AUTHORITY_BENCH_MAX_P95_MS'),
     outputPath: process.env.AUTHORITY_BENCH_OUTPUT || '',
 };
 
@@ -122,6 +124,7 @@ try {
         config,
         health,
         scenarios,
+        gate: evaluateGate(scenarios, config),
     };
 
     if (config.outputPath) {
@@ -130,6 +133,9 @@ try {
     }
 
     printReport(report);
+    if (!report.gate.passed) {
+        process.exitCode = 1;
+    }
 } catch (error) {
     console.error('Authority core benchmark failed.');
     console.error(String(error instanceof Error ? error.stack || error.message : error));
@@ -281,8 +287,17 @@ function printReport(report) {
     console.log(`- iterations: ${report.config.iterations}`);
     console.log(`- concurrency: ${report.config.concurrency}`);
     console.log(`- pageLimit: ${report.config.pageLimit}`);
+    if (report.config.maxAvgMs != null || report.config.maxP95Ms != null) {
+        console.log(`- gate: avg<=${report.config.maxAvgMs ?? 'disabled'}ms p95<=${report.config.maxP95Ms ?? 'disabled'}ms`);
+    }
     for (const scenario of report.scenarios) {
         console.log(`- ${scenario.name}: avg=${scenario.avgMs}ms p50=${scenario.p50Ms}ms p95=${scenario.p95Ms}ms min=${scenario.minMs}ms max=${scenario.maxMs}ms`);
+    }
+    if (report.gate.checked) {
+        console.log(`- gate result: ${report.gate.passed ? 'passed' : 'failed'}`);
+        for (const violation of report.gate.violations) {
+            console.log(`  - ${violation}`);
+        }
     }
     if (report.config.outputPath) {
         console.log(`- report: ${report.config.outputPath}`);
@@ -296,6 +311,42 @@ function readPositiveInt(name, fallback) {
     }
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readOptionalPositiveNumber(name) {
+    const value = process.env[name];
+    if (!value) {
+        return null;
+    }
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function evaluateGate(scenarios, config) {
+    const checked = config.maxAvgMs != null || config.maxP95Ms != null;
+    const violations = [];
+
+    if (config.maxAvgMs != null) {
+        for (const scenario of scenarios) {
+            if (scenario.avgMs > config.maxAvgMs) {
+                violations.push(`${scenario.name} avg ${scenario.avgMs}ms > ${config.maxAvgMs}ms`);
+            }
+        }
+    }
+
+    if (config.maxP95Ms != null) {
+        for (const scenario of scenarios) {
+            if (scenario.p95Ms > config.maxP95Ms) {
+                violations.push(`${scenario.name} p95 ${scenario.p95Ms}ms > ${config.maxP95Ms}ms`);
+            }
+        }
+    }
+
+    return {
+        checked,
+        passed: violations.length === 0,
+        violations,
+    };
 }
 
 function percentile(values, ratio) {

@@ -7,6 +7,7 @@ import type {
     DataTransferAppendResponse,
     DataTransferInitRequest,
     DataTransferInitResponse,
+    DataTransferManifestResponse,
     DataTransferReadRequest,
     DataTransferReadResponse,
     DataTransferResource,
@@ -161,6 +162,10 @@ export class DataTransferService {
 
     status(user: UserContext, extensionId: string, transferId: string, resource?: DataTransferResource): DataTransferInitResponse {
         return toInitResponse(this.get(user, extensionId, transferId, resource));
+    }
+
+    manifest(user: UserContext, extensionId: string, transferId: string, resource?: DataTransferResource): DataTransferManifestResponse {
+        return toManifestResponse(this.get(user, extensionId, transferId, resource));
     }
 
     assertChecksum(user: UserContext, extensionId: string, transferId: string, expectedChecksumSha256: string): string {
@@ -319,6 +324,25 @@ function toInitResponse(record: DataTransferRecord): DataTransferInitResponse {
     };
 }
 
+function toManifestResponse(record: DataTransferRecord): DataTransferManifestResponse {
+    const chunkSize = DATA_TRANSFER_CHUNK_BYTES;
+    const chunkCount = Math.ceil(record.sizeBytes / chunkSize);
+    return {
+        ...toInitResponse(record),
+        chunkCount,
+        chunks: Array.from({ length: chunkCount }, (_, index) => {
+            const offset = index * chunkSize;
+            const sizeBytes = Math.min(chunkSize, record.sizeBytes - offset);
+            return {
+                index,
+                offset,
+                sizeBytes,
+                checksumSha256: computeFileSliceSha256(record.filePath, offset, sizeBytes),
+            };
+        }),
+    };
+}
+
 function normalizeTransferResource(resource: DataTransferInitRequest['resource']): DataTransferResource {
     if (resource === 'storage.blob' || resource === 'fs.private' || resource === 'http.fetch') {
         return resource;
@@ -419,6 +443,21 @@ function validateReadableTransferFile(sourcePath: string): { filePath: string; s
 
 function computeFileSha256(filePath: string): string {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function computeFileSliceSha256(filePath: string, offset: number, sizeBytes: number): string {
+    if (sizeBytes <= 0) {
+        return EMPTY_FILE_SHA256;
+    }
+
+    const handle = fs.openSync(filePath, 'r');
+    try {
+        const buffer = Buffer.alloc(sizeBytes);
+        const bytesRead = fs.readSync(handle, buffer, 0, sizeBytes, offset);
+        return crypto.createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex');
+    } finally {
+        fs.closeSync(handle);
+    }
 }
 
 function normalizeChecksumSha256(value: string): string | null {

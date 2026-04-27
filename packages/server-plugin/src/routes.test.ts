@@ -27,6 +27,8 @@ describe('registerRoutes', () => {
             '/jobs/:id',
             '/events/stream',
             '/admin/policies',
+            '/admin/usage-summary',
+            '/admin/diagnostic-bundle',
         ]));
         expect(posts).toEqual(expect.arrayContaining([
             '/permissions/evaluate-batch',
@@ -34,6 +36,7 @@ describe('registerRoutes', () => {
             '/transfers/:id/append',
             '/transfers/:id/read',
             '/transfers/:id/status',
+            '/transfers/:id/manifest',
             '/transfers/:id/discard',
             '/storage/blob/commit-transfer',
             '/storage/blob/open-read',

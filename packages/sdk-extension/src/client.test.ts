@@ -489,6 +489,28 @@ describe('AuthorityClient', () => {
             })
             .mockResolvedValueOnce({
                 transferId: 'transfer-1',
+                resource: 'storage.blob',
+                purpose: 'storageBlobWrite',
+                chunkSize: 262144,
+                maxBytes: 1024,
+                createdAt: 't1',
+                updatedAt: 't2',
+                sizeBytes: 5,
+                direction: 'upload',
+                checksumSha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+                resumable: true,
+                chunkCount: 1,
+                chunks: [
+                    {
+                        index: 0,
+                        offset: 0,
+                        sizeBytes: 5,
+                        checksumSha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+                    },
+                ],
+            })
+            .mockResolvedValueOnce({
+                transferId: 'transfer-1',
                 sizeBytes: 10,
                 updatedAt: 't2',
                 checksumSha256: '0f683f2427b4ee20118a12dde6648d29396f813df27f56c3f3721e1a4dd7a3b7',
@@ -527,6 +549,10 @@ describe('AuthorityClient', () => {
         expect(status.sizeBytes).toBe(5);
         expect(status.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
 
+        const manifest = await client.transfers.manifest('transfer-1');
+        expect(manifest.chunkCount).toBe(1);
+        expect(manifest.chunks[0]?.offset).toBe(0);
+
         const appended = await client.transfers.append('transfer-1', new TextEncoder().encode(' world'), { offset: 5 });
         expect(appended.sizeBytes).toBe(10);
 
@@ -549,17 +575,21 @@ describe('AuthorityClient', () => {
             method: 'POST',
             sessionToken: 'session-token',
         }));
-        expect(authorityRequestMock).toHaveBeenNthCalledWith(4, '/transfers/transfer-1/append', expect.objectContaining({
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(4, '/transfers/transfer-1/manifest', expect.objectContaining({
+            method: 'POST',
+            sessionToken: 'session-token',
+        }));
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(5, '/transfers/transfer-1/append', expect.objectContaining({
             method: 'POST',
             sessionToken: 'session-token',
             body: expect.objectContaining({ offset: 5 }),
         }));
-        expect(authorityRequestMock).toHaveBeenNthCalledWith(5, '/transfers/transfer-1/read', expect.objectContaining({
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(6, '/transfers/transfer-1/read', expect.objectContaining({
             method: 'POST',
             sessionToken: 'session-token',
             body: { offset: 0 },
         }));
-        expect(authorityRequestMock).toHaveBeenNthCalledWith(6, '/transfers/transfer-1/discard', expect.objectContaining({
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(7, '/transfers/transfer-1/discard', expect.objectContaining({
             method: 'POST',
             sessionToken: 'session-token',
         }));
