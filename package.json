@@ -13,6 +13,7 @@
     "build": "npm run version:sync && npm run build --workspace @stdo/shared-types && npm run build:core && npm run build --workspace @stdo/server-plugin && npm run build --workspace @stdo/sdk-extension && npm run build --workspace @stdo/example-extension",
     "build:core": "node ./scripts/build-core.mjs",
     "bench:core": "node ./scripts/benchmark-core.mjs",
+    "bench:scale": "node ./scripts/benchmark-scale.mjs",
     "typecheck": "npm run version:sync && tsc -b",
     "test": "npm run version:sync && vitest run && cargo test --manifest-path crates/authority-core/Cargo.toml",
     "sync:installable": "npm run typecheck && npm run build && npm test && node ./scripts/installable.mjs sync",

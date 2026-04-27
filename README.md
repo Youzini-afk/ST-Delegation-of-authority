@@ -551,6 +551,8 @@ await client.openSecurityCenter();
 - `POST /sql/transaction`
 - `POST /sql/migrate`
 - `POST /sql/list-migrations`
+- `POST /sql/list-schema`
+- `POST /sql/stat`
 - `GET /sql/databases`
 - `POST /trivium/insert`
 - `POST /trivium/insert-with-id`
@@ -579,6 +581,7 @@ await client.openSecurityCenter();
 - `POST /trivium/flush`
 - `POST /trivium/stat`
 - `POST /trivium/compact`
+- `POST /trivium/check-mappings-integrity`
 - `POST /trivium/delete-orphan-mappings`
 - `POST /trivium/list-mappings`
 - `GET /trivium/databases`
@@ -586,8 +589,10 @@ await client.openSecurityCenter();
 - `POST /http/fetch-open`
 - `POST /jobs/create`
 - `GET /jobs`
+- `POST /jobs/list`
 - `GET /jobs/:id`
 - `POST /jobs/:id/cancel`
+- `POST /jobs/:id/requeue`
 - `GET /events/stream`
 - `GET /admin/policies`
 - `POST /admin/policies`
@@ -672,6 +677,15 @@ POST /api/plugins/authority/probe
   - 是继续保留给兼容合同的 transfer-max map
   - 当前运行时会回报 unmanaged 值，表示插件不再主动施加 transfer ceiling
 
+补充：
+
+- `POST /jobs/list` 是当前公开 jobs 的 page-aware 列表接口
+- `GET /jobs` 继续保留为兼容数组视图
+- `POST /trivium/check-mappings-integrity`
+- `POST /trivium/delete-orphan-mappings`
+- `POST /trivium/stat` 搭配 `includeMappingIntegrity`
+- 这三类 Trivium 映射完整性能力都应视为 diagnostics / maintenance 路径，而不是高频业务热路径
+
 ## 开发环境
 
 开发需要：
@@ -694,6 +708,7 @@ npm run typecheck
 npm run build
 npm test
 npm run bench:core
+npm run bench:scale
 npm run sync:installable
 npm run check:installable
 npm run dev:link
@@ -707,6 +722,8 @@ npm run dev:unlink
 - `npm test`：运行 Vitest 测试和 Rust core 稳定性测试。
 - `npm run bench:core`：拉起临时 `authority-core`，输出 SQL 与 paged control audit/jobs/events 的基线延迟。
   当前 CI 也会把它作为 benchmark gate，阈值为 `avg <= 150ms`、`p95 <= 300ms`。
+- `npm run bench:scale`：生成更大规模的 Trivium、mapping、mixed load 与 admin import/export 证据。
+  默认不作为 CI 硬门禁，更适合本地性能回归、优化切片与容量对比。
 - `npm run sync:installable`：重新生成根目录可直装产物。
 - `npm run check:installable`：检查根目录可直装产物是否与源码构建一致。
 - `npm run dev:link`：构建并链接到本地 SillyTavern。
@@ -748,6 +765,7 @@ npm run typecheck
 npm run build
 npm test
 npm run bench:core
+npm run bench:scale
 npm run sync:installable
 npm run check:installable
 ```

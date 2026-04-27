@@ -111,6 +111,8 @@
 - `POST /sql/transaction`
 - `POST /sql/migrate`
 - `POST /sql/list-migrations`
+- `POST /sql/list-schema`
+- `POST /sql/stat`
 - `GET /sql/databases`
 
 ## 3.6 Trivium
@@ -142,6 +144,7 @@
 - `POST /trivium/flush`
 - `POST /trivium/stat`
 - `POST /trivium/compact`
+- `POST /trivium/check-mappings-integrity`
 - `POST /trivium/delete-orphan-mappings`
 - `POST /trivium/list-mappings`
 - `GET /trivium/databases`
@@ -152,8 +155,10 @@
 - `POST /http/fetch-open`
 - `POST /jobs/create`
 - `GET /jobs`
+- `POST /jobs/list`
 - `GET /jobs/:id`
 - `POST /jobs/:id/cancel`
+- `POST /jobs/:id/requeue`
 - `GET /events/stream`
 
 ## 3.8 管理员接口
@@ -451,6 +456,8 @@
 - `transaction`：事务执行，多语句失败则回滚
 - `migrate`：幂等迁移，默认 migration table 为 `_authority_migrations`
 - `list-migrations`：按 migration table 顺序读取当前数据库的已应用迁移记录
+- `list-schema`：分页列出当前数据库的 tables / indexes / views 等 schema object
+- `stat`：返回当前数据库文件与慢查询摘要
 - `databases`：列出当前扩展的私有 SQL 文件
 
 分页补充：
@@ -482,7 +489,8 @@ Trivium 公开 API 相对完整，支持：
 - flush
 - compact
 - stat
-- delete orphan mappings
+- **check mappings integrity** (heavy diagnostics/maintenance operation)
+- **delete orphan mappings** (heavy diagnostics/maintenance operation)
 - list mappings
 - list databases
 
@@ -495,6 +503,7 @@ Trivium 公开 API 相对完整，支持：
 - target 是数据库名
 - `resolve-id` / `upsert` / `get` / `search` / `neighbors` 等公开层接口会处理 external ID 映射
 - `stat` 返回 richer runtime metadata，例如 `edgeCount`、`vectorDim`、`databaseSize`、`walSize`、`vecSize`
+- `check-mappings-integrity`、`delete-orphan-mappings` 和 `stat(includeMappingIntegrity)` 都会触发 mapping / node 集分析，应视为 diagnostics / maintenance 路径，而不是高频业务热路径
 
 分页补充：
 
@@ -551,8 +560,10 @@ https://api.openai.com/v1/...
 
 - `POST /jobs/create`
 - `GET /jobs`
+- `POST /jobs/list`
 - `GET /jobs/:id`
 - `POST /jobs/:id/cancel`
+- `POST /jobs/:id/requeue`
 
 当前内置 job type 包括：
 
@@ -566,6 +577,8 @@ https://api.openai.com/v1/...
 额外边界：
 
 - `GET /jobs` 仍然返回当前扩展的 job 数组，不单独暴露 page envelope
+- `POST /jobs/list` 返回 page-aware jobs envelope，适合控制面和大列表场景
+- `POST /jobs/:id/requeue` 会基于原 job type 再做一次 `jobs.background` 权限校验
 - 如果你需要 `jobsPage` 这类分页元数据，应看 `GET /extensions/:id` 的控制面聚合响应
 
 ## 12. SSE 事件流

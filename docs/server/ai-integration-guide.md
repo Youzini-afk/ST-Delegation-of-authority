@@ -90,6 +90,7 @@
 
 - `GET /extensions/:id` 的 `activity` 现在包含 `warnings` 与 `pages`
 - `jobsPage` 是控制面聚合字段，不等于公开 `GET /jobs` 的返回合同
+- `POST /jobs/list` 才是公开 jobs 的 page-aware 列表接口
 - `Updates` 页现在还是管理员运维面板，里面包含 usage summary、portable package、operation 列表和 diagnostic archive
 - 最终运行的是 `managed/sdk-extension/*`
 - 改完源码后需要同步 installable
@@ -277,6 +278,22 @@ Authority Trivium 当前要求调用方提供 `vector`。
 
 如果 AI 擅自设计“后台执行任意 JS/Rust 逻辑”的接口，那不是当前实现。
 
+## 6.6 不要把 Trivium mapping integrity 路径当成业务热路径
+
+当前这些能力虽然是公开 API / SDK 能力，但更适合：
+
+- diagnostics
+- maintenance
+- repair
+
+具体包括：
+
+- `trivium.stat({ includeMappingIntegrity: true })`
+- `trivium.checkMappingsIntegrity()`
+- `trivium.deleteOrphanMappings()`
+
+原因是它们会触发 mapping / node 集分析，不适合挂在高频用户交互路径上。
+
 ## 7. 做改动时的推荐顺序
 
 ## 7.1 新能力
@@ -289,7 +306,7 @@ Authority Trivium 当前要求调用方提供 `vector`。
 4. 在 server service / route 暴露公开 API
 5. 在 SDK client 暴露前端方法
 6. 补文档 / Security Center
-7. 对性能敏感改动补跑 `npm run bench:core`
+7. 对性能敏感改动补跑 `npm run bench:core` 与 `npm run bench:scale`，并参考 `performance-benchmarks.md`
 8. 跑测试与 installable 同步
 
 ## 7.2 纯 UI 改动

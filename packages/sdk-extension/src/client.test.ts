@@ -1211,6 +1211,7 @@ describe('AuthorityClient', () => {
 
     it('routes Trivium mapping integrity tools through the new endpoints', async () => {
         const { AuthorityClient } = await import('./client.js');
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
@@ -1274,6 +1275,65 @@ describe('AuthorityClient', () => {
                 limit: 10,
             },
         });
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Trivium checkMappingsIntegrity on graph'));
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Trivium deleteOrphanMappings on graph'));
+        warnSpy.mockRestore();
+    });
+
+    it('warns when Trivium stat requests mapping integrity analysis', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn().mockResolvedValue(undefined);
+        const requestWithSession = vi.fn().mockResolvedValue({
+            exists: true,
+            name: 'graph',
+            fileName: 'graph.tdb',
+            nodeCount: 2,
+            edgeCount: 1,
+            vectorDim: 2,
+            dtype: 'f32',
+            syncMode: 'normal',
+            storageMode: 'mmap',
+            databaseSize: 1,
+            walSize: 0,
+            vecSize: 0,
+            sizeBytes: 1,
+            walSizeBytes: 0,
+            vecSizeBytes: 0,
+            totalSizeBytes: 1,
+            updatedAt: 'now',
+            lastFlushAt: null,
+            mappingCount: 2,
+            orphanMappingCount: 0,
+            indexHealth: {
+                status: 'fresh',
+                reason: null,
+                requiresRebuild: false,
+                staleSince: null,
+                lastContentMutationAt: 'now',
+                lastTextWriteAt: 'now',
+                lastTextRebuildAt: 'now',
+                lastCompactionAt: null,
+            },
+        });
+        Object.assign(client as object, {
+            ensurePermission,
+            requestWithSession,
+        });
+
+        await client.trivium.stat({ database: 'graph', includeMappingIntegrity: true });
+
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Trivium stat.includeMappingIntegrity on graph'));
+        warnSpy.mockRestore();
     });
 
     it('routes Trivium compact through the new endpoint', async () => {

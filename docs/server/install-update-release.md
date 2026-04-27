@@ -264,6 +264,7 @@ npm run check:installable
 npm run typecheck
 npm test
 npm run bench:core
+npm run bench:scale
 npm run sync:installable
 npm run check:installable
 ```
@@ -284,6 +285,7 @@ npm run build
 npm run typecheck
 npm test
 npm run bench:core
+npm run bench:scale
 npm run sync:installable
 npm run check:installable
 ```
@@ -301,6 +303,11 @@ npm run check:installable
   - 拉起临时 `authority-core`
   - 生成 SQL 与 paged control audit/jobs/events 的延迟基线
   - 也是当前 CI 的 benchmark gate 命令
+
+- `npm run bench:scale`
+  - 拉起临时 `authority-core`
+  - 生成大规模 Trivium / mapping / mixed load / admin import-export 证据
+  - 默认不作为 CI 硬门禁，而是本地或手动回归用的扩展 benchmark
 
 - `npm run sync:installable`
   - 全量构建 + 测试 + installable 同步

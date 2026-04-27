@@ -2227,6 +2227,13 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
+            if (payload.includeMappingIntegrity === true) {
+                await runtime.audit.logWarning(user, session.extension.id, 'Trivium mapping integrity stat requested', {
+                    database,
+                    route: '/trivium/stat',
+                    hotPathRisk: true,
+                });
+            }
             const result = await runtime.trivium.stat(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium stat', {
                 database,
@@ -2248,6 +2255,11 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
+            await runtime.audit.logWarning(user, session.extension.id, 'Trivium mapping integrity check requested', {
+                database,
+                route: '/trivium/check-mappings-integrity',
+                hotPathRisk: true,
+            });
             const result = await runtime.trivium.checkMappingsIntegrity(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium check mappings integrity', {
                 database,
@@ -2272,6 +2284,12 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
+            await runtime.audit.logWarning(user, session.extension.id, 'Trivium orphan mapping cleanup requested', {
+                database,
+                route: '/trivium/delete-orphan-mappings',
+                dryRun: payload.dryRun === true,
+                hotPathRisk: true,
+            });
             const result = await runtime.trivium.deleteOrphanMappings(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium delete orphan mappings', {
                 database,

@@ -220,6 +220,7 @@ Trivium 数据库路径：
 - Authority **不生成 embedding**
 - 调用方必须自己提供 `vector`
 - 不应让两个不同运行时直接并发读写同一个 `.tdb`
+- `checkMappingsIntegrity`、`deleteOrphanMappings` 与 `stat(includeMappingIntegrity)` 会触发 mapping / node 集分析，更适合 diagnostics / maintenance，而不是业务热路径
 
 ## 7.6 HTTP：`http.fetch`
 
@@ -392,7 +393,7 @@ Trivium 在当前服务端里提供的是：
   - 表结构明确、需要查询/事务/迁移的关系数据
 
 - **`trivium.private`**
-  - 向量 + 图关系 + 文本索引型检索数据
+  - 向量 + 图关系 + 文本索引型检索 / 加速数据
 
 - **`http.fetch`**
   - 受 hostname 治理的外部网络调用

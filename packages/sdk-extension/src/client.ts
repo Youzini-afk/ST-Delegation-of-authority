@@ -1243,6 +1243,7 @@ export class AuthorityClient {
                     target: database,
                     reason: `检查 Trivium externalId 映射完整性（${database}）`,
                 });
+                this.warnHeavyTriviumDiagnostics('checkMappingsIntegrity', database);
                 return await this.requestWithSession<TriviumCheckMappingsIntegrityResponse>('/trivium/check-mappings-integrity', {
                     method: 'POST',
                     body: {
@@ -1259,6 +1260,7 @@ export class AuthorityClient {
                     target: database,
                     reason: `清理 Trivium orphan externalId 映射（${database}）`,
                 });
+                this.warnHeavyTriviumDiagnostics('deleteOrphanMappings', database);
                 return await this.requestWithSession<TriviumDeleteOrphanMappingsResponse>('/trivium/delete-orphan-mappings', {
                     method: 'POST',
                     body: {
@@ -1349,6 +1351,9 @@ export class AuthorityClient {
                     target: database,
                     reason: `查看 Trivium 数据库状态 ${database}`,
                 });
+                if (input.includeMappingIntegrity === true) {
+                    this.warnHeavyTriviumDiagnostics('stat.includeMappingIntegrity', database);
+                }
                 return await this.requestWithSession<TriviumStatResponse>('/trivium/stat', {
                     method: 'POST',
                     body: {
@@ -1796,6 +1801,12 @@ export class AuthorityClient {
             evaluation,
             message: getPermissionEvaluationMessage(this.config.displayName, evaluation.resource, evaluation.target, evaluation.decision),
         };
+    }
+
+    private warnHeavyTriviumDiagnostics(operation: 'stat.includeMappingIntegrity' | 'checkMappingsIntegrity' | 'deleteOrphanMappings', database: string): void {
+        console.warn(
+            `[Authority] Trivium ${operation} on ${database} is a diagnostics/maintenance path and may scan mapping or node sets. Avoid using it on hot user-interaction paths.`,
+        );
     }
 
     async openSecurityCenter(): Promise<void> {

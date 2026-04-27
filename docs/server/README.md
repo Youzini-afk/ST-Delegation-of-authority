@@ -48,6 +48,9 @@
 - `docs/server/admin-import-export.md`
   - 管理员 Usage Summary、portable package、operation 恢复、artifact 下载与 diagnostic archive
 
+- `docs/server/performance-benchmarks.md`
+  - `bench:core` 与 `bench:scale` 的定位、profile、环境变量与结果解读
+
 - `docs/server/ai-integration-guide.md`
   - 面向编程 AI 的接入规则、常见修改任务、反模式和检查清单
 
@@ -72,7 +75,8 @@
   - 先读 `admin-import-export.md`
 
 - **想做性能回归或优化切片基线**
-  - 先看根目录 `npm run bench:core`
+  - 先看 `performance-benchmarks.md`
+  - 再按需要运行 `npm run bench:core` 或 `npm run bench:scale`
 
 - **想让编程 AI 快速安全地改这个项目**
   - 先读 `ai-integration-guide.md`
@@ -83,6 +87,7 @@
 npm run typecheck
 npm test
 npm run bench:core
+npm run bench:scale
 npm run sync:installable
 npm run check:installable
 ```
@@ -92,6 +97,10 @@ npm run check:installable
 - `npm run bench:core`
   - 会临时拉起 `authority-core`
   - 生成 SQL 与 paged control audit/jobs/events 的延迟基线
+
+- `npm run bench:scale`
+  - 会生成更大规模的 Trivium、mapping、mixed load 与 admin import/export 证据
+  - 默认不是 CI 硬门禁，更适合本地性能对比和优化回归
 
 - `npm run sync:installable`
   - 会先做类型检查、构建和测试
