@@ -768,6 +768,9 @@ export interface DataTransferInitResponse {
     createdAt: string;
     updatedAt: string;
     sizeBytes: number;
+    direction: 'upload' | 'download';
+    checksumSha256?: string;
+    resumable: boolean;
 }
 
 export interface DataTransferAppendRequest {
@@ -779,7 +782,10 @@ export interface DataTransferAppendResponse {
     transferId: string;
     sizeBytes: number;
     updatedAt: string;
+    checksumSha256: string;
 }
+
+export type DataTransferStatusResponse = DataTransferInitResponse;
 
 export interface DataTransferReadRequest {
     offset: number;
@@ -794,18 +800,21 @@ export interface DataTransferReadResponse {
     sizeBytes: number;
     eof: boolean;
     updatedAt: string;
+    checksumSha256?: string;
 }
 
 export interface BlobTransferCommitRequest {
     transferId: string;
     name: string;
     contentType?: string;
+    expectedChecksumSha256?: string;
 }
 
 export interface PrivateFileTransferCommitRequest {
     transferId: string;
     path: string;
     createParents?: boolean;
+    expectedChecksumSha256?: string;
 }
 
 export interface BlobRecord {

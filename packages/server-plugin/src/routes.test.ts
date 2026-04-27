@@ -33,6 +33,7 @@ describe('registerRoutes', () => {
             '/transfers/init',
             '/transfers/:id/append',
             '/transfers/:id/read',
+            '/transfers/:id/status',
             '/transfers/:id/discard',
             '/storage/blob/commit-transfer',
             '/storage/blob/open-read',

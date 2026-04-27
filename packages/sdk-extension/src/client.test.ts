@@ -456,6 +456,115 @@ describe('AuthorityClient', () => {
         }));
     });
 
+    it('exposes low-level transfers namespace for resumable status, append, read, and discard', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        authorityRequestMock
+            .mockResolvedValueOnce(buildSession())
+            .mockResolvedValueOnce({
+                transferId: 'transfer-1',
+                resource: 'storage.blob',
+                purpose: 'storageBlobWrite',
+                chunkSize: 256,
+                maxBytes: 1024,
+                createdAt: 't0',
+                updatedAt: 't0',
+                sizeBytes: 0,
+                direction: 'upload',
+                checksumSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                resumable: true,
+            })
+            .mockResolvedValueOnce({
+                transferId: 'transfer-1',
+                resource: 'storage.blob',
+                purpose: 'storageBlobWrite',
+                chunkSize: 256,
+                maxBytes: 1024,
+                createdAt: 't0',
+                updatedAt: 't1',
+                sizeBytes: 5,
+                direction: 'upload',
+                checksumSha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+                resumable: true,
+            })
+            .mockResolvedValueOnce({
+                transferId: 'transfer-1',
+                sizeBytes: 10,
+                updatedAt: 't2',
+                checksumSha256: '0f683f2427b4ee20118a12dde6648d29396f813df27f56c3f3721e1a4dd7a3b7',
+            })
+            .mockResolvedValueOnce({
+                transferId: 'transfer-1',
+                offset: 0,
+                content: Buffer.from('hello', 'utf8').toString('base64'),
+                encoding: 'base64',
+                sizeBytes: 10,
+                eof: false,
+                updatedAt: 't3',
+                checksumSha256: '0f683f2427b4ee20118a12dde6648d29396f813df27f56c3f3721e1a4dd7a3b7',
+            })
+            .mockResolvedValueOnce(undefined);
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        Object.assign(client as object, {
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+        });
+
+        const initialized = await client.transfers.init({
+            resource: 'storage.blob',
+            purpose: 'storageBlobWrite',
+        });
+        expect(initialized.resumable).toBe(true);
+
+        const status = await client.transfers.status('transfer-1');
+        expect(status.sizeBytes).toBe(5);
+        expect(status.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+
+        const appended = await client.transfers.append('transfer-1', new TextEncoder().encode(' world'), { offset: 5 });
+        expect(appended.sizeBytes).toBe(10);
+
+        const chunk = await client.transfers.read('transfer-1');
+        expect(new TextDecoder().decode(chunk.bytes)).toBe('hello');
+        expect(chunk.eof).toBe(false);
+
+        await client.transfers.discard('transfer-1');
+
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(1, '/session/init', expect.objectContaining({ method: 'POST' }));
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(2, '/transfers/init', expect.objectContaining({
+            method: 'POST',
+            sessionToken: 'session-token',
+            body: {
+                resource: 'storage.blob',
+                purpose: 'storageBlobWrite',
+            },
+        }));
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(3, '/transfers/transfer-1/status', expect.objectContaining({
+            method: 'POST',
+            sessionToken: 'session-token',
+        }));
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(4, '/transfers/transfer-1/append', expect.objectContaining({
+            method: 'POST',
+            sessionToken: 'session-token',
+            body: expect.objectContaining({ offset: 5 }),
+        }));
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(5, '/transfers/transfer-1/read', expect.objectContaining({
+            method: 'POST',
+            sessionToken: 'session-token',
+            body: { offset: 0 },
+        }));
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(6, '/transfers/transfer-1/discard', expect.objectContaining({
+            method: 'POST',
+            sessionToken: 'session-token',
+        }));
+    });
+
     it('splits items by chunk item count and estimated json bytes', async () => {
         const { splitAuthorityItemsIntoChunks } = await import('./client.js');
 

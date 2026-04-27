@@ -96,6 +96,37 @@ describe('DataTransferService', () => {
         }, 8)).rejects.toThrow('Transfer exceeds 8 bytes');
     });
 
+    it('rehydrates persisted upload transfer state across service instances', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+
+        const initialized = await transfers.init(user, 'third-party/ext-a', {
+            resource: 'storage.blob',
+            purpose: 'storageBlobWrite',
+        });
+        const firstChunk = Buffer.from('hello ', 'utf8').toString('base64');
+        await transfers.append(user, 'third-party/ext-a', initialized.transferId, {
+            offset: 0,
+            content: firstChunk,
+        });
+
+        const reloaded = new DataTransferService();
+        const status = reloaded.status(user, 'third-party/ext-a', initialized.transferId, 'storage.blob');
+        expect(status.direction).toBe('upload');
+        expect(status.resumable).toBe(true);
+        expect(status.sizeBytes).toBe(Buffer.byteLength('hello '));
+        expect(status.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(() => reloaded.assertChecksum(user, 'third-party/ext-a', initialized.transferId, status.checksumSha256 ?? '')).not.toThrow();
+
+        await reloaded.append(user, 'third-party/ext-a', initialized.transferId, {
+            offset: status.sizeBytes,
+            content: Buffer.from('authority', 'utf8').toString('base64'),
+        });
+
+        const record = reloaded.get(user, 'third-party/ext-a', initialized.transferId, 'storage.blob');
+        expect(fs.readFileSync(record.filePath, 'utf8')).toBe('hello authority');
+    });
+
     it('reads chunked payloads from existing files without deleting the source file', async () => {
         const user = createUser(dirs);
         const transfers = new DataTransferService();

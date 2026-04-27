@@ -9,9 +9,12 @@ import type {
     BlobPutRequest,
     BlobRecord,
     BlobTransferCommitRequest,
+    DataTransferAppendResponse,
+    DataTransferInitRequest,
     DataTransferInitResponse,
     DataTransferReadResponse,
     DataTransferResource,
+    DataTransferStatusResponse,
     DeclaredPermissions,
     HttpBodyEncoding,
     HttpFetchOpenResponse,
@@ -288,6 +291,16 @@ export interface AuthorityHttpRequest {
     bodyEncoding?: HttpBodyEncoding;
 }
 
+export interface AuthorityTransferReadResult {
+    transferId: string;
+    offset: number;
+    bytes: Uint8Array;
+    sizeBytes: number;
+    eof: boolean;
+    updatedAt: string;
+    checksumSha256?: string;
+}
+
 export interface AuthorityEventEnvelope {
     name: string;
     data: unknown;
@@ -502,6 +515,14 @@ export class AuthorityClient {
 
     readonly http: {
         fetch: (input: AuthorityHttpRequest) => Promise<HttpFetchResponse>;
+    };
+
+    readonly transfers: {
+        init: (request: DataTransferInitRequest) => Promise<DataTransferInitResponse>;
+        status: (transferId: string) => Promise<DataTransferStatusResponse>;
+        append: (transferId: string, bytes: Uint8Array, options?: { offset?: number }) => Promise<DataTransferAppendResponse>;
+        read: (transferId: string, options?: { offset?: number; limit?: number }) => Promise<AuthorityTransferReadResult>;
+        discard: (transferId: string) => Promise<void>;
     };
 
     readonly permissions: {
@@ -1355,6 +1376,55 @@ export class AuthorityClient {
             },
         };
 
+        this.transfers = {
+            init: async request => {
+                if (request.resource === 'storage.blob' || request.resource === 'fs.private') {
+                    await this.ensurePermission({ resource: request.resource, reason: `初始化分块传输 ${request.resource}` });
+                }
+                if (request.resource === 'http.fetch') {
+                    await this.ensurePermission({ resource: 'http.fetch', reason: '初始化 HTTP 分块传输' });
+                }
+                return await this.requestWithSession<DataTransferInitResponse>('/transfers/init', {
+                    method: 'POST',
+                    body: request,
+                });
+            },
+            status: async transferId => {
+                return await this.getTransferStatus(transferId);
+            },
+            append: async (transferId, bytes, options = {}) => {
+                const offset = options.offset ?? (await this.getTransferStatus(transferId)).sizeBytes;
+                return await this.requestWithSession<DataTransferAppendResponse>(`/transfers/${encodeURIComponent(transferId)}/append`, {
+                    method: 'POST',
+                    body: {
+                        offset,
+                        content: bytesToBase64(bytes),
+                    },
+                });
+            },
+            read: async (transferId, options = {}) => {
+                const chunk = await this.requestWithSession<DataTransferReadResponse>(`/transfers/${encodeURIComponent(transferId)}/read`, {
+                    method: 'POST',
+                    body: {
+                        offset: options.offset ?? 0,
+                        ...(options.limit === undefined ? {} : { limit: options.limit }),
+                    },
+                });
+                return {
+                    transferId: chunk.transferId,
+                    offset: chunk.offset,
+                    bytes: base64ToBytes(chunk.content),
+                    sizeBytes: chunk.sizeBytes,
+                    eof: chunk.eof,
+                    updatedAt: chunk.updatedAt,
+                    ...(chunk.checksumSha256 ? { checksumSha256: chunk.checksumSha256 } : {}),
+                };
+            },
+            discard: async transferId => {
+                await this.discardTransferQuietly(transferId);
+            },
+        };
+
         this.permissions = {
             evaluate: async request => await this.evaluatePermission(request),
             evaluateBatch: async requests => await this.evaluatePermissions(requests),
@@ -1765,6 +1835,12 @@ export class AuthorityClient {
         return null;
     }
 
+    private async getTransferStatus(transferId: string): Promise<DataTransferStatusResponse> {
+        return await this.requestWithSession<DataTransferStatusResponse>(`/transfers/${encodeURIComponent(transferId)}/status`, {
+            method: 'POST',
+        });
+    }
+
     private async assertTransferWithinEffectiveMax(key: InlineThresholdKey, bytes: Uint8Array): Promise<void> {
         const limit = await this.getEffectiveTransferMaxLimit(key);
         if (!limit || bytes.byteLength <= limit.bytes) {
@@ -2114,10 +2190,12 @@ export class AuthorityClient {
         const transfer = await this.initializeTransfer('storage.blob', 'storageBlobWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
+            const status = await this.getTransferStatus(transfer.transferId);
             const request: BlobTransferCommitRequest = {
                 transferId: transfer.transferId,
                 name: input.name,
                 ...(input.contentType ? { contentType: input.contentType } : {}),
+                ...(status.checksumSha256 ? { expectedChecksumSha256: status.checksumSha256 } : {}),
             };
             return await this.requestWithSession<BlobRecord>('/storage/blob/commit-transfer', {
                 method: 'POST',
@@ -2227,10 +2305,12 @@ export class AuthorityClient {
         const transfer = await this.initializeTransfer('fs.private', 'privateFileWrite');
         try {
             await this.appendTransferBytes(transfer, bytes);
+            const status = await this.getTransferStatus(transfer.transferId);
             const request: PrivateFileTransferCommitRequest = {
                 transferId: transfer.transferId,
                 path,
                 ...(options.createParents === undefined ? {} : { createParents: options.createParents }),
+                ...(status.checksumSha256 ? { expectedChecksumSha256: status.checksumSha256 } : {}),
             };
             const response = await this.requestWithSession<{ entry: PrivateFileEntry }>('/fs/private/write-file-transfer', {
                 method: 'POST',
@@ -2285,8 +2365,17 @@ export class AuthorityClient {
     }
 
     private async appendTransferBytes(transfer: DataTransferInitResponse, bytes: Uint8Array): Promise<void> {
-        const chunkSize = transfer.chunkSize > 0 ? transfer.chunkSize : SDK_TRANSFER_INLINE_THRESHOLD_BYTES;
-        let offset = 0;
+        const status = await this.getTransferStatus(transfer.transferId);
+        if (status.sizeBytes > bytes.byteLength) {
+            throw new Error(`Transfer status size ${status.sizeBytes} exceeds payload size ${bytes.byteLength}`);
+        }
+
+        const chunkSize = status.chunkSize > 0
+            ? status.chunkSize
+            : transfer.chunkSize > 0
+                ? transfer.chunkSize
+                : SDK_TRANSFER_INLINE_THRESHOLD_BYTES;
+        let offset = status.sizeBytes;
         while (offset < bytes.byteLength) {
             const chunk = bytes.subarray(offset, offset + chunkSize);
             await this.requestWithSession(`/transfers/${encodeURIComponent(transfer.transferId)}/append`, {
@@ -2301,18 +2390,24 @@ export class AuthorityClient {
     }
 
     private async readTransferBytes(transfer: DataTransferInitResponse): Promise<Uint8Array> {
-        if (transfer.sizeBytes <= 0) {
+        const status = await this.getTransferStatus(transfer.transferId);
+        if (status.sizeBytes <= 0) {
             return new Uint8Array(0);
         }
 
-        const result = new Uint8Array(transfer.sizeBytes);
+        const chunkSize = status.chunkSize > 0
+            ? status.chunkSize
+            : transfer.chunkSize > 0
+                ? transfer.chunkSize
+                : SDK_TRANSFER_INLINE_THRESHOLD_BYTES;
+        const result = new Uint8Array(status.sizeBytes);
         let offset = 0;
-        while (offset < transfer.sizeBytes) {
+        while (offset < status.sizeBytes) {
             const chunk = await this.requestWithSession<DataTransferReadResponse>(`/transfers/${encodeURIComponent(transfer.transferId)}/read`, {
                 method: 'POST',
                 body: {
                     offset,
-                    limit: transfer.chunkSize,
+                    limit: chunkSize,
                 },
             });
             const bytes = base64ToBytes(chunk.content);

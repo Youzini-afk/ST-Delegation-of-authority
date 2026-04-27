@@ -1,4 +1,6 @@
 import type {
+    AuthorityExtensionLimitsPolicy,
+    AuthorityInlineThresholdKey,
     AuthorityJobRegistryEntry,
     AuthorityPolicyEntry,
     PermissionResource,
@@ -67,6 +69,14 @@ const DEFAULT_OVERVIEW_SECTION_STATE: OverviewSectionState = {
     capabilityMatrix: true,
     recentActivity: true,
 };
+const LIMIT_OPERATION_OPTIONS: Array<{ key: AuthorityInlineThresholdKey; label: string }> = [
+    { key: 'storageBlobWrite', label: 'Blob 写入' },
+    { key: 'storageBlobRead', label: 'Blob 读取' },
+    { key: 'privateFileWrite', label: '私有文件写入' },
+    { key: 'privateFileRead', label: '私有文件读取' },
+    { key: 'httpFetchRequest', label: 'HTTP 请求体' },
+    { key: 'httpFetchResponse', label: 'HTTP 响应体' },
+];
 
 export function bootstrapSecurityCenter(): Promise<void> {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
@@ -314,6 +324,7 @@ class SecurityCenterView {
 
         try {
             const nextExtensions = { ...this.state.policies.extensions };
+            const nextLimitExtensions = { ...this.state.policies.limits.extensions };
             const extensionId = this.state.policyEditorExtensionId;
             if (extensionId) {
                 const entries = this.collectOverridePolicies();
@@ -322,6 +333,13 @@ class SecurityCenterView {
                 } else {
                     delete nextExtensions[extensionId];
                 }
+
+                const limitPolicy = this.collectExtensionLimitPolicy();
+                if (limitPolicy) {
+                    nextLimitExtensions[extensionId] = limitPolicy;
+                } else {
+                    delete nextLimitExtensions[extensionId];
+                }
             }
 
             this.state.policies = await authorityRequest<PoliciesResponse>('/admin/policies', {
@@ -329,6 +347,9 @@ class SecurityCenterView {
                 body: {
                     defaults: this.collectDefaultPolicies(),
                     extensions: nextExtensions,
+                    limits: {
+                        extensions: nextLimitExtensions,
+                    },
                 },
             });
             toastr.success('管理员策略已保存', TOAST_TITLE);
@@ -371,6 +392,33 @@ class SecurityCenterView {
             };
         }
         return result;
+    }
+
+    private collectExtensionLimitPolicy(): AuthorityExtensionLimitsPolicy | null {
+        const inlineThresholdBytes: Partial<Record<AuthorityInlineThresholdKey, number>> = {};
+        const transferMaxBytes: Partial<Record<AuthorityInlineThresholdKey, number>> = {};
+
+        for (const { key } of LIMIT_OPERATION_OPTIONS) {
+            const inlineInput = this.root.querySelector<HTMLInputElement>(`[data-limit-kind="inlineThresholdBytes"][data-limit-key="${key}"]`);
+            const transferInput = this.root.querySelector<HTMLInputElement>(`[data-limit-kind="transferMaxBytes"][data-limit-key="${key}"]`);
+            const inlineValue = parsePositiveIntOrNull(inlineInput?.value ?? '');
+            const transferValue = parsePositiveIntOrNull(transferInput?.value ?? '');
+            if (inlineValue !== null) {
+                inlineThresholdBytes[key] = inlineValue;
+            }
+            if (transferValue !== null) {
+                transferMaxBytes[key] = transferValue;
+            }
+        }
+
+        if (Object.keys(inlineThresholdBytes).length === 0 && Object.keys(transferMaxBytes).length === 0) {
+            return null;
+        }
+
+        return {
+            ...(Object.keys(inlineThresholdBytes).length > 0 ? { inlineThresholdBytes } : {}),
+            ...(Object.keys(transferMaxBytes).length > 0 ? { transferMaxBytes } : {}),
+        };
     }
 
     private addPolicyOverrideRow(entry?: AuthorityPolicyEntry): void {
@@ -942,6 +990,7 @@ class SecurityCenterView {
 
         const extensionId = this.state.policyEditorExtensionId ?? this.state.selectedExtensionId ?? this.state.extensions[0]?.id ?? '';
         const overrides = extensionId ? Object.values(policies.extensions[extensionId] ?? {}) : [];
+        const limitPolicy = extensionId ? policies.limits.extensions[extensionId] : null;
         container.innerHTML = `
             <div class="authority-page-stack">
                 <div class="authority-page-header">
@@ -1013,6 +1062,41 @@ class SecurityCenterView {
                             <span class="authority-pill authority-pill--blocked">管理员封锁</span>
                         </div>
                         <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>
+                    </div>
+                </section>
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>扩展 Limits Policy</h3>
+                            <div class="authority-muted">留空表示沿用 runtime / probe 基线；填写正整数表示对该扩展下压生效值。</div>
+                        </div>
+                        <span class="authority-pill authority-pill--admin">${escapeHtml(extensionId || '未选择扩展')}</span>
+                    </div>
+                    <div class="authority-table-wrap">
+                        <table class="authority-data-table authority-policy-matrix">
+                            <thead>
+                                <tr>
+                                    <th>操作</th>
+                                    <th>Inline 阈值（bytes）</th>
+                                    <th>Transfer 上限（bytes）</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${LIMIT_OPERATION_OPTIONS.map(({ key, label }) => `
+                                    <tr>
+                                        <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
+                                        <td><input type="number" min="1" step="1" data-limit-kind="inlineThresholdBytes" data-limit-key="${escapeHtml(key)}" value="${escapeHtml(String(limitPolicy?.inlineThresholdBytes?.[key] ?? ''))}" placeholder="例如 262144" /></td>
+                                        <td><input type="number" min="1" step="1" data-limit-kind="transferMaxBytes" data-limit-key="${escapeHtml(key)}" value="${escapeHtml(String(limitPolicy?.transferMaxBytes?.[key] ?? ''))}" placeholder="例如 1048576" /></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="authority-policy-footer">
+                        <div class="authority-chip-row">
+                            <span class="authority-pill authority-pill--prompt">留空 = runtime</span>
+                            <span class="authority-pill authority-pill--runtime">probe/session 会显示 source</span>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -1146,15 +1230,6 @@ class SecurityCenterView {
             return '';
         }
 
-        const operations: Array<{ key: keyof SessionInitResponse['limits']['effectiveInlineThresholdBytes']; label: string }> = [
-            { key: 'storageBlobWrite', label: 'Blob 写入' },
-            { key: 'storageBlobRead', label: 'Blob 读取' },
-            { key: 'privateFileWrite', label: '私有文件写入' },
-            { key: 'privateFileRead', label: '私有文件读取' },
-            { key: 'httpFetchRequest', label: 'HTTP 请求体' },
-            { key: 'httpFetchResponse', label: 'HTTP 响应体' },
-        ];
-
         return `
             <section class="authority-card authority-card--flat">
                 <div class="authority-section-heading">
@@ -1180,7 +1255,7 @@ class SecurityCenterView {
                             </tr>
                         </thead>
                         <tbody>
-                            ${operations.map(({ key, label }) => `
+                            ${LIMIT_OPERATION_OPTIONS.map(({ key, label }) => `
                                 <tr>
                                     <td><strong>${escapeHtml(label)}</strong><div class="authority-muted">${escapeHtml(key)}</div></td>
                                     <td>${escapeHtml(this.formatEffectiveLimitValue(sessionLimits.effectiveInlineThresholdBytes[key]))}</td>
@@ -1357,4 +1432,17 @@ class SecurityCenterView {
         }
         return this.state.details.get(this.state.selectedExtensionId) ?? null;
     }
+}
+
+function parsePositiveIntOrNull(value: string): number | null {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+    }
+    return parsed;
 }

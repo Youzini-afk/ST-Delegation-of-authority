@@ -1,4 +1,5 @@
 import type {
+    AuthorityLimitsPolicyState,
     AuthorityInstallStatusCode,
     AuthorityProbeResponse,
     ControlExtensionRecord,
@@ -118,6 +119,7 @@ export interface DatabaseGroupSummary {
 export interface PoliciesResponse {
     defaults: Record<PermissionResource, PermissionStatus>;
     extensions: Record<string, Record<string, AuthorityPolicyEntry>>;
+    limits: AuthorityLimitsPolicyState;
     updatedAt: string;
 }
 

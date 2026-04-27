@@ -42,7 +42,10 @@ interface DataTransferRecord {
     updatedAt: string;
     direction: 'upload' | 'download';
     ownedFile: boolean;
+    checksumSha256: string;
 }
+
+const EMPTY_FILE_SHA256 = crypto.createHash('sha256').update('').digest('hex');
 
 export class DataTransferService {
     private readonly transfers = new Map<string, DataTransferRecord>();
@@ -52,8 +55,9 @@ export class DataTransferService {
         const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = crypto.randomUUID();
         const timestamp = new Date().toISOString();
-        const dirPath = this.getTransferDir(user, extensionId, resource);
+        const dirPath = this.getTransferDataDir(user, extensionId, resource);
         fs.mkdirSync(dirPath, { recursive: true });
+        fs.mkdirSync(this.getTransferRecordDir(user, extensionId), { recursive: true });
         const filePath = path.join(dirPath, `${transferId}.part`);
         fs.writeFileSync(filePath, Buffer.alloc(0));
 
@@ -70,8 +74,9 @@ export class DataTransferService {
             updatedAt: timestamp,
             direction: 'upload',
             ownedFile: true,
+            checksumSha256: EMPTY_FILE_SHA256,
         };
-        this.transfers.set(transferId, record);
+        this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
 
@@ -92,10 +97,13 @@ export class DataTransferService {
         fs.appendFileSync(record.filePath, chunk);
         record.sizeBytes = nextSize;
         record.updatedAt = new Date().toISOString();
+        record.checksumSha256 = computeFileSha256(record.filePath);
+        this.storeRecord(user, extensionId, record);
         return {
             transferId: record.transferId,
             sizeBytes: record.sizeBytes,
             updatedAt: record.updatedAt,
+            checksumSha256: record.checksumSha256,
         };
     }
 
@@ -110,6 +118,7 @@ export class DataTransferService {
 
         const transferId = crypto.randomUUID();
         const timestamp = new Date().toISOString();
+        fs.mkdirSync(this.getTransferRecordDir(user, extensionId), { recursive: true });
         const record: DataTransferRecord = {
             transferId,
             userHandle: user.handle,
@@ -123,8 +132,9 @@ export class DataTransferService {
             updatedAt: timestamp,
             direction: 'download',
             ownedFile: false,
+            checksumSha256: computeFileSha256(filePath),
         };
-        this.transfers.set(transferId, record);
+        this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
 
@@ -144,7 +154,25 @@ export class DataTransferService {
         record.maxBytes = sizeBytes;
         record.direction = 'download';
         record.updatedAt = new Date().toISOString();
+        record.checksumSha256 = computeFileSha256(filePath);
+        this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
+    }
+
+    status(user: UserContext, extensionId: string, transferId: string, resource?: DataTransferResource): DataTransferInitResponse {
+        return toInitResponse(this.get(user, extensionId, transferId, resource));
+    }
+
+    assertChecksum(user: UserContext, extensionId: string, transferId: string, expectedChecksumSha256: string): string {
+        const record = this.get(user, extensionId, transferId);
+        const expected = normalizeChecksumSha256(expectedChecksumSha256);
+        if (!expected) {
+            throw new Error('Transfer checksum must be a 64-character sha256 hex string');
+        }
+        if (record.checksumSha256.toLowerCase() !== expected) {
+            throw new Error(`Transfer checksum mismatch: expected ${expected}, received ${record.checksumSha256}`);
+        }
+        return record.checksumSha256;
     }
 
     async read(user: UserContext, extensionId: string, transferId: string, request: DataTransferReadRequest): Promise<DataTransferReadResponse> {
@@ -175,6 +203,7 @@ export class DataTransferService {
                 sizeBytes: record.sizeBytes,
                 eof: true,
                 updatedAt: record.updatedAt,
+                checksumSha256: record.checksumSha256,
             };
         }
 
@@ -190,6 +219,7 @@ export class DataTransferService {
                 sizeBytes: record.sizeBytes,
                 eof: request.offset + bytesRead >= record.sizeBytes,
                 updatedAt: record.updatedAt,
+                checksumSha256: record.checksumSha256,
             };
         } finally {
             fs.closeSync(handle);
@@ -197,7 +227,7 @@ export class DataTransferService {
     }
 
     get(user: UserContext, extensionId: string, transferId: string, resource?: DataTransferResource): DataTransferRecord {
-        const record = this.transfers.get(transferId);
+        const record = this.transfers.get(transferId) ?? this.loadRecord(user, extensionId, transferId);
         if (!record || record.userHandle !== user.handle || record.extensionId !== extensionId) {
             throw new Error('Transfer not found');
         }
@@ -210,25 +240,66 @@ export class DataTransferService {
     async discard(user: UserContext, extensionId: string, transferId: string): Promise<void> {
         const record = this.get(user, extensionId, transferId);
         this.transfers.delete(transferId);
+        fs.rmSync(this.getTransferRecordPath(user, extensionId, transferId), { force: true });
         if (!record.ownedFile) {
+            pruneEmptyTransferDirs(this.getTransferRecordDir(user, extensionId));
             return;
         }
         try {
             fs.rmSync(record.filePath, { force: true });
         } finally {
             pruneEmptyTransferDirs(path.dirname(record.filePath));
+            pruneEmptyTransferDirs(this.getTransferRecordDir(user, extensionId));
         }
     }
 
-    private getTransferDir(user: UserContext, extensionId: string, resource: DataTransferResource): string {
+    private loadRecord(user: UserContext, extensionId: string, transferId: string): DataTransferRecord | null {
+        const recordPath = this.getTransferRecordPath(user, extensionId, transferId);
+        let parsed: DataTransferRecord;
+        try {
+            parsed = JSON.parse(fs.readFileSync(recordPath, 'utf8')) as DataTransferRecord;
+        } catch {
+            return null;
+        }
+        try {
+            const readable = validateReadableTransferFile(parsed.filePath);
+            parsed.sizeBytes = readable.sizeBytes;
+            if (!parsed.checksumSha256) {
+                parsed.checksumSha256 = computeFileSha256(parsed.filePath);
+            }
+        } catch {
+            return null;
+        }
+        this.transfers.set(transferId, parsed);
+        return parsed;
+    }
+
+    private storeRecord(user: UserContext, extensionId: string, record: DataTransferRecord): void {
+        fs.mkdirSync(this.getTransferRecordDir(user, extensionId), { recursive: true });
+        fs.writeFileSync(this.getTransferRecordPath(user, extensionId, record.transferId), JSON.stringify(record, null, 2));
+        this.transfers.set(record.transferId, record);
+    }
+
+    private getTransferBaseDir(user: UserContext, extensionId: string): string {
         const paths = getUserAuthorityPaths(user);
         const stateDir = path.dirname(paths.controlDbFile);
         return path.join(
             stateDir,
             'transfers',
             sanitizeFileSegment(extensionId),
-            sanitizeFileSegment(resource),
         );
+    }
+
+    private getTransferDataDir(user: UserContext, extensionId: string, resource: DataTransferResource): string {
+        return path.join(this.getTransferBaseDir(user, extensionId), sanitizeFileSegment(resource));
+    }
+
+    private getTransferRecordDir(user: UserContext, extensionId: string): string {
+        return path.join(this.getTransferBaseDir(user, extensionId), 'records');
+    }
+
+    private getTransferRecordPath(user: UserContext, extensionId: string, transferId: string): string {
+        return path.join(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
     }
 }
 
@@ -242,6 +313,9 @@ function toInitResponse(record: DataTransferRecord): DataTransferInitResponse {
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         sizeBytes: record.sizeBytes,
+        direction: record.direction,
+        checksumSha256: record.checksumSha256,
+        resumable: true,
     };
 }
 
@@ -341,6 +415,15 @@ function validateReadableTransferFile(sourcePath: string): { filePath: string; s
         filePath,
         sizeBytes: metadata.size,
     };
+}
+
+function computeFileSha256(filePath: string): string {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function normalizeChecksumSha256(value: string): string | null {
+    const candidate = value.trim().toLowerCase();
+    return /^[a-f0-9]{64}$/.test(candidate) ? candidate : null;
 }
 
 function pruneEmptyTransferDirs(dirPath: string): void {

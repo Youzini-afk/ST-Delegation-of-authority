@@ -928,6 +928,16 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
+    router.post('/transfers/:id/status', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            ok(res, runtime.transfers.status(user, session.extension.id, String(req.params?.id ?? '')));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
     router.post('/transfers/:id/discard', async (req, res) => {
         try {
             const user = getUserContext(req);
@@ -972,6 +982,9 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             }
 
             const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'storage.blob');
+            if (payload.expectedChecksumSha256) {
+                runtime.transfers.assertChecksum(user, session.extension.id, payload.transferId, payload.expectedChecksumSha256);
+            }
             const record = await runtime.storage.putBlobFromSource(
                 user,
                 session.extension.id,
@@ -1126,6 +1139,9 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             }
 
             const transfer = runtime.transfers.get(user, session.extension.id, payload.transferId, 'fs.private');
+            if (payload.expectedChecksumSha256) {
+                runtime.transfers.assertChecksum(user, session.extension.id, payload.transferId, payload.expectedChecksumSha256);
+            }
             const entry = await runtime.files.writeFileFromSource(user, session.extension.id, {
                 path: payload.path,
                 sourcePath: transfer.filePath,
