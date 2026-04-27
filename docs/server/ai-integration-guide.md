@@ -131,11 +131,13 @@
 - **core hard ceiling**
   - 例如 core 内部请求、blob、HTTP、event poll 的编译时上限
 
-- **adapter transfer ceiling**
-  - 例如 `effectiveTransferMaxBytes` / `purpose` 驱动的 transfer max bytes
+- **adapter transport routing threshold**
+  - 例如 `effectiveInlineThresholdBytes` 决定 inline vs transfer
+  - 这是当前公开层真正仍在使用的 transport 决策值
 
-- **effective inline threshold**
-  - 例如 `effectiveInlineThresholdBytes` 决定 inline vs transfer 的阈值
+- **compatibility transfer-max field**
+  - 例如 `effectiveTransferMaxBytes`
+  - 继续保留给旧合同，但当前不再代表插件层主动施加的 transfer ceiling
 
 最常见误区：
 

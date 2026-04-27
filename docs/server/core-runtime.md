@@ -99,7 +99,16 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 - `effectiveInlineThresholdBytes`
 - `effectiveTransferMaxBytes`
 
-这两类 limits 属于 adapter/public contract，不直接来自 core `/health`。
+其中：
+
+- `effectiveInlineThresholdBytes`
+  - 是公开层按操作给客户端的 transport routing hint
+  - 当前运行时来源为 `runtime`
+- `effectiveTransferMaxBytes`
+  - 是继续保留的兼容字段
+  - 当前运行时会回报 unmanaged 值，表示插件不再额外施加 transfer ceiling
+
+这两类字段都属于 adapter/public contract，不直接来自 core `/health`。
 
 ## 5. 当前内部端点清单
 
@@ -268,9 +277,10 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 
 当前实际公开层的 HTTP / transfer 行为还要再叠一层 Node adapter 限制：
 
-- core `fetch-open` 的 hard ceiling 可以高于公开 adapter 当前选择暴露的 ceiling
-- 公开 adapter 当前会把 request/response transfer ceiling 按操作收敛到 probe/session contract
-- 因此排障时要分清：**是 core 执行层硬上限触发，还是 adapter transport strategy 先触发**
+- core `fetch-open` / blob / private-file 的真正硬上限要先看 `core.health.limits`
+- 公开 adapter 当前主要暴露的是 inline-vs-transfer routing threshold
+- probe/session 里的 transfer-max 字段仍存在，但当前是 compatibility-only 的 unmanaged runtime 语义
+- 因此排障时要分清：**是 core 执行层硬上限触发，还是公开层先切换到了 transfer 路径**
 
 ## 9. Trivium open 参数
 

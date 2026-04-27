@@ -49,7 +49,7 @@ Node 插件是 **真正的公开服务端 API 层**，其职责包括：
 - 注册 SillyTavern 插件路由
 - 会话创建与校验
 - 权限决策组合
-- limits 决策组合（effective inline thresholds / transfer ceilings）
+- transport 决策组合（按操作 inline threshold + 兼容 transfer-max 合同）
 - 审计日志写入
 - 存储路径解析
 - 聚合扩展详情、活动与作业视图
@@ -169,25 +169,26 @@ browser EventSource
 ```text
 AuthoritySDK.storage.blob.get() / fs.readFile() / http.fetch()
   -> Node adapter 先做 session + permission
-  -> PermissionService 返回 session-scoped effective limits
+  -> PermissionService 返回 session-scoped transport hints
   -> 若 payload / response 小于 effective inline threshold
        -> 直接走 inline 响应
   -> 否则
        -> 走 DataTransferService staging + read/discard
 ```
 
-这里要区分三件事：
+这里其中要区分三件事：
 
 - `effectiveInlineThresholdBytes`
   - 决定某个操作应返回 inline 还是 transfer
-  - 当前可能来自 `runtime` 或 extension-scoped `policy`
+  - 当前运行时来源为 `runtime`
 
 - `effectiveTransferMaxBytes`
-  - 决定某个操作允许使用多大的 transfer payload
-  - 当前来源为 `runtime`
+  - 是 probe / session 为兼容旧客户端继续暴露的 transfer-max map
+  - 当前运行时会回报 unmanaged 值，表示插件不再对扩展施加 transfer ceiling
 
 - `core.health.limits`
-  - 是内部执行层的 hard ceiling 诊断，不等于公开 adapter 一定完全暴露这些上限
+  - 是内部执行层的 hard ceiling 诊断
+  - 这才是需要排障时优先确认的真实硬上限来源
 
 ## 5.5 Security Center 扩展详情
 
@@ -336,14 +337,15 @@ prompt
 - **effective inline thresholds**
   - 决定执行后是否走 inline vs transfer
 
-- **effective transfer ceilings**
-  - 决定 transfer 路径本身的最大 payload
+- **compatibility transfer-max fields**
+  - 对旧客户端保留的 transport 合同字段
+  - 当前不再表示插件层主动施加的 ceiling
 
 当前实现中：
 
-- inline threshold 可以被 extension-scoped limits policy 下压
-- transfer ceiling 仍然是 runtime-only
-- 这两类 effective limits 会通过 `/probe` 与 session 返回对外暴露
+- inline threshold 当前为固定 runtime 值
+- transfer-max 字段当前为 runtime-only 的 unmanaged 语义
+- 这两类字段都会通过 `/probe` 与 session 返回对外暴露，但前者用于路由决策，后者主要是兼容合同
 
 ## 9. 控制面数据与数据面数据
 

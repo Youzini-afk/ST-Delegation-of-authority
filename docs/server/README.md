@@ -14,7 +14,7 @@
 - **公开 HTTP 基路径**：`/api/plugins/authority`
 - **公开传输方式**：复用 SillyTavern 自身 HTTP 服务端口，不额外暴露独立公网端口
 - **公开错误合同**：结构化 `AuthorityErrorPayload`，含 `code` / `category` / `details`
-- **公开 limits 合同**：`/probe` 与 session 返回都携带 effective inline thresholds / transfer ceilings
+- **公开 transport 合同**：`/probe` 与 session 返回都携带按操作的 `effectiveInlineThresholdBytes`；`effectiveTransferMaxBytes` 与 `maxDataTransferBytes` 作为兼容字段继续保留，但当前不代表插件层扩展 I/O ceiling
 - **内部 core 执行层**：Rust `authority-core`
 - **内部 core 绑定地址**：插件运行时为 `127.0.0.1:<ephemeral-port>`
 - **Session Header**：`x-authority-session-token`

@@ -31,7 +31,7 @@
 - `extension`
 - 当前 grants
 - 当前 policies
-- 当前 limits
+- 当前 transport hints / compatibility limits
 - features
 
 ## 2.2 读取当前会话
@@ -225,11 +225,11 @@
 
 - `effectiveInlineThresholdBytes`
   - 用于决定 inline vs transfer routing
-  - 当前 source 可能为 `runtime` 或 `policy`
+  - 当前运行时来源为 `runtime`
 
 - `effectiveTransferMaxBytes`
-  - 用于决定 transfer staging 的最大 payload
-  - 当前 source 为 `runtime`
+  - 是继续保留给旧客户端的 compatibility field
+  - 当前运行时会回报 unmanaged 值，表示插件不再主动施加 transfer ceiling
 
 ## 4.2 `POST /permissions/evaluate`
 
@@ -375,7 +375,8 @@
 - 这是大对象 transport layer，不是新的权限资源
 - 当前支持的 `resource` 为：`storage.blob`、`fs.private`、`http.fetch`
 - `init` / `open-read` 路径内部会记录可选 `purpose`
-- `purpose` 用于匹配按操作拆分的 transfer ceiling，例如 `httpFetchRequest` / `httpFetchResponse`
+- `purpose` 主要用于标记当前 transfer 对应的操作语义，例如 `httpFetchRequest` / `httpFetchResponse`
+- 当前插件运行时不会再根据 `purpose` 对扩展施加额外的 transfer ceiling
 
 ## 6.3 Blob
 
@@ -595,7 +596,7 @@ https://api.openai.com/v1/...
 
 - 全局默认策略
 - 扩展级覆盖策略
-- extension-scoped limits policy
+- legacy `limits` 文档（用于兼容 / import-export round-trip）
 - `updatedAt`
 
 ## 13.2 `POST /admin/policies`
@@ -609,6 +610,14 @@ https://api.openai.com/v1/...
 - `defaults`
 - `extensions`
 - `limits`
+
+其中：
+
+- `defaults` / `extensions`
+  - 是当前仍会被 Node 插件运行时真正应用的管理员策略
+- `limits`
+  - 当前仍允许保存并返回，用于兼容旧合同与 import/export round-trip
+  - 但当前运行时不会把它作为插件层扩展 I/O 限制来执行
 
 ## 13.3 `POST /admin/update`
 

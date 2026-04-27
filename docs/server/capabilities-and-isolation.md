@@ -308,21 +308,21 @@ extension:<extensionId>
   - 由 `authority-core` 编译时常量决定
   - 主要通过 `core.health.limits` 暴露诊断
 
-- **adapter transfer ceiling**
-  - 由 Node adapter / `DataTransferService` 控制
-  - 现在按操作拆成 `storageBlob*`、`privateFile*`、`httpFetch*`
-  - 通过 `probe.limits.effectiveTransferMaxBytes` 与 `session.limits.effectiveTransferMaxBytes` 暴露
+- **adapter transport routing hint**
+  - 由 Node adapter 暴露按操作的 `effectiveInlineThresholdBytes`
+  - 用于决定结果走 inline 还是 transfer
+  - 当前运行时来源为 `runtime`
 
-- **effective inline threshold**
-  - 决定结果是 inline 还是 transfer
-  - 通过 `probe.limits.effectiveInlineThresholdBytes` 与 `session.limits.effectiveInlineThresholdBytes` 暴露
-  - 当前 source 可能为 `runtime` 或 `policy`
+- **compatibility transfer-max fields**
+  - `effectiveTransferMaxBytes` 与 `maxDataTransferBytes` 会继续对外暴露
+  - 当前运行时会回报 unmanaged 值，表示插件不再对扩展施加 transfer ceiling
+  - 它们主要用于兼容旧合同，而不是新的插件层 I/O 限制
 
 当前 limits policy surface 的真实边界是：
 
-- inline threshold 可被 extension-scoped policy 下压
-- transfer ceiling 仍然是 runtime-only
-- 公开兼容字段 `maxDataTransferBytes` 仍保留，但它只是 generic compatibility max，不再代表每个操作都共享同一 ceiling
+- control policies 文档里的 `limits.extensions` 仍会保留并支持 round-trip / import-export
+- Security Center 不再展示或下发扩展级 size-limit 配置
+- 当前 Node 插件运行时不会根据这些持久化 limits policy 去限制扩展 I/O
 
 ## 8. 私有文件安全边界
 

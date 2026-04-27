@@ -177,6 +177,7 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 
 - `git-pull`
 - `redeploy-sdk`
+- 当前插件 / SDK / core 安装状态回显
 - `Usage Summary`
 - portable package 导出 / 导入
 - import/export operation 列表、失败恢复、artifact 下载
