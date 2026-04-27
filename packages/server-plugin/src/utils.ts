@@ -2,9 +2,35 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import type { PermissionResource } from '@stdo/shared-types';
+import type { AuthorityErrorCategory, AuthorityErrorCode, AuthorityErrorPayload, PermissionResource } from '@stdo/shared-types';
 import { RESOURCE_RISK, SESSION_HEADER, SESSION_QUERY, SUPPORTED_RESOURCES } from './constants.js';
 import type { AuthorityRequest, PermissionDescriptor, UserContext } from './types.js';
+
+export class AuthorityServiceError extends Error {
+    constructor(
+        message: string,
+        public readonly status: number,
+        public readonly code: AuthorityErrorCode,
+        public readonly category: AuthorityErrorCategory,
+        public readonly details?: AuthorityErrorPayload['details'],
+    ) {
+        super(message);
+        this.name = 'AuthorityServiceError';
+    }
+
+    toPayload(): AuthorityErrorPayload {
+        return {
+            error: this.message,
+            code: this.code,
+            category: this.category,
+            ...(this.details === undefined ? {} : { details: this.details }),
+        };
+    }
+}
+
+export function isAuthorityServiceError(error: unknown): error is AuthorityServiceError {
+    return error instanceof AuthorityServiceError;
+}
 
 export function nowIso(): string {
     return new Date().toISOString();
@@ -47,7 +73,7 @@ export function sanitizeFileSegment(input: string): string {
 
 export function getUserContext(request: AuthorityRequest): UserContext {
     if (!request.user) {
-        throw new Error('Unauthorized');
+        throw new AuthorityServiceError('Unauthorized', 401, 'unauthorized', 'auth');
     }
 
     return {

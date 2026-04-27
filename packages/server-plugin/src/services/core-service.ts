@@ -116,7 +116,7 @@ import type {
 } from '@stdo/shared-types';
 import { AUTHORITY_MANAGED_CORE_DIR } from '../constants.js';
 import type { AuthorityCoreHealthSnapshot, AuthorityCoreManagedMetadata, AuthorityCoreStatus, CoreRuntimeState } from '../types.js';
-import { asErrorMessage, randomToken } from '../utils.js';
+import { asErrorMessage, AuthorityServiceError, randomToken } from '../utils.js';
 
 interface CoreArtifact {
     binaryPath: string;
@@ -1012,21 +1012,44 @@ export class CoreService {
         }
 
         if (status.state !== 'running' || !this.token || !status.port) {
-            throw new Error(status.lastError ?? 'Authority core is not available');
+            throw new AuthorityServiceError(
+                status.lastError ?? 'Authority core is not available',
+                503,
+                'core_unavailable',
+                'core',
+                {
+                    state: status.state,
+                    lastError: status.lastError,
+                },
+            );
         }
 
-        const response = await fetch(`http://127.0.0.1:${status.port}${requestPath}`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                'x-authority-core-token': this.token,
-            },
-            body: JSON.stringify(body),
-        });
+        let response: Response;
+        try {
+            response = await fetch(`http://127.0.0.1:${status.port}${requestPath}`, {
+                method: 'POST',
+                headers: {
+                    'content-type': 'application/json',
+                    'x-authority-core-token': this.token,
+                },
+                body: JSON.stringify(body),
+            });
+        } catch (error) {
+            throw new AuthorityServiceError(
+                asErrorMessage(error),
+                503,
+                'core_unavailable',
+                'core',
+                {
+                    requestPath,
+                    state: status.state,
+                },
+            );
+        }
         const payload = await readCorePayload(response);
 
         if (!response.ok) {
-            throw new Error(extractCoreErrorMessage(payload, response.status));
+            throw buildCoreRequestError(requestPath, payload, response.status);
         }
 
         return payload as T;
@@ -1145,6 +1168,39 @@ function extractCoreErrorMessage(payload: unknown, statusCode: number): string {
     }
 
     return `authority-core request failed with ${statusCode}`;
+}
+
+function buildCoreRequestError(requestPath: string, payload: unknown, statusCode: number): AuthorityServiceError {
+    const message = extractCoreErrorMessage(payload, statusCode);
+    if (statusCode === 408 || statusCode === 504 || /timed?\s*out|timeout/i.test(message)) {
+        return new AuthorityServiceError(message, statusCode, 'timeout', 'timeout', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+
+    if (statusCode === 413 || statusCode === 429 || /exceeds|too large|queue_full|max/i.test(message)) {
+        return new AuthorityServiceError(message, statusCode, 'limit_exceeded', 'limit', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+
+    if (statusCode >= 400 && statusCode < 500) {
+        return new AuthorityServiceError(message, statusCode, 'validation_error', 'validation', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+
+    return new AuthorityServiceError(message, statusCode >= 500 ? statusCode : 500, 'core_request_failed', 'core', {
+        requestPath,
+        source: 'core',
+        statusCode,
+    });
 }
 
 function delay(durationMs: number): Promise<void> {

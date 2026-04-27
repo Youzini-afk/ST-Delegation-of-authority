@@ -14,7 +14,15 @@ export {
     isAuthorityPermissionError,
     splitAuthorityItemsIntoChunks,
 } from './client.js';
-export { AuthorityApiError } from './api.js';
+export {
+    AuthorityApiError,
+    AuthorityAuthError,
+    AuthoritySessionError,
+    AuthorityValidationError,
+    AuthorityLimitError,
+    AuthorityTimeoutError,
+    AuthorityCoreError,
+} from './api.js';
 export type {
     AuthorityChunk,
     AuthorityChunkSplitOptions,
@@ -23,10 +31,10 @@ export type {
     AuthorityChunkedTriviumMutationResult,
     AuthorityChunkedTriviumOptions,
     AuthorityChunkedTriviumProgress,
-    AuthorityChunkedTriviumUpsertResponseItem,
     AuthorityChunkedTriviumUpsertResult,
     AuthorityPermissionErrorCode,
     AuthorityPermissionErrorDecision,
     AuthorityPermissionErrorDetails,
+    AuthorityPermissionExplainResult,
 } from './client.js';
 export { AuthoritySDK, openSecurityCenter };

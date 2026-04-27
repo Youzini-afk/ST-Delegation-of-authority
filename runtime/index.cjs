@@ -302,28 +302,22 @@ function ok(res, data) {
     res.json(data);
 }
 function fail(runtime, req, res, extensionId, error) {
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error);
-    const permissionErrorPayload = buildPermissionErrorPayload(message);
+    const normalized = normalizeAuthorityError(error);
     try {
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-        if (permissionErrorPayload) {
+        if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
-                ...permissionErrorPayload.details,
-                message,
+                ...normalized.payload.details,
+                message: normalized.payload.error,
             }).catch(() => undefined);
         }
         else {
-            void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
+            void runtime.audit.logError(user, extensionId, normalized.payload.error).catch(() => undefined);
         }
     }
     catch {
-        // ignore errors raised before auth is available
     }
-    if (permissionErrorPayload) {
-        res.status(403).json(permissionErrorPayload);
-        return;
-    }
-    res.status(400).json({ error: message });
+    res.status(normalized.status).json(normalized.payload);
 }
 function buildPermissionErrorPayload(message) {
     const match = /^Permission not granted: ([a-z.]+)(?: for (.+))?$/.exec(message);
@@ -339,6 +333,7 @@ function buildPermissionErrorPayload(message) {
     return {
         error: message,
         code: 'permission_not_granted',
+        category: 'permission',
         details: {
             resource: descriptor.resource,
             target: descriptor.target,
@@ -356,6 +351,98 @@ function isPermissionResource(value) {
         || value === 'http.fetch'
         || value === 'jobs.background'
         || value === 'events.stream';
+}
+function isPermissionErrorDetails(value) {
+    return typeof value === 'object'
+        && value !== null
+        && 'resource' in value
+        && 'target' in value
+        && 'key' in value
+        && 'riskLevel' in value;
+}
+function normalizeAuthorityError(error) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isAuthorityServiceError)(error)) {
+        return {
+            status: error.status,
+            payload: error.toPayload(),
+        };
+    }
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error);
+    const permissionErrorPayload = buildPermissionErrorPayload(message);
+    if (permissionErrorPayload) {
+        return {
+            status: 403,
+            payload: permissionErrorPayload,
+        };
+    }
+    if (message === 'Unauthorized') {
+        return {
+            status: 401,
+            payload: {
+                error: message,
+                code: 'unauthorized',
+                category: 'auth',
+            },
+        };
+    }
+    if (message === 'Invalid authority session') {
+        return {
+            status: 401,
+            payload: {
+                error: message,
+                code: 'invalid_session',
+                category: 'session',
+            },
+        };
+    }
+    if (message === 'Authority session does not belong to current user') {
+        return {
+            status: 403,
+            payload: {
+                error: message,
+                code: 'session_user_mismatch',
+                category: 'session',
+            },
+        };
+    }
+    if (/timed?\s*out|timeout/i.test(message)) {
+        return {
+            status: 504,
+            payload: {
+                error: message,
+                code: 'timeout',
+                category: 'timeout',
+            },
+        };
+    }
+    if (/exceeds|too large|queue_full|max(?:imum)?|too many/i.test(message)) {
+        return {
+            status: 413,
+            payload: {
+                error: message,
+                code: 'limit_exceeded',
+                category: 'limit',
+            },
+        };
+    }
+    if (/must\b|required\b|invalid\b|unsupported\b|not[_ ]found\b|is not\b|cannot both be provided|mismatch|symlink is not allowed/i.test(message)) {
+        return {
+            status: 400,
+            payload: {
+                error: message,
+                code: 'validation_error',
+                category: 'validation',
+            },
+        };
+    }
+    return {
+        status: 500,
+        payload: {
+            error: message,
+            code: 'core_request_failed',
+            category: 'core',
+        },
+    };
 }
 function parseAdminUpdateAction(value) {
     return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
@@ -656,6 +743,22 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                 });
             }
             ok(res, evaluation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/permissions/evaluate-batch', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+            }
+            const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
+            const response = { results };
+            ok(res, response);
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -3221,19 +3324,31 @@ class CoreService {
             status = await this.start();
         }
         if (status.state !== 'running' || !this.token || !status.port) {
-            throw new Error(status.lastError ?? 'Authority core is not available');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(status.lastError ?? 'Authority core is not available', 503, 'core_unavailable', 'core', {
+                state: status.state,
+                lastError: status.lastError,
+            });
         }
-        const response = await fetch(`http://127.0.0.1:${status.port}${requestPath}`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                'x-authority-core-token': this.token,
-            },
-            body: JSON.stringify(body),
-        });
+        let response;
+        try {
+            response = await fetch(`http://127.0.0.1:${status.port}${requestPath}`, {
+                method: 'POST',
+                headers: {
+                    'content-type': 'application/json',
+                    'x-authority-core-token': this.token,
+                },
+                body: JSON.stringify(body),
+            });
+        }
+        catch (error) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError((0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.asErrorMessage)(error), 503, 'core_unavailable', 'core', {
+                requestPath,
+                state: status.state,
+            });
+        }
         const payload = await readCorePayload(response);
         if (!response.ok) {
-            throw new Error(extractCoreErrorMessage(payload, response.status));
+            throw buildCoreRequestError(requestPath, payload, response.status);
         }
         return payload;
     }
@@ -3330,6 +3445,35 @@ function extractCoreErrorMessage(payload, statusCode) {
         return payload.trim();
     }
     return `authority-core request failed with ${statusCode}`;
+}
+function buildCoreRequestError(requestPath, payload, statusCode) {
+    const message = extractCoreErrorMessage(payload, statusCode);
+    if (statusCode === 408 || statusCode === 504 || /timed?\s*out|timeout/i.test(message)) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'timeout', 'timeout', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+    if (statusCode === 413 || statusCode === 429 || /exceeds|too large|queue_full|max/i.test(message)) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'limit_exceeded', 'limit', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+    if (statusCode >= 400 && statusCode < 500) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'validation_error', 'validation', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+    return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode >= 500 ? statusCode : 500, 'core_request_failed', 'core', {
+        requestPath,
+        source: 'core',
+        statusCode,
+    });
 }
 function delay(durationMs) {
     return new Promise(resolve => setTimeout(resolve, durationMs));
@@ -4312,6 +4456,9 @@ class PermissionService {
             resource: descriptor.resource,
         };
     }
+    async evaluateBatch(user, session, requests) {
+        return await Promise.all(requests.map(async (request) => await this.evaluate(user, session, request)));
+    }
     async authorize(user, session, request, consume = true) {
         const evaluation = await this.evaluate(user, session, request);
         if (evaluation.decision !== 'granted') {
@@ -4728,10 +4875,10 @@ class SessionService {
     async assertSession(token, user) {
         const session = await this.getSession(token, user);
         if (!session) {
-            throw new Error('Invalid authority session');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError('Invalid authority session', 401, 'invalid_session', 'session');
         }
         if (session.userHandle !== user.handle) {
-            throw new Error('Authority session does not belong to current user');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError('Authority session does not belong to current user', 403, 'session_user_mismatch', 'session');
         }
         return session;
     }
@@ -6071,6 +6218,7 @@ function getGlobalAuthorityPaths() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AuthorityServiceError: () => (/* binding */ AuthorityServiceError),
 /* harmony export */   asErrorMessage: () => (/* binding */ asErrorMessage),
 /* harmony export */   atomicWriteJson: () => (/* binding */ atomicWriteJson),
 /* harmony export */   buildPermissionDescriptor: () => (/* binding */ buildPermissionDescriptor),
@@ -6078,6 +6226,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   getHttpFetchNetworkClass: () => (/* binding */ getHttpFetchNetworkClass),
 /* harmony export */   getSessionToken: () => (/* binding */ getSessionToken),
 /* harmony export */   getUserContext: () => (/* binding */ getUserContext),
+/* harmony export */   isAuthorityServiceError: () => (/* binding */ isAuthorityServiceError),
 /* harmony export */   isRestrictedHttpFetchTarget: () => (/* binding */ isRestrictedHttpFetchTarget),
 /* harmony export */   normalizeHostname: () => (/* binding */ normalizeHostname),
 /* harmony export */   normalizeHttpFetchTarget: () => (/* binding */ normalizeHttpFetchTarget),
@@ -6102,6 +6251,31 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+class AuthorityServiceError extends Error {
+    status;
+    code;
+    category;
+    details;
+    constructor(message, status, code, category, details) {
+        super(message);
+        this.status = status;
+        this.code = code;
+        this.category = category;
+        this.details = details;
+        this.name = 'AuthorityServiceError';
+    }
+    toPayload() {
+        return {
+            error: this.message,
+            code: this.code,
+            category: this.category,
+            ...(this.details === undefined ? {} : { details: this.details }),
+        };
+    }
+}
+function isAuthorityServiceError(error) {
+    return error instanceof AuthorityServiceError;
+}
 function nowIso() {
     return new Date().toISOString();
 }
@@ -6136,7 +6310,7 @@ function sanitizeFileSegment(input) {
 }
 function getUserContext(request) {
     if (!request.user) {
-        throw new Error('Unauthorized');
+        throw new AuthorityServiceError('Unauthorized', 401, 'unauthorized', 'auth');
     }
     return {
         handle: request.user.profile.handle,

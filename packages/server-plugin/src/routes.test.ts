@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { registerRoutes } from './routes.js';
 import type { AuthorityRuntime } from './runtime.js';
+import { AuthorityServiceError } from './utils.js';
 
 describe('registerRoutes', () => {
     it('registers fs.private routes', () => {
@@ -28,6 +29,7 @@ describe('registerRoutes', () => {
             '/admin/policies',
         ]));
         expect(posts).toEqual(expect.arrayContaining([
+            '/permissions/evaluate-batch',
             '/transfers/init',
             '/transfers/:id/append',
             '/transfers/:id/read',
@@ -121,12 +123,70 @@ describe('registerRoutes', () => {
         expect(response.json).toHaveBeenCalledWith({
             error: 'Permission not granted: storage.kv',
             code: 'permission_not_granted',
+            category: 'permission',
             details: {
                 resource: 'storage.kv',
                 target: '*',
                 key: 'storage.kv:*',
                 riskLevel: 'low',
             },
+        });
+    });
+
+    it('returns structured session payloads when the session is invalid', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockRejectedValue(new AuthorityServiceError('Invalid authority session', 401, 'invalid_session', 'session')),
+            },
+            audit: {
+                logPermission: vi.fn().mockResolvedValue(undefined),
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const handler = posts.get('/permissions/evaluate-batch');
+        expect(handler).toBeTypeOf('function');
+
+        const response = {
+            status: vi.fn(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+        response.status.mockReturnValue(response);
+
+        await handler?.({
+            user: {
+                profile: {
+                    handle: 'alice',
+                    admin: false,
+                },
+                directories: {
+                    root: 'C:/users/alice',
+                },
+            },
+            body: { requests: [{ resource: 'storage.kv' }] },
+            headers: {},
+        }, response);
+
+        expect(response.status).toHaveBeenCalledWith(401);
+        expect(response.json).toHaveBeenCalledWith({
+            error: 'Invalid authority session',
+            code: 'invalid_session',
+            category: 'session',
         });
     });
 });

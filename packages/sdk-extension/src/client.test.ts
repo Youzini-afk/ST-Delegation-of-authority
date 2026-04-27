@@ -160,6 +160,86 @@ describe('AuthorityClient', () => {
         expect(openSecurityCenter).not.toHaveBeenCalled();
     });
 
+    it('evaluates permissions in batch through the public permissions namespace', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        authorityRequestMock
+            .mockResolvedValueOnce(buildSession())
+            .mockResolvedValueOnce({
+                results: [
+                    {
+                        decision: 'prompt',
+                        key: 'storage.kv:*',
+                        riskLevel: 'low',
+                        target: '*',
+                        resource: 'storage.kv',
+                    },
+                    {
+                        decision: 'blocked',
+                        key: 'http.fetch:localhost',
+                        riskLevel: 'high',
+                        target: 'localhost',
+                        resource: 'http.fetch',
+                    },
+                ],
+            });
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const results = await client.permissions.evaluateBatch([
+            { resource: 'storage.kv', reason: '读取测试键' },
+            { resource: 'http.fetch', target: 'localhost', reason: '访问本地主机' },
+        ]);
+
+        expect(results).toHaveLength(2);
+        expect(authorityRequestMock).toHaveBeenNthCalledWith(2, '/permissions/evaluate-batch', {
+            method: 'POST',
+            sessionToken: 'session-token',
+            body: {
+                requests: [
+                    { resource: 'storage.kv', reason: '读取测试键' },
+                    { resource: 'http.fetch', target: 'localhost', reason: '访问本地主机' },
+                ],
+            },
+        });
+    });
+
+    it('explains granted permissions with a positive message', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        Object.assign(client as object, {
+            evaluatePermission: vi.fn().mockResolvedValue({
+                decision: 'granted',
+                key: 'sql.private:default',
+                riskLevel: 'medium',
+                target: 'default',
+                resource: 'sql.private',
+            }),
+        });
+
+        const explained = await client.permissions.explain({
+            resource: 'sql.private',
+            target: 'default',
+            reason: '检查 SQL 权限',
+        });
+
+        expect(explained.evaluation.decision).toBe('granted');
+        expect(explained.message).toBe('Ext A 当前已获得 私有 SQL 数据库 (default) 的访问授权。');
+    });
+
     it('splits items by chunk item count and estimated json bytes', async () => {
         const { splitAuthorityItemsIntoChunks } = await import('./client.js');
 
@@ -1136,5 +1216,25 @@ function buildProbe(overrides: Partial<{
                 },
             },
         },
+    };
+}
+
+function buildSession() {
+    return {
+        sessionToken: 'session-token',
+        user: {
+            handle: 'alice',
+            isAdmin: false,
+        },
+        extension: {
+            id: 'third-party/ext-a',
+            installType: 'local',
+            displayName: 'Ext A',
+            version: '0.1.0',
+            firstSeenAt: '2026-01-01T00:00:00.000Z',
+        },
+        grants: [],
+        policies: [],
+        features: buildProbe().features,
     };
 }

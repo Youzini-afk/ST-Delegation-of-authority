@@ -6,6 +6,6 @@ window.STAuthority = {
     openSecurityCenter,
 };
 export { AuthorityClient, AuthorityPermissionError, isAuthorityPermissionError, splitAuthorityItemsIntoChunks, } from './client.js';
-export { AuthorityApiError } from './api.js';
+export { AuthorityApiError, AuthorityAuthError, AuthoritySessionError, AuthorityValidationError, AuthorityLimitError, AuthorityTimeoutError, AuthorityCoreError, } from './api.js';
 export { AuthoritySDK, openSecurityCenter };
 //# sourceMappingURL=index.js.map

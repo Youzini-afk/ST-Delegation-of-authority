@@ -1,5 +1,5 @@
 import { getRequestHeaders } from '/script.js';
-import type { AuthorityErrorCode, AuthorityErrorPayload } from '@stdo/shared-types';
+import type { AuthorityErrorCategory, AuthorityErrorCode, AuthorityErrorPayload } from '@stdo/shared-types';
 
 export const AUTHORITY_API_BASE = '/api/plugins/authority';
 export const AUTHORITY_EXTENSION_NAME = 'third-party/st-authority-sdk';
@@ -17,6 +17,7 @@ export interface AuthorityRequestOptions {
 
 export class AuthorityApiError extends Error {
     readonly code: AuthorityErrorCode | undefined;
+    readonly category: AuthorityErrorCategory | undefined;
     readonly details: AuthorityErrorPayload['details'] | undefined;
 
     constructor(
@@ -28,8 +29,51 @@ export class AuthorityApiError extends Error {
         this.name = 'AuthorityApiError';
         if (isAuthorityErrorPayload(payload)) {
             this.code = payload.code;
+            this.category = payload.category;
             this.details = payload.details;
         }
+    }
+}
+
+export class AuthorityAuthError extends AuthorityApiError {
+    constructor(message: string, status: number, payload?: unknown) {
+        super(message, status, payload);
+        this.name = 'AuthorityAuthError';
+    }
+}
+
+export class AuthoritySessionError extends AuthorityApiError {
+    constructor(message: string, status: number, payload?: unknown) {
+        super(message, status, payload);
+        this.name = 'AuthoritySessionError';
+    }
+}
+
+export class AuthorityValidationError extends AuthorityApiError {
+    constructor(message: string, status: number, payload?: unknown) {
+        super(message, status, payload);
+        this.name = 'AuthorityValidationError';
+    }
+}
+
+export class AuthorityLimitError extends AuthorityApiError {
+    constructor(message: string, status: number, payload?: unknown) {
+        super(message, status, payload);
+        this.name = 'AuthorityLimitError';
+    }
+}
+
+export class AuthorityTimeoutError extends AuthorityApiError {
+    constructor(message: string, status: number, payload?: unknown) {
+        super(message, status, payload);
+        this.name = 'AuthorityTimeoutError';
+    }
+}
+
+export class AuthorityCoreError extends AuthorityApiError {
+    constructor(message: string, status: number, payload?: unknown) {
+        super(message, status, payload);
+        this.name = 'AuthorityCoreError';
     }
 }
 
@@ -68,14 +112,14 @@ export async function authorityRequest<T>(path: string, options: AuthorityReques
 
     const payload = await readResponsePayload(response);
     if (!response.ok) {
-        throw new AuthorityApiError(getErrorMessage(payload, response.statusText), response.status, payload);
+        throw createAuthorityApiError(getErrorMessage(payload, response.statusText), response.status, payload);
     }
 
     return payload as T;
 }
 
 export function isInvalidSessionError(error: unknown): boolean {
-    return error instanceof AuthorityApiError && /authority session/i.test(error.message);
+    return error instanceof AuthoritySessionError && error.code === 'invalid_session';
 }
 
 export function buildEventStreamUrl(sessionToken: string, channel: string): string {
@@ -116,4 +160,40 @@ function isAuthorityErrorPayload(payload: unknown): payload is AuthorityErrorPay
         && payload !== null
         && 'error' in payload
         && typeof (payload as { error?: unknown }).error === 'string';
+}
+
+function createAuthorityApiError(message: string, status: number, payload?: unknown): AuthorityApiError {
+    const category = isAuthorityErrorPayload(payload) ? payload.category : undefined;
+    switch (category) {
+        case 'permission':
+            return new AuthorityApiError(message, status, payload);
+        case 'auth':
+            return new AuthorityAuthError(message, status, payload);
+        case 'session':
+            return new AuthoritySessionError(message, status, payload);
+        case 'validation':
+            return new AuthorityValidationError(message, status, payload);
+        case 'limit':
+            return new AuthorityLimitError(message, status, payload);
+        case 'timeout':
+            return new AuthorityTimeoutError(message, status, payload);
+        case 'core':
+            return new AuthorityCoreError(message, status, payload);
+        default:
+            break;
+    }
+
+    if (status === 401) {
+        return new AuthorityAuthError(message, status, payload);
+    }
+    if (status === 408 || status === 504) {
+        return new AuthorityTimeoutError(message, status, payload);
+    }
+    if (status === 413 || status === 429) {
+        return new AuthorityLimitError(message, status, payload);
+    }
+    if (status >= 400 && status < 500) {
+        return new AuthorityValidationError(message, status, payload);
+    }
+    return new AuthorityCoreError(message, status, payload);
 }

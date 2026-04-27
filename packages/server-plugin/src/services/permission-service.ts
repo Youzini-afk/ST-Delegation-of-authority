@@ -90,6 +90,14 @@ export class PermissionService {
         };
     }
 
+    async evaluateBatch(
+        user: UserContext,
+        session: SessionRecord,
+        requests: PermissionEvaluateRequest[],
+    ): Promise<PermissionEvaluateResponse[]> {
+        return await Promise.all(requests.map(async request => await this.evaluate(user, session, request)));
+    }
+
     async authorize(user: UserContext, session: SessionRecord, request: PermissionEvaluateRequest, consume = true): Promise<AuthorityGrant | AuthorityPolicyEntry | null> {
         const evaluation = await this.evaluate(user, session, request);
         if (evaluation.decision !== 'granted') {

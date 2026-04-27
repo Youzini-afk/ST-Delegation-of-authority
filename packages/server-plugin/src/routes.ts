@@ -13,6 +13,8 @@ import type {
     DataTransferReadRequest,
     HttpFetchOpenRequest,
     JobListRequest,
+    PermissionEvaluateBatchRequest,
+    PermissionEvaluateBatchResponse,
     PermissionEvaluateRequest,
     PermissionResource,
     PermissionResolveRequest,
@@ -91,7 +93,7 @@ import {
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
-import { asErrorMessage, buildPermissionDescriptor, getSessionToken, getUserContext, normalizeHostname, sanitizeFileSegment } from './utils.js';
+import { asErrorMessage, AuthorityServiceError, buildPermissionDescriptor, getSessionToken, getUserContext, isAuthorityServiceError, normalizeHostname, sanitizeFileSegment } from './utils.js';
 
 type RouterLike = {
     get(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
@@ -102,27 +104,26 @@ function ok(res: AuthorityResponse, data: unknown): void {
     res.json(data);
 }
 
+interface NormalizedAuthorityError {
+    status: number;
+    payload: AuthorityErrorPayload;
+}
+
 function fail(runtime: AuthorityRuntime, req: AuthorityRequest, res: AuthorityResponse, extensionId: string, error: unknown): void {
-    const message = asErrorMessage(error);
-    const permissionErrorPayload = buildPermissionErrorPayload(message);
+    const normalized = normalizeAuthorityError(error);
     try {
         const user = getUserContext(req);
-        if (permissionErrorPayload) {
+        if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
-                ...permissionErrorPayload.details,
-                message,
+                ...normalized.payload.details,
+                message: normalized.payload.error,
             }).catch(() => undefined);
         } else {
-            void runtime.audit.logError(user, extensionId, message).catch(() => undefined);
+            void runtime.audit.logError(user, extensionId, normalized.payload.error).catch(() => undefined);
         }
     } catch {
-        // ignore errors raised before auth is available
     }
-    if (permissionErrorPayload) {
-        res.status(403).json(permissionErrorPayload);
-        return;
-    }
-    res.status(400).json({ error: message });
+    res.status(normalized.status).json(normalized.payload);
 }
 
 function buildPermissionErrorPayload(message: string): AuthorityErrorPayload | null {
@@ -141,6 +142,7 @@ function buildPermissionErrorPayload(message: string): AuthorityErrorPayload | n
     return {
         error: message,
         code: 'permission_not_granted',
+        category: 'permission',
         details: {
             resource: descriptor.resource,
             target: descriptor.target,
@@ -159,6 +161,113 @@ function isPermissionResource(value: string): value is PermissionResource {
         || value === 'http.fetch'
         || value === 'jobs.background'
         || value === 'events.stream';
+}
+
+function isPermissionErrorDetails(value: AuthorityErrorPayload['details']): value is NonNullable<AuthorityErrorPayload['details']> & {
+    resource: PermissionResource;
+    target: string;
+    key: string;
+    riskLevel: string;
+} {
+    return typeof value === 'object'
+        && value !== null
+        && 'resource' in value
+        && 'target' in value
+        && 'key' in value
+        && 'riskLevel' in value;
+}
+
+function normalizeAuthorityError(error: unknown): NormalizedAuthorityError {
+    if (isAuthorityServiceError(error)) {
+        return {
+            status: error.status,
+            payload: error.toPayload(),
+        };
+    }
+
+    const message = asErrorMessage(error);
+    const permissionErrorPayload = buildPermissionErrorPayload(message);
+    if (permissionErrorPayload) {
+        return {
+            status: 403,
+            payload: permissionErrorPayload,
+        };
+    }
+
+    if (message === 'Unauthorized') {
+        return {
+            status: 401,
+            payload: {
+                error: message,
+                code: 'unauthorized',
+                category: 'auth',
+            },
+        };
+    }
+
+    if (message === 'Invalid authority session') {
+        return {
+            status: 401,
+            payload: {
+                error: message,
+                code: 'invalid_session',
+                category: 'session',
+            },
+        };
+    }
+
+    if (message === 'Authority session does not belong to current user') {
+        return {
+            status: 403,
+            payload: {
+                error: message,
+                code: 'session_user_mismatch',
+                category: 'session',
+            },
+        };
+    }
+
+    if (/timed?\s*out|timeout/i.test(message)) {
+        return {
+            status: 504,
+            payload: {
+                error: message,
+                code: 'timeout',
+                category: 'timeout',
+            },
+        };
+    }
+
+    if (/exceeds|too large|queue_full|max(?:imum)?|too many/i.test(message)) {
+        return {
+            status: 413,
+            payload: {
+                error: message,
+                code: 'limit_exceeded',
+                category: 'limit',
+            },
+        };
+    }
+
+    if (/must\b|required\b|invalid\b|unsupported\b|not[_ ]found\b|is not\b|cannot both be provided|mismatch|symlink is not allowed/i.test(message)) {
+        return {
+            status: 400,
+            payload: {
+                error: message,
+                code: 'validation_error',
+                category: 'validation',
+            },
+        };
+    }
+
+    return {
+        status: 500,
+        payload: {
+            error: message,
+            code: 'core_request_failed',
+            category: 'core',
+        },
+    };
 }
 
 function parseAdminUpdateAction(value: unknown): AdminUpdateAction {
@@ -544,6 +653,22 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 });
             }
             ok(res, evaluation);
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.post('/permissions/evaluate-batch', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as PermissionEvaluateBatchRequest;
+            if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
+                throw new AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+            }
+            const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
+            const response: PermissionEvaluateBatchResponse = { results };
+            ok(res, response);
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }

@@ -9,6 +9,7 @@ export class AuthorityApiError extends Error {
     status;
     payload;
     code;
+    category;
     details;
     constructor(message, status, payload) {
         super(message);
@@ -17,8 +18,45 @@ export class AuthorityApiError extends Error {
         this.name = 'AuthorityApiError';
         if (isAuthorityErrorPayload(payload)) {
             this.code = payload.code;
+            this.category = payload.category;
             this.details = payload.details;
         }
+    }
+}
+export class AuthorityAuthError extends AuthorityApiError {
+    constructor(message, status, payload) {
+        super(message, status, payload);
+        this.name = 'AuthorityAuthError';
+    }
+}
+export class AuthoritySessionError extends AuthorityApiError {
+    constructor(message, status, payload) {
+        super(message, status, payload);
+        this.name = 'AuthoritySessionError';
+    }
+}
+export class AuthorityValidationError extends AuthorityApiError {
+    constructor(message, status, payload) {
+        super(message, status, payload);
+        this.name = 'AuthorityValidationError';
+    }
+}
+export class AuthorityLimitError extends AuthorityApiError {
+    constructor(message, status, payload) {
+        super(message, status, payload);
+        this.name = 'AuthorityLimitError';
+    }
+}
+export class AuthorityTimeoutError extends AuthorityApiError {
+    constructor(message, status, payload) {
+        super(message, status, payload);
+        this.name = 'AuthorityTimeoutError';
+    }
+}
+export class AuthorityCoreError extends AuthorityApiError {
+    constructor(message, status, payload) {
+        super(message, status, payload);
+        this.name = 'AuthorityCoreError';
     }
 }
 export async function authorityRequest(path, options = {}) {
@@ -48,12 +86,12 @@ export async function authorityRequest(path, options = {}) {
     }
     const payload = await readResponsePayload(response);
     if (!response.ok) {
-        throw new AuthorityApiError(getErrorMessage(payload, response.statusText), response.status, payload);
+        throw createAuthorityApiError(getErrorMessage(payload, response.statusText), response.status, payload);
     }
     return payload;
 }
 export function isInvalidSessionError(error) {
-    return error instanceof AuthorityApiError && /authority session/i.test(error.message);
+    return error instanceof AuthoritySessionError && error.code === 'invalid_session';
 }
 export function buildEventStreamUrl(sessionToken, channel) {
     const url = new URL(`${AUTHORITY_API_BASE}/events/stream`, window.location.origin);
@@ -86,5 +124,39 @@ function isAuthorityErrorPayload(payload) {
         && payload !== null
         && 'error' in payload
         && typeof payload.error === 'string';
+}
+function createAuthorityApiError(message, status, payload) {
+    const category = isAuthorityErrorPayload(payload) ? payload.category : undefined;
+    switch (category) {
+        case 'permission':
+            return new AuthorityApiError(message, status, payload);
+        case 'auth':
+            return new AuthorityAuthError(message, status, payload);
+        case 'session':
+            return new AuthoritySessionError(message, status, payload);
+        case 'validation':
+            return new AuthorityValidationError(message, status, payload);
+        case 'limit':
+            return new AuthorityLimitError(message, status, payload);
+        case 'timeout':
+            return new AuthorityTimeoutError(message, status, payload);
+        case 'core':
+            return new AuthorityCoreError(message, status, payload);
+        default:
+            break;
+    }
+    if (status === 401) {
+        return new AuthorityAuthError(message, status, payload);
+    }
+    if (status === 408 || status === 504) {
+        return new AuthorityTimeoutError(message, status, payload);
+    }
+    if (status === 413 || status === 429) {
+        return new AuthorityLimitError(message, status, payload);
+    }
+    if (status >= 400 && status < 500) {
+        return new AuthorityValidationError(message, status, payload);
+    }
+    return new AuthorityCoreError(message, status, payload);
 }
 //# sourceMappingURL=api.js.map

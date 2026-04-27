@@ -2,7 +2,7 @@ import type { AuthorityInitConfig, ControlSessionSnapshot, SessionInitResponse }
 import { buildAuthorityFeatureFlags } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { SessionRecord, UserContext } from '../types.js';
-import { nowIso, randomToken } from '../utils.js';
+import { AuthorityServiceError, nowIso, randomToken } from '../utils.js';
 import { CoreService } from './core-service.js';
 
 export class SessionService {
@@ -49,11 +49,11 @@ export class SessionService {
     async assertSession(token: string | null, user: UserContext): Promise<SessionRecord> {
         const session = await this.getSession(token, user);
         if (!session) {
-            throw new Error('Invalid authority session');
+            throw new AuthorityServiceError('Invalid authority session', 401, 'invalid_session', 'session');
         }
 
         if (session.userHandle !== user.handle) {
-            throw new Error('Authority session does not belong to current user');
+            throw new AuthorityServiceError('Authority session does not belong to current user', 403, 'session_user_mismatch', 'session');
         }
 
         return session;

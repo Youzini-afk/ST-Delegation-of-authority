@@ -114,6 +114,25 @@ describe('PermissionService', () => {
         expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'api.example.com' })).decision).toBe('prompt');
         expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'example.com' })).decision).toBe('blocked');
     });
+
+    it('evaluates permissions in batch', async () => {
+        const user = createUser(false);
+        const session = createSession(user, {
+            jobs: {
+                background: ['delay'],
+            },
+        });
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        const results = await permissions.evaluateBatch(user, session, [
+            { resource: 'storage.kv' },
+            { resource: 'jobs.background', target: 'delay' },
+            { resource: 'jobs.background', target: 'reindex' },
+        ]);
+
+        expect(results.map(result => result.decision)).toEqual(['blocked', 'prompt', 'blocked']);
+    });
 });
 
 function createMockCore(): CoreService {

@@ -14,7 +14,19 @@ export type PermissionStatus = 'granted' | 'denied' | 'prompt' | 'blocked';
 export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type GrantScope = 'session' | 'persistent' | 'policy';
-export type AuthorityErrorCode = 'permission_not_granted' | 'permission_denied' | 'permission_blocked';
+export type AuthorityErrorCategory = 'permission' | 'auth' | 'session' | 'validation' | 'limit' | 'timeout' | 'core';
+export type AuthorityErrorCode =
+    | 'permission_not_granted'
+    | 'permission_denied'
+    | 'permission_blocked'
+    | 'unauthorized'
+    | 'invalid_session'
+    | 'session_user_mismatch'
+    | 'validation_error'
+    | 'limit_exceeded'
+    | 'timeout'
+    | 'core_unavailable'
+    | 'core_request_failed';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type PrivateFileKind = 'file' | 'directory';
 export type PrivateFileEncoding = 'utf8' | 'base64';
@@ -31,6 +43,7 @@ export interface AuthorityPermissionErrorPayloadDetails {
 export interface AuthorityErrorPayload {
     error: string;
     code?: AuthorityErrorCode;
+    category?: AuthorityErrorCategory;
     details?: Record<string, unknown> | AuthorityPermissionErrorPayloadDetails;
 }
 
@@ -678,6 +691,14 @@ export interface PermissionEvaluateResponse {
     target: string;
     resource: PermissionResource;
     grant?: AuthorityGrant | AuthorityPolicyEntry;
+}
+
+export interface PermissionEvaluateBatchRequest {
+    requests: PermissionEvaluateRequest[];
+}
+
+export interface PermissionEvaluateBatchResponse {
+    results: PermissionEvaluateResponse[];
 }
 
 export interface PermissionResolveRequest extends PermissionEvaluateRequest {

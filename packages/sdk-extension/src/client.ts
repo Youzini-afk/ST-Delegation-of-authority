@@ -20,6 +20,7 @@ import type {
     JobListRequest,
     JobListResponse,
     PermissionDecision,
+    PermissionEvaluateBatchResponse,
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
     PermissionResource,
@@ -117,6 +118,11 @@ export interface AuthorityPermissionErrorDetails {
     riskLevel: PermissionEvaluateResponse['riskLevel'];
     target: string;
     resource: PermissionResource;
+}
+
+export interface AuthorityPermissionExplainResult {
+    evaluation: PermissionEvaluateResponse;
+    message: string;
 }
 
 export class AuthorityPermissionError extends Error {
@@ -488,6 +494,12 @@ export class AuthorityClient {
 
     readonly http: {
         fetch: (input: AuthorityHttpRequest) => Promise<HttpFetchResponse>;
+    };
+
+    readonly permissions: {
+        evaluate: (request: AuthorityPermissionRequest) => Promise<PermissionEvaluateResponse>;
+        evaluateBatch: (requests: AuthorityPermissionRequest[]) => Promise<PermissionEvaluateResponse[]>;
+        explain: (request: AuthorityPermissionRequest) => Promise<AuthorityPermissionExplainResult>;
     };
 
     readonly jobs: {
@@ -1333,13 +1345,16 @@ export class AuthorityClient {
             },
         };
 
+        this.permissions = {
+            evaluate: async request => await this.evaluatePermission(request),
+            evaluateBatch: async requests => await this.evaluatePermissions(requests),
+            explain: async request => await this.explainPermission(request),
+        };
+
         this.jobs = {
-            create: async (type, payload = {}, options) => {
-                await this.ensurePermission({
-                    resource: 'jobs.background',
-                    target: type,
-                    reason: `创建后台任务 ${type}`,
-                });
+            create: async (type, payload = {}, options = {}) => {
+                await this.requireFeature('jobs.background', 'Authority 当前版本尚未提供后台任务能力');
+                await this.ensurePermission({ resource: 'jobs.background', target: type, reason: `创建后台任务 ${type}` });
                 return await this.requestWithSession<JobRecord>('/jobs/create', {
                     method: 'POST',
                     body: {
@@ -1674,6 +1689,25 @@ export class AuthorityClient {
             target: grant.target,
             resource: grant.resource,
             grant,
+        };
+    }
+
+    async evaluatePermissions(requests: AuthorityPermissionRequest[]): Promise<PermissionEvaluateResponse[]> {
+        if (requests.length === 0) {
+            return [];
+        }
+        const response = await this.requestWithSession<PermissionEvaluateBatchResponse>('/permissions/evaluate-batch', {
+            method: 'POST',
+            body: { requests },
+        });
+        return response.results;
+    }
+
+    async explainPermission(request: AuthorityPermissionRequest): Promise<AuthorityPermissionExplainResult> {
+        const evaluation = await this.evaluatePermission(request);
+        return {
+            evaluation,
+            message: getPermissionEvaluationMessage(this.config.displayName, evaluation.resource, evaluation.target, evaluation.decision),
         };
     }
 
@@ -2448,6 +2482,21 @@ function getPermissionFailureMessage(
     }
 
     return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
+}
+
+function getPermissionEvaluationMessage(
+    displayName: string,
+    resource: PermissionResource,
+    target: string,
+    decision: PermissionEvaluateResponse['decision'],
+): string {
+    if (decision === 'granted') {
+        const resourceName = getPermissionResourceLabel(resource);
+        const resourceLabel = target && target !== '*' ? `${resourceName} (${target})` : resourceName;
+        return `${displayName} 当前已获得 ${resourceLabel} 的访问授权。`;
+    }
+
+    return getPermissionFailureMessage(displayName, resource, target, decision);
 }
 
 function getAuthorityPermissionErrorCode(decision: AuthorityPermissionErrorDecision): AuthorityPermissionErrorCode {
