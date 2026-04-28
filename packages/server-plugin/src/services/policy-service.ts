@@ -9,6 +9,24 @@ export class PolicyService {
     constructor(private readonly core: CoreService) {}
 
     async getPolicies(user: UserContext): Promise<PoliciesState> {
+        const globalFile = await this.getStoredPolicies(user);
+
+        return {
+            ...globalFile,
+            defaults: {
+                ...DEFAULT_POLICY_STATUS,
+                ...globalFile.defaults,
+            },
+            limits: {
+                extensions: {
+                    ...(globalFile.limits?.extensions ?? {}),
+                },
+            },
+            updatedAt: globalFile.updatedAt || nowIso(),
+        };
+    }
+
+    async getStoredPolicies(user: UserContext): Promise<PoliciesState> {
         const globalPaths = getGlobalAuthorityPaths();
         const globalFile = await this.core.getControlPolicies(globalPaths.controlDbFile, {
             userHandle: user.handle,
@@ -17,8 +35,7 @@ export class PolicyService {
         return {
             ...globalFile,
             defaults: {
-                ...DEFAULT_POLICY_STATUS,
-                ...globalFile.defaults,
+                ...(globalFile.defaults ?? {}),
             },
             limits: {
                 extensions: {

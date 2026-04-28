@@ -6115,17 +6115,8 @@ fn save_control_policies_document(
 }
 
 fn default_control_policies_document() -> ControlPoliciesDocument {
-    let mut defaults = HashMap::new();
-    defaults.insert(String::from("storage.kv"), String::from("prompt"));
-    defaults.insert(String::from("storage.blob"), String::from("prompt"));
-    defaults.insert(String::from("fs.private"), String::from("prompt"));
-    defaults.insert(String::from("sql.private"), String::from("prompt"));
-    defaults.insert(String::from("trivium.private"), String::from("prompt"));
-    defaults.insert(String::from("http.fetch"), String::from("prompt"));
-    defaults.insert(String::from("jobs.background"), String::from("prompt"));
-    defaults.insert(String::from("events.stream"), String::from("prompt"));
     ControlPoliciesDocument {
-        defaults,
+        defaults: HashMap::new(),
         extensions: HashMap::new(),
         limits: ControlLimitsPoliciesDocument::default(),
         updated_at: current_timestamp_iso(),
@@ -8464,6 +8455,8 @@ mod tests {
     use std::io::Write as _;
     use std::net::TcpListener;
 
+    static TEST_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     struct LocalHttpFetchGuard {
         _guard: std::sync::MutexGuard<'static, ()>,
     }
@@ -9932,21 +9925,25 @@ mod tests {
     }
 
     fn test_db_path(name: &str) -> String {
+        let sequence = TEST_PATH_COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = env::temp_dir().join(format!(
-            "authority-core-test-{}-{}-{}.sqlite",
+            "authority-core-test-{}-{}-{}-{}.sqlite",
             name,
             process::id(),
-            current_unix_millis()
+            current_unix_millis(),
+            sequence
         ));
         path.to_string_lossy().into_owned()
     }
 
     fn test_trivium_path(name: &str) -> String {
+        let sequence = TEST_PATH_COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = env::temp_dir().join(format!(
-            "authority-core-trivium-{}-{}-{}.tdb",
+            "authority-core-trivium-{}-{}-{}-{}.tdb",
             name,
             process::id(),
-            current_unix_millis()
+            current_unix_millis(),
+            sequence
         ));
         path.to_string_lossy().into_owned()
     }
@@ -9962,11 +9959,13 @@ mod tests {
     }
 
     fn test_private_root(name: &str) -> String {
+        let sequence = TEST_PATH_COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = env::temp_dir().join(format!(
-            "authority-core-private-{}-{}-{}",
+            "authority-core-private-{}-{}-{}-{}",
             name,
             process::id(),
-            current_unix_millis()
+            current_unix_millis(),
+            sequence
         ));
         path.to_string_lossy().into_owned()
     }

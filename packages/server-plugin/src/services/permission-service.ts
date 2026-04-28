@@ -85,15 +85,27 @@ export class PermissionService {
             return declarationDecision;
         }
 
-        const policy = await this.getPolicyGrant(user, session.extension.id, descriptor.key);
-        if (policy) {
+        const extensionPolicy = await this.getExtensionPolicyGrant(user, session.extension.id, descriptor.key);
+        if (extensionPolicy) {
             return {
-                decision: policy.status,
+                decision: extensionPolicy.status,
                 key: descriptor.key,
                 riskLevel: descriptor.riskLevel,
                 target: descriptor.target,
                 resource: descriptor.resource,
-                grant: policy,
+                grant: extensionPolicy,
+            };
+        }
+
+        const defaultPolicy = await this.getDefaultPolicyGrant(user, descriptor);
+        if (defaultPolicy && defaultPolicy.status !== 'prompt') {
+            return {
+                decision: defaultPolicy.status,
+                key: descriptor.key,
+                riskLevel: descriptor.riskLevel,
+                target: descriptor.target,
+                resource: descriptor.resource,
+                grant: defaultPolicy,
             };
         }
 
@@ -121,12 +133,25 @@ export class PermissionService {
             };
         }
 
+        if (defaultPolicy) {
+            return {
+                decision: defaultPolicy.status,
+                key: descriptor.key,
+                riskLevel: descriptor.riskLevel,
+                target: descriptor.target,
+                resource: descriptor.resource,
+                grant: defaultPolicy,
+            };
+        }
+
+        const defaultGrant = this.buildSystemDefaultPolicy(descriptor);
         return {
-            decision: DEFAULT_POLICY_STATUS[descriptor.resource],
+            decision: defaultGrant.status,
             key: descriptor.key,
             riskLevel: descriptor.riskLevel,
             target: descriptor.target,
             resource: descriptor.resource,
+            grant: defaultGrant,
         };
     }
 
@@ -198,9 +223,39 @@ export class PermissionService {
         await this.core.resetControlGrants(paths.controlDbFile, request);
     }
 
-    private async getPolicyGrant(user: UserContext, extensionId: string, key: string): Promise<StoredPolicyEntry | null> {
-        const file = await this.policyService.getPolicies(user);
+    private async getExtensionPolicyGrant(user: UserContext, extensionId: string, key: string): Promise<StoredPolicyEntry | null> {
+        const file = await this.policyService.getStoredPolicies(user);
         return file.extensions[extensionId]?.[key] ?? null;
+    }
+
+    private async getDefaultPolicyGrant(user: UserContext, descriptor: PermissionDescriptor): Promise<StoredPolicyEntry | null> {
+        const file = await this.policyService.getStoredPolicies(user);
+        const defaultStatus = file.defaults[descriptor.resource];
+        if (!defaultStatus) {
+            return null;
+        }
+
+        return {
+            key: descriptor.key,
+            resource: descriptor.resource,
+            target: descriptor.target,
+            status: defaultStatus,
+            riskLevel: descriptor.riskLevel,
+            updatedAt: file.updatedAt || nowIso(),
+            source: 'admin',
+        };
+    }
+
+    private buildSystemDefaultPolicy(descriptor: PermissionDescriptor): StoredPolicyEntry {
+        return {
+            key: descriptor.key,
+            resource: descriptor.resource,
+            target: descriptor.target,
+            status: DEFAULT_POLICY_STATUS[descriptor.resource],
+            riskLevel: descriptor.riskLevel,
+            updatedAt: nowIso(),
+            source: 'system',
+        };
     }
 
     private async getPersistentGrant(user: UserContext, extensionId: string, key: string): Promise<StoredGrantEntry | null> {

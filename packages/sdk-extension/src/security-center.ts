@@ -1214,8 +1214,8 @@ class SecurityCenterView {
                     </div>
                     <div class="authority-policy-footer">
                         <div class="authority-chip-row">
-                            <span class="authority-pill authority-pill--prompt">默认询问</span>
-                            <span class="authority-pill authority-pill--granted">允许并记住</span>
+                            <span class="authority-pill authority-pill--granted">默认允许</span>
+                            <span class="authority-pill authority-pill--prompt">需要询问</span>
                             <span class="authority-pill authority-pill--blocked">管理员封锁</span>
                         </div>
                         <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>

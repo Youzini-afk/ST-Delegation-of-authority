@@ -41,14 +41,14 @@ export const RESOURCE_RISK: Record<PermissionResource, RiskLevel> = {
 };
 
 export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus> = {
-    'storage.kv': 'prompt',
-    'storage.blob': 'prompt',
-    'fs.private': 'prompt',
-    'sql.private': 'prompt',
-    'trivium.private': 'prompt',
-    'http.fetch': 'prompt',
-    'jobs.background': 'prompt',
-    'events.stream': 'prompt',
+    'storage.kv': 'granted',
+    'storage.blob': 'granted',
+    'fs.private': 'granted',
+    'sql.private': 'granted',
+    'trivium.private': 'granted',
+    'http.fetch': 'granted',
+    'jobs.background': 'granted',
+    'events.stream': 'granted',
 };
 
 export const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'] as const;

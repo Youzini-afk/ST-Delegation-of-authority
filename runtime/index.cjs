@@ -68,14 +68,14 @@ const RESOURCE_RISK = {
     'events.stream': 'low',
 };
 const DEFAULT_POLICY_STATUS = {
-    'storage.kv': 'prompt',
-    'storage.blob': 'prompt',
-    'fs.private': 'prompt',
-    'sql.private': 'prompt',
-    'trivium.private': 'prompt',
-    'http.fetch': 'prompt',
-    'jobs.background': 'prompt',
-    'events.stream': 'prompt',
+    'storage.kv': 'granted',
+    'storage.blob': 'granted',
+    'fs.private': 'granted',
+    'sql.private': 'granted',
+    'trivium.private': 'granted',
+    'http.fetch': 'granted',
+    'jobs.background': 'granted',
+    'events.stream': 'granted',
 };
 const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'];
 const BUILTIN_JOB_REGISTRY_SUMMARY = {
@@ -6133,15 +6133,26 @@ class PermissionService {
         if (declarationDecision) {
             return declarationDecision;
         }
-        const policy = await this.getPolicyGrant(user, session.extension.id, descriptor.key);
-        if (policy) {
+        const extensionPolicy = await this.getExtensionPolicyGrant(user, session.extension.id, descriptor.key);
+        if (extensionPolicy) {
             return {
-                decision: policy.status,
+                decision: extensionPolicy.status,
                 key: descriptor.key,
                 riskLevel: descriptor.riskLevel,
                 target: descriptor.target,
                 resource: descriptor.resource,
-                grant: policy,
+                grant: extensionPolicy,
+            };
+        }
+        const defaultPolicy = await this.getDefaultPolicyGrant(user, descriptor);
+        if (defaultPolicy && defaultPolicy.status !== 'prompt') {
+            return {
+                decision: defaultPolicy.status,
+                key: descriptor.key,
+                riskLevel: descriptor.riskLevel,
+                target: descriptor.target,
+                resource: descriptor.resource,
+                grant: defaultPolicy,
             };
         }
         const persistentGrant = await this.getPersistentGrant(user, session.extension.id, descriptor.key);
@@ -6166,12 +6177,24 @@ class PermissionService {
                 grant: sessionGrant,
             };
         }
+        if (defaultPolicy) {
+            return {
+                decision: defaultPolicy.status,
+                key: descriptor.key,
+                riskLevel: descriptor.riskLevel,
+                target: descriptor.target,
+                resource: descriptor.resource,
+                grant: defaultPolicy,
+            };
+        }
+        const defaultGrant = this.buildSystemDefaultPolicy(descriptor);
         return {
-            decision: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS[descriptor.resource],
+            decision: defaultGrant.status,
             key: descriptor.key,
             riskLevel: descriptor.riskLevel,
             target: descriptor.target,
             resource: descriptor.resource,
+            grant: defaultGrant,
         };
     }
     async evaluateBatch(user, session, requests) {
@@ -6232,9 +6255,36 @@ class PermissionService {
         };
         await this.core.resetControlGrants(paths.controlDbFile, request);
     }
-    async getPolicyGrant(user, extensionId, key) {
-        const file = await this.policyService.getPolicies(user);
+    async getExtensionPolicyGrant(user, extensionId, key) {
+        const file = await this.policyService.getStoredPolicies(user);
         return file.extensions[extensionId]?.[key] ?? null;
+    }
+    async getDefaultPolicyGrant(user, descriptor) {
+        const file = await this.policyService.getStoredPolicies(user);
+        const defaultStatus = file.defaults[descriptor.resource];
+        if (!defaultStatus) {
+            return null;
+        }
+        return {
+            key: descriptor.key,
+            resource: descriptor.resource,
+            target: descriptor.target,
+            status: defaultStatus,
+            riskLevel: descriptor.riskLevel,
+            updatedAt: file.updatedAt || (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+            source: 'admin',
+        };
+    }
+    buildSystemDefaultPolicy(descriptor) {
+        return {
+            key: descriptor.key,
+            resource: descriptor.resource,
+            target: descriptor.target,
+            status: _constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS[descriptor.resource],
+            riskLevel: descriptor.riskLevel,
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+            source: 'system',
+        };
     }
     async getPersistentGrant(user, extensionId, key) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
@@ -6369,6 +6419,22 @@ class PolicyService {
         this.core = core;
     }
     async getPolicies(user) {
+        const globalFile = await this.getStoredPolicies(user);
+        return {
+            ...globalFile,
+            defaults: {
+                ..._constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS,
+                ...globalFile.defaults,
+            },
+            limits: {
+                extensions: {
+                    ...(globalFile.limits?.extensions ?? {}),
+                },
+            },
+            updatedAt: globalFile.updatedAt || (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.nowIso)(),
+        };
+    }
+    async getStoredPolicies(user) {
         const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getGlobalAuthorityPaths)();
         const globalFile = await this.core.getControlPolicies(globalPaths.controlDbFile, {
             userHandle: user.handle,
@@ -6376,8 +6442,7 @@ class PolicyService {
         return {
             ...globalFile,
             defaults: {
-                ..._constants_js__WEBPACK_IMPORTED_MODULE_0__.DEFAULT_POLICY_STATUS,
-                ...globalFile.defaults,
+                ...(globalFile.defaults ?? {}),
             },
             limits: {
                 extensions: {

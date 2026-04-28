@@ -36,7 +36,7 @@ describe('PermissionService', () => {
         const core = createMockCore();
         const permissions = new PermissionService(new PolicyService(core), core);
 
-        expect((await permissions.evaluate(user, session, { resource: 'storage.kv' })).decision).toBe('prompt');
+        expect((await permissions.evaluate(user, session, { resource: 'storage.kv' })).decision).toBe('granted');
 
         const granted = await permissions.resolve(user, session, { resource: 'storage.kv' }, 'allow-always');
         expect(granted.status).toBe('granted');
@@ -49,9 +49,18 @@ describe('PermissionService', () => {
 
     it('consumes allow-once session grants after a single authorization', async () => {
         const user = createUser(false);
+        const admin = createUser(true);
         const session = createSession(user);
         const core = createMockCore();
-        const permissions = new PermissionService(new PolicyService(core), core);
+        const policies = new PolicyService(core);
+        const permissions = new PermissionService(policies, core);
+
+        await policies.saveGlobalPolicies(admin, {
+            defaults: {
+                ...DEFAULT_POLICY_STATUS,
+                'jobs.background': 'prompt',
+            },
+        });
 
         await permissions.resolve(user, session, { resource: 'jobs.background', target: 'delay' }, 'allow-once');
         expect(await permissions.authorize(user, session, { resource: 'jobs.background', target: 'delay' })).not.toBeNull();
@@ -88,6 +97,41 @@ describe('PermissionService', () => {
         expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'api.example.com' })).decision).toBe('blocked');
     });
 
+    it('applies admin default policies ahead of user grants', async () => {
+        const user = createUser(false);
+        const admin = createUser(true);
+        const session = createSession(user);
+        const core = createMockCore();
+        const policies = new PolicyService(core);
+        const permissions = new PermissionService(policies, core);
+
+        await permissions.resolve(user, session, { resource: 'storage.kv' }, 'deny');
+        expect((await permissions.evaluate(user, session, { resource: 'storage.kv' })).decision).toBe('denied');
+
+        await policies.saveGlobalPolicies(admin, {
+            defaults: {
+                ...DEFAULT_POLICY_STATUS,
+                'storage.kv': 'granted',
+            },
+        });
+
+        const evaluation = await permissions.evaluate(user, session, { resource: 'storage.kv' });
+        expect(evaluation.decision).toBe('granted');
+        expect(evaluation.grant?.source).toBe('admin');
+    });
+
+    it('authorizes system-default granted permissions without explicit grants', async () => {
+        const user = createUser(false);
+        const session = createSession(user);
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        const grant = await permissions.authorize(user, session, { resource: 'storage.kv' });
+        expect(grant).not.toBeNull();
+        expect(grant?.status).toBe('granted');
+        expect(grant?.source).toBe('system');
+    });
+
     it('blocks undeclared job types when the extension declares scoped background jobs', async () => {
         const user = createUser(false);
         const session = createSession(user, {
@@ -98,7 +142,7 @@ describe('PermissionService', () => {
         const core = createMockCore();
         const permissions = new PermissionService(new PolicyService(core), core);
 
-        expect((await permissions.evaluate(user, session, { resource: 'jobs.background', target: 'delay' })).decision).toBe('prompt');
+        expect((await permissions.evaluate(user, session, { resource: 'jobs.background', target: 'delay' })).decision).toBe('granted');
         expect((await permissions.evaluate(user, session, { resource: 'jobs.background', target: 'reindex' })).decision).toBe('blocked');
     });
 
@@ -112,7 +156,7 @@ describe('PermissionService', () => {
         const core = createMockCore();
         const permissions = new PermissionService(new PolicyService(core), core);
 
-        expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'api.example.com' })).decision).toBe('prompt');
+        expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'api.example.com' })).decision).toBe('granted');
         expect((await permissions.evaluate(user, session, { resource: 'http.fetch', target: 'example.com' })).decision).toBe('blocked');
     });
 
@@ -132,7 +176,7 @@ describe('PermissionService', () => {
             { resource: 'jobs.background', target: 'reindex' },
         ]);
 
-        expect(results.map(result => result.decision)).toEqual(['blocked', 'prompt', 'blocked']);
+        expect(results.map(result => result.decision)).toEqual(['blocked', 'granted', 'blocked']);
     });
 
     it('always returns runtime inline thresholds regardless of extension limit policy', async () => {
@@ -193,7 +237,7 @@ describe('PermissionService', () => {
 function createMockCore(): CoreService {
     const grants = new Map<string, StoredGrantEntry>();
     let policies: PoliciesState = {
-        defaults: { ...DEFAULT_POLICY_STATUS },
+        defaults: {} as PoliciesState['defaults'],
         extensions: {},
         limits: {
             extensions: {},
