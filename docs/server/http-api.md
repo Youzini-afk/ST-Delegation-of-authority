@@ -136,8 +136,11 @@
 - `POST /trivium/search`
 - `POST /trivium/search-advanced`
 - `POST /trivium/search-hybrid`
-- `POST /trivium/filter-where`
-- `POST /trivium/query`
+- `POST /trivium/search-hybrid-context`
+- `POST /trivium/tql`
+- `POST /trivium/tql-mut`
+- `POST /trivium/create-index`
+- `POST /trivium/drop-index`
 - `POST /trivium/index-text`
 - `POST /trivium/index-keyword`
 - `POST /trivium/build-text-index`
@@ -483,8 +486,10 @@ Trivium 公开 API 相对完整，支持：
 - vector search
 - advanced search
 - hybrid search
-- 条件过滤
-- query
+- hybrid search with context
+- TQL read / page query
+- TQL mutation
+- property index create / drop
 - text / keyword 索引
 - flush
 - compact
@@ -502,12 +507,15 @@ Trivium 公开 API 相对完整，支持：
 - 权限资源是 `trivium.private`
 - target 是数据库名
 - `resolve-id` / `upsert` / `get` / `search` / `neighbors` 等公开层接口会处理 external ID 映射
+- 读路径优先推荐 `POST /trivium/tql`，变更路径优先推荐 `POST /trivium/tql-mut`
+- 高频 payload 字段过滤建议配合 `POST /trivium/create-index` / `POST /trivium/drop-index`
+- `POST /trivium/search-hybrid-context` 会返回 `hits` 和 `context.stageTimings`，适合调试或观测检索链路
 - `stat` 返回 richer runtime metadata，例如 `edgeCount`、`vectorDim`、`databaseSize`、`walSize`、`vecSize`
 - `check-mappings-integrity`、`delete-orphan-mappings` 和 `stat(includeMappingIntegrity)` 都会触发 mapping / node 集分析，应视为 diagnostics / maintenance 路径，而不是高频业务热路径
 
 分页补充：
 
-- `POST /trivium/filter-where` 与 `POST /trivium/query` 现在可接受可选 `page`
+- `POST /trivium/tql` 可接受可选 `page`
 - 当提供 `page` 时，响应会带 `page: CursorPageInfo`
 - 默认 limit 为 100，最大 limit 为 1000
 

@@ -744,19 +744,15 @@ export class AuthorityClient {
                 });
                 return response.hits;
             },
-            filterWhere: async (input) => {
-                const response = await this.trivium.filterWherePage(input);
-                return response.nodes;
-            },
-            filterWherePage: async (input) => {
-                await this.requireFeature('trivium.filterWherePage', 'Authority 当前版本尚未提供 Trivium 分页过滤能力');
+            searchHybridWithContext: async (input) => {
+                await this.requireFeature('trivium.searchContext', 'Authority 当前版本尚未提供 Trivium 搜索上下文能力');
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
-                    reason: `过滤查询 Trivium 数据库 ${database}`,
+                    reason: `执行 Trivium 上下文化混合搜索 ${database}`,
                 });
-                return await this.requestWithSession('/trivium/filter-where', {
+                return await this.requestWithSession('/trivium/search-hybrid-context', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -764,19 +760,67 @@ export class AuthorityClient {
                     },
                 });
             },
-            query: async (input) => {
-                const response = await this.trivium.queryPage(input);
+            tql: async (input) => {
+                const response = await this.trivium.tqlPage(input);
                 return response.rows;
             },
-            queryPage: async (input) => {
-                await this.requireFeature('trivium.queryPage', 'Authority 当前版本尚未提供 Trivium 图查询分页能力');
+            tqlPage: async (input) => {
+                await this.requireFeature('trivium.tql', 'Authority 当前版本尚未提供 Trivium TQL 查询能力');
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
-                    reason: `图查询 Trivium 数据库 ${database}`,
+                    reason: `执行 Trivium TQL 查询 ${database}`,
                 });
-                return await this.requestWithSession('/trivium/query', {
+                return await this.requestWithSession('/trivium/tql', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            tqlMut: async (input) => {
+                await this.requireFeature('trivium.tqlMut', 'Authority 当前版本尚未提供 Trivium TQL 变更能力');
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `执行 Trivium TQL 变更 ${database}`,
+                });
+                return await this.requestWithSession('/trivium/tql-mut', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            createIndex: async (input) => {
+                await this.requireFeature('trivium.propertyIndex', 'Authority 当前版本尚未提供 Trivium 属性索引能力');
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `创建 Trivium 属性索引 ${database}:${input.field}`,
+                });
+                await this.requestWithSession('/trivium/create-index', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            dropIndex: async (input) => {
+                await this.requireFeature('trivium.propertyIndex', 'Authority 当前版本尚未提供 Trivium 属性索引能力');
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `删除 Trivium 属性索引 ${database}:${input.field}`,
+                });
+                await this.requestWithSession('/trivium/drop-index', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -1966,10 +2010,14 @@ function getFeatureAvailability(features, feature) {
             return features.trivium.upsert;
         case 'trivium.bulkMutations':
             return features.trivium.bulkMutations;
-        case 'trivium.filterWherePage':
-            return features.trivium.filterWherePage;
-        case 'trivium.queryPage':
-            return features.trivium.queryPage;
+        case 'trivium.tql':
+            return features.trivium.tql;
+        case 'trivium.tqlMut':
+            return features.trivium.tqlMut;
+        case 'trivium.propertyIndex':
+            return features.trivium.propertyIndex;
+        case 'trivium.searchContext':
+            return features.trivium.searchContext;
         case 'trivium.mappingPages':
             return features.trivium.mappingPages;
         case 'trivium.mappingIntegrity':

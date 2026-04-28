@@ -13,9 +13,8 @@ import type {
     TriviumBulkMutationResponse,
     TriviumNodeView,
     TriviumSearchHit,
-    TriviumFilterWhereResponse,
-    TriviumQueryResponse,
     TriviumStatResponse,
+    TriviumTqlResponse,
 } from '@stdo/shared-types';
 import { TriviumService } from './trivium-service.js';
 import type { CoreService } from './core-service.js';
@@ -407,7 +406,7 @@ describe('TriviumService', () => {
         expect(afterDelete.missingMappingCount).toBe(1);
     });
 
-    it('returns page-aware enriched filter/query responses while keeping array wrappers compatible', async () => {
+    it('returns page-aware enriched TQL responses while keeping array wrappers compatible', async () => {
         const user = createUser(dirs);
         const trivium = new TriviumService(createMockCore());
 
@@ -419,47 +418,26 @@ describe('TriviumService', () => {
             ],
         });
 
-        const filterPage = await trivium.filterWherePage(user, 'third-party/ext-a', {
+        const tqlPage = await trivium.tqlPage(user, 'third-party/ext-a', {
             database: 'graph',
-            condition: { name: { $exists: true } },
+            query: 'MATCH (n) RETURN n',
             page: { limit: 1 },
         });
-        expect(filterPage.nodes).toHaveLength(1);
-        expect(filterPage.nodes[0]?.externalId).toBe('alpha');
-        expect(filterPage.page).toEqual({
+        expect(tqlPage.rows).toHaveLength(1);
+        expect(tqlPage.rows[0]?.n?.externalId).toBe('alpha');
+        expect(tqlPage.page).toEqual({
             nextCursor: '1',
             limit: 1,
             hasMore: true,
             totalCount: 2,
         });
 
-        const filterRows = await trivium.filterWhere(user, 'third-party/ext-a', {
+        const tqlRows = await trivium.tql(user, 'third-party/ext-a', {
             database: 'graph',
-            condition: { name: { $exists: true } },
+            query: 'MATCH (n) RETURN n',
             page: { limit: 1 },
         });
-        expect(filterRows.map(node => node.externalId)).toEqual(['alpha']);
-
-        const queryPage = await trivium.queryPage(user, 'third-party/ext-a', {
-            database: 'graph',
-            cypher: 'MATCH (n) RETURN n',
-            page: { limit: 1 },
-        });
-        expect(queryPage.rows).toHaveLength(1);
-        expect(queryPage.rows[0]?.n?.externalId).toBe('alpha');
-        expect(queryPage.page).toEqual({
-            nextCursor: '1',
-            limit: 1,
-            hasMore: true,
-            totalCount: 2,
-        });
-
-        const queryRows = await trivium.query(user, 'third-party/ext-a', {
-            database: 'graph',
-            cypher: 'MATCH (n) RETURN n',
-            page: { limit: 1 },
-        });
-        expect(queryRows.map(row => row.n?.externalId)).toEqual(['alpha']);
+        expect(tqlRows.map(row => row.n?.externalId)).toEqual(['alpha']);
     });
 });
 
@@ -712,17 +690,7 @@ function createMockCore(): CoreService {
                 .sort((left, right) => left.id - right.id)
                 .map(node => ({ id: node.id, score: 1, payload: node.payload }));
         },
-        async filterWhereTriviumPage(dbPath: string, request: { page?: { limit?: number } }): Promise<TriviumFilterWhereResponse> {
-            const nodes = [...getDatabase(dbPath).values()]
-                .sort((left, right) => left.id - right.id)
-                .map(node => JSON.parse(JSON.stringify(node)) as TriviumNodeView);
-            const limit = request.page?.limit ?? nodes.length;
-            return {
-                nodes: nodes.slice(0, limit),
-                ...(request.page ? { page: toPage(nodes.length, limit) } : {}),
-            };
-        },
-        async queryTriviumPage(dbPath: string, request: { page?: { cursor?: string; limit?: number } }): Promise<TriviumQueryResponse> {
+        async tqlTriviumPage(dbPath: string, request: { page?: { cursor?: string; limit?: number } }): Promise<TriviumTqlResponse> {
             const rows = [...getDatabase(dbPath).values()]
                 .sort((left, right) => left.id - right.id)
                 .map(node => ({ n: JSON.parse(JSON.stringify(node)) as TriviumNodeView }));

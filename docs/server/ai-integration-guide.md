@@ -267,6 +267,13 @@ Authority Trivium 当前要求调用方提供 `vector`。
 
 应在调用方侧完成，再把向量传进来。
 
+另外，当前推荐的 Trivium 调用方式是：
+
+- 读路径优先使用 `trivium.tql()` / `trivium.tqlPage()`
+- CREATE / SET / DELETE / DETACH DELETE 等图谱变更优先使用 `trivium.tqlMut()`
+- 高频 payload 字段过滤优先考虑 `trivium.createIndex()` / `trivium.dropIndex()`
+- 需要检索链路上下文或 stage timings 时，优先使用 `trivium.searchHybridWithContext()`
+
 ## 6.5 不要把 `jobs.background` 当成任意代码执行平台
 
 当前公开内置 job type 包括：

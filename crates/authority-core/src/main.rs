@@ -42,6 +42,7 @@ use triviumdb::database::{
     StorageMode as TriviumStorageMode,
 };
 use triviumdb::filter::Filter as TriviumFilter;
+use triviumdb::hook::HookContext as TriviumRawHookContext;
 use triviumdb::node::{NodeView as TriviumRawNodeView, SearchHit as TriviumRawSearchHit};
 use triviumdb::storage::wal::SyncMode as TriviumSyncMode;
 use url::Url;
@@ -484,20 +485,35 @@ struct TriviumSearchHybridRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TriviumFilterWhereRequest {
+struct TriviumTqlRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
-    condition: JsonValue,
+    query: String,
     page: Option<CursorPageRequest>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TriviumQueryRequest {
+struct TriviumTqlMutRequest {
     #[serde(flatten)]
     open: TriviumOpenRequest,
-    cypher: String,
-    page: Option<CursorPageRequest>,
+    query: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumCreateIndexRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    field: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumDropIndexRequest {
+    #[serde(flatten)]
+    open: TriviumOpenRequest,
+    field: String,
 }
 
 #[derive(Deserialize)]
@@ -620,18 +636,39 @@ struct TriviumNeighborsResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TriviumFilterWhereResponse {
-    nodes: Vec<TriviumNodeView>,
+struct TriviumTqlResponse {
+    rows: Vec<HashMap<String, TriviumNodeView>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     page: Option<CursorPageInfo>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TriviumQueryResponse {
-    rows: Vec<HashMap<String, TriviumNodeView>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<CursorPageInfo>,
+struct TriviumTqlMutResponse {
+    affected: usize,
+    created_ids: Vec<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumSearchStageTiming {
+    stage: String,
+    elapsed_ms: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumSearchContext {
+    custom_data: JsonValue,
+    stage_timings: Vec<TriviumSearchStageTiming>,
+    aborted: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TriviumSearchHybridWithContextResponse {
+    hits: Vec<TriviumSearchHit>,
+    context: TriviumSearchContext,
 }
 
 #[derive(Serialize)]
@@ -1383,8 +1420,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/trivium/search", post(v1_trivium_search))
         .route("/trivium/search-advanced", post(v1_trivium_search_advanced))
         .route("/trivium/search-hybrid", post(v1_trivium_search_hybrid))
-        .route("/trivium/filter-where", post(v1_trivium_filter_where))
-        .route("/trivium/query", post(v1_trivium_query))
+        .route(
+            "/trivium/search-hybrid-context",
+            post(v1_trivium_search_hybrid_with_context),
+        )
+        .route("/trivium/tql", post(v1_trivium_tql))
+        .route("/trivium/tql-mut", post(v1_trivium_tql_mut))
+        .route("/trivium/create-index", post(v1_trivium_create_index))
+        .route("/trivium/drop-index", post(v1_trivium_drop_index))
         .route("/trivium/index-text", post(v1_trivium_index_text))
         .route("/trivium/index-keyword", post(v1_trivium_index_keyword))
         .route(
@@ -2133,17 +2176,35 @@ async fn v1_trivium_search_hybrid(
 ) -> Result<Json<JsonValue>, ApiError> {
     spawn_blocking_handler(body, handle_trivium_search_hybrid).await
 }
-async fn v1_trivium_filter_where(
+async fn v1_trivium_search_hybrid_with_context(
     State(_config): State<Arc<Config>>,
-    Json(body): Json<TriviumFilterWhereRequest>,
+    Json(body): Json<TriviumSearchHybridRequest>,
 ) -> Result<Json<JsonValue>, ApiError> {
-    spawn_blocking_handler(body, handle_trivium_filter_where).await
+    spawn_blocking_handler(body, handle_trivium_search_hybrid_with_context).await
 }
-async fn v1_trivium_query(
+async fn v1_trivium_tql(
     State(_config): State<Arc<Config>>,
-    Json(body): Json<TriviumQueryRequest>,
+    Json(body): Json<TriviumTqlRequest>,
 ) -> Result<Json<JsonValue>, ApiError> {
-    spawn_blocking_handler(body, handle_trivium_query).await
+    spawn_blocking_handler(body, handle_trivium_tql).await
+}
+async fn v1_trivium_tql_mut(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumTqlMutRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_tql_mut).await
+}
+async fn v1_trivium_create_index(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumCreateIndexRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_create_index).await
+}
+async fn v1_trivium_drop_index(
+    State(_config): State<Arc<Config>>,
+    Json(body): Json<TriviumDropIndexRequest>,
+) -> Result<Json<JsonValue>, ApiError> {
+    spawn_blocking_handler(body, handle_trivium_drop_index).await
 }
 async fn v1_trivium_index_text(
     State(_config): State<Arc<Config>>,
@@ -3225,60 +3286,152 @@ fn handle_trivium_search_hybrid(
     Ok(json!({ "hits": hits }))
 }
 
-fn handle_trivium_filter_where(request: TriviumFilterWhereRequest) -> Result<JsonValue, ApiError> {
-    let filter = parse_trivium_filter_condition(&request.condition)?;
-    let nodes = match parse_trivium_dtype(request.open.dtype.as_deref())? {
-        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
-            .filter_where(&filter)
-            .into_iter()
-            .map(|node| map_trivium_node(node, |value| value as f64))
-            .collect(),
-        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
-            .filter_where(&filter)
-            .into_iter()
-            .map(|node| map_trivium_node(node, |value| value.to_f64()))
-            .collect(),
-        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
-            .filter_where(&filter)
-            .into_iter()
-            .map(|node| map_trivium_node(node, |value| value as f64))
-            .collect(),
-    };
-    let (nodes, page) = slice_vec_page(nodes, request.page.as_ref(), 100, 1000)?;
+fn handle_trivium_search_hybrid_with_context(
+    request: TriviumSearchHybridRequest,
+) -> Result<JsonValue, ApiError> {
+    let started = Instant::now();
+    validate_non_empty("queryText", &request.query_text)?;
 
+    let config = build_trivium_hybrid_search_config(&request)?;
+    let (hits, context) = match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
+            .search_hybrid_with_context(
+                Some(&request.query_text),
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| value as f32)
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
+            .search_hybrid_with_context(
+                Some(&request.query_text),
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| f16::from_f64(value))
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
+            .search_hybrid_with_context(
+                Some(&request.query_text),
+                Some(
+                    &request
+                        .vector
+                        .iter()
+                        .map(|&value| value as u64)
+                        .collect::<Vec<_>>(),
+                ),
+                &config,
+            )
+            .map_err(to_trivium_error)?,
+    };
+    let hits: Vec<TriviumSearchHit> = hits.into_iter().map(map_trivium_search_hit).collect();
+    emit_if_slow(
+        "trivium_slow_search",
+        started.elapsed(),
+        SLOW_TRIVIUM_LOG_MS,
+        json!({
+            "dbPath": request.open.db_path,
+            "mode": "hybrid-context",
+            "topK": request.top_k.unwrap_or(5),
+            "hitCount": hits.len(),
+        }),
+    );
     Ok(
-        serde_json::to_value(TriviumFilterWhereResponse { nodes, page })
-            .expect("trivium filter where response should serialize"),
+        serde_json::to_value(TriviumSearchHybridWithContextResponse {
+            hits,
+            context: map_trivium_hook_context(context),
+        })
+        .expect("trivium hybrid search with context response should serialize"),
     )
 }
 
-fn handle_trivium_query(request: TriviumQueryRequest) -> Result<JsonValue, ApiError> {
-    validate_non_empty("cypher", &request.cypher)?;
+fn handle_trivium_tql(request: TriviumTqlRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("query", &request.query)?;
 
     let rows = match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => map_trivium_query_rows(
             open_trivium_f32(&request.open)?
-                .query(&request.cypher)
+                .tql(&request.query)
                 .map_err(to_trivium_error)?,
             |value| value as f64,
         ),
         TriviumDTypeTag::F16 => map_trivium_query_rows(
             open_trivium_f16(&request.open)?
-                .query(&request.cypher)
+                .tql(&request.query)
                 .map_err(to_trivium_error)?,
             |value| value.to_f64(),
         ),
         TriviumDTypeTag::U64 => map_trivium_query_rows(
             open_trivium_u64(&request.open)?
-                .query(&request.cypher)
+                .tql(&request.query)
                 .map_err(to_trivium_error)?,
             |value| value as f64,
         ),
     };
     let (rows, page) = slice_vec_page(rows, request.page.as_ref(), 100, 1000)?;
 
-    Ok(serde_json::to_value(TriviumQueryResponse { rows, page })
-        .expect("trivium query response should serialize"))
+    Ok(
+        serde_json::to_value(TriviumTqlResponse { rows, page })
+            .expect("trivium tql response should serialize"),
+    )
+}
+
+fn handle_trivium_tql_mut(request: TriviumTqlMutRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("query", &request.query)?;
+
+    let result = match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?
+            .tql_mut(&request.query)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?
+            .tql_mut(&request.query)
+            .map_err(to_trivium_error)?,
+        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?
+            .tql_mut(&request.query)
+            .map_err(to_trivium_error)?,
+    };
+
+    Ok(
+        serde_json::to_value(TriviumTqlMutResponse {
+            affected: result.affected,
+            created_ids: result.created_ids,
+        })
+        .expect("trivium tql mutation response should serialize"),
+    )
+}
+
+fn handle_trivium_create_index(request: TriviumCreateIndexRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("field", &request.field)?;
+
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?.create_index(&request.field),
+        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?.create_index(&request.field),
+        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?.create_index(&request.field),
+    }
+
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_trivium_drop_index(request: TriviumDropIndexRequest) -> Result<JsonValue, ApiError> {
+    validate_non_empty("field", &request.field)?;
+
+    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+        TriviumDTypeTag::F32 => open_trivium_f32(&request.open)?.drop_index(&request.field),
+        TriviumDTypeTag::F16 => open_trivium_f16(&request.open)?.drop_index(&request.field),
+        TriviumDTypeTag::U64 => open_trivium_u64(&request.open)?.drop_index(&request.field),
+    }
+
+    Ok(json!({ "ok": true }))
 }
 
 fn handle_trivium_index_text(request: TriviumIndexTextRequest) -> Result<JsonValue, ApiError> {
@@ -5294,6 +5447,21 @@ where
                 .collect()
         })
         .collect()
+}
+
+fn map_trivium_hook_context(context: TriviumRawHookContext) -> TriviumSearchContext {
+    TriviumSearchContext {
+        custom_data: context.custom_data,
+        stage_timings: context
+            .stage_timings
+            .into_iter()
+            .map(|(stage, elapsed)| TriviumSearchStageTiming {
+                stage,
+                elapsed_ms: elapsed.as_secs_f64() * 1000.0,
+            })
+            .collect(),
+        aborted: context.abort,
+    }
 }
 
 fn build_trivium_advanced_search_config(
@@ -8974,6 +9142,205 @@ mod tests {
         })
         .expect("get should succeed after compact");
         assert_eq!(fetched["node"]["payload"]["name"], json!("alpha"));
+    }
+
+    #[test]
+    fn trivium_tql_route_supports_paging() {
+        let db_path = test_trivium_path("tql-route-paging");
+        handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![
+                TriviumBulkUpsertItem {
+                    id: 1,
+                    vector: vec![1.0, 0.0],
+                    payload: json!({ "name": "alpha" }),
+                },
+                TriviumBulkUpsertItem {
+                    id: 2,
+                    vector: vec![0.0, 1.0],
+                    payload: json!({ "name": "beta" }),
+                },
+            ],
+        })
+        .expect("bulk upsert should succeed");
+
+        let first_page = handle_trivium_tql(TriviumTqlRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            query: String::from("MATCH (n) RETURN n"),
+            page: Some(CursorPageRequest {
+                cursor: None,
+                limit: Some(1),
+            }),
+        })
+        .expect("first tql page should succeed");
+
+        assert_eq!(first_page["rows"].as_array().map(|rows| rows.len()), Some(1));
+        assert_eq!(first_page["page"]["totalCount"], json!(2));
+        assert_eq!(first_page["page"]["hasMore"], json!(true));
+
+        let next_cursor = first_page["page"]["nextCursor"]
+            .as_str()
+            .expect("next cursor should exist")
+            .to_string();
+        let second_page = handle_trivium_tql(TriviumTqlRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            query: String::from("MATCH (n) RETURN n"),
+            page: Some(CursorPageRequest {
+                cursor: Some(next_cursor),
+                limit: Some(1),
+            }),
+        })
+        .expect("second tql page should succeed");
+
+        assert_eq!(second_page["rows"].as_array().map(|rows| rows.len()), Some(1));
+        assert_eq!(second_page["page"]["totalCount"], json!(2));
+        assert_eq!(second_page["page"]["hasMore"], json!(false));
+
+        let mut names = vec![
+            first_page["rows"][0]["n"]["payload"]["name"]
+                .as_str()
+                .expect("first page name should exist")
+                .to_string(),
+            second_page["rows"][0]["n"]["payload"]["name"]
+                .as_str()
+                .expect("second page name should exist")
+                .to_string(),
+        ];
+        names.sort();
+        assert_eq!(names, vec![String::from("alpha"), String::from("beta")]);
+    }
+
+    #[test]
+    fn trivium_tql_mut_route_creates_and_updates_nodes() {
+        let db_path = test_trivium_path("tql-mut-route");
+        let created = handle_trivium_tql_mut(TriviumTqlMutRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            query: String::from(r#"CREATE (a {name: "Alice", status: "active"})"#),
+        })
+        .expect("tql mutation create should succeed");
+
+        assert_eq!(created["affected"], json!(1));
+        assert_eq!(created["createdIds"].as_array().map(|rows| rows.len()), Some(1));
+
+        let created_id = created["createdIds"][0]
+            .as_u64()
+            .expect("created id should be present");
+        let read = handle_trivium_tql(TriviumTqlRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            query: String::from(r#"MATCH (a {name: "Alice"}) RETURN a"#),
+            page: None,
+        })
+        .expect("tql read should succeed");
+        assert_eq!(read["rows"][0]["a"]["payload"]["status"], json!("active"));
+
+        let updated = handle_trivium_tql_mut(TriviumTqlMutRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            query: String::from(r#"MATCH (a {name: "Alice"}) SET a.status == "archived""#),
+        })
+        .expect("tql mutation update should succeed");
+        assert_eq!(updated["affected"], json!(1));
+
+        let fetched = handle_trivium_get(TriviumGetRequest {
+            open: test_trivium_open_request(db_path, 2),
+            id: created_id,
+        })
+        .expect("get should succeed after tql mutation update");
+        assert_eq!(fetched["node"]["payload"]["status"], json!("archived"));
+    }
+
+    #[test]
+    fn trivium_property_index_lifecycle_routes_work() {
+        let db_path = test_trivium_path("property-index-lifecycle");
+        handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![TriviumBulkUpsertItem {
+                id: 1,
+                vector: vec![1.0, 0.0],
+                payload: json!({ "name": "alpha", "status": "active" }),
+            }],
+        })
+        .expect("bulk upsert should succeed");
+
+        let created = handle_trivium_create_index(TriviumCreateIndexRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            field: String::from("status"),
+        })
+        .expect("create index should succeed");
+        assert_eq!(created["ok"], json!(true));
+
+        let indexed_query = handle_trivium_tql(TriviumTqlRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            query: String::from(r#"MATCH (a {status: "active"}) RETURN a"#),
+            page: None,
+        })
+        .expect("indexed match query should succeed");
+        assert_eq!(indexed_query["rows"][0]["a"]["payload"]["name"], json!("alpha"));
+
+        let dropped = handle_trivium_drop_index(TriviumDropIndexRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            field: String::from("status"),
+        })
+        .expect("drop index should succeed");
+        assert_eq!(dropped["ok"], json!(true));
+
+        let after_drop = handle_trivium_tql(TriviumTqlRequest {
+            open: test_trivium_open_request(db_path, 2),
+            query: String::from(r#"MATCH (a {status: "active"}) RETURN a"#),
+            page: None,
+        })
+        .expect("match query should still succeed after drop index");
+        assert_eq!(after_drop["rows"].as_array().map(|rows| rows.len()), Some(1));
+    }
+
+    #[test]
+    fn trivium_search_hybrid_with_context_route_returns_context() {
+        let db_path = test_trivium_path("search-hybrid-context-route");
+        handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            items: vec![
+                TriviumBulkUpsertItem {
+                    id: 1,
+                    vector: vec![1.0, 0.0],
+                    payload: json!({ "name": "alpha" }),
+                },
+                TriviumBulkUpsertItem {
+                    id: 2,
+                    vector: vec![0.0, 1.0],
+                    payload: json!({ "name": "beta" }),
+                },
+            ],
+        })
+        .expect("bulk upsert should succeed");
+
+        handle_trivium_index_text(TriviumIndexTextRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            id: 1,
+            text: String::from("alpha hybrid context"),
+        })
+        .expect("first text index should succeed");
+        handle_trivium_index_text(TriviumIndexTextRequest {
+            open: test_trivium_open_request(db_path.clone(), 2),
+            id: 2,
+            text: String::from("beta unrelated"),
+        })
+        .expect("second text index should succeed");
+
+        let response = handle_trivium_search_hybrid_with_context(TriviumSearchHybridRequest {
+            open: test_trivium_open_request(db_path, 2),
+            vector: vec![1.0, 0.0],
+            query_text: String::from("alpha"),
+            top_k: Some(2),
+            expand_depth: Some(1),
+            min_score: Some(0.0),
+            hybrid_alpha: Some(0.5),
+            payload_filter: None,
+        })
+        .expect("hybrid search with context should succeed");
+
+        assert!(response["hits"].as_array().is_some_and(|hits| !hits.is_empty()));
+        assert_eq!(response["hits"][0]["payload"]["name"], json!("alpha"));
+        assert!(response["context"]["stageTimings"].is_array());
+        assert_eq!(response["context"]["aborted"], json!(false));
     }
 
     #[test]

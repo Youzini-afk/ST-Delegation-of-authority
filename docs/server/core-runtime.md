@@ -167,8 +167,11 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
 - `POST /v1/trivium/search`
 - `POST /v1/trivium/search-advanced`
 - `POST /v1/trivium/search-hybrid`
-- `POST /v1/trivium/filter-where`
-- `POST /v1/trivium/query`
+- `POST /v1/trivium/search-hybrid-context`
+- `POST /v1/trivium/tql`
+- `POST /v1/trivium/tql-mut`
+- `POST /v1/trivium/create-index`
+- `POST /v1/trivium/drop-index`
 - `POST /v1/trivium/index-text`
 - `POST /v1/trivium/index-keyword`
 - `POST /v1/trivium/build-text-index`
@@ -211,15 +214,20 @@ Node adapter 启动 core 后，会轮询 `/health` 直到 ready。
   - 可接受可选 `page`
   - 当提供 `page` 时，结果会带 `page: CursorPageInfo`
 
-- `POST /v1/trivium/filter-where` / `POST /v1/trivium/query`
+- `POST /v1/trivium/tql`
   - 可接受可选 `page`
   - 当提供 `page` 时，结果会带 `page: CursorPageInfo`
+
+- `POST /v1/trivium/tql-mut`
+  - 用于 CREATE / SET / DELETE / DETACH DELETE 等 TQL 变更语句
+  - 返回 `affected` 与 `createdIds`
 
 - 当前内置后台任务注册表：
   - `delay`
   - `sql.backup`
   - `trivium.flush`
-  - `fs.import-jsonl`
+  - `trivium.index-text`
+  - `trivium.index-keyword`
 
 - 当前会持久化的运行诊断包括：
   - queue pressure

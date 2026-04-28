@@ -199,7 +199,7 @@ npm run bench:scale
 
 适用场景包括：
 
-- Trivium 存储结构或 query/filter/mapping 逻辑
+- Trivium 存储结构或 TQL/property-index/mapping 逻辑
 - SQL batch/transaction 行为
 - control plane audit/jobs/events 读取路径
 - admin package export/import

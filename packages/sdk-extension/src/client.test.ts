@@ -61,15 +61,15 @@ describe('AuthorityClient', () => {
         });
 
         const probe = await client.probe();
-        expect(probe.features.trivium.queryPage).toBe(true);
-        expect(client.hasFeature('trivium.queryPage')).toBe(true);
+        expect(probe.features.trivium.tql).toBe(true);
+        expect(client.hasFeature('trivium.tql')).toBe(true);
         expect(await client.probe()).toEqual(probe);
         expect(authorityRequestMock).toHaveBeenCalledTimes(1);
     });
 
-    it('rejects page-aware Trivium calls when probe reports unsupported feature', async () => {
+    it('rejects TQL calls when probe reports unsupported feature', async () => {
         const { AuthorityClient } = await import('./client.js');
-        authorityRequestMock.mockResolvedValue(buildProbe({ queryPage: false }));
+        authorityRequestMock.mockResolvedValue(buildProbe({ tql: false }));
 
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
@@ -79,7 +79,7 @@ describe('AuthorityClient', () => {
             declaredPermissions: {},
         });
 
-        await expect(client.trivium.queryPage({ cypher: 'MATCH (n) RETURN n' })).rejects.toThrow('Authority 当前版本尚未提供 Trivium 图查询分页能力');
+        await expect(client.trivium.tqlPage({ query: 'MATCH (n) RETURN n' })).rejects.toThrow('Authority 当前版本尚未提供 Trivium TQL 查询能力');
         expect(authorityRequestMock).toHaveBeenCalledWith('/probe', { method: 'POST' });
     });
 
@@ -1453,8 +1453,10 @@ function buildProbe(overrides: Partial<{
     resolveMany: boolean;
     upsert: boolean;
     bulkMutations: boolean;
-    filterWherePage: boolean;
-    queryPage: boolean;
+    tql: boolean;
+    tqlMut: boolean;
+    propertyIndex: boolean;
+    searchContext: boolean;
     mappingPages: boolean;
     mappingIntegrity: boolean;
     inlineThresholdBytes: Partial<Record<
@@ -1497,8 +1499,10 @@ function buildProbe(overrides: Partial<{
                 resolveMany: true,
                 upsert: true,
                 bulkMutations: true,
-                filterWherePage: true,
-                queryPage: true,
+                tql: true,
+                tqlMut: true,
+                propertyIndex: true,
+                searchContext: true,
                 mappingPages: true,
                 mappingIntegrity: true,
                 ...overrides,

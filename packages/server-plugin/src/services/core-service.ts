@@ -88,8 +88,8 @@ import type {
     TriviumBuildTextIndexRequest,
     TriviumBulkMutationResponse,
     TriviumCompactRequest,
-    TriviumFilterWhereRequest,
-    TriviumFilterWhereResponse,
+    TriviumCreateIndexRequest,
+    TriviumDropIndexRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumIndexKeywordRequest,
@@ -101,15 +101,19 @@ import type {
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
     TriviumNodeView,
-    TriviumQueryRequest,
-    TriviumQueryResponse,
-    TriviumQueryRow,
     TriviumSearchHit,
     TriviumSearchAdvancedRequest,
     TriviumSearchHybridRequest,
+    TriviumSearchHybridWithContextRequest,
+    TriviumSearchHybridWithContextResponse,
     TriviumSearchRequest,
     TriviumStatRequest,
     TriviumStatResponse,
+    TriviumTqlMutRequest,
+    TriviumTqlMutResponse,
+    TriviumTqlRequest,
+    TriviumTqlResponse,
+    TriviumTqlRow,
     TriviumUnlinkRequest,
     TriviumUpdatePayloadRequest,
     TriviumUpdateVectorRequest,
@@ -551,32 +555,54 @@ export class CoreService {
         return response.hits;
     }
 
-    async filterWhereTrivium(dbPath: string, request: TriviumFilterWhereRequest): Promise<TriviumNodeView[]> {
-        const response = await this.filterWhereTriviumPage(dbPath, request);
-        return response.nodes;
-    }
-
-    async filterWhereTriviumPage(dbPath: string, request: TriviumFilterWhereRequest): Promise<TriviumFilterWhereResponse> {
-        const response = await this.request<TriviumFilterWhereResponse>('/v1/trivium/filter-where', {
+    async searchHybridWithContextTrivium(
+        dbPath: string,
+        request: TriviumSearchHybridWithContextRequest,
+    ): Promise<TriviumSearchHybridWithContextResponse> {
+        return await this.request<TriviumSearchHybridWithContextResponse>('/v1/trivium/search-hybrid-context', {
             ...buildTriviumOpenPayload(dbPath, request),
-            condition: request.condition,
-            ...(request.page === undefined ? {} : { page: request.page }),
+            vector: request.vector,
+            queryText: request.queryText,
+            ...(request.topK === undefined ? {} : { topK: request.topK }),
+            ...(request.expandDepth === undefined ? {} : { expandDepth: request.expandDepth }),
+            ...(request.minScore === undefined ? {} : { minScore: request.minScore }),
+            ...(request.hybridAlpha === undefined ? {} : { hybridAlpha: request.hybridAlpha }),
+            ...(request.payloadFilter === undefined ? {} : { payloadFilter: request.payloadFilter }),
         });
-        return response;
     }
 
-    async queryTrivium(dbPath: string, request: TriviumQueryRequest): Promise<TriviumQueryRow[]> {
-        const response = await this.queryTriviumPage(dbPath, request);
+    async tqlTrivium(dbPath: string, request: TriviumTqlRequest): Promise<TriviumTqlRow[]> {
+        const response = await this.tqlTriviumPage(dbPath, request);
         return response.rows;
     }
 
-    async queryTriviumPage(dbPath: string, request: TriviumQueryRequest): Promise<TriviumQueryResponse> {
-        const response = await this.request<TriviumQueryResponse>('/v1/trivium/query', {
+    async tqlTriviumPage(dbPath: string, request: TriviumTqlRequest): Promise<TriviumTqlResponse> {
+        return await this.request<TriviumTqlResponse>('/v1/trivium/tql', {
             ...buildTriviumOpenPayload(dbPath, request),
-            cypher: request.cypher,
+            query: request.query,
             ...(request.page === undefined ? {} : { page: request.page }),
         });
-        return response;
+    }
+
+    async tqlMutTrivium(dbPath: string, request: TriviumTqlMutRequest): Promise<TriviumTqlMutResponse> {
+        return await this.request<TriviumTqlMutResponse>('/v1/trivium/tql-mut', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            query: request.query,
+        });
+    }
+
+    async createIndexTrivium(dbPath: string, request: TriviumCreateIndexRequest): Promise<void> {
+        await this.request('/v1/trivium/create-index', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            field: request.field,
+        });
+    }
+
+    async dropIndexTrivium(dbPath: string, request: TriviumDropIndexRequest): Promise<void> {
+        await this.request('/v1/trivium/drop-index', {
+            ...buildTriviumOpenPayload(dbPath, request),
+            field: request.field,
+        });
     }
 
     async indexTextTrivium(dbPath: string, request: TriviumIndexTextRequest): Promise<void> {

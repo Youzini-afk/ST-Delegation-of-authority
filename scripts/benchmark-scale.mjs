@@ -216,16 +216,16 @@ async function main() {
             id: live.id,
             depth: 1,
         }), { group: 'trivium' }))
-        scenarios.push(await benchmarkScenario('trivium.filterWhere.page', () => trivium.filterWherePage(sourceUser, seed.trivium.extensionId, {
+        scenarios.push(await benchmarkScenario('trivium.tql.page.find', () => trivium.tqlPage(sourceUser, seed.trivium.extensionId, {
             database: seed.trivium.database,
             dim: config.triviumDim,
-            condition: { name: { $exists: true } },
+            query: 'FIND {name: {$exists: true}} RETURN *',
             page: { limit: config.pageLimit },
         }), { group: 'trivium' }))
-        scenarios.push(await benchmarkScenario('trivium.query.page', () => trivium.queryPage(sourceUser, seed.trivium.extensionId, {
+        scenarios.push(await benchmarkScenario('trivium.tql.page.match', () => trivium.tqlPage(sourceUser, seed.trivium.extensionId, {
             database: seed.trivium.database,
             dim: config.triviumDim,
-            cypher: 'MATCH (n) RETURN n',
+            query: 'MATCH (n) RETURN n',
             page: { limit: config.pageLimit },
         }), { group: 'trivium' }))
         scenarios.push(await benchmarkScenario('trivium.resolveId', () => trivium.resolveId(sourceUser, seed.trivium.extensionId, {

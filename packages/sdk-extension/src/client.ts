@@ -66,11 +66,11 @@ import type {
     TriviumCheckMappingsIntegrityRequest,
     TriviumCheckMappingsIntegrityResponse,
     TriviumCompactRequest,
+    TriviumCreateIndexRequest,
     TriviumDeleteRequest,
     TriviumDeleteOrphanMappingsRequest,
     TriviumDeleteOrphanMappingsResponse,
-    TriviumFilterWhereRequest,
-    TriviumFilterWhereResponse,
+    TriviumDropIndexRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumIndexKeywordRequest,
@@ -85,9 +85,6 @@ import type {
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
     TriviumNodeView,
-    TriviumQueryRequest,
-    TriviumQueryResponse,
-    TriviumQueryRow,
     TriviumResolveIdRequest,
     TriviumResolveIdResponse,
     TriviumResolveManyRequest,
@@ -95,9 +92,16 @@ import type {
     TriviumSearchAdvancedRequest,
     TriviumSearchHit,
     TriviumSearchHybridRequest,
+    TriviumSearchHybridWithContextRequest,
+    TriviumSearchHybridWithContextResponse,
     TriviumSearchRequest,
     TriviumStatRequest,
     TriviumStatResponse,
+    TriviumTqlMutRequest,
+    TriviumTqlMutResponse,
+    TriviumTqlRequest,
+    TriviumTqlResponse,
+    TriviumTqlRow,
     TriviumUnlinkRequest,
     TriviumUpsertRequest,
     TriviumUpsertResponse,
@@ -336,8 +340,10 @@ export type AuthorityFeaturePath =
     | 'trivium.resolveMany'
     | 'trivium.upsert'
     | 'trivium.bulkMutations'
-    | 'trivium.filterWherePage'
-    | 'trivium.queryPage'
+    | 'trivium.tql'
+    | 'trivium.tqlMut'
+    | 'trivium.propertyIndex'
+    | 'trivium.searchContext'
     | 'trivium.mappingPages'
     | 'trivium.mappingIntegrity'
     | 'transfers.blob'
@@ -498,10 +504,12 @@ export class AuthorityClient {
         search: (input: TriviumSearchRequest) => Promise<TriviumSearchHit[]>;
         searchAdvanced: (input: TriviumSearchAdvancedRequest) => Promise<TriviumSearchHit[]>;
         searchHybrid: (input: TriviumSearchHybridRequest) => Promise<TriviumSearchHit[]>;
-        filterWhere: (input: TriviumFilterWhereRequest) => Promise<TriviumNodeView[]>;
-        filterWherePage: (input: TriviumFilterWhereRequest) => Promise<TriviumFilterWhereResponse>;
-        query: (input: TriviumQueryRequest) => Promise<TriviumQueryRow[]>;
-        queryPage: (input: TriviumQueryRequest) => Promise<TriviumQueryResponse>;
+        searchHybridWithContext: (input: TriviumSearchHybridWithContextRequest) => Promise<TriviumSearchHybridWithContextResponse>;
+        tql: (input: TriviumTqlRequest) => Promise<TriviumTqlRow[]>;
+        tqlPage: (input: TriviumTqlRequest) => Promise<TriviumTqlResponse>;
+        tqlMut: (input: TriviumTqlMutRequest) => Promise<TriviumTqlMutResponse>;
+        createIndex: (input: TriviumCreateIndexRequest) => Promise<void>;
+        dropIndex: (input: TriviumDropIndexRequest) => Promise<void>;
         listMappingsPage: (input?: TriviumListMappingsRequest) => Promise<TriviumListMappingsResponse>;
         checkMappingsIntegrity: (input?: TriviumCheckMappingsIntegrityRequest) => Promise<TriviumCheckMappingsIntegrityResponse>;
         deleteOrphanMappings: (input?: TriviumDeleteOrphanMappingsRequest) => Promise<TriviumDeleteOrphanMappingsResponse>;
@@ -1179,19 +1187,15 @@ export class AuthorityClient {
                 });
                 return response.hits;
             },
-            filterWhere: async input => {
-                const response = await this.trivium.filterWherePage(input);
-                return response.nodes;
-            },
-            filterWherePage: async input => {
-                await this.requireFeature('trivium.filterWherePage', 'Authority 当前版本尚未提供 Trivium 分页过滤能力');
+            searchHybridWithContext: async input => {
+                await this.requireFeature('trivium.searchContext', 'Authority 当前版本尚未提供 Trivium 搜索上下文能力');
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
-                    reason: `过滤查询 Trivium 数据库 ${database}`,
+                    reason: `执行 Trivium 上下文化混合搜索 ${database}`,
                 });
-                return await this.requestWithSession<TriviumFilterWhereResponse>('/trivium/filter-where', {
+                return await this.requestWithSession<TriviumSearchHybridWithContextResponse>('/trivium/search-hybrid-context', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -1199,19 +1203,67 @@ export class AuthorityClient {
                     },
                 });
             },
-            query: async input => {
-                const response = await this.trivium.queryPage(input);
+            tql: async input => {
+                const response = await this.trivium.tqlPage(input);
                 return response.rows;
             },
-            queryPage: async input => {
-                await this.requireFeature('trivium.queryPage', 'Authority 当前版本尚未提供 Trivium 图查询分页能力');
+            tqlPage: async input => {
+                await this.requireFeature('trivium.tql', 'Authority 当前版本尚未提供 Trivium TQL 查询能力');
                 const database = getTriviumDatabaseName(input.database);
                 await this.ensurePermission({
                     resource: 'trivium.private',
                     target: database,
-                    reason: `图查询 Trivium 数据库 ${database}`,
+                    reason: `执行 Trivium TQL 查询 ${database}`,
                 });
-                return await this.requestWithSession<TriviumQueryResponse>('/trivium/query', {
+                return await this.requestWithSession<TriviumTqlResponse>('/trivium/tql', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            tqlMut: async input => {
+                await this.requireFeature('trivium.tqlMut', 'Authority 当前版本尚未提供 Trivium TQL 变更能力');
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `执行 Trivium TQL 变更 ${database}`,
+                });
+                return await this.requestWithSession<TriviumTqlMutResponse>('/trivium/tql-mut', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            createIndex: async input => {
+                await this.requireFeature('trivium.propertyIndex', 'Authority 当前版本尚未提供 Trivium 属性索引能力');
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `创建 Trivium 属性索引 ${database}:${input.field}`,
+                });
+                await this.requestWithSession('/trivium/create-index', {
+                    method: 'POST',
+                    body: {
+                        ...input,
+                        database,
+                    },
+                });
+            },
+            dropIndex: async input => {
+                await this.requireFeature('trivium.propertyIndex', 'Authority 当前版本尚未提供 Trivium 属性索引能力');
+                const database = getTriviumDatabaseName(input.database);
+                await this.ensurePermission({
+                    resource: 'trivium.private',
+                    target: database,
+                    reason: `删除 Trivium 属性索引 ${database}:${input.field}`,
+                });
+                await this.requestWithSession('/trivium/drop-index', {
                     method: 'POST',
                     body: {
                         ...input,
@@ -2555,10 +2607,14 @@ function getFeatureAvailability(features: AuthorityFeatureFlags, feature: Author
             return features.trivium.upsert;
         case 'trivium.bulkMutations':
             return features.trivium.bulkMutations;
-        case 'trivium.filterWherePage':
-            return features.trivium.filterWherePage;
-        case 'trivium.queryPage':
-            return features.trivium.queryPage;
+        case 'trivium.tql':
+            return features.trivium.tql;
+        case 'trivium.tqlMut':
+            return features.trivium.tqlMut;
+        case 'trivium.propertyIndex':
+            return features.trivium.propertyIndex;
+        case 'trivium.searchContext':
+            return features.trivium.searchContext;
         case 'trivium.mappingPages':
             return features.trivium.mappingPages;
         case 'trivium.mappingIntegrity':

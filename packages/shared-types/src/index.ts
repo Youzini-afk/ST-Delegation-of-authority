@@ -171,8 +171,10 @@ export interface AuthorityFeatureFlags {
         resolveMany: boolean;
         upsert: boolean;
         bulkMutations: boolean;
-        filterWherePage: boolean;
-        queryPage: boolean;
+        tql: boolean;
+        tqlMut: boolean;
+        propertyIndex: boolean;
+        searchContext: boolean;
         mappingPages: boolean;
         mappingIntegrity: boolean;
     };
@@ -1500,14 +1502,44 @@ export interface TriviumSearchHybridRequest extends TriviumOpenOptions {
     payloadFilter?: TriviumFilterCondition;
 }
 
-export interface TriviumFilterWhereRequest extends TriviumOpenOptions {
-    condition: TriviumFilterCondition;
+export interface TriviumSearchStageTiming {
+    stage: string;
+    elapsedMs: number;
+}
+
+export interface TriviumSearchContext {
+    customData: unknown;
+    stageTimings: TriviumSearchStageTiming[];
+    aborted: boolean;
+}
+
+export interface TriviumSearchHybridWithContextRequest extends TriviumSearchHybridRequest {}
+
+export interface TriviumSearchHybridWithContextResponse {
+    hits: TriviumSearchHit[];
+    context: TriviumSearchContext;
+}
+
+export interface TriviumTqlRequest extends TriviumOpenOptions {
+    query: string;
     page?: CursorPageRequest;
 }
 
-export interface TriviumQueryRequest extends TriviumOpenOptions {
-    cypher: string;
-    page?: CursorPageRequest;
+export interface TriviumTqlMutRequest extends TriviumOpenOptions {
+    query: string;
+}
+
+export interface TriviumTqlMutResponse {
+    affected: number;
+    createdIds: number[];
+}
+
+export interface TriviumCreateIndexRequest extends TriviumOpenOptions {
+    field: string;
+}
+
+export interface TriviumDropIndexRequest extends TriviumOpenOptions {
+    field: string;
 }
 
 export interface TriviumIndexTextRequest extends TriviumOpenOptions {
@@ -1683,15 +1715,10 @@ export interface TriviumBulkUpsertResponse extends TriviumBulkMutationResponse {
     items: TriviumBulkUpsertResponseItem[];
 }
 
-export interface TriviumFilterWhereResponse {
-    nodes: TriviumNodeView[];
-    page?: CursorPageInfo;
-}
+export type TriviumTqlRow = Record<string, TriviumNodeView>;
 
-export type TriviumQueryRow = Record<string, TriviumNodeView>;
-
-export interface TriviumQueryResponse {
-    rows: TriviumQueryRow[];
+export interface TriviumTqlResponse {
+    rows: TriviumTqlRow[];
     page?: CursorPageInfo;
 }
 

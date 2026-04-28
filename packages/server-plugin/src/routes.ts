@@ -60,10 +60,11 @@ import type {
     TriviumBuildTextIndexRequest,
     TriviumCheckMappingsIntegrityRequest,
     TriviumCompactRequest,
+    TriviumCreateIndexRequest,
     TriviumDatabaseRecord,
     TriviumDeleteRequest,
     TriviumDeleteOrphanMappingsRequest,
-    TriviumFilterWhereRequest,
+    TriviumDropIndexRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumIndexKeywordRequest,
@@ -74,13 +75,15 @@ import type {
     TriviumListDatabasesResponse,
     TriviumListMappingsRequest,
     TriviumNeighborsRequest,
-    TriviumQueryRequest,
     TriviumResolveIdRequest,
     TriviumResolveManyRequest,
     TriviumSearchAdvancedRequest,
     TriviumSearchHybridRequest,
+    TriviumSearchHybridWithContextRequest,
     TriviumSearchRequest,
     TriviumStatRequest,
+    TriviumTqlMutRequest,
+    TriviumTqlRequest,
     TriviumUnlinkRequest,
     TriviumUpsertRequest,
     TriviumUpdatePayloadRequest,
@@ -2073,20 +2076,20 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
-    router.post('/trivium/filter-where', async (req, res) => {
+    router.post('/trivium/search-hybrid-context', async (req, res) => {
         try {
             const user = getUserContext(req);
             const session = await runtime.sessions.assertSession(getSessionToken(req), user);
-            const payload = (req.body ?? {}) as TriviumFilterWhereRequest;
+            const payload = (req.body ?? {}) as TriviumSearchHybridWithContextRequest;
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const response = await runtime.trivium.filterWherePage(user, session.extension.id, payload);
-            await runtime.audit.logUsage(user, session.extension.id, 'Trivium filter where', {
+            const response = await runtime.trivium.searchHybridWithContext(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium hybrid search context', {
                 database,
-                count: response.nodes.length,
+                hitCount: response.hits.length,
             });
             ok(res, response);
         } catch (error) {
@@ -2094,22 +2097,86 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
-    router.post('/trivium/query', async (req, res) => {
+    router.post('/trivium/tql', async (req, res) => {
         try {
             const user = getUserContext(req);
             const session = await runtime.sessions.assertSession(getSessionToken(req), user);
-            const payload = (req.body ?? {}) as TriviumQueryRequest;
+            const payload = (req.body ?? {}) as TriviumTqlRequest;
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const response = await runtime.trivium.queryPage(user, session.extension.id, payload);
-            await runtime.audit.logUsage(user, session.extension.id, 'Trivium query', {
+            const response = await runtime.trivium.tqlPage(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium TQL query', {
                 database,
                 rowCount: response.rows.length,
             });
             ok(res, response);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/tql-mut', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumTqlMutRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            const response = await runtime.trivium.tqlMut(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium TQL mutation', {
+                database,
+                affected: response.affected,
+                createdCount: response.createdIds.length,
+            });
+            ok(res, response);
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/create-index', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumCreateIndexRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            await runtime.trivium.createIndex(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium create index', {
+                database,
+                field: payload.field,
+            });
+            ok(res, { ok: true });
+        } catch (error) {
+            fail(runtime, req, res, 'trivium.private', error);
+        }
+    });
+
+    router.post('/trivium/drop-index', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as TriviumDropIndexRequest;
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+
+            await runtime.trivium.dropIndex(user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'Trivium drop index', {
+                database,
+                field: payload.field,
+            });
+            ok(res, { ok: true });
         } catch (error) {
             fail(runtime, req, res, 'trivium.private', error);
         }

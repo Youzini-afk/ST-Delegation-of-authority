@@ -46,8 +46,10 @@ describe('SessionService', () => {
         expect(response.features.sql.queryPage).toBe(true);
         expect(response.features.sql.stat).toBe(true);
         expect(response.features.sql.schemaManifest).toBe(true);
-        expect(response.features.trivium.queryPage).toBe(true);
-        expect(response.features.trivium.filterWherePage).toBe(true);
+        expect(response.features.trivium.tql).toBe(true);
+        expect(response.features.trivium.tqlMut).toBe(true);
+        expect(response.features.trivium.propertyIndex).toBe(true);
+        expect(response.features.trivium.searchContext).toBe(true);
         expect(response.features.trivium.resolveMany).toBe(true);
         expect(response.features.trivium.mappingPages).toBe(true);
         expect(response.features.trivium.mappingIntegrity).toBe(true);

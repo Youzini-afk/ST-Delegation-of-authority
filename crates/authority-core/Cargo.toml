@@ -13,6 +13,6 @@ serde_json = "1.0.138"
 time = { version = "0.3.37", features = ["formatting"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["timeout", "limit"] }
-triviumdb = { git = "https://github.com/YoKONCy/TriviumDB", rev = "7c3f0e4b4fd9a67177cd40611ee74de06a28e44a" }
+triviumdb = { git = "https://github.com/YoKONCy/TriviumDB", rev = "ec73d994823dcb74af329fda0d3f354a6fd8f3d8" }
 ureq = "2.12.1"
 url = "2.5.4"

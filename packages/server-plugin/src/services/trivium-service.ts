@@ -5,6 +5,7 @@ import type {
     ControlTriviumBulkLinkRequest,
     ControlTriviumBulkUnlinkRequest,
     ControlTriviumBulkUpsertRequest,
+    ControlTriviumBulkUpsertResponse,
     CursorPageInfo,
     CursorPageRequest,
     TriviumBulkDeleteRequest,
@@ -18,13 +19,13 @@ import type {
     TriviumCheckMappingsIntegrityRequest,
     TriviumCheckMappingsIntegrityResponse,
     TriviumCompactRequest,
+    TriviumCreateIndexRequest,
     TriviumDeleteRequest,
     TriviumDeleteOrphanMappingsRequest,
     TriviumDeleteOrphanMappingsResponse,
     TriviumDType,
     TriviumDatabaseRecord,
-    TriviumFilterWhereRequest,
-    TriviumFilterWhereResponse,
+    TriviumDropIndexRequest,
     TriviumFlushRequest,
     TriviumGetRequest,
     TriviumIndexHealth,
@@ -42,9 +43,6 @@ import type {
     TriviumNeighborsResponse,
     TriviumNodeReference,
     TriviumNodeView,
-    TriviumQueryRequest,
-    TriviumQueryResponse,
-    TriviumQueryRow,
     TriviumResolveIdRequest,
     TriviumResolveIdResponse,
     TriviumResolveManyRequest,
@@ -53,11 +51,18 @@ import type {
     TriviumSearchAdvancedRequest,
     TriviumSearchHit,
     TriviumSearchHybridRequest,
+    TriviumSearchHybridWithContextRequest,
+    TriviumSearchHybridWithContextResponse,
     TriviumSearchRequest,
     TriviumStatRequest,
     TriviumStatResponse,
     TriviumStorageMode,
     TriviumSyncMode,
+    TriviumTqlMutRequest,
+    TriviumTqlMutResponse,
+    TriviumTqlRequest,
+    TriviumTqlResponse,
+    TriviumTqlRow,
     TriviumUpsertRequest,
     TriviumUpsertResponse,
     TriviumUpdatePayloadRequest,
@@ -66,87 +71,48 @@ import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
 import { asErrorMessage, sanitizeFileSegment } from '../utils.js';
 import { CoreService } from './core-service.js';
-
-const EXTERNAL_IDS_TABLE = 'authority_trivium_external_ids';
-const META_TABLE = 'authority_trivium_meta';
-const LAST_FLUSH_META_KEY = 'last_flush_at';
-const DATABASE_DIM_META_KEY = 'database_dim';
-const DATABASE_DTYPE_META_KEY = 'database_dtype';
-const DATABASE_SYNC_MODE_META_KEY = 'database_sync_mode';
-const DATABASE_STORAGE_MODE_META_KEY = 'database_storage_mode';
-const LAST_CONTENT_MUTATION_META_KEY = 'last_content_mutation_at';
-const LAST_TEXT_INDEX_WRITE_META_KEY = 'last_text_index_write_at';
-const LAST_TEXT_INDEX_REBUILD_META_KEY = 'last_text_index_rebuild_at';
-const LAST_COMPACTION_META_KEY = 'last_compaction_at';
-const LAST_INDEX_LIFECYCLE_EVENT_META_KEY = 'last_index_lifecycle_event_at';
-const DEFAULT_CURSOR_PAGE_LIMIT = 50;
-const MAX_CURSOR_PAGE_LIMIT = 500;
-const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
-const DEFAULT_ORPHAN_DELETE_LIMIT = 100;
-
-interface TriviumDatabaseConfigMeta {
-    dim: number | null;
-    dtype: TriviumDType | null;
-    syncMode: TriviumSyncMode | null;
-    storageMode: TriviumStorageMode | null;
-}
-
-interface TriviumIndexLifecycleMeta {
-    lastContentMutationAt: string | null;
-    lastTextWriteAt: string | null;
-    lastTextRebuildAt: string | null;
-    lastCompactionAt: string | null;
-}
-
-interface ResolvedReference extends TriviumResolvedNodeReference {
-    createdMapping: boolean;
-}
-
-interface IndexedCoreUpsertItem {
-    originalIndex: number;
-    mapping: ResolvedReference;
-    request: ControlTriviumBulkUpsertRequest['items'][number];
-}
-
-interface IndexedCoreMutationItem<T> {
-    originalIndex: number;
-    request: T;
-}
-
-interface MappingIntegrityAnalysis {
-    mappings: TriviumMappingRecord[];
-    nodeIds: number[];
-    orphanMappings: TriviumMappingRecord[];
-    missingNodeIds: number[];
-    duplicateInternalGroups: TriviumMappingRecord[][];
-    duplicateExternalGroups: TriviumMappingRecord[][];
-}
+import {
+    DEFAULT_INTEGRITY_SAMPLE_LIMIT,
+    DEFAULT_ORPHAN_DELETE_LIMIT,
+    LAST_FLUSH_META_KEY,
+    MAX_CURSOR_PAGE_LIMIT,
+    buildTriviumDatabaseRecord,
+    type IndexedCoreMutationItem,
+    type IndexedCoreUpsertItem,
+    type MappingIntegrityAnalysis,
+    type ResolvedReference,
+    type TriviumDatabaseConfigMeta,
+    type TriviumIndexLifecycleMeta,
+    type TriviumPathSet,
+    getBoundedPositiveInteger,
+    getRequiredExternalId,
+    getRequiredNumericId,
+    getTriviumDatabaseName,
+    getTriviumNamespace,
+} from './trivium-internal.js';
+import { TriviumMappingMetaStore } from './trivium-mapping-meta-store.js';
+import { TriviumRepository } from './trivium-repository.js';
 
 export class TriviumService {
-    private readonly schemaReady = new Map<string, Promise<void>>();
+    private readonly repository: TriviumRepository;
+    private readonly mappingStore: TriviumMappingMetaStore;
 
-    constructor(private readonly core: CoreService) {}
+    constructor(core: CoreService) {
+        this.repository = new TriviumRepository(core);
+        this.mappingStore = new TriviumMappingMetaStore(core);
+    }
 
     async listDatabases(user: UserContext, extensionId: string): Promise<TriviumListDatabasesResponse> {
-        const paths = getUserAuthorityPaths(user);
-        const directory = path.join(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
-        if (!fs.existsSync(directory)) {
-            return { databases: [] };
-        }
-
-        const databases = await Promise.all(fs.readdirSync(directory, { withFileTypes: true })
-            .filter(entry => entry.isFile() && entry.name.endsWith('.tdb'))
+        const databases = await Promise.all(this.repository.listDatabaseEntries(user, extensionId)
             .map(async entry => {
-                const database = entry.name.slice(0, -'.tdb'.length);
-                const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
                 const [meta, indexHealth] = await Promise.all([
-                    this.readDatabaseConfigMeta(mappingDbPath),
-                    this.readIndexHealth(mappingDbPath, true),
+                    this.readDatabaseConfigMeta(entry.mappingDbPath),
+                    this.readIndexHealth(entry.mappingDbPath, true),
                 ]);
-                return buildTriviumDatabaseRecord(dbPath, entry.name, meta, indexHealth);
+                return buildTriviumDatabaseRecord(entry.dbPath, entry.entryName, meta, indexHealth);
             }));
 
-        databases.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+        databases.sort((left: TriviumDatabaseRecord, right: TriviumDatabaseRecord) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
         return { databases };
     }
 
@@ -154,7 +120,7 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.rememberDatabaseConfig(mappingDbPath, request);
-        const response = await this.core.insertTrivium(dbPath, { ...request, database });
+        const response = await this.repository.insert(dbPath, { ...request, database });
         await this.markContentMutation(mappingDbPath);
         return response;
     }
@@ -163,14 +129,14 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.core.insertTriviumWithId(dbPath, { ...request, database });
+        await this.repository.insertWithId(dbPath, { ...request, database });
         await this.markContentMutation(mappingDbPath);
     }
 
     async updatePayload(user: UserContext, extensionId: string, request: TriviumUpdatePayloadRequest): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.core.updateTriviumPayload(dbPath, { ...request, database });
+        await this.repository.updatePayload(dbPath, { ...request, database });
         await this.markContentMutation(mappingDbPath);
     }
 
@@ -178,7 +144,7 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.core.indexTextTrivium(dbPath, { ...request, database });
+        await this.repository.indexText(dbPath, { ...request, database });
         await this.markTextIndexWrite(mappingDbPath);
     }
 
@@ -186,7 +152,7 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.core.indexKeywordTrivium(dbPath, { ...request, database });
+        await this.repository.indexKeyword(dbPath, { ...request, database });
         await this.markTextIndexWrite(mappingDbPath);
     }
 
@@ -194,7 +160,7 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.core.buildTextIndexTrivium(dbPath, { ...request, database });
+        await this.repository.buildTextIndex(dbPath, { ...request, database });
         await this.markTextIndexRebuild(mappingDbPath);
     }
 
@@ -202,7 +168,7 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.core.compactTrivium(dbPath, { ...request, database });
+        await this.repository.compact(dbPath, { ...request, database });
         await this.markCompaction(mappingDbPath);
     }
 
@@ -322,7 +288,7 @@ export class TriviumService {
 
         let successItems: TriviumBulkUpsertResponse['items'] = [];
         if (prepared.length > 0) {
-            const coreResponse = await this.core.bulkUpsertTrivium(dbPath, {
+            const coreResponse = await this.repository.bulkUpsert(dbPath, {
                 ...request,
                 database,
                 items: prepared.map(item => item.request),
@@ -339,7 +305,7 @@ export class TriviumService {
                 message: item.message,
             })));
             successItems = coreResponse.items
-                .map(item => {
+                .map((item: ControlTriviumBulkUpsertResponse['items'][number]) => {
                     const preparedItem = prepared[item.index];
                     if (!preparedItem) {
                         return null;
@@ -353,7 +319,7 @@ export class TriviumService {
                     };
                 })
                 .filter((item): item is TriviumBulkUpsertResponse['items'][number] => item !== null)
-                .sort((left, right) => left.index - right.index);
+                .sort((left: TriviumBulkUpsertResponse['items'][number], right: TriviumBulkUpsertResponse['items'][number]) => left.index - right.index);
             if (successItems.length > 0) {
                 await this.markContentMutation(mappingDbPath);
             }
@@ -392,7 +358,7 @@ export class TriviumService {
             }
         }
 
-        return await this.runBulkMutation(prepared, failures, request.items.length, items => this.core.bulkLinkTrivium(dbPath, {
+        return await this.runBulkMutation(prepared, failures, request.items.length, items => this.repository.bulkLink(dbPath, {
             ...request,
             database,
             items,
@@ -421,7 +387,7 @@ export class TriviumService {
             }
         }
 
-        return await this.runBulkMutation(prepared, failures, request.items.length, items => this.core.bulkUnlinkTrivium(dbPath, {
+        return await this.runBulkMutation(prepared, failures, request.items.length, items => this.repository.bulkUnlink(dbPath, {
             ...request,
             database,
             items,
@@ -447,7 +413,7 @@ export class TriviumService {
             }
         }
 
-        const response = await this.runBulkMutation(prepared, failures, request.items.length, items => this.core.bulkDeleteTrivium(dbPath, {
+        const response = await this.runBulkMutation(prepared, failures, request.items.length, items => this.repository.bulkDelete(dbPath, {
             ...request,
             database,
             items,
@@ -476,7 +442,7 @@ export class TriviumService {
     async get(user: UserContext, extensionId: string, request: TriviumGetRequest): Promise<TriviumNodeView | null> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const node = await this.core.getTrivium(dbPath, { ...request, database });
+        const node = await this.repository.get(dbPath, { ...request, database });
         if (!node) {
             return null;
         }
@@ -487,7 +453,7 @@ export class TriviumService {
     async neighbors(user: UserContext, extensionId: string, request: TriviumNeighborsRequest): Promise<TriviumNeighborsResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const response = await this.core.neighborsTrivium(dbPath, { ...request, database });
+        const response = await this.repository.neighbors(dbPath, { ...request, database });
         return {
             ...response,
             nodes: await this.resolveMappingsByInternalIds(mappingDbPath, response.ids),
@@ -497,55 +463,82 @@ export class TriviumService {
     async search(user: UserContext, extensionId: string, request: TriviumSearchRequest): Promise<TriviumSearchHit[]> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichSearchHits(mappingDbPath, await this.core.searchTrivium(dbPath, { ...request, database }));
+        return await this.enrichSearchHits(mappingDbPath, await this.repository.search(dbPath, { ...request, database }));
     }
 
     async searchAdvanced(user: UserContext, extensionId: string, request: TriviumSearchAdvancedRequest): Promise<TriviumSearchHit[]> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichSearchHits(mappingDbPath, await this.core.searchAdvancedTrivium(dbPath, { ...request, database }));
+        return await this.enrichSearchHits(mappingDbPath, await this.repository.searchAdvanced(dbPath, { ...request, database }));
     }
 
     async searchHybrid(user: UserContext, extensionId: string, request: TriviumSearchHybridRequest): Promise<TriviumSearchHit[]> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichSearchHits(mappingDbPath, await this.core.searchHybridTrivium(dbPath, { ...request, database }));
+        return await this.enrichSearchHits(mappingDbPath, await this.repository.searchHybrid(dbPath, { ...request, database }));
     }
 
-    async filterWhere(user: UserContext, extensionId: string, request: TriviumFilterWhereRequest): Promise<TriviumNodeView[]> {
-        const response = await this.filterWherePage(user, extensionId, request);
-        return response.nodes;
-    }
-
-    async filterWherePage(user: UserContext, extensionId: string, request: TriviumFilterWhereRequest): Promise<TriviumFilterWhereResponse> {
+    async searchHybridWithContext(
+        user: UserContext,
+        extensionId: string,
+        request: TriviumSearchHybridWithContextRequest,
+    ): Promise<TriviumSearchHybridWithContextResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const response = await this.core.filterWhereTriviumPage(dbPath, { ...request, database });
+        const response = await this.repository.searchHybridWithContext(dbPath, { ...request, database });
         return {
             ...response,
-            nodes: await this.enrichNodes(mappingDbPath, response.nodes),
+            hits: await this.enrichSearchHits(mappingDbPath, response.hits),
         };
     }
 
-    async query(user: UserContext, extensionId: string, request: TriviumQueryRequest): Promise<TriviumQueryRow[]> {
-        const response = await this.queryPage(user, extensionId, request);
+    async tql(user: UserContext, extensionId: string, request: TriviumTqlRequest): Promise<TriviumTqlRow[]> {
+        const response = await this.tqlPage(user, extensionId, request);
         return response.rows;
     }
 
-    async queryPage(user: UserContext, extensionId: string, request: TriviumQueryRequest): Promise<TriviumQueryResponse> {
+    async tqlPage(user: UserContext, extensionId: string, request: TriviumTqlRequest): Promise<TriviumTqlResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const response = await this.core.queryTriviumPage(dbPath, { ...request, database });
+        const response = await this.repository.tqlPage(dbPath, { ...request, database });
         return {
             ...response,
             rows: await this.enrichRows(mappingDbPath, response.rows),
         };
     }
 
+    async tqlMut(user: UserContext, extensionId: string, request: TriviumTqlMutRequest): Promise<TriviumTqlMutResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        const response = await this.repository.tqlMut(dbPath, { ...request, database });
+        if (response.affected > 0 || response.createdIds.length > 0) {
+            await this.markContentMutation(mappingDbPath);
+            await this.reconcileMappingsAfterTqlMutation(dbPath, mappingDbPath, database, response.createdIds);
+        }
+        return response;
+    }
+
+    async createIndex(user: UserContext, extensionId: string, request: TriviumCreateIndexRequest): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.repository.createIndex(dbPath, { ...request, database });
+        await this.upsertPropertyIndexMetadata(mappingDbPath, request.field, 'manual');
+    }
+
+    async dropIndex(user: UserContext, extensionId: string, request: TriviumDropIndexRequest): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        await this.rememberDatabaseConfig(mappingDbPath, request);
+        await this.repository.dropIndex(dbPath, { ...request, database });
+        await this.deletePropertyIndexMetadata(mappingDbPath, request.field);
+    }
+
     async flush(user: UserContext, extensionId: string, request: TriviumFlushRequest = {}): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.core.flushTrivium(dbPath, { ...request, database });
+        await this.repository.flush(dbPath, { ...request, database });
         await this.ensureSchema(mappingDbPath);
         if (fs.existsSync(dbPath)) {
             await this.rememberDatabaseConfig(mappingDbPath, request);
@@ -559,7 +552,7 @@ export class TriviumService {
         if (fs.existsSync(dbPath)) {
             await this.rememberDatabaseConfig(mappingDbPath, request);
         }
-        const stat = await this.core.statTrivium(dbPath, { ...request, database });
+        const stat = await this.repository.stat(dbPath, { ...request, database });
         const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
         const mappingCount = await this.countMappings(mappingDbPath);
         const indexHealth = await this.readIndexHealth(mappingDbPath, stat.exists);
@@ -685,76 +678,19 @@ export class TriviumService {
     async listMappingsPage(user: UserContext, extensionId: string, request: TriviumListMappingsRequest = {}): Promise<TriviumListMappingsResponse> {
         const database = getTriviumDatabaseName(request.database);
         const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
-        const namespace = getOptionalTriviumNamespace(request.namespace);
-        if (!fs.existsSync(mappingDbPath)) {
-            return {
-                mappings: [],
-                ...(request.page ? { page: buildEmptyCursorPage(request.page) } : {}),
-            };
-        }
-
-        const params = namespace ? [namespace] : [];
-        const result = await this.core.querySql(mappingDbPath, {
-            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace, created_at AS createdAt, updated_at AS updatedAt
-                FROM ${EXTERNAL_IDS_TABLE}${namespace ? ' WHERE namespace = ?1' : ''}
-                ORDER BY namespace ASC, external_id ASC, internal_id ASC`,
-            params,
-            ...(request.page ? { page: request.page } : {}),
-        });
-
-        return {
-            mappings: result.rows.map(row => readMappingRecord(row)),
-            ...(result.page ? { page: result.page } : {}),
-        };
+        return await this.mappingStore.listMappingsPage(mappingDbPath, request);
     }
 
     private async ensureSchema(mappingDbPath: string): Promise<void> {
-        const existing = this.schemaReady.get(mappingDbPath);
-        if (existing) {
-            await existing;
-            return;
-        }
-
-        const schemaPromise = this.core.migrateSql(mappingDbPath, {
-            migrations: [{
-                id: '001_authority_trivium_mapping',
-                statement: `CREATE TABLE IF NOT EXISTS ${EXTERNAL_IDS_TABLE} (
-                    internal_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    namespace TEXT NOT NULL,
-                    external_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE (namespace, external_id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_${EXTERNAL_IDS_TABLE}_external ON ${EXTERNAL_IDS_TABLE}(namespace, external_id);
-                CREATE INDEX IF NOT EXISTS idx_${EXTERNAL_IDS_TABLE}_internal ON ${EXTERNAL_IDS_TABLE}(internal_id);
-                CREATE TABLE IF NOT EXISTS ${META_TABLE} (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );`,
-            }],
-        }).then(() => undefined);
-        this.schemaReady.set(mappingDbPath, schemaPromise);
-        try {
-            await schemaPromise;
-        } catch (error) {
-            this.schemaReady.delete(mappingDbPath);
-            throw error;
-        }
+        await this.mappingStore.ensureSchema(mappingDbPath);
     }
 
-    private resolvePaths(user: UserContext, extensionId: string, database: string): { dbPath: string; mappingDbPath: string } {
-        const paths = getUserAuthorityPaths(user);
-        const directory = path.join(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
-        return {
-            dbPath: path.join(directory, `${sanitizeFileSegment(database)}.tdb`),
-            mappingDbPath: path.join(directory, '__mapping__', `${sanitizeFileSegment(database)}.sqlite`),
-        };
+    private resolvePaths(user: UserContext, extensionId: string, database: string): TriviumPathSet {
+        return this.repository.resolvePaths(user, extensionId, database);
     }
 
     private getMappingDbPath(user: UserContext, extensionId: string, database: string): string {
-        return this.resolvePaths(user, extensionId, database).mappingDbPath;
+        return this.repository.getMappingDbPath(user, extensionId, database);
     }
 
     private async runBulkMutation<T>(
@@ -785,576 +721,102 @@ export class TriviumService {
     }
 
     private async resolveReference(mappingDbPath: string, reference: TriviumNodeReference, allowCreate: boolean): Promise<ResolvedReference> {
-        const externalId = reference.externalId?.trim() ? reference.externalId.trim() : null;
-        const hasId = reference.id != null;
-        if (!hasId && !externalId) {
-            throw new Error('Trivium reference must include id or externalId');
-        }
-        if (externalId === null) {
-            return {
-                id: getRequiredNumericId(reference.id),
-                externalId: null,
-                namespace: null,
-                createdMapping: false,
-            };
-        }
-
-        const namespace = getTriviumNamespace(reference.namespace);
-        await this.ensureSchema(mappingDbPath);
-        const existing = await this.fetchMappingByExternal(mappingDbPath, externalId, namespace);
-        if (existing) {
-            if (hasId && existing.id !== getRequiredNumericId(reference.id)) {
-                throw new Error(`Trivium externalId ${namespace}:${externalId} is already mapped to ${existing.id}`);
-            }
-            return { ...existing, createdMapping: false };
-        }
-        if (!allowCreate) {
-            throw new Error(`Trivium externalId ${namespace}:${externalId} is not mapped`);
-        }
-
-        const explicitId = hasId ? getRequiredNumericId(reference.id) : null;
-        try {
-            if (explicitId != null) {
-                await this.insertMappingWithId(mappingDbPath, explicitId, externalId, namespace);
-                return { id: explicitId, externalId, namespace, createdMapping: true };
-            }
-            const id = await this.insertMappingAuto(mappingDbPath, externalId, namespace);
-            return { id, externalId, namespace, createdMapping: true };
-        } catch (error) {
-            const raced = await this.fetchMappingByExternal(mappingDbPath, externalId, namespace);
-            if (raced) {
-                if (explicitId != null && raced.id !== explicitId) {
-                    throw new Error(`Trivium externalId ${namespace}:${externalId} is already mapped to ${raced.id}`);
-                }
-                return { ...raced, createdMapping: false };
-            }
-            throw new Error(`Failed to create Trivium externalId mapping: ${asErrorMessage(error)}`);
-        }
+        return await this.mappingStore.resolveReference(mappingDbPath, reference, allowCreate);
     }
 
     private async fetchMappingByExternal(mappingDbPath: string, externalId: string, namespace: string): Promise<TriviumResolvedNodeReference | null> {
-        if (!fs.existsSync(mappingDbPath)) {
-            return null;
-        }
-        const result = await this.core.querySql(mappingDbPath, {
-            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace FROM ${EXTERNAL_IDS_TABLE} WHERE namespace = ?1 AND external_id = ?2 LIMIT 1`,
-            params: [namespace, externalId],
-        });
-        const [row] = result.rows;
-        return row ? readResolvedReference(row) : null;
+        return await this.mappingStore.fetchMappingByExternal(mappingDbPath, externalId, namespace);
     }
 
     private async resolveMappingsByInternalIds(mappingDbPath: string, ids: number[]): Promise<TriviumResolvedNodeReference[]> {
-        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, ids);
-        return ids.map(id => mappings.get(id) ?? { id, externalId: null, namespace: null });
+        return await this.mappingStore.resolveMappingsByInternalIds(mappingDbPath, ids);
     }
 
     private async fetchMappingsByInternalIds(mappingDbPath: string, ids: number[]): Promise<Map<number, TriviumResolvedNodeReference>> {
-        const uniqueIds = [...new Set(ids.filter(value => Number.isSafeInteger(value) && value > 0))];
-        if (uniqueIds.length === 0 || !fs.existsSync(mappingDbPath)) {
-            return new Map();
-        }
-        const statement = `SELECT internal_id AS internalId, external_id AS externalId, namespace FROM ${EXTERNAL_IDS_TABLE} WHERE internal_id IN (${uniqueIds.map((_, index) => `?${index + 1}`).join(', ')})`;
-        const result = await this.core.querySql(mappingDbPath, {
-            statement,
-            params: uniqueIds,
-        });
-        return new Map(result.rows.map(row => {
-            const resolved = readResolvedReference(row);
-            return [resolved.id, resolved] as const;
-        }));
+        return await this.mappingStore.fetchMappingsByInternalIds(mappingDbPath, ids);
     }
 
     private async countMappings(mappingDbPath: string): Promise<number> {
-        if (!fs.existsSync(mappingDbPath)) {
-            return 0;
-        }
-        const result = await this.core.querySql(mappingDbPath, {
-            statement: `SELECT COUNT(*) AS count FROM ${EXTERNAL_IDS_TABLE}`,
-        });
-        return getNonNegativeInteger(result.rows[0]?.count);
+        return await this.mappingStore.countMappings(mappingDbPath);
     }
 
     private async countOrphanMappings(dbPath: string, mappingDbPath: string, database: string): Promise<number> {
-        if (!fs.existsSync(mappingDbPath)) {
-            return 0;
-        }
-        const result = await this.core.querySql(mappingDbPath, {
-            statement: `SELECT internal_id AS internalId FROM ${EXTERNAL_IDS_TABLE} ORDER BY internal_id ASC`,
-        });
-
-        let orphanCount = 0;
-        for (const row of result.rows) {
-            const id = getRequiredNumericId(row.internalId, 'internalId');
-            const node = await this.core.getTrivium(dbPath, {
-                database,
-                id,
-            });
-            if (!node) {
-                orphanCount += 1;
-            }
-        }
-        return orphanCount;
+        return await this.mappingStore.countOrphanMappings(dbPath, mappingDbPath, database);
     }
 
     private async analyzeMappingsIntegrity(dbPath: string, mappingDbPath: string, database: string): Promise<MappingIntegrityAnalysis> {
-        const mappings = await this.listAllMappings(mappingDbPath);
-        const nodeIds = await this.listAllNodeIds(dbPath, database);
-        const nodeIdSet = new Set(nodeIds);
-        const mappedIdSet = new Set<number>();
-        const byInternalId = new Map<number, TriviumMappingRecord[]>();
-        const byExternalId = new Map<string, TriviumMappingRecord[]>();
-
-        for (const mapping of mappings) {
-            mappedIdSet.add(mapping.id);
-            const internalGroup = byInternalId.get(mapping.id);
-            if (internalGroup) {
-                internalGroup.push(mapping);
-            } else {
-                byInternalId.set(mapping.id, [mapping]);
-            }
-
-            const externalKey = `${mapping.namespace}\u0000${mapping.externalId}`;
-            const externalGroup = byExternalId.get(externalKey);
-            if (externalGroup) {
-                externalGroup.push(mapping);
-            } else {
-                byExternalId.set(externalKey, [mapping]);
-            }
-        }
-
-        return {
-            mappings,
-            nodeIds,
-            orphanMappings: mappings.filter(mapping => !nodeIdSet.has(mapping.id)),
-            missingNodeIds: nodeIds.filter(id => !mappedIdSet.has(id)),
-            duplicateInternalGroups: [...byInternalId.entries()]
-                .filter(([, group]) => group.length > 1)
-                .sort((left, right) => left[0] - right[0])
-                .map(([, group]) => group),
-            duplicateExternalGroups: [...byExternalId.entries()]
-                .filter(([, group]) => group.length > 1)
-                .sort((left, right) => left[0].localeCompare(right[0]))
-                .map(([, group]) => group),
-        };
-    }
-
-    private async listAllMappings(mappingDbPath: string): Promise<TriviumMappingRecord[]> {
-        if (!fs.existsSync(mappingDbPath)) {
-            return [];
-        }
-        const result = await this.core.querySql(mappingDbPath, {
-            statement: `SELECT internal_id AS internalId, external_id AS externalId, namespace, created_at AS createdAt, updated_at AS updatedAt
-                FROM ${EXTERNAL_IDS_TABLE}
-                ORDER BY internal_id ASC, namespace ASC, external_id ASC`,
-        });
-        return result.rows.map(row => readMappingRecord(row));
-    }
-
-    private async listAllNodeIds(dbPath: string, database: string): Promise<number[]> {
-        if (!fs.existsSync(dbPath)) {
-            return [];
-        }
-
-        const ids: number[] = [];
-        let cursor: string | null = null;
-        do {
-            const response = await this.core.queryTriviumPage(dbPath, {
-                database,
-                cypher: 'MATCH (n) RETURN n',
-                page: {
-                    ...(cursor ? { cursor } : {}),
-                    limit: MAX_CURSOR_PAGE_LIMIT,
-                },
-            });
-
-            for (const row of response.rows) {
-                ids.push(getRequiredNumericId(row.n?.id, 'id'));
-            }
-
-            cursor = response.page?.nextCursor ?? null;
-        } while (cursor);
-
-        return [...new Set(ids)].sort((left, right) => left - right);
-    }
-
-    private async insertMappingAuto(mappingDbPath: string, externalId: string, namespace: string): Promise<number> {
-        const timestamp = new Date().toISOString();
-        const result = await this.core.execSql(mappingDbPath, {
-            statement: `INSERT INTO ${EXTERNAL_IDS_TABLE} (namespace, external_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)`,
-            params: [namespace, externalId, timestamp, timestamp],
-        });
-        return getRequiredNumericId(result.lastInsertRowid, 'lastInsertRowid');
-    }
-
-    private async insertMappingWithId(mappingDbPath: string, id: number, externalId: string, namespace: string): Promise<void> {
-        const timestamp = new Date().toISOString();
-        await this.core.execSql(mappingDbPath, {
-            statement: `INSERT INTO ${EXTERNAL_IDS_TABLE} (internal_id, namespace, external_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)`,
-            params: [id, namespace, externalId, timestamp, timestamp],
-        });
+        return await this.mappingStore.analyzeMappingsIntegrity(dbPath, mappingDbPath, database);
     }
 
     private async deleteMappingsByInternalIds(mappingDbPath: string, ids: number[]): Promise<void> {
-        const uniqueIds = [...new Set(ids.filter(value => Number.isSafeInteger(value) && value > 0))];
-        if (uniqueIds.length === 0 || !fs.existsSync(mappingDbPath)) {
-            return;
-        }
-        await this.core.execSql(mappingDbPath, {
-            statement: `DELETE FROM ${EXTERNAL_IDS_TABLE} WHERE internal_id IN (${uniqueIds.map((_, index) => `?${index + 1}`).join(', ')})`,
-            params: uniqueIds,
-        });
+        await this.mappingStore.deleteMappingsByInternalIds(mappingDbPath, ids);
+    }
+
+    private async reconcileMappingsAfterTqlMutation(
+        dbPath: string,
+        mappingDbPath: string,
+        database: string,
+        createdIds: number[],
+    ): Promise<void> {
+        await this.mappingStore.reconcileMappingsAfterTqlMutation(dbPath, mappingDbPath, database, createdIds);
+    }
+
+    private async upsertPropertyIndexMetadata(mappingDbPath: string, field: string, source: 'manual' | 'system'): Promise<void> {
+        await this.mappingStore.upsertPropertyIndexMetadata(mappingDbPath, field, source);
+    }
+
+    private async deletePropertyIndexMetadata(mappingDbPath: string, field: string): Promise<void> {
+        await this.mappingStore.deletePropertyIndexMetadata(mappingDbPath, field);
     }
 
     private async readMetaValue(mappingDbPath: string, key: string): Promise<string | null> {
-        if (!fs.existsSync(mappingDbPath)) {
-            return null;
-        }
-        const result = await this.core.querySql(mappingDbPath, {
-            statement: `SELECT value FROM ${META_TABLE} WHERE key = ?1 LIMIT 1`,
-            params: [key],
-        });
-        const [row] = result.rows;
-        return typeof row?.value === 'string' ? row.value : null;
+        return await this.mappingStore.readMetaValue(mappingDbPath, key);
     }
 
     private async writeMetaValue(mappingDbPath: string, key: string, value: string): Promise<void> {
-        const timestamp = new Date().toISOString();
-        await this.core.execSql(mappingDbPath, {
-            statement: `INSERT INTO ${META_TABLE} (key, value, updated_at) VALUES (?1, ?2, ?3)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-            params: [key, value, timestamp],
-        });
+        await this.mappingStore.writeMetaValue(mappingDbPath, key, value);
     }
 
     private async rememberDatabaseConfig(
         mappingDbPath: string,
         request: { dim?: number; dtype?: TriviumDType; syncMode?: TriviumSyncMode; storageMode?: TriviumStorageMode },
     ): Promise<void> {
-        await this.ensureSchema(mappingDbPath);
-        const writes: Promise<void>[] = [];
-        if (request.dim !== undefined) {
-            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_DIM_META_KEY, String(request.dim)));
-        }
-        if (request.dtype !== undefined) {
-            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_DTYPE_META_KEY, request.dtype));
-        }
-        if (request.syncMode !== undefined) {
-            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_SYNC_MODE_META_KEY, request.syncMode));
-        }
-        if (request.storageMode !== undefined) {
-            writes.push(this.writeMetaValue(mappingDbPath, DATABASE_STORAGE_MODE_META_KEY, request.storageMode));
-        }
-        await Promise.all(writes);
+        await this.mappingStore.rememberDatabaseConfig(mappingDbPath, request);
     }
 
     private async readDatabaseConfigMeta(mappingDbPath: string): Promise<TriviumDatabaseConfigMeta> {
-        const [dim, dtype, syncMode, storageMode] = await Promise.all([
-            this.readMetaValue(mappingDbPath, DATABASE_DIM_META_KEY),
-            this.readMetaValue(mappingDbPath, DATABASE_DTYPE_META_KEY),
-            this.readMetaValue(mappingDbPath, DATABASE_SYNC_MODE_META_KEY),
-            this.readMetaValue(mappingDbPath, DATABASE_STORAGE_MODE_META_KEY),
-        ]);
-        return {
-            dim: parseOptionalPositiveInteger(dim),
-            dtype: parseOptionalTriviumDType(dtype),
-            syncMode: parseOptionalTriviumSyncMode(syncMode),
-            storageMode: parseOptionalTriviumStorageMode(storageMode),
-        };
+        return await this.mappingStore.readDatabaseConfigMeta(mappingDbPath);
     }
 
     private async readIndexHealth(mappingDbPath: string, exists: boolean): Promise<TriviumIndexHealth | null> {
-        if (!exists) {
-            return null;
-        }
-
-        const lifecycle = await this.readIndexLifecycleMeta(mappingDbPath);
-        const requiresRebuild = lifecycle.lastContentMutationAt != null
-            && (lifecycle.lastTextRebuildAt == null || lifecycle.lastContentMutationAt > lifecycle.lastTextRebuildAt);
-        const hasIndexSignal = lifecycle.lastTextRebuildAt != null || lifecycle.lastTextWriteAt != null;
-
-        if (requiresRebuild) {
-            return {
-                status: 'stale',
-                reason: lifecycle.lastTextRebuildAt
-                    ? 'Trivium payload 数据在最近一次全文索引重建之后发生了变化'
-                    : 'Trivium 已发生内容变更，但尚未执行全文索引重建',
-                requiresRebuild: true,
-                staleSince: lifecycle.lastContentMutationAt,
-                lastContentMutationAt: lifecycle.lastContentMutationAt,
-                lastTextWriteAt: lifecycle.lastTextWriteAt,
-                lastTextRebuildAt: lifecycle.lastTextRebuildAt,
-                lastCompactionAt: lifecycle.lastCompactionAt,
-            };
-        }
-
-        if (hasIndexSignal) {
-            return {
-                status: 'fresh',
-                reason: null,
-                requiresRebuild: false,
-                staleSince: null,
-                lastContentMutationAt: lifecycle.lastContentMutationAt,
-                lastTextWriteAt: lifecycle.lastTextWriteAt,
-                lastTextRebuildAt: lifecycle.lastTextRebuildAt,
-                lastCompactionAt: lifecycle.lastCompactionAt,
-            };
-        }
-
-        return {
-            status: 'missing',
-            reason: 'Trivium 尚未建立全文索引',
-            requiresRebuild: false,
-            staleSince: null,
-            lastContentMutationAt: lifecycle.lastContentMutationAt,
-            lastTextWriteAt: lifecycle.lastTextWriteAt,
-            lastTextRebuildAt: lifecycle.lastTextRebuildAt,
-            lastCompactionAt: lifecycle.lastCompactionAt,
-        };
-    }
-
-    private async readIndexLifecycleMeta(mappingDbPath: string): Promise<TriviumIndexLifecycleMeta> {
-        const [lastContentMutationAt, lastTextWriteAt, lastTextRebuildAt, lastCompactionAt] = await Promise.all([
-            this.readMetaValue(mappingDbPath, LAST_CONTENT_MUTATION_META_KEY),
-            this.readMetaValue(mappingDbPath, LAST_TEXT_INDEX_WRITE_META_KEY),
-            this.readMetaValue(mappingDbPath, LAST_TEXT_INDEX_REBUILD_META_KEY),
-            this.readMetaValue(mappingDbPath, LAST_COMPACTION_META_KEY),
-        ]);
-        return {
-            lastContentMutationAt,
-            lastTextWriteAt,
-            lastTextRebuildAt,
-            lastCompactionAt,
-        };
+        return await this.mappingStore.readIndexHealth(mappingDbPath, exists);
     }
 
     private async markContentMutation(mappingDbPath: string): Promise<void> {
-        await this.writeMetaTimestamp(mappingDbPath, LAST_CONTENT_MUTATION_META_KEY);
+        await this.mappingStore.markContentMutation(mappingDbPath);
     }
 
     private async markTextIndexWrite(mappingDbPath: string): Promise<void> {
-        await this.writeMetaTimestamp(mappingDbPath, LAST_TEXT_INDEX_WRITE_META_KEY);
+        await this.mappingStore.markTextIndexWrite(mappingDbPath);
     }
 
     private async markTextIndexRebuild(mappingDbPath: string): Promise<void> {
-        await this.writeMetaTimestamp(mappingDbPath, LAST_TEXT_INDEX_REBUILD_META_KEY);
+        await this.mappingStore.markTextIndexRebuild(mappingDbPath);
     }
 
     private async markCompaction(mappingDbPath: string): Promise<void> {
-        await this.writeMetaTimestamp(mappingDbPath, LAST_COMPACTION_META_KEY);
-    }
-
-    private async writeMetaTimestamp(mappingDbPath: string, key: string): Promise<void> {
-        await this.ensureSchema(mappingDbPath);
-        const timestamp = await this.nextLifecycleTimestamp(mappingDbPath);
-        await Promise.all([
-            this.writeMetaValue(mappingDbPath, key, timestamp),
-            this.writeMetaValue(mappingDbPath, LAST_INDEX_LIFECYCLE_EVENT_META_KEY, timestamp),
-        ]);
-    }
-
-    private async nextLifecycleTimestamp(mappingDbPath: string): Promise<string> {
-        const current = new Date();
-        const last = await this.readMetaValue(mappingDbPath, LAST_INDEX_LIFECYCLE_EVENT_META_KEY);
-        const lastMs = last ? Date.parse(last) : Number.NaN;
-        if (Number.isFinite(lastMs) && current.getTime() <= lastMs) {
-            return new Date(lastMs + 1).toISOString();
-        }
-        return current.toISOString();
+        await this.mappingStore.markCompaction(mappingDbPath);
     }
 
     private async enrichSearchHits(mappingDbPath: string, hits: TriviumSearchHit[]): Promise<TriviumSearchHit[]> {
-        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, hits.map(hit => hit.id));
-        return hits.map(hit => ({
-            ...hit,
-            externalId: mappings.get(hit.id)?.externalId ?? null,
-            namespace: mappings.get(hit.id)?.namespace ?? null,
-        }));
+        return await this.mappingStore.enrichSearchHits(mappingDbPath, hits);
     }
 
     private async enrichNodes(mappingDbPath: string, nodes: TriviumNodeView[]): Promise<TriviumNodeView[]> {
-        const ids = nodes.flatMap(node => [node.id, ...node.edges.map(edge => edge.targetId)]);
-        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, ids);
-        return nodes.map(node => ({
-            ...node,
-            externalId: mappings.get(node.id)?.externalId ?? null,
-            namespace: mappings.get(node.id)?.namespace ?? null,
-            edges: node.edges.map(edge => ({
-                ...edge,
-                targetExternalId: mappings.get(edge.targetId)?.externalId ?? null,
-                targetNamespace: mappings.get(edge.targetId)?.namespace ?? null,
-            })),
-        }));
+        return await this.mappingStore.enrichNodes(mappingDbPath, nodes);
     }
 
-    private async enrichRows(mappingDbPath: string, rows: TriviumQueryRow[]): Promise<TriviumQueryRow[]> {
-        const ids = rows.flatMap(row => Object.values(row).flatMap(node => [node.id, ...node.edges.map(edge => edge.targetId)]));
-        const mappings = await this.fetchMappingsByInternalIds(mappingDbPath, ids);
-        return rows.map(row => Object.fromEntries(Object.entries(row).map(([key, node]) => [key, {
-            ...node,
-            externalId: mappings.get(node.id)?.externalId ?? null,
-            namespace: mappings.get(node.id)?.namespace ?? null,
-            edges: node.edges.map(edge => ({
-                ...edge,
-                targetExternalId: mappings.get(edge.targetId)?.externalId ?? null,
-                targetNamespace: mappings.get(edge.targetId)?.namespace ?? null,
-            })),
-        }])));
+    private async enrichRows(mappingDbPath: string, rows: TriviumTqlRow[]): Promise<TriviumTqlRow[]> {
+        return await this.mappingStore.enrichRows(mappingDbPath, rows);
     }
-}
-
-function getTriviumDatabaseName(value: unknown): string {
-    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
-}
-
-function buildTriviumDatabaseRecord(
-    filePath: string,
-    entryName: string,
-    meta: TriviumDatabaseConfigMeta,
-    indexHealth: TriviumIndexHealth | null,
-): TriviumDatabaseRecord {
-    const mainStats = fs.statSync(filePath);
-    const walPath = `${filePath}.wal`;
-    const vecPath = `${filePath}.vec`;
-    const walStats = fs.existsSync(walPath) ? fs.statSync(walPath) : null;
-    const vecStats = fs.existsSync(vecPath) ? fs.statSync(vecPath) : null;
-    const timestamps = [mainStats, walStats, vecStats]
-        .filter((value): value is fs.Stats => value !== null)
-        .map(stats => stats.mtime.toISOString())
-        .sort((left, right) => left.localeCompare(right));
-
-    return {
-        name: entryName.slice(0, -'.tdb'.length),
-        fileName: entryName,
-        dim: readTriviumDimension(filePath) ?? meta.dim,
-        dtype: meta.dtype,
-        syncMode: meta.syncMode,
-        storageMode: meta.storageMode ?? (vecStats ? 'mmap' : 'rom'),
-        sizeBytes: mainStats.size,
-        walSizeBytes: walStats?.size ?? 0,
-        vecSizeBytes: vecStats?.size ?? 0,
-        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
-        updatedAt: timestamps.at(-1) ?? null,
-        indexHealth,
-    };
-}
-
-function readTriviumDimension(filePath: string): number | null {
-    try {
-        const handle = fs.openSync(filePath, 'r');
-        try {
-            const header = Buffer.alloc(10);
-            const bytesRead = fs.readSync(handle, header, 0, 10, 0);
-            if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
-                return null;
-            }
-            return header.readUInt32LE(6);
-        } finally {
-            fs.closeSync(handle);
-        }
-    } catch {
-        return null;
-    }
-}
-
-function getTriviumNamespace(value: unknown): string {
-    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
-}
-
-function getOptionalTriviumNamespace(value: unknown): string | null {
-    return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function getRequiredExternalId(value: unknown): string {
-    if (typeof value === 'string' && value.trim()) {
-        return value.trim();
-    }
-    throw new Error('Trivium externalId must not be empty');
-}
-
-function getRequiredNumericId(value: unknown, label = 'id'): number {
-    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
-        return value;
-    }
-    throw new Error(`Trivium ${label} must be a positive safe integer`);
-}
-
-function getNonNegativeInteger(value: unknown): number {
-    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
-        return value;
-    }
-    if (typeof value === 'string' && value.trim()) {
-        const parsed = Number(value);
-        if (Number.isSafeInteger(parsed) && parsed >= 0) {
-            return parsed;
-        }
-    }
-    return 0;
-}
-
-function parseOptionalPositiveInteger(value: string | null): number | null {
-    if (!value) {
-        return null;
-    }
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function parseOptionalTriviumDType(value: string | null): TriviumDType | null {
-    return value === 'f32' || value === 'f16' || value === 'u64' ? value : null;
-}
-
-function parseOptionalTriviumSyncMode(value: string | null): TriviumSyncMode | null {
-    return value === 'full' || value === 'normal' || value === 'off' ? value : null;
-}
-
-function parseOptionalTriviumStorageMode(value: string | null): TriviumStorageMode | null {
-    return value === 'mmap' || value === 'rom' ? value : null;
-}
-
-function getBoundedPositiveInteger(value: unknown, defaultValue: number, maxValue: number, label: string): number {
-    if (value == null) {
-        return defaultValue;
-    }
-    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
-        return Math.min(value, maxValue);
-    }
-    throw new Error(`Trivium ${label} must be a positive safe integer`);
-}
-
-function buildEmptyCursorPage(page: CursorPageRequest): CursorPageInfo {
-    const limit = Number.isInteger(page.limit) && Number(page.limit) > 0
-        ? Math.min(Number(page.limit), MAX_CURSOR_PAGE_LIMIT)
-        : DEFAULT_CURSOR_PAGE_LIMIT;
-    const cursor = page.cursor?.trim();
-    if (cursor) {
-        const offset = Number(cursor);
-        if (!Number.isSafeInteger(offset) || offset < 0) {
-            throw new Error('invalid_page_cursor');
-        }
-    }
-    return {
-        nextCursor: null,
-        limit,
-        hasMore: false,
-        totalCount: 0,
-    };
-}
-
-function readMappingRecord(row: Record<string, unknown>): TriviumMappingRecord {
-    return {
-        id: getRequiredNumericId(row.internalId, 'internalId'),
-        externalId: getRequiredExternalId(row.externalId),
-        namespace: getTriviumNamespace(row.namespace),
-        createdAt: typeof row.createdAt === 'string' ? row.createdAt : '',
-        updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : '',
-    };
-}
-
-function readResolvedReference(row: Record<string, unknown>): TriviumResolvedNodeReference {
-    return {
-        id: getRequiredNumericId(row.internalId, 'internalId'),
-        externalId: typeof row.externalId === 'string' ? row.externalId : null,
-        namespace: typeof row.namespace === 'string' ? row.namespace : null,
-    };
 }
