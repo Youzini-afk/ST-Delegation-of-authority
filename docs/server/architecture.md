@@ -315,28 +315,47 @@ Node adapter 启动 core 时会：
 当前权限决策顺序是：
 
 ```text
-admin/global policy
+declared permissions gate
+  > admin extension policy
+  > admin default policy (granted / denied / blocked)
   > persistent grant
   > session grant
-  > default policy status
+  > admin default policy (prompt)
+  > system default policy
 ```
 
-默认策略当前全部是：
+这里要特别区分两类“默认策略”：
+
+- **管理员显式默认策略**
+  - 存在于全局 control policies 文档里
+  - 由管理员通过 `/admin/policies` 或 Security Center 保存
+- **系统内置默认策略**
+  - 当前全部是 `granted`
+  - 由 Node server-plugin 在运行时提供
+  - `authority-core` 默认文档本身不会预填这些值
+  - `GET /admin/policies` 会把这些内置默认值与显式管理员默认值合并后返回给 UI 展示
+
+当前系统内置默认策略是：
 
 ```text
-prompt
+granted
 ```
 
-这意味着如果没有管理员策略、没有持久授权、没有会话授权，公开 API 会把该能力视为“需要提示/未直接放行”。
+这意味着：
+
+- 如果扩展声明权限没有把请求挡掉，且管理员没有额外收紧，大多数请求会被系统默认直接放行。
+- 管理员默认策略如果是 `granted` / `denied` / `blocked`，会先于用户持久 grant 与 session grant 生效。
+- 管理员默认策略如果是 `prompt`，则会在用户 grant 之后兜底，表示“没有用户 grant 时再提示”。
+- 扩展级管理员策略始终比全局默认策略更强。
+
+对外 API 还有一个容易忽略的实现点：即使放行来自系统内置默认 `granted`，运行时也会返回一个 synthetic policy grant，因此后续 `authorize(...)` 不会因为“没有显式 grant 记录”而误判成 `null`。
 
 同一条请求还有一条独立但相关的 limits 决策链：
 
 - **access policy / grant**
   - 决定这条请求是否允许执行
-
 - **effective inline thresholds**
   - 决定执行后是否走 inline vs transfer
-
 - **compatibility transfer-max fields**
   - 对旧客户端保留的 transport 合同字段
   - 当前不再表示插件层主动施加的 ceiling

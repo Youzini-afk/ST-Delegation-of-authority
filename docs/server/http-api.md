@@ -34,6 +34,8 @@
 - 当前 transport hints / compatibility limits
 - features
 
+ 这里的 `policies` 只包含**当前扩展的扩展级管理员覆盖策略**，不包含全局默认策略；管理员如果要读取全局默认策略，应使用 `GET /admin/policies`。
+
 ## 2.2 读取当前会话
 
 - `GET /session/current`
@@ -46,6 +48,8 @@
 - `policies`
 - `limits`
 - `features`
+
+ 同样地，这里的 `policies` 不是“所有有效默认策略”，而是当前扩展的显式管理员覆盖记录。
 
 ## 2.3 谁需要 session
 
@@ -247,7 +251,7 @@
 
 - 只做权限评估
 - 不写入 grant
-- 常用于前端决定是否弹权限提示
+- 常用于前端决定是否直接执行、是否需要弹权限提示，或是否应立即拒绝
 
 返回：`PermissionEvaluateResponse`
 
@@ -258,6 +262,12 @@
 - `target`
 - `riskLevel`
 - `grant`
+
+ 其中：
+
+- `decision` 可能来自扩展声明权限 gate、管理员扩展级策略、管理员默认策略、用户 grant，或系统内置默认策略。
+- 当前系统内置默认策略全部为 `granted`，所以没有管理员额外收紧时，很多请求会直接返回 `granted`。
+- `grant` 既可能是显式保存过的用户 / 管理员 grant，也可能是运行时合成出的 system policy grant（例如系统默认允许时）。
 
 ## 4.3 `POST /permissions/evaluate-batch`
 
@@ -289,6 +299,15 @@
 
 - 把用户选择落成 session grant 或 persistent grant
 - 写审计日志
+
+ 当前语义：
+
+- `allow-once`：写成单次 session grant，消费一次后失效
+- `allow-session`：写成当前 session 内有效的 grant
+- `allow-always`：写成 persistent grant
+- `deny`：写成 persistent grant，状态为 `denied`
+
+ 这些用户 grant 只有在没有被更高优先级的管理员策略覆盖时，才会影响后续评估结果。
 
 ## 4.5 `GET /extensions`
 
@@ -328,6 +347,8 @@
 - `activity.pages.{permissions,usage,errors,warnings}`
 - `jobs` 是当前页的 job 列表
 - `jobsPage` 是对应的 `CursorPageInfo`
+
+ 这里的 `policies` 只包含当前扩展的扩展级管理员覆盖，不包含全局默认策略
 
 这个接口主要给 Security Center 用，所以它会比普通扩展工作流接口多一层聚合和分页元数据。
 
@@ -615,7 +636,7 @@ https://api.openai.com/v1/...
 
 返回：
 
-- 全局默认策略
+- 全局默认策略（已把系统内置默认值与显式管理员默认值合并，便于 UI 直接展示）
 - 扩展级覆盖策略
 - legacy `limits` 文档（用于兼容 / import-export round-trip）
 - `updatedAt`
@@ -636,9 +657,15 @@ https://api.openai.com/v1/...
 
 - `defaults` / `extensions`
   - 是当前仍会被 Node 插件运行时真正应用的管理员策略
+  - `extensions` 是按扩展、按 target 的最高优先级覆盖
+  - `defaults` 是按资源生效的全局管理员默认策略
+  - `defaults = prompt` 的语义是“没有用户 grant 时需要提示”
+  - `defaults = granted / denied / blocked` 会先于用户 grant 生效
 - `limits`
   - 当前仍允许保存并返回，用于兼容旧合同与 import/export round-trip
   - 但当前运行时不会把它作为插件层扩展 I/O 限制来执行
+
+当前 Security Center 保存管理员策略时，会提交完整的 `defaults` map，而不仅是单个资源的局部 patch。
 
 ## 13.3 `POST /admin/update`
 

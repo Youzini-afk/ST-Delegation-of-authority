@@ -23,29 +23,44 @@
 
 ## 2. 风险等级与默认策略
 
-| 资源 | 风险等级 | 默认策略 |
+| 资源 | 风险等级 | 系统内置默认策略 |
 | --- | --- | --- |
-| `storage.kv` | `low` | `prompt` |
-| `storage.blob` | `low` | `prompt` |
-| `fs.private` | `medium` | `prompt` |
-| `sql.private` | `medium` | `prompt` |
-| `trivium.private` | `high` | `prompt` |
-| `http.fetch` | `medium` | `prompt` |
-| `jobs.background` | `medium` | `prompt` |
-| `events.stream` | `low` | `prompt` |
+| `storage.kv` | `low` | `granted` |
+| `storage.blob` | `low` | `granted` |
+| `fs.private` | `medium` | `granted` |
+| `sql.private` | `medium` | `granted` |
+| `trivium.private` | `high` | `granted` |
+| `http.fetch` | `medium` | `granted` |
+| `jobs.background` | `medium` | `granted` |
+| `events.stream` | `low` | `granted` |
+
+说明：
+
+- 这里指的是**系统内置默认策略**，不是管理员显式保存到 control policies 文档里的默认值。
+- `GET /admin/policies` 会把系统内置默认值与显式管理员默认值合并后返回给 UI 展示。
 
 ## 3. 权限判定顺序
 
 权限决策链为：
 
 ```text
-扩展级 / 全局管理员策略
-  > 持久化 grant
-  > 当前 session grant
-  > 默认策略
+declared permissions gate
+  > admin extension policy
+  > admin default policy (granted / denied / blocked)
+  > persistent grant
+  > session grant
+  > admin default policy (prompt)
+  > system default policy (granted)
 ```
 
-如果最终结果不是 `granted`，`authorize(...)` 不会放行。
+其中：
+
+- 如果扩展声明权限本身没有覆盖到某个资源或 target，会先在 declaration gate 被拦下。
+- 扩展级管理员策略的优先级最高。
+- 全局管理员默认策略里，`granted` / `denied` / `blocked` 会先于用户 grant 生效。
+- 全局管理员默认策略里的 `prompt` 会落在用户 grant 之后，语义是“没有用户 grant 时再提示”。
+- 如果最终结果是系统默认 `granted`，`authorize(...)` 仍会放行，因为运行时会生成一个 synthetic system policy grant。
+- 如果最终结果不是 `granted`，`authorize(...)` 不会放行。
 
 ## 4. 用户选择如何落地
 
@@ -71,6 +86,12 @@
 - **`deny`**
   - persistent grant
   - 状态为 `denied`
+
+这些用户 grant 何时会生效：
+
+- 如果管理员没有配置更高优先级的扩展级覆盖或全局 `granted` / `denied` / `blocked` 默认策略，用户 grant 会按上面的方式参与评估。
+- 如果管理员把全局默认策略设成 `prompt`，用户之前点过的 `allow-once` / `allow-session` / `allow-always` 仍然有效。
+- 如果管理员配置了更强的扩展级覆盖，或把全局默认策略设成 `denied` / `blocked`，用户 grant 会被覆盖。
 
 ## 5. 数据隔离维度
 
