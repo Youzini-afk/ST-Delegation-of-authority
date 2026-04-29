@@ -5,20 +5,44 @@
   "sdkVersion": "1.0.9",
   "assetHash": "71fdc8205d0bea3095b289401899f0163ebfbb648053f0eed19d21b2c0b52e95",
   "coreVersion": "1.0.9",
-  "coreArtifactHash": "798dba2a30ed2b41a1bb934bbf429c1d1a204745edd906f43e6674f802a7f371",
-  "coreArtifactPlatform": "win32-x64",
+  "coreArtifactHash": "f7192e11dc00c64abdbe81ab9b094253e962c6765692564f03ab1514dbf3662c",
+  "coreArtifactPlatform": "linux-x64",
   "coreArtifactPlatforms": [
+    "android-arm64",
+    "linux-arm64",
+    "linux-x64",
     "win32-x64"
   ],
   "coreArtifacts": {
+    "android-arm64": {
+      "platform": "android",
+      "arch": "arm64",
+      "binaryName": "authority-core",
+      "binarySha256": "328717cfbb35a2fc041d132b020ee40ea29eb796f9346320234961d4fdd5be06",
+      "artifactHash": "cdd4c9ad9ba8169381b5f0954e2e2dfd27559ee9c7a9a1fc31af0f27bbd1cd7e"
+    },
+    "linux-arm64": {
+      "platform": "linux",
+      "arch": "arm64",
+      "binaryName": "authority-core",
+      "binarySha256": "f81e481d60341510430044c4eff829de0de0fc070e8ebeb8191a44f774649630",
+      "artifactHash": "1cd97dd0353fc6a867a0200dd86a6d1cc684b49c0195e7fdb1d5e4449e4f534f"
+    },
+    "linux-x64": {
+      "platform": "linux",
+      "arch": "x64",
+      "binaryName": "authority-core",
+      "binarySha256": "11b29045cfac50118b9782c075f8b43a8d9003e99ed38819a15b79d098f08de1",
+      "artifactHash": "923703b7e82d62bf827637b64945cb50e3a2e1338a982432ab86a4c156ca3cc3"
+    },
     "win32-x64": {
       "platform": "win32",
       "arch": "x64",
       "binaryName": "authority-core.exe",
-      "binarySha256": "a0d991bf749910ae13a850d73331dd711e9826dc084ab88c736d5e4392f5110d",
-      "artifactHash": "c82a77b6d0157cf2f18375d77a189bc97605c4a3e2cf6e0b450c1b5591474e04"
+      "binarySha256": "2491bf74d74d3694f84e65851182d2eea08b07ad11ac3738ba27f8a0c44672c7",
+      "artifactHash": "071d61725d6ea5264b03b3cefac3d844b4706218ed96d18ace9315485f2e6660"
     }
   },
-  "coreBinarySha256": "a0d991bf749910ae13a850d73331dd711e9826dc084ab88c736d5e4392f5110d",
-  "buildTime": "2026-04-29T12:55:53.296Z"
+  "coreBinarySha256": "11b29045cfac50118b9782c075f8b43a8d9003e99ed38819a15b79d098f08de1",
+  "buildTime": "2026-04-29T13:00:24.692Z"
 }
