@@ -3358,7 +3358,7 @@ fn handle_trivium_search_hybrid_with_context(
 fn handle_trivium_tql(request: TriviumTqlRequest) -> Result<JsonValue, ApiError> {
     validate_non_empty("query", &request.query)?;
 
-    let rows = match parse_trivium_dtype(request.open.dtype.as_deref())? {
+    let mut rows = match parse_trivium_dtype(request.open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => map_trivium_query_rows(
             open_trivium_f32(&request.open)?
                 .tql(&request.query)
@@ -3378,6 +3378,9 @@ fn handle_trivium_tql(request: TriviumTqlRequest) -> Result<JsonValue, ApiError>
             |value| value as f64,
         ),
     };
+    if request.page.is_some() {
+        sort_trivium_query_rows(&mut rows);
+    }
     let (rows, page) = slice_vec_page(rows, request.page.as_ref(), 100, 1000)?;
 
     Ok(
@@ -5447,6 +5450,19 @@ where
                 .collect()
         })
         .collect()
+}
+
+fn sort_trivium_query_rows(rows: &mut [HashMap<String, TriviumNodeView>]) {
+    rows.sort_by_cached_key(trivium_query_row_sort_key);
+}
+
+fn trivium_query_row_sort_key(row: &HashMap<String, TriviumNodeView>) -> Vec<(String, u64)> {
+    let mut fields = row
+        .iter()
+        .map(|(key, node)| (key.clone(), node.id))
+        .collect::<Vec<_>>();
+    fields.sort();
+    fields
 }
 
 fn map_trivium_hook_context(context: TriviumRawHookContext) -> TriviumSearchContext {
