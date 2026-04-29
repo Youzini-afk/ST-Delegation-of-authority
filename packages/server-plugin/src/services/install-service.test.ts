@@ -163,7 +163,9 @@ describe('InstallService', () => {
             }
             throw new Error(`Unexpected spawnSync call: ${String(command)} ${String(args)}`);
         });
-        const service = createService(setup);
+        const service = createService(setup, {
+            AUTHORITY_CORE_LIBC: 'glibc',
+        });
 
         const status = await service.bootstrap();
 

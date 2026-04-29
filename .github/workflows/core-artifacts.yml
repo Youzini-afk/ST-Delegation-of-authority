@@ -31,6 +31,10 @@ on:
       - README.md
       - LICENSE
 
+concurrency:
+  group: core-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -226,24 +230,17 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "Main advanced while this workflow was running; skipping stale installable sync commit."
+            exit 0
+          fi
           git add .authority-release.json runtime managed
           git commit -m "build: synchronize multi-platform installable artifacts [skip ci]"
-          for attempt in 1 2; do
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "Push failed on attempt ${attempt}; rebasing onto origin/main and regenerating installable runtime."
-            git fetch origin main
-            git rebase origin/main
-            node ./scripts/installable.mjs sync
-            node ./scripts/installable.mjs check
-            if git diff --quiet -- .authority-release.json runtime managed; then
-              continue
-            fi
-            git add .authority-release.json runtime managed
-            git commit --amend --no-edit
-          done
-          git push origin HEAD:main
+          if ! git push origin HEAD:main; then
+            echo "Main advanced during push; skipping stale installable sync commit. A newer workflow run will regenerate artifacts."
+            exit 0
+          fi
 
       - name: Upload multi-platform installable
         uses: actions/upload-artifact@v4
