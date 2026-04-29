@@ -202,6 +202,22 @@ describe('InstallService', () => {
         expect(status.coreArtifactPlatforms).toContain('android-arm64');
     });
 
+    it.runIf(process.platform === 'linux')('prefers the linux musl core artifact when the runtime is musl', async () => {
+        const setup = createInstallFixture();
+        addExtraCoreArtifact(setup.pluginRoot, 'linux', process.arch, 'musl');
+        const service = createService(setup, {
+            AUTHORITY_CORE_LIBC: 'musl',
+            AUTHORITY_CORE_AUTOBUILD: '0',
+        });
+
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.coreVerified).toBe(true);
+        expect(status.coreArtifactPlatform).toBe(`linux-${process.arch}-musl`);
+        expect(status.coreArtifactPlatforms).toContain(`linux-${process.arch}-musl`);
+    });
+
     it('accepts managed core text files with CRLF line endings when release metadata was hashed with LF', async () => {
         const setup = createInstallFixture();
         const platformDir = path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, `${process.platform}-${process.arch}`);
@@ -419,16 +435,19 @@ const root = process.cwd();
 const platform = process.env.AUTHORITY_CORE_TARGET_PLATFORM || process.platform;
 const arch = process.env.AUTHORITY_CORE_TARGET_ARCH || process.arch;
 const binaryName = process.env.AUTHORITY_CORE_BINARY_NAME || (platform === 'win32' ? 'authority-core.exe' : 'authority-core');
-const platformDir = path.join(root, 'managed', 'core', platform + '-' + arch);
+const platformId = process.env.AUTHORITY_CORE_PLATFORM_ID || platform + '-' + arch;
+const libc = platformId.endsWith('-musl') ? 'musl' : null;
+const platformDir = path.join(root, 'managed', 'core', platformId);
 const binaryPath = path.join(platformDir, binaryName);
 fs.mkdirSync(platformDir, { recursive: true });
-fs.writeFileSync(binaryPath, 'authority-core ${AUTHORITY_VERSION} ' + platform + '-' + arch + '\\n', 'utf8');
+fs.writeFileSync(binaryPath, 'authority-core ${AUTHORITY_VERSION} ' + platformId + '\\n', 'utf8');
 const binarySha256 = crypto.createHash('sha256').update(fs.readFileSync(binaryPath)).digest('hex');
 fs.writeFileSync(path.join(platformDir, 'authority-core.json'), JSON.stringify({
   managedBy: 'authority',
   version: '${AUTHORITY_VERSION}',
   platform,
   arch,
+  ...(libc ? { libc } : {}),
   binaryName,
   binarySha256,
   builtAt: new Date().toISOString()
@@ -446,10 +465,10 @@ function getOtherPlatform(): { platform: NodeJS.Platform; arch: NodeJS.Architect
     return { platform: 'linux', arch: 'x64' };
 }
 
-function addExtraCoreArtifact(pluginRoot: string, platform: string, arch: string): void {
+function addExtraCoreArtifact(pluginRoot: string, platform: string, arch: string, libc?: string): void {
     const releasePath = path.join(pluginRoot, AUTHORITY_RELEASE_FILE);
     const release = readJson<AuthorityReleaseMetadata>(releasePath);
-    const platformId = `${platform}-${arch}`;
+    const platformId = libc ? `${platform}-${arch}-${libc}` : `${platform}-${arch}`;
     const binaryName = platform === 'win32' ? 'authority-core.exe' : 'authority-core';
     const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
     const platformDir = path.join(coreRoot, platformId);
@@ -462,6 +481,7 @@ function addExtraCoreArtifact(pluginRoot: string, platform: string, arch: string
         version: release.coreVersion,
         platform,
         arch,
+        ...(libc ? { libc } : {}),
         binaryName,
         binarySha256,
         builtAt: new Date().toISOString(),
@@ -476,6 +496,7 @@ function addExtraCoreArtifact(pluginRoot: string, platform: string, arch: string
         [platformId]: {
             platform,
             arch,
+            ...(libc ? { libc } : {}),
             binaryName,
             binarySha256,
             artifactHash: hashDirectory(platformDir),

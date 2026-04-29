@@ -133,6 +133,9 @@ export function getSystemMessageLabel(message) {
     if (message === 'Managed authority-core binary hash does not match release metadata.') {
         return '后台服务文件校验失败：与发布元数据不一致。';
     }
+    if (message.startsWith('Authority core binary for ') && message.includes('glibc Linux binaries are not compatible')) {
+        return '当前环境是 Alpine / musl Linux，不能运行 glibc 版 linux-x64 后台服务。请更新到包含 linux-x64-musl 的多平台包。';
+    }
     if (message.startsWith('Authority core binary for ')) {
         return '缺少当前平台的后台服务可执行文件。请使用多平台安装包，或在完整源码目录运行 npm run build:core。';
     }
@@ -168,6 +171,9 @@ export function getSystemMessageLabel(message) {
     }
     if (message.startsWith('Managed authority-core metadata platform mismatch: ')) {
         return '后台服务元数据记录的平台信息与当前环境不一致。';
+    }
+    if (message.startsWith('Managed authority-core metadata libc mismatch: ')) {
+        return '后台服务元数据记录的 Linux libc 类型与当前环境不一致。';
     }
     if (message.startsWith('Managed authority-core version mismatch: expected ')) {
         return '后台服务版本与发布记录不一致。';

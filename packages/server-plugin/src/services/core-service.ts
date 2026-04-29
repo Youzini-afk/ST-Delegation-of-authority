@@ -221,7 +221,7 @@ export class CoreService {
             this.setStatus('missing', {
                 binaryPath: null,
                 version: null,
-                lastError: describeMissingManagedCore(managedCoreRoots),
+                lastError: describeMissingManagedCore(managedCoreRoots, this.env),
                 port: null,
                 pid: null,
                 startedAt: null,
@@ -994,7 +994,7 @@ export class CoreService {
 
     private resolveArtifact(roots = this.resolveManagedCoreRoots()): CoreArtifact | null {
         for (const root of roots) {
-            const artifact = readArtifact(root);
+            const artifact = readArtifact(root, this.env);
             if (artifact) {
                 return artifact;
             }
@@ -1083,8 +1083,10 @@ export class CoreService {
     }
 }
 
-function readArtifact(root: string): CoreArtifact | null {
-    const platformDir = path.join(root, `${process.platform}-${process.arch}`);
+function readArtifact(root: string, env: NodeJS.ProcessEnv): CoreArtifact | null {
+    const platformId = getCurrentCorePlatform(env);
+    const expectedLibc = getCorePlatformLibc(platformId);
+    const platformDir = path.join(root, platformId);
     const metadataPath = path.join(platformDir, 'authority-core.json');
     if (!fs.existsSync(metadataPath)) {
         return null;
@@ -1097,7 +1099,7 @@ function readArtifact(root: string): CoreArtifact | null {
         return null;
     }
 
-    if (metadata.managedBy !== 'authority' || metadata.platform !== process.platform || metadata.arch !== process.arch) {
+    if (metadata.managedBy !== 'authority' || metadata.platform !== process.platform || metadata.arch !== process.arch || (metadata.libc ?? null) !== expectedLibc) {
         return null;
     }
 
@@ -1130,15 +1132,47 @@ function ensureExecutable(filePath: string): void {
     }
 }
 
-function describeMissingManagedCore(roots: string[]): string {
-    const expectedPlatform = `${process.platform}-${process.arch}`;
+function describeMissingManagedCore(roots: string[], env: NodeJS.ProcessEnv): string {
+    const expectedPlatform = getCurrentCorePlatform(env);
     const discoveredPlatforms = Array.from(new Set(
         roots.flatMap(root => listManagedCorePlatforms(root)),
     )).sort();
     const platformHint = discoveredPlatforms.length > 0
         ? `Found managed platforms: ${discoveredPlatforms.join(', ')}.`
         : 'No managed core platform directories were found.';
-    return `Authority core binary for ${expectedPlatform} was not found under ${AUTHORITY_MANAGED_CORE_DIR}. ${platformHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
+    const libcHint = expectedPlatform.endsWith('-musl')
+        ? ' Detected Linux musl runtime; glibc Linux binaries are not compatible.'
+        : '';
+    return `Authority core binary for ${expectedPlatform} was not found under ${AUTHORITY_MANAGED_CORE_DIR}. ${platformHint}${libcHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
+}
+
+function getCurrentCorePlatform(env: NodeJS.ProcessEnv): string {
+    const basePlatform = `${process.platform}-${process.arch}`;
+    return getCurrentLinuxLibc(env) === 'musl'
+        ? `${basePlatform}-musl`
+        : basePlatform;
+}
+
+function getCurrentLinuxLibc(env: NodeJS.ProcessEnv): 'musl' | 'gnu' | null {
+    if (process.platform !== 'linux') {
+        return null;
+    }
+
+    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+
+    const report = process.report?.getReport?.() as { header?: { glibcVersionRuntime?: string; glibcVersionCompiler?: string } } | undefined;
+    const header = report?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
+}
+
+function getCorePlatformLibc(platformId: string): string | null {
+    return platformId.endsWith('-musl') ? 'musl' : null;
 }
 
 function listManagedCorePlatforms(root: string): string[] {

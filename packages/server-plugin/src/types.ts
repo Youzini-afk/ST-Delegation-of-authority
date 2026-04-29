@@ -128,6 +128,7 @@ export interface AuthorityReleaseMetadata {
     coreArtifacts?: Record<string, {
         platform: string;
         arch: string;
+        libc?: string;
         binaryName: string;
         binarySha256: string;
         artifactHash: string;
@@ -150,6 +151,7 @@ export interface AuthorityCoreManagedMetadata {
     version: string;
     platform: string;
     arch: string;
+    libc?: string;
     binaryName: string;
     binarySha256: string;
     builtAt: string;

@@ -54,6 +54,13 @@ jobs:
             target_arch: x64
             target_triple: x86_64-unknown-linux-gnu
             binary_name: authority-core
+          - platform_id: linux-x64-musl
+            os: ubuntu-latest
+            target_platform: linux
+            target_arch: x64
+            target_triple: x86_64-unknown-linux-musl
+            target_libc: musl
+            binary_name: authority-core
           - platform_id: linux-arm64
             os: ubuntu-latest
             target_platform: linux
@@ -91,6 +98,18 @@ jobs:
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> "$GITHUB_ENV"
 
+      - name: Install Linux musl linker
+        if: matrix.target_triple == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Configure Linux x64 musl linker
+        if: matrix.target_triple == 'x86_64-unknown-linux-musl'
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+
       - name: Resolve Android NDK path
         if: matrix.target_triple == 'aarch64-linux-android'
         shell: bash
@@ -118,6 +137,7 @@ jobs:
           AUTHORITY_CORE_TARGET_PLATFORM: ${{ matrix.target_platform }}
           AUTHORITY_CORE_TARGET_ARCH: ${{ matrix.target_arch }}
           AUTHORITY_CORE_TARGET_TRIPLE: ${{ matrix.target_triple }}
+          AUTHORITY_CORE_TARGET_LIBC: ${{ matrix.target_libc }}
           AUTHORITY_CORE_BINARY_NAME: ${{ matrix.binary_name }}
 
       - name: Upload managed core artifact
@@ -161,7 +181,7 @@ jobs:
         run: |
           rm -rf managed/core
           mkdir -p managed/core
-          expected_platforms=(win32-x64 linux-x64 linux-arm64 android-arm64)
+          expected_platforms=(win32-x64 linux-x64 linux-x64-musl linux-arm64 android-arm64)
           for platform_id in "${expected_platforms[@]}"; do
             artifact_dir="downloaded-core/managed-core-${platform_id}"
             if [ ! -d "$artifact_dir" ]; then

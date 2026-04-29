@@ -142,6 +142,33 @@ describe('CoreService', () => {
         expect(status.lastError).toContain(`Found managed platforms: ${platformId}`);
         expect(status.lastError).toContain('npm run build:core');
     });
+
+    it.runIf(process.platform === 'linux')('reports linux musl as the expected platform when the runtime is musl', async () => {
+        const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-core-service-'));
+        cleanupDirs.push(baseDir);
+        const pluginRoot = path.join(baseDir, 'plugin-root');
+        fs.mkdirSync(path.join(pluginRoot, 'runtime'), { recursive: true });
+        writeForeignCoreArtifact(pluginRoot, 'linux', process.arch);
+
+        const service = new CoreService({
+            runtimeDir: path.join(pluginRoot, 'runtime'),
+            cwd: baseDir,
+            env: {
+                AUTHORITY_CORE_LIBC: 'musl',
+            },
+            logger: {
+                info() {},
+                warn() {},
+                error() {},
+            },
+        });
+
+        const status = await service.start();
+
+        expect(status.state).toBe('missing');
+        expect(status.lastError).toContain(`Authority core binary for linux-${process.arch}-musl`);
+        expect(status.lastError).toContain('glibc Linux binaries are not compatible');
+    });
 });
 
 function getOtherPlatform(): { platform: NodeJS.Platform; arch: NodeJS.Architecture } {

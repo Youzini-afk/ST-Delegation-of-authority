@@ -3,10 +3,10 @@
   "pluginVersion": "1.1.0",
   "sdkExtensionId": "third-party/st-authority-sdk",
   "sdkVersion": "1.1.0",
-  "assetHash": "dad2e40a8a94a245c245f5232ab6589bf55a70f1215a1c9ce33a12f7b4047598",
+  "assetHash": "1ef4db9eb49717819122ac41b9c9790e6c4b9329722b6c7b804f676d16ee1f95",
   "coreVersion": "1.1.0",
   "coreArtifactHash": "db23de49044edad9c76afc91c8665b0199bce61f8c4ef386017448017c696441",
-  "coreArtifactPlatform": "linux-x64",
+  "coreArtifactPlatform": "win32-x64",
   "coreArtifactPlatforms": [
     "android-arm64",
     "linux-arm64",
@@ -43,6 +43,6 @@
       "artifactHash": "db2bb101f6e40b5e4927ab2bc3033755afea18022c6c0456eb91beac29ab029b"
     }
   },
-  "coreBinarySha256": "99e6aed3f8dd2f30e11a4174cba75823eec0390039d184de0104d439ee4c2cbd",
-  "buildTime": "2026-04-29T13:38:37.969Z"
+  "coreBinarySha256": "c77ff674105dc3bcabe79cc4feae34c4aae5ef5218263d3e9da3e7a6a07157d5",
+  "buildTime": "2026-04-29T14:00:18.541Z"
 }

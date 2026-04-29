@@ -38,7 +38,9 @@ function readCoreArtifacts(managedCoreDir) {
         .map(platformId => {
             const platformDir = path.join(managedCoreDir, platformId);
             const metadata = readJson(path.join(platformDir, 'authority-core.json'));
-            const expectedPlatformId = `${metadata.platform}-${metadata.arch}`;
+            const expectedPlatformId = metadata.libc
+                ? `${metadata.platform}-${metadata.arch}-${metadata.libc}`
+                : `${metadata.platform}-${metadata.arch}`;
             if (platformId !== expectedPlatformId) {
                 throw new Error(`Managed authority-core metadata mismatch: ${platformId} contains ${expectedPlatformId}.`);
             }
@@ -53,6 +55,7 @@ function readCoreArtifacts(managedCoreDir) {
             return [platformId, {
                 platform: metadata.platform,
                 arch: metadata.arch,
+                ...(metadata.libc ? { libc: metadata.libc } : {}),
                 binaryName: metadata.binaryName,
                 binarySha256,
                 artifactHash: hashDirectory(platformDir),
@@ -61,10 +64,34 @@ function readCoreArtifacts(managedCoreDir) {
 }
 
 function choosePrimaryCoreArtifactPlatform(coreArtifactPlatforms) {
-    const currentPlatform = `${process.platform}-${process.arch}`;
+    const currentPlatform = getCurrentCorePlatform();
     return coreArtifactPlatforms.includes(currentPlatform)
         ? currentPlatform
         : coreArtifactPlatforms[0];
+}
+
+function getCurrentCorePlatform() {
+    const basePlatform = `${process.platform}-${process.arch}`;
+    return getCurrentLinuxLibc() === 'musl'
+        ? `${basePlatform}-musl`
+        : basePlatform;
+}
+
+function getCurrentLinuxLibc() {
+    if (process.platform !== 'linux') {
+        return null;
+    }
+
+    const override = process.env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+
+    const header = process.report?.getReport?.()?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
 }
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));

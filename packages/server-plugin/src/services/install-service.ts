@@ -69,7 +69,7 @@ export class InstallService {
         this.logger = options.logger ?? console;
         this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
         this.coreBuildMessage = null;
-        const expectedCorePlatform = getCurrentCorePlatform();
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
 
         this.status = {
             installStatus: 'missing',
@@ -244,7 +244,7 @@ export class InstallService {
     }
 
     private getResolvedCoreArtifactPlatform(): string | null {
-        const expectedCorePlatform = getCurrentCorePlatform();
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
         const coreArtifactPlatforms = this.getCoreArtifactPlatforms();
         return coreArtifactPlatforms.includes(expectedCorePlatform)
             ? expectedCorePlatform
@@ -252,7 +252,7 @@ export class InstallService {
     }
 
     private getCoreBinarySha256(): string | null {
-        const expectedCorePlatform = getCurrentCorePlatform();
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
         return this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
             ?? readManagedCoreArtifact(this.pluginRoot, expectedCorePlatform)?.binarySha256
             ?? this.releaseMetadata?.coreBinarySha256
@@ -313,10 +313,11 @@ export class InstallService {
     }
 
     private ensureCurrentPlatformCore(): string | null {
-        const expectedPlatform = getCurrentCorePlatform();
+        const expectedPlatform = getCurrentCorePlatform(this.env);
         if (readManagedCoreArtifact(this.pluginRoot, expectedPlatform)) {
             return null;
         }
+        const expectedLibc = getCorePlatformLibc(expectedPlatform);
 
         if (isCoreAutobuildDisabled(this.env)) {
             return `Managed authority-core for ${expectedPlatform} is missing and local core build is disabled by AUTHORITY_CORE_AUTOBUILD.`;
@@ -347,8 +348,10 @@ export class InstallService {
             cwd: this.pluginRoot,
             env: {
                 ...this.env,
+                AUTHORITY_CORE_PLATFORM_ID: expectedPlatform,
                 AUTHORITY_CORE_TARGET_PLATFORM: process.platform,
                 AUTHORITY_CORE_TARGET_ARCH: process.arch,
+                ...(expectedLibc ? { AUTHORITY_CORE_TARGET_LIBC: expectedLibc } : {}),
                 AUTHORITY_CORE_BINARY_NAME: binaryName,
             },
             encoding: 'utf8',
@@ -382,7 +385,8 @@ export class InstallService {
             return { ok: false, message: 'Authority release metadata is missing.' };
         }
 
-        const expectedPlatform = getCurrentCorePlatform();
+        const expectedPlatform = getCurrentCorePlatform(this.env);
+        const expectedLibc = getCorePlatformLibc(expectedPlatform);
         const releasePlatforms = getReleaseCorePlatforms(release);
         const localArtifact = readManagedCoreArtifact(this.pluginRoot, expectedPlatform);
         if (!localArtifact) {
@@ -407,6 +411,12 @@ export class InstallService {
             return {
                 ok: false,
                 message: `Managed authority-core metadata platform mismatch: ${metadata.platform}-${metadata.arch}.`,
+            };
+        }
+        if ((metadata.libc ?? null) !== expectedLibc) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata libc mismatch: expected ${expectedLibc ?? 'unspecified'}, found ${metadata.libc ?? 'unspecified'}.`,
             };
         }
 
@@ -573,8 +583,33 @@ function runGit(
     return { stdout, stderr };
 }
 
-function getCurrentCorePlatform(): string {
-    return `${process.platform}-${process.arch}`;
+function getCurrentCorePlatform(env: NodeJS.ProcessEnv = process.env): string {
+    const basePlatform = `${process.platform}-${process.arch}`;
+    return getCurrentLinuxLibc(env) === 'musl'
+        ? `${basePlatform}-musl`
+        : basePlatform;
+}
+
+function getCurrentLinuxLibc(env: NodeJS.ProcessEnv): 'musl' | 'gnu' | null {
+    if (process.platform !== 'linux') {
+        return null;
+    }
+
+    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+
+    const report = process.report?.getReport?.() as { header?: { glibcVersionRuntime?: string; glibcVersionCompiler?: string } } | undefined;
+    const header = report?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
+}
+
+function getCorePlatformLibc(platformId: string): string | null {
+    return platformId.endsWith('-musl') ? 'musl' : null;
 }
 
 function getReleaseCorePlatforms(release: AuthorityReleaseMetadata | null): string[] {

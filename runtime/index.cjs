@@ -4163,7 +4163,7 @@ class CoreService {
             this.setStatus('missing', {
                 binaryPath: null,
                 version: null,
-                lastError: describeMissingManagedCore(managedCoreRoots),
+                lastError: describeMissingManagedCore(managedCoreRoots, this.env),
                 port: null,
                 pid: null,
                 startedAt: null,
@@ -4844,7 +4844,7 @@ class CoreService {
     }
     resolveArtifact(roots = this.resolveManagedCoreRoots()) {
         for (const root of roots) {
-            const artifact = readArtifact(root);
+            const artifact = readArtifact(root, this.env);
             if (artifact) {
                 return artifact;
             }
@@ -4912,8 +4912,10 @@ class CoreService {
         return payload;
     }
 }
-function readArtifact(root) {
-    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(root, `${(node_process__WEBPACK_IMPORTED_MODULE_4___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)}`);
+function readArtifact(root, env) {
+    const platformId = getCurrentCorePlatform(env);
+    const expectedLibc = getCorePlatformLibc(platformId);
+    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(root, platformId);
     const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, 'authority-core.json');
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(metadataPath)) {
         return null;
@@ -4925,7 +4927,7 @@ function readArtifact(root) {
     catch {
         return null;
     }
-    if (metadata.managedBy !== 'authority' || metadata.platform !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) || metadata.arch !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)) {
+    if (metadata.managedBy !== 'authority' || metadata.platform !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) || metadata.arch !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().arch) || (metadata.libc ?? null) !== expectedLibc) {
         return null;
     }
     const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, metadata.binaryName);
@@ -4954,13 +4956,40 @@ function ensureExecutable(filePath) {
     catch {
     }
 }
-function describeMissingManagedCore(roots) {
-    const expectedPlatform = `${(node_process__WEBPACK_IMPORTED_MODULE_4___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)}`;
+function describeMissingManagedCore(roots, env) {
+    const expectedPlatform = getCurrentCorePlatform(env);
     const discoveredPlatforms = Array.from(new Set(roots.flatMap(root => listManagedCorePlatforms(root)))).sort();
     const platformHint = discoveredPlatforms.length > 0
         ? `Found managed platforms: ${discoveredPlatforms.join(', ')}.`
         : 'No managed core platform directories were found.';
-    return `Authority core binary for ${expectedPlatform} was not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR}. ${platformHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
+    const libcHint = expectedPlatform.endsWith('-musl')
+        ? ' Detected Linux musl runtime; glibc Linux binaries are not compatible.'
+        : '';
+    return `Authority core binary for ${expectedPlatform} was not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR}. ${platformHint}${libcHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
+}
+function getCurrentCorePlatform(env) {
+    const basePlatform = `${(node_process__WEBPACK_IMPORTED_MODULE_4___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)}`;
+    return getCurrentLinuxLibc(env) === 'musl'
+        ? `${basePlatform}-musl`
+        : basePlatform;
+}
+function getCurrentLinuxLibc(env) {
+    if ((node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) !== 'linux') {
+        return null;
+    }
+    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+    const report = node_process__WEBPACK_IMPORTED_MODULE_4___default().report?.getReport?.();
+    const header = report?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
+}
+function getCorePlatformLibc(platformId) {
+    return platformId.endsWith('-musl') ? 'musl' : null;
 }
 function listManagedCorePlatforms(root) {
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(root)) {
@@ -5592,7 +5621,7 @@ class InstallService {
         this.logger = options.logger ?? console;
         this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
         this.coreBuildMessage = null;
-        const expectedCorePlatform = getCurrentCorePlatform();
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
         this.status = {
             installStatus: 'missing',
             installMessage: 'Authority SDK deployment has not run yet.',
@@ -5739,14 +5768,14 @@ class InstallService {
         ])).sort();
     }
     getResolvedCoreArtifactPlatform() {
-        const expectedCorePlatform = getCurrentCorePlatform();
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
         const coreArtifactPlatforms = this.getCoreArtifactPlatforms();
         return coreArtifactPlatforms.includes(expectedCorePlatform)
             ? expectedCorePlatform
             : this.releaseMetadata?.coreArtifactPlatform ?? null;
     }
     getCoreBinarySha256() {
-        const expectedCorePlatform = getCurrentCorePlatform();
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
         return this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
             ?? readManagedCoreArtifact(this.pluginRoot, expectedCorePlatform)?.binarySha256
             ?? this.releaseMetadata?.coreBinarySha256
@@ -5800,10 +5829,11 @@ class InstallService {
         }
     }
     ensureCurrentPlatformCore() {
-        const expectedPlatform = getCurrentCorePlatform();
+        const expectedPlatform = getCurrentCorePlatform(this.env);
         if (readManagedCoreArtifact(this.pluginRoot, expectedPlatform)) {
             return null;
         }
+        const expectedLibc = getCorePlatformLibc(expectedPlatform);
         if (isCoreAutobuildDisabled(this.env)) {
             return `Managed authority-core for ${expectedPlatform} is missing and local core build is disabled by AUTHORITY_CORE_AUTOBUILD.`;
         }
@@ -5830,8 +5860,10 @@ class InstallService {
             cwd: this.pluginRoot,
             env: {
                 ...this.env,
+                AUTHORITY_CORE_PLATFORM_ID: expectedPlatform,
                 AUTHORITY_CORE_TARGET_PLATFORM: process.platform,
                 AUTHORITY_CORE_TARGET_ARCH: process.arch,
+                ...(expectedLibc ? { AUTHORITY_CORE_TARGET_LIBC: expectedLibc } : {}),
                 AUTHORITY_CORE_BINARY_NAME: binaryName,
             },
             encoding: 'utf8',
@@ -5863,7 +5895,8 @@ class InstallService {
         if (!release) {
             return { ok: false, message: 'Authority release metadata is missing.' };
         }
-        const expectedPlatform = getCurrentCorePlatform();
+        const expectedPlatform = getCurrentCorePlatform(this.env);
+        const expectedLibc = getCorePlatformLibc(expectedPlatform);
         const releasePlatforms = getReleaseCorePlatforms(release);
         const localArtifact = readManagedCoreArtifact(this.pluginRoot, expectedPlatform);
         if (!localArtifact) {
@@ -5886,6 +5919,12 @@ class InstallService {
             return {
                 ok: false,
                 message: `Managed authority-core metadata platform mismatch: ${metadata.platform}-${metadata.arch}.`,
+            };
+        }
+        if ((metadata.libc ?? null) !== expectedLibc) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata libc mismatch: expected ${expectedLibc ?? 'unspecified'}, found ${metadata.libc ?? 'unspecified'}.`,
             };
         }
         if (release.coreVersion && metadata.version !== release.coreVersion) {
@@ -6016,8 +6055,29 @@ function runGit(cwd, args, env, allowNoisyOutput = false) {
     }
     return { stdout, stderr };
 }
-function getCurrentCorePlatform() {
-    return `${process.platform}-${process.arch}`;
+function getCurrentCorePlatform(env = process.env) {
+    const basePlatform = `${process.platform}-${process.arch}`;
+    return getCurrentLinuxLibc(env) === 'musl'
+        ? `${basePlatform}-musl`
+        : basePlatform;
+}
+function getCurrentLinuxLibc(env) {
+    if (process.platform !== 'linux') {
+        return null;
+    }
+    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+    const report = process.report?.getReport?.();
+    const header = report?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
+}
+function getCorePlatformLibc(platformId) {
+    return platformId.endsWith('-musl') ? 'musl' : null;
 }
 function getReleaseCorePlatforms(release) {
     if (!release) {

@@ -13,8 +13,10 @@ const profile = process.env.AUTHORITY_CORE_PROFILE === 'debug' ? 'debug' : 'rele
 const targetPlatform = process.env.AUTHORITY_CORE_TARGET_PLATFORM || process.platform;
 const targetArch = process.env.AUTHORITY_CORE_TARGET_ARCH || process.arch;
 const targetTriple = process.env.AUTHORITY_CORE_TARGET_TRIPLE || '';
+const targetLibc = resolveTargetLibc();
+const platformId = process.env.AUTHORITY_CORE_PLATFORM_ID || (targetLibc === 'musl' ? `${targetPlatform}-${targetArch}-musl` : `${targetPlatform}-${targetArch}`);
 const binaryName = process.env.AUTHORITY_CORE_BINARY_NAME || (targetPlatform === 'win32' ? 'authority-core.exe' : 'authority-core');
-const managedRoot = path.join(repoRoot, 'managed', 'core', `${targetPlatform}-${targetArch}`);
+const managedRoot = path.join(repoRoot, 'managed', 'core', platformId);
 const metadataPath = path.join(managedRoot, 'authority-core.json');
 const targetBinaryPath = path.join(managedRoot, binaryName);
 const cargoArgs = ['build', '--manifest-path', manifestPath];
@@ -56,6 +58,7 @@ const builtAt = existingMetadata
     && existingMetadata.version === version
     && existingMetadata.platform === targetPlatform
     && existingMetadata.arch === targetArch
+    && (existingMetadata.libc ?? null) === targetLibc
     && existingMetadata.binaryName === binaryName
     && existingMetadata.binarySha256 === binarySha256
     && typeof existingMetadata.builtAt === 'string'
@@ -66,10 +69,35 @@ const metadata = {
     version,
     platform: targetPlatform,
     arch: targetArch,
+    ...(targetLibc ? { libc: targetLibc } : {}),
     binaryName,
     binarySha256,
     builtAt,
 };
 
-fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+
+function resolveTargetLibc() {
+    if (targetPlatform !== 'linux') {
+        return null;
+    }
+
+    const override = process.env.AUTHORITY_CORE_TARGET_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return null;
+    }
+
+    if (targetTriple.includes('musl')) {
+        return 'musl';
+    }
+    if (targetTriple.includes('gnu')) {
+        return null;
+    }
+
+    const header = process.report?.getReport?.()?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? null : 'musl';
+}
 console.log(`Authority core prepared at ${targetBinaryPath}`);

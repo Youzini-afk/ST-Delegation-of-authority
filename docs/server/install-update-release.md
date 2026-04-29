@@ -90,6 +90,7 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 - 当前平台 `authority-core.json` 是否存在
 - metadata 是否有效且 `managedBy === authority`
 - metadata 的 platform/arch 是否匹配当前运行平台
+- Linux 下 metadata 的 libc 是否匹配当前运行环境
 - metadata 版本是否匹配 release 中的 coreVersion
 - binary 是否存在
 - binary sha256 是否匹配 `authority-core.json`
@@ -106,7 +107,10 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 
 如果用户通过 Git 安装时只拿到其他平台的 `managed/core`，启动时会按下面顺序处理：
 
-1. 优先查找 `managed/core/<process.platform>-<process.arch>`
+1. 优先查找当前运行环境对应的 core 目录
+   - glibc Linux: `managed/core/linux-x64`
+   - Alpine / musl Linux: `managed/core/linux-x64-musl`
+   - Android arm64: `managed/core/android-arm64`
 2. 找不到时，检查当前目录是否是完整源码安装
 3. 若存在 `scripts/build-core.mjs` 和 `crates/authority-core/Cargo.toml`，且系统有 `cargo`，自动执行本地构建
 4. 构建成功后，用新生成的 `authority-core.json` 与 binary sha256 作为本地校验依据
@@ -121,6 +125,7 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 建议分发方式：
 
 - 普通用户优先使用 GitHub Actions 产出的 `authority-installable-multiplatform`
+- Alpine / musl Docker 用户应使用包含 `linux-x64-musl` 的多平台产物，不能直接运行 glibc `linux-x64` binary
 - 源码 / Git 安装用户在 Linux 或 Termux 上需要确保 Rust/Cargo 可用，或等待 CI 同步多平台 `managed/core`
 
 ## 6. 哪些 hash 漂移只是 warning
