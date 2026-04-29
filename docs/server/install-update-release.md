@@ -40,12 +40,13 @@
 
 1. `install.bootstrap()`
 2. 尝试解析 release metadata
-3. 验证 managed core
-4. 解析 SillyTavern 根目录
-5. 检查 `st-authority-sdk` 目标目录
-6. 若缺失或版本/hash 漂移，则重新部署 SDK
-7. 更新 install status
-8. 然后再启动 `authority-core`
+3. 若当前平台 `managed/core/<platform>-<arch>` 缺失，并且当前安装目录是完整源码且本机有 Cargo，则尝试本地构建当前平台 core
+4. 验证 managed core
+5. 解析 SillyTavern 根目录
+6. 检查 `st-authority-sdk` 目标目录
+7. 若缺失或版本/hash 漂移，则重新部署 SDK
+8. 更新 install status
+9. 然后再启动 `authority-core`
 
 ## 3. SDK 自动部署路径
 
@@ -86,16 +87,41 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 当前 `verifyBundledCore()` 至少会检查：
 
 - release metadata 是否存在
-- 当前平台是否在 release 支持平台内
 - 当前平台 `authority-core.json` 是否存在
 - metadata 是否有效且 `managedBy === authority`
 - metadata 的 platform/arch 是否匹配当前运行平台
 - metadata 版本是否匹配 release 中的 coreVersion
 - binary 是否存在
 - binary sha256 是否匹配 `authority-core.json`
-- binary sha256 是否匹配 `.authority-release.json`
+- 如果 `.authority-release.json` 记录了当前平台，则 binary sha256 还必须匹配平台 release metadata
 
 这些属于 **强校验**。
+
+如果 release metadata 没有列出当前平台，但当前平台 binary 已经存在且通过本地 `authority-core.json` 校验，运行时会允许继续启动，并给出 warning。这用于兼容两种场景：
+
+- Git 安装先只拿到部分平台产物，随后本机自动构建了当前平台 core
+- CI 后续把多平台 installable 产物同步回仓库之前，用户已经在 Linux / Android 上启动过一次
+
+## 5.1 Linux / Android / Termux 平台兜底
+
+如果用户通过 Git 安装时只拿到其他平台的 `managed/core`，启动时会按下面顺序处理：
+
+1. 优先查找 `managed/core/<process.platform>-<process.arch>`
+2. 找不到时，检查当前目录是否是完整源码安装
+3. 若存在 `scripts/build-core.mjs` 和 `crates/authority-core/Cargo.toml`，且系统有 `cargo`，自动执行本地构建
+4. 构建成功后，用新生成的 `authority-core.json` 与 binary sha256 作为本地校验依据
+5. 构建失败或不能构建时，在 Security Center 显示可操作的提示
+
+可用环境变量：
+
+- **`AUTHORITY_CORE_AUTOBUILD=0`**
+  - 禁用启动时自动构建
+  - 适合只允许使用预编译多平台包的生产环境
+
+建议分发方式：
+
+- 普通用户优先使用 GitHub Actions 产出的 `authority-installable-multiplatform`
+- 源码 / Git 安装用户在 Linux 或 Termux 上需要确保 Rust/Cargo 可用，或等待 CI 同步多平台 `managed/core`
 
 ## 6. 哪些 hash 漂移只是 warning
 

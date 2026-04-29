@@ -4157,12 +4157,13 @@ class CoreService {
         if (this.child) {
             await this.stop();
         }
-        const artifact = this.resolveArtifact();
+        const managedCoreRoots = this.resolveManagedCoreRoots();
+        const artifact = this.resolveArtifact(managedCoreRoots);
         if (!artifact) {
             this.setStatus('missing', {
                 binaryPath: null,
                 version: null,
-                lastError: `Authority core binary not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR}`,
+                lastError: describeMissingManagedCore(managedCoreRoots),
                 port: null,
                 pid: null,
                 startedAt: null,
@@ -4841,8 +4842,8 @@ class CoreService {
         }
         throw new Error(`authority-core did not become healthy within ${HEALTH_TIMEOUT_MS}ms`);
     }
-    resolveArtifact() {
-        for (const root of this.resolveManagedCoreRoots()) {
+    resolveArtifact(roots = this.resolveManagedCoreRoots()) {
+        for (const root of roots) {
             const artifact = readArtifact(root);
             if (artifact) {
                 return artifact;
@@ -4931,6 +4932,9 @@ function readArtifact(root) {
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(binaryPath)) {
         return null;
     }
+    if ((node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) !== 'win32') {
+        ensureExecutable(binaryPath);
+    }
     const binarySha256 = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(binaryPath)).digest('hex');
     if (metadata.binarySha256 !== binarySha256) {
         return null;
@@ -4939,6 +4943,37 @@ function readArtifact(root) {
         binaryPath,
         metadata,
     };
+}
+function ensureExecutable(filePath) {
+    try {
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
+        if ((stat.mode & 0o111) === 0) {
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().chmodSync(filePath, stat.mode | 0o755);
+        }
+    }
+    catch {
+    }
+}
+function describeMissingManagedCore(roots) {
+    const expectedPlatform = `${(node_process__WEBPACK_IMPORTED_MODULE_4___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)}`;
+    const discoveredPlatforms = Array.from(new Set(roots.flatMap(root => listManagedCorePlatforms(root)))).sort();
+    const platformHint = discoveredPlatforms.length > 0
+        ? `Found managed platforms: ${discoveredPlatforms.join(', ')}.`
+        : 'No managed core platform directories were found.';
+    return `Authority core binary for ${expectedPlatform} was not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR}. ${platformHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
+}
+function listManagedCorePlatforms(root) {
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(root)) {
+        return [];
+    }
+    try {
+        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(root, { withFileTypes: true })
+            .filter(entry => entry.isDirectory())
+            .map(entry => entry.name);
+    }
+    catch {
+        return [];
+    }
 }
 function buildTriviumOpenPayload(dbPath, request) {
     return {
@@ -5511,10 +5546,13 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_1__);
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_2__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:os */ "node:os");
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_os__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_4__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 
@@ -5536,6 +5574,7 @@ const TEXT_HASH_EXTENSIONS = new Set([
     '.yaml',
     '.yml',
 ]);
+const CORE_AUTOBUILD_DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
 class InstallService {
     runtimeDir;
     pluginRoot;
@@ -5543,14 +5582,16 @@ class InstallService {
     env;
     logger;
     releaseMetadata;
+    coreBuildMessage;
     status;
     constructor(options = {}) {
-        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.runtimeDir ?? __dirname);
+        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(options.runtimeDir ?? __dirname);
         this.pluginRoot = resolvePluginRoot(this.runtimeDir);
-        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.cwd ?? process.cwd());
+        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(options.cwd ?? process.cwd());
         this.env = options.env ?? process.env;
         this.logger = options.logger ?? console;
         this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
+        this.coreBuildMessage = null;
         const expectedCorePlatform = getCurrentCorePlatform();
         this.status = {
             installStatus: 'missing',
@@ -5579,7 +5620,9 @@ class InstallService {
     }
     async bootstrap() {
         this.refreshReleaseMetadata();
-        const bundledDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_SDK_DIR);
+        this.coreBuildMessage = this.ensureCurrentPlatformCore();
+        this.refreshReleaseMetadata();
+        const bundledDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_SDK_DIR);
         try {
             if (!this.releaseMetadata || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(bundledDir)) {
                 return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.', {
@@ -5599,9 +5642,9 @@ class InstallService {
                     coreMessage,
                 });
             }
-            const targetDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-authority-sdk');
-            const managedFile = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE);
-            const existingManaged = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(managedFile, null);
+            const targetDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-authority-sdk');
+            const managedFile = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE);
+            const existingManaged = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(managedFile, null);
             if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir)) {
                 this.deployBundledSdk(bundledDir, targetDir);
                 return this.setStatus('installed', buildInstallMessage('deployed', targetDir, coreCheck), {
@@ -5610,14 +5653,14 @@ class InstallService {
                     coreMessage,
                 });
             }
-            if (!existingManaged || existingManaged.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID) {
-                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${_constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID}.`, {
+            if (!existingManaged || existingManaged.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID) {
+                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID}.`, {
                     sdkDeployedVersion: null,
                     coreVerified,
                     coreMessage,
                 });
             }
-            const currentHash = hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE]));
+            const currentHash = hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE]));
             const needsUpdate = existingManaged.sdkVersion !== this.releaseMetadata.sdkVersion
                 || existingManaged.assetHash !== this.releaseMetadata.assetHash
                 || currentHash !== this.releaseMetadata.assetHash;
@@ -5652,7 +5695,7 @@ class InstallService {
         return this.bootstrap();
     }
     pullLatestFromGit() {
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, '.git'))) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, '.git'))) {
             throw new Error('当前 Authority 插件目录不是 Git 仓库，无法执行服务端插件更新。');
         }
         const branch = runGit(this.pluginRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], this.env).stdout || null;
@@ -5690,7 +5733,10 @@ class InstallService {
         return this.releaseMetadata?.sdkVersion ?? readBundledSdkVersion(this.pluginRoot) ?? this.getPluginVersion();
     }
     getCoreArtifactPlatforms() {
-        return getReleaseCorePlatforms(this.releaseMetadata);
+        return Array.from(new Set([
+            ...getReleaseCorePlatforms(this.releaseMetadata),
+            ...getManagedCorePlatforms(this.pluginRoot),
+        ])).sort();
     }
     getResolvedCoreArtifactPlatform() {
         const expectedCorePlatform = getCurrentCorePlatform();
@@ -5702,6 +5748,7 @@ class InstallService {
     getCoreBinarySha256() {
         const expectedCorePlatform = getCurrentCorePlatform();
         return this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
+            ?? readManagedCoreArtifact(this.pluginRoot, expectedCorePlatform)?.binarySha256
             ?? this.releaseMetadata?.coreBinarySha256
             ?? null;
     }
@@ -5709,8 +5756,8 @@ class InstallService {
         const envRoot = this.env.AUTHORITY_ST_ROOT?.trim();
         const candidates = [
             this.cwd,
-            node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(this.pluginRoot, '..', '..'),
-            envRoot ? node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(envRoot) : null,
+            node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(this.pluginRoot, '..', '..'),
+            envRoot ? node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(envRoot) : null,
         ];
         for (const candidate of candidates) {
             if (candidate && isSillyTavernRoot(candidate)) {
@@ -5720,10 +5767,10 @@ class InstallService {
         return null;
     }
     deployBundledSdk(bundledDir, targetDir) {
-        const parentDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(targetDir);
+        const parentDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().dirname(targetDir);
         node_fs__WEBPACK_IMPORTED_MODULE_2___default().mkdirSync(parentDir, { recursive: true });
         const backupDir = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir)
-            ? node_path__WEBPACK_IMPORTED_MODULE_3___default().join(parentDir, `${node_path__WEBPACK_IMPORTED_MODULE_3___default().basename(targetDir)}.authority-backup-${Date.now()}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`)
+            ? node_path__WEBPACK_IMPORTED_MODULE_4___default().join(parentDir, `${node_path__WEBPACK_IMPORTED_MODULE_4___default().basename(targetDir)}.authority-backup-${Date.now()}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`)
             : null;
         if (backupDir) {
             node_fs__WEBPACK_IMPORTED_MODULE_2___default().renameSync(targetDir, backupDir);
@@ -5731,14 +5778,14 @@ class InstallService {
         try {
             node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(bundledDir, targetDir, { recursive: true, force: true });
             const metadata = {
-                managedBy: _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID,
+                managedBy: _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID,
                 pluginVersion: this.releaseMetadata?.pluginVersion ?? this.status.pluginVersion,
                 sdkVersion: this.releaseMetadata?.sdkVersion ?? this.status.sdkBundledVersion,
-                assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE])),
-                installedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+                assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE])),
+                installedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.nowIso)(),
                 targetPath: targetDir,
             };
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_FILE), metadata);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.atomicWriteJson)(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE), metadata);
             if (backupDir) {
                 node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(backupDir, { recursive: true, force: true });
             }
@@ -5752,6 +5799,65 @@ class InstallService {
             throw error;
         }
     }
+    ensureCurrentPlatformCore() {
+        const expectedPlatform = getCurrentCorePlatform();
+        if (readManagedCoreArtifact(this.pluginRoot, expectedPlatform)) {
+            return null;
+        }
+        if (isCoreAutobuildDisabled(this.env)) {
+            return `Managed authority-core for ${expectedPlatform} is missing and local core build is disabled by AUTHORITY_CORE_AUTOBUILD.`;
+        }
+        if (!canBuildCoreFromSource(this.pluginRoot)) {
+            return `Managed authority-core for ${expectedPlatform} is missing and local source build is unavailable. Install the multi-platform package, or run npm run build:core from a full source checkout.`;
+        }
+        const cargoCheck = (0,node_child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)('cargo', ['--version'], {
+            cwd: this.pluginRoot,
+            env: this.env,
+            encoding: 'utf8',
+            windowsHide: true,
+        });
+        if (cargoCheck.error || cargoCheck.status !== 0) {
+            return `Managed authority-core for ${expectedPlatform} is missing and Cargo is not available. Install Rust/Cargo, then run npm run build:core in the plugin directory.`;
+        }
+        const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
+        const targetDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
+        const beforeBuild = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir) ? node_fs__WEBPACK_IMPORTED_MODULE_2___default().mkdtempSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(node_os__WEBPACK_IMPORTED_MODULE_3___default().tmpdir(), 'authority-core-autobuild-')) : null;
+        if (beforeBuild) {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(targetDir, beforeBuild, { recursive: true, force: true });
+        }
+        this.logger.info(`[authority] Managed authority-core for ${expectedPlatform} is missing; building it locally from source.`);
+        const build = (0,node_child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)(process.execPath, ['./scripts/build-core.mjs'], {
+            cwd: this.pluginRoot,
+            env: {
+                ...this.env,
+                AUTHORITY_CORE_TARGET_PLATFORM: process.platform,
+                AUTHORITY_CORE_TARGET_ARCH: process.arch,
+                AUTHORITY_CORE_BINARY_NAME: binaryName,
+            },
+            encoding: 'utf8',
+            windowsHide: true,
+        });
+        if (build.error || build.status !== 0) {
+            if (beforeBuild) {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetDir, { recursive: true, force: true });
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(beforeBuild, targetDir, { recursive: true, force: true });
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(beforeBuild, { recursive: true, force: true });
+            }
+            else {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetDir, { recursive: true, force: true });
+            }
+            const detail = [
+                build.error ? build.error.message : '',
+                build.stderr?.trim() ?? '',
+                build.stdout?.trim() ?? '',
+            ].filter(Boolean).join('\n');
+            return `Managed authority-core for ${expectedPlatform} is missing and local source build failed${detail ? `: ${detail}` : '.'}`;
+        }
+        if (beforeBuild) {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(beforeBuild, { recursive: true, force: true });
+        }
+        return `Managed authority-core for ${expectedPlatform} was built locally from source.`;
+    }
     verifyBundledCore() {
         const release = this.releaseMetadata;
         if (!release) {
@@ -5759,22 +5865,18 @@ class InstallService {
         }
         const expectedPlatform = getCurrentCorePlatform();
         const releasePlatforms = getReleaseCorePlatforms(release);
-        if (releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)) {
+        const localArtifact = readManagedCoreArtifact(this.pluginRoot, expectedPlatform);
+        if (!localArtifact) {
+            const platformMessage = releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)
+                ? `Managed authority-core artifacts target ${releasePlatforms.join(', ')}, but this runtime needs ${expectedPlatform}.`
+                : `Managed authority-core metadata is missing for ${expectedPlatform}.`;
             return {
                 ok: false,
-                message: `Managed authority-core artifacts target ${releasePlatforms.join(', ')}, but this runtime needs ${expectedPlatform}.`,
+                message: [platformMessage, this.coreBuildMessage].filter(Boolean).join(' '),
             };
         }
-        const platformDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
-        const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, 'authority-core.json');
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(metadataPath)) {
-            return {
-                ok: false,
-                message: `Managed authority-core metadata is missing for ${expectedPlatform}.`,
-            };
-        }
-        const metadata = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(metadataPath, null);
-        if (!metadata || metadata.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID) {
+        const { metadata, binarySha256, platformDir } = localArtifact;
+        if (metadata.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID) {
             return {
                 ok: false,
                 message: `Managed authority-core metadata for ${expectedPlatform} is invalid.`,
@@ -5792,14 +5894,6 @@ class InstallService {
                 message: `Managed authority-core version mismatch: expected ${release.coreVersion}, found ${metadata.version}.`,
             };
         }
-        const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, metadata.binaryName);
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(binaryPath)) {
-            return {
-                ok: false,
-                message: `Managed authority-core binary is missing: ${binaryPath}.`,
-            };
-        }
-        const binarySha256 = hashFile(binaryPath);
         if (metadata.binarySha256 !== binarySha256) {
             return {
                 ok: false,
@@ -5813,13 +5907,19 @@ class InstallService {
                 message: 'Managed authority-core binary hash does not match platform release metadata.',
             };
         }
-        if (!releaseArtifact && release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
+        if (!releaseArtifact && releasePlatforms.includes(expectedPlatform) && release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
             return {
                 ok: false,
                 message: 'Managed authority-core binary hash does not match release metadata.',
             };
         }
         const warnings = [];
+        if (!releaseArtifact && releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)) {
+            warnings.push(`Managed authority-core release metadata targets ${releasePlatforms.join(', ')}, but ${expectedPlatform} is available locally and verified against its local metadata.`);
+        }
+        if (this.coreBuildMessage) {
+            warnings.push(this.coreBuildMessage);
+        }
         if (releaseArtifact) {
             const platformArtifactHash = hashDirectory(platformDir);
             if (releaseArtifact.artifactHash !== platformArtifactHash) {
@@ -5827,7 +5927,7 @@ class InstallService {
             }
         }
         if (release.coreArtifactHash) {
-            const artifactHash = hashDirectory(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_CORE_DIR));
+            const artifactHash = hashDirectory(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR));
             if (artifactHash !== release.coreArtifactHash) {
                 warnings.push('Managed authority-core artifact directory hash drift detected. SDK deployment remains enabled because the current platform binary is verified.');
             }
@@ -5875,17 +5975,17 @@ function buildInstallMessage(kind, targetDir, coreCheck) {
 function resolvePluginRoot(runtimeDir) {
     let current = runtimeDir;
     while (true) {
-        if (node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_RELEASE_FILE))) {
+        if (node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_RELEASE_FILE))) {
             return current;
         }
-        const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, 'package.json');
+        const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(current, 'package.json');
         if (node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(packageJsonPath)) {
-            const packageJson = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(packageJsonPath, {});
-            if (packageJson.name === _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_PLUGIN_ID) {
+            const packageJson = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(packageJsonPath, {});
+            if (packageJson.name === _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID) {
                 return current;
             }
         }
-        const parent = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(current);
+        const parent = node_path__WEBPACK_IMPORTED_MODULE_4___default().dirname(current);
         if (parent === current) {
             return runtimeDir;
         }
@@ -5893,7 +5993,7 @@ function resolvePluginRoot(runtimeDir) {
     }
 }
 function readReleaseMetadata(pluginRoot) {
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_RELEASE_FILE), null);
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_RELEASE_FILE), null);
 }
 function runGit(cwd, args, env, allowNoisyOutput = false) {
     const result = (0,node_child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)('git', args, {
@@ -5931,28 +6031,63 @@ function getReleaseCorePlatforms(release) {
     }
     return release.coreArtifactPlatform ? [release.coreArtifactPlatform] : [];
 }
+function getManagedCorePlatforms(pluginRoot) {
+    const coreRoot = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(coreRoot)) {
+        return [];
+    }
+    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().readdirSync(coreRoot, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+        .sort();
+}
+function readManagedCoreArtifact(pluginRoot, platformId) {
+    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR, platformId);
+    const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(platformDir, 'authority-core.json');
+    const metadata = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(metadataPath, null);
+    if (!metadata) {
+        return null;
+    }
+    const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(platformDir, metadata.binaryName);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(binaryPath)) {
+        return null;
+    }
+    return {
+        platformDir,
+        binaryPath,
+        metadata,
+        binarySha256: hashFile(binaryPath),
+    };
+}
+function isCoreAutobuildDisabled(env) {
+    return CORE_AUTOBUILD_DISABLED_VALUES.has(env.AUTHORITY_CORE_AUTOBUILD?.trim().toLowerCase() ?? '');
+}
+function canBuildCoreFromSource(pluginRoot) {
+    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, 'scripts', 'build-core.mjs'))
+        && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, 'crates', 'authority-core', 'Cargo.toml'));
+}
 function readPackageVersion(pluginRoot) {
-    const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(pluginRoot, 'package.json');
+    const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, 'package.json');
     if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(packageJsonPath)) {
         return null;
     }
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(packageJsonPath, {}).version ?? null;
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(packageJsonPath, {}).version ?? null;
 }
 function readBundledSdkVersion(pluginRoot) {
-    const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_SDK_DIR, 'manifest.json');
+    const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_SDK_DIR, 'manifest.json');
     if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(manifestPath)) {
         return null;
     }
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(manifestPath, {}).version ?? null;
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(manifestPath, {}).version ?? null;
 }
 function isSillyTavernRoot(candidate) {
-    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(candidate, 'plugins'))
-        && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(candidate, 'public', 'scripts', 'extensions'));
+    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(candidate, 'plugins'))
+        && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(candidate, 'public', 'scripts', 'extensions'));
 }
 function hashDirectory(rootDir, ignoreNames = new Set()) {
     const hash = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256');
     for (const filePath of listFiles(rootDir, ignoreNames)) {
-        const relativePath = node_path__WEBPACK_IMPORTED_MODULE_3___default().relative(rootDir, filePath).replace(/\\/g, '/');
+        const relativePath = node_path__WEBPACK_IMPORTED_MODULE_4___default().relative(rootDir, filePath).replace(/\\/g, '/');
         hash.update(relativePath);
         hash.update('\0');
         hash.update(readStableHashContent(filePath));
@@ -5965,7 +6100,7 @@ function hashFile(filePath) {
 }
 function readStableHashContent(filePath) {
     const content = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath);
-    if (!TEXT_HASH_EXTENSIONS.has(node_path__WEBPACK_IMPORTED_MODULE_3___default().extname(filePath).toLowerCase())) {
+    if (!TEXT_HASH_EXTENSIONS.has(node_path__WEBPACK_IMPORTED_MODULE_4___default().extname(filePath).toLowerCase())) {
         return content;
     }
     return Buffer.from(content.toString('utf8').replace(/\r\n?/g, '\n'), 'utf8');
@@ -5980,7 +6115,7 @@ function listFiles(rootDir, ignoreNames) {
             .filter(entry => !ignoreNames.has(entry.name))
             .sort((left, right) => left.name.localeCompare(right.name));
         for (const entry of entries) {
-            const fullPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(currentDir, entry.name);
+            const fullPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(currentDir, entry.name);
             if (entry.isDirectory()) {
                 visit(fullPath);
             }
@@ -8919,6 +9054,16 @@ module.exports = require("node:fs");
 (module) {
 
 module.exports = require("node:net");
+
+/***/ },
+
+/***/ "node:os"
+/*!**************************!*\
+  !*** external "node:os" ***!
+  \**************************/
+(module) {
+
+module.exports = require("node:os");
 
 /***/ },
 

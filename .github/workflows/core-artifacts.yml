@@ -31,6 +31,9 @@ on:
       - README.md
       - LICENSE
 
+permissions:
+  contents: write
+
 jobs:
   build-core:
     name: Build ${{ matrix.platform_id }}
@@ -168,6 +171,20 @@ jobs:
         run: |
           node ./scripts/installable.mjs sync
           node ./scripts/installable.mjs check
+
+      - name: Commit synchronized multi-platform installable
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          if git diff --quiet -- .authority-release.json runtime managed; then
+            echo "Installable runtime already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .authority-release.json runtime managed
+          git commit -m "build: synchronize multi-platform installable artifacts [skip ci]"
+          git push
 
       - name: Upload multi-platform installable
         uses: actions/upload-artifact@v4

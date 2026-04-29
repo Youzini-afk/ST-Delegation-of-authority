@@ -215,12 +215,13 @@ export class CoreService {
             await this.stop();
         }
 
-        const artifact = this.resolveArtifact();
+        const managedCoreRoots = this.resolveManagedCoreRoots();
+        const artifact = this.resolveArtifact(managedCoreRoots);
         if (!artifact) {
             this.setStatus('missing', {
                 binaryPath: null,
                 version: null,
-                lastError: `Authority core binary not found under ${AUTHORITY_MANAGED_CORE_DIR}`,
+                lastError: describeMissingManagedCore(managedCoreRoots),
                 port: null,
                 pid: null,
                 startedAt: null,
@@ -991,8 +992,8 @@ export class CoreService {
         throw new Error(`authority-core did not become healthy within ${HEALTH_TIMEOUT_MS}ms`);
     }
 
-    private resolveArtifact(): CoreArtifact | null {
-        for (const root of this.resolveManagedCoreRoots()) {
+    private resolveArtifact(roots = this.resolveManagedCoreRoots()): CoreArtifact | null {
+        for (const root of roots) {
             const artifact = readArtifact(root);
             if (artifact) {
                 return artifact;
@@ -1104,6 +1105,9 @@ function readArtifact(root: string): CoreArtifact | null {
     if (!fs.existsSync(binaryPath)) {
         return null;
     }
+    if (process.platform !== 'win32') {
+        ensureExecutable(binaryPath);
+    }
 
     const binarySha256 = crypto.createHash('sha256').update(fs.readFileSync(binaryPath)).digest('hex');
     if (metadata.binarySha256 !== binarySha256) {
@@ -1114,6 +1118,41 @@ function readArtifact(root: string): CoreArtifact | null {
         binaryPath,
         metadata,
     };
+}
+
+function ensureExecutable(filePath: string): void {
+    try {
+        const stat = fs.statSync(filePath);
+        if ((stat.mode & 0o111) === 0) {
+            fs.chmodSync(filePath, stat.mode | 0o755);
+        }
+    } catch {
+    }
+}
+
+function describeMissingManagedCore(roots: string[]): string {
+    const expectedPlatform = `${process.platform}-${process.arch}`;
+    const discoveredPlatforms = Array.from(new Set(
+        roots.flatMap(root => listManagedCorePlatforms(root)),
+    )).sort();
+    const platformHint = discoveredPlatforms.length > 0
+        ? `Found managed platforms: ${discoveredPlatforms.join(', ')}.`
+        : 'No managed core platform directories were found.';
+    return `Authority core binary for ${expectedPlatform} was not found under ${AUTHORITY_MANAGED_CORE_DIR}. ${platformHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
+}
+
+function listManagedCorePlatforms(root: string): string[] {
+    if (!fs.existsSync(root)) {
+        return [];
+    }
+
+    try {
+        return fs.readdirSync(root, { withFileTypes: true })
+            .filter(entry => entry.isDirectory())
+            .map(entry => entry.name);
+    } catch {
+        return [];
+    }
 }
 
 function buildTriviumOpenPayload(dbPath: string, request: {

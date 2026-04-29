@@ -141,6 +141,27 @@ export function getSystemMessageLabel(message: string): string {
     if (message === 'Managed authority-core binary hash does not match release metadata.') {
         return '后台服务文件校验失败：与发布元数据不一致。';
     }
+    if (message.startsWith('Authority core binary for ')) {
+        return '缺少当前平台的后台服务可执行文件。请使用多平台安装包，或在完整源码目录运行 npm run build:core。';
+    }
+    if (message.startsWith('Managed authority-core for ') && message.includes(' was built locally from source')) {
+        return '当前平台的后台服务已从本地源码自动构建。';
+    }
+    if (message.startsWith('Managed authority-core for ') && message.includes(' local core build is disabled by AUTHORITY_CORE_AUTOBUILD')) {
+        return '当前平台缺少后台服务，且本地自动构建已被 AUTHORITY_CORE_AUTOBUILD 禁用。';
+    }
+    if (message.startsWith('Managed authority-core for ') && message.includes(' local source build is unavailable')) {
+        return '当前平台缺少后台服务，且当前安装目录不是可本地构建的完整源码。请使用多平台安装包。';
+    }
+    if (message.startsWith('Managed authority-core for ') && message.includes(' Cargo is not available')) {
+        return '当前平台缺少后台服务，且没有检测到 Rust/Cargo。请安装 Rust/Cargo 后在插件目录运行 npm run build:core，或使用多平台安装包。';
+    }
+    if (message.startsWith('Managed authority-core for ') && message.includes(' local source build failed')) {
+        return '当前平台缺少后台服务，尝试从本地源码构建失败。请查看服务端日志，或使用多平台安装包。';
+    }
+    if (message.startsWith('Managed authority-core release metadata targets ')) {
+        return '发布元数据未列出当前平台，但本地当前平台后台服务已通过校验。';
+    }
     if (message.startsWith('Authority SDK target already exists and is not managed by ')) {
         return '前端组件目录已经存在，但不是当前插件在管理，不能自动覆盖。';
     }

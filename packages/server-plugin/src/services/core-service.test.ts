@@ -1,13 +1,25 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CoreService } from './core-service.js';
 import { AuthorityServiceError } from '../utils.js';
+import { AUTHORITY_MANAGED_CORE_DIR, AUTHORITY_PLUGIN_ID } from '../constants.js';
 
 describe('CoreService', () => {
     const originalFetch = globalThis.fetch;
+    const cleanupDirs: string[] = [];
 
     afterEach(() => {
         globalThis.fetch = originalFetch;
         vi.restoreAllMocks();
+        while (cleanupDirs.length > 0) {
+            const dir = cleanupDirs.pop();
+            if (dir) {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }
     });
 
     it('passes page to sql query requests', async () => {
@@ -102,4 +114,59 @@ describe('CoreService', () => {
             category: 'limit',
         });
     });
+
+    it('reports the expected platform and discovered managed platforms when core is missing', async () => {
+        const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-core-service-'));
+        cleanupDirs.push(baseDir);
+        const pluginRoot = path.join(baseDir, 'plugin-root');
+        fs.mkdirSync(path.join(pluginRoot, 'runtime'), { recursive: true });
+        const { platform, arch } = getOtherPlatform();
+        writeForeignCoreArtifact(pluginRoot, platform, arch);
+        const platformId = `${platform}-${arch}`;
+
+        const service = new CoreService({
+            runtimeDir: path.join(pluginRoot, 'runtime'),
+            cwd: baseDir,
+            env: {},
+            logger: {
+                info() {},
+                warn() {},
+                error() {},
+            },
+        });
+
+        const status = await service.start();
+
+        expect(status.state).toBe('missing');
+        expect(status.lastError).toContain(`Authority core binary for ${process.platform}-${process.arch}`);
+        expect(status.lastError).toContain(`Found managed platforms: ${platformId}`);
+        expect(status.lastError).toContain('npm run build:core');
+    });
 });
+
+function getOtherPlatform(): { platform: NodeJS.Platform; arch: NodeJS.Architecture } {
+    const current = `${process.platform}-${process.arch}`;
+    if (current !== 'win32-x64') {
+        return { platform: 'win32', arch: 'x64' };
+    }
+    return { platform: 'linux', arch: 'x64' };
+}
+
+function writeForeignCoreArtifact(pluginRoot: string, platform: string, arch: string): void {
+    const platformId = `${platform}-${arch}`;
+    const binaryName = platform === 'win32' ? 'authority-core.exe' : 'authority-core';
+    const platformDir = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR, platformId);
+    const binaryPath = path.join(platformDir, binaryName);
+    fs.mkdirSync(platformDir, { recursive: true });
+    fs.writeFileSync(binaryPath, `authority-core ${platformId}\n`, 'utf8');
+    const binarySha256 = crypto.createHash('sha256').update(fs.readFileSync(binaryPath)).digest('hex');
+    fs.writeFileSync(path.join(platformDir, 'authority-core.json'), JSON.stringify({
+        managedBy: AUTHORITY_PLUGIN_ID,
+        version: 'test',
+        platform,
+        arch,
+        binaryName,
+        binarySha256,
+        builtAt: new Date().toISOString(),
+    }, null, 2), 'utf8');
+}

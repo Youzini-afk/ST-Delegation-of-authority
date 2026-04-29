@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
     AUTHORITY_MANAGED_FILE,
@@ -41,6 +42,14 @@ const TEXT_HASH_EXTENSIONS = new Set([
     '.yaml',
     '.yml',
 ]);
+const CORE_AUTOBUILD_DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
+
+interface ManagedCoreArtifactSummary {
+    platformDir: string;
+    binaryPath: string;
+    metadata: AuthorityCoreManagedMetadata;
+    binarySha256: string;
+}
 
 export class InstallService {
     private readonly runtimeDir: string;
@@ -49,6 +58,7 @@ export class InstallService {
     private readonly env: NodeJS.ProcessEnv;
     private readonly logger: Pick<typeof console, 'info' | 'warn' | 'error'>;
     private releaseMetadata: AuthorityReleaseMetadata | null;
+    private coreBuildMessage: string | null;
     private status: InstallStatusSnapshot;
 
     constructor(options: InstallServiceOptions = {}) {
@@ -58,6 +68,7 @@ export class InstallService {
         this.env = options.env ?? process.env;
         this.logger = options.logger ?? console;
         this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
+        this.coreBuildMessage = null;
         const expectedCorePlatform = getCurrentCorePlatform();
 
         this.status = {
@@ -88,6 +99,8 @@ export class InstallService {
     }
 
     async bootstrap(): Promise<InstallStatusSnapshot> {
+        this.refreshReleaseMetadata();
+        this.coreBuildMessage = this.ensureCurrentPlatformCore();
         this.refreshReleaseMetadata();
         const bundledDir = path.join(this.pluginRoot, AUTHORITY_MANAGED_SDK_DIR);
         try {
@@ -224,7 +237,10 @@ export class InstallService {
     }
 
     private getCoreArtifactPlatforms(): string[] {
-        return getReleaseCorePlatforms(this.releaseMetadata);
+        return Array.from(new Set([
+            ...getReleaseCorePlatforms(this.releaseMetadata),
+            ...getManagedCorePlatforms(this.pluginRoot),
+        ])).sort();
     }
 
     private getResolvedCoreArtifactPlatform(): string | null {
@@ -238,6 +254,7 @@ export class InstallService {
     private getCoreBinarySha256(): string | null {
         const expectedCorePlatform = getCurrentCorePlatform();
         return this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
+            ?? readManagedCoreArtifact(this.pluginRoot, expectedCorePlatform)?.binarySha256
             ?? this.releaseMetadata?.coreBinarySha256
             ?? null;
     }
@@ -295,6 +312,70 @@ export class InstallService {
         }
     }
 
+    private ensureCurrentPlatformCore(): string | null {
+        const expectedPlatform = getCurrentCorePlatform();
+        if (readManagedCoreArtifact(this.pluginRoot, expectedPlatform)) {
+            return null;
+        }
+
+        if (isCoreAutobuildDisabled(this.env)) {
+            return `Managed authority-core for ${expectedPlatform} is missing and local core build is disabled by AUTHORITY_CORE_AUTOBUILD.`;
+        }
+
+        if (!canBuildCoreFromSource(this.pluginRoot)) {
+            return `Managed authority-core for ${expectedPlatform} is missing and local source build is unavailable. Install the multi-platform package, or run npm run build:core from a full source checkout.`;
+        }
+
+        const cargoCheck = spawnSync('cargo', ['--version'], {
+            cwd: this.pluginRoot,
+            env: this.env,
+            encoding: 'utf8',
+            windowsHide: true,
+        });
+        if (cargoCheck.error || cargoCheck.status !== 0) {
+            return `Managed authority-core for ${expectedPlatform} is missing and Cargo is not available. Install Rust/Cargo, then run npm run build:core in the plugin directory.`;
+        }
+
+        const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
+        const targetDir = path.join(this.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
+        const beforeBuild = fs.existsSync(targetDir) ? fs.mkdtempSync(path.join(os.tmpdir(), 'authority-core-autobuild-')) : null;
+        if (beforeBuild) {
+            fs.cpSync(targetDir, beforeBuild, { recursive: true, force: true });
+        }
+        this.logger.info(`[authority] Managed authority-core for ${expectedPlatform} is missing; building it locally from source.`);
+        const build = spawnSync(process.execPath, ['./scripts/build-core.mjs'], {
+            cwd: this.pluginRoot,
+            env: {
+                ...this.env,
+                AUTHORITY_CORE_TARGET_PLATFORM: process.platform,
+                AUTHORITY_CORE_TARGET_ARCH: process.arch,
+                AUTHORITY_CORE_BINARY_NAME: binaryName,
+            },
+            encoding: 'utf8',
+            windowsHide: true,
+        });
+        if (build.error || build.status !== 0) {
+            if (beforeBuild) {
+                fs.rmSync(targetDir, { recursive: true, force: true });
+                fs.cpSync(beforeBuild, targetDir, { recursive: true, force: true });
+                fs.rmSync(beforeBuild, { recursive: true, force: true });
+            } else {
+                fs.rmSync(targetDir, { recursive: true, force: true });
+            }
+            const detail = [
+                build.error ? build.error.message : '',
+                build.stderr?.trim() ?? '',
+                build.stdout?.trim() ?? '',
+            ].filter(Boolean).join('\n');
+            return `Managed authority-core for ${expectedPlatform} is missing and local source build failed${detail ? `: ${detail}` : '.'}`;
+        }
+        if (beforeBuild) {
+            fs.rmSync(beforeBuild, { recursive: true, force: true });
+        }
+
+        return `Managed authority-core for ${expectedPlatform} was built locally from source.`;
+    }
+
     private verifyBundledCore(): { ok: true; platform: string; message: string | null } | { ok: false; message: string } {
         const release = this.releaseMetadata;
         if (!release) {
@@ -303,24 +384,19 @@ export class InstallService {
 
         const expectedPlatform = getCurrentCorePlatform();
         const releasePlatforms = getReleaseCorePlatforms(release);
-        if (releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)) {
+        const localArtifact = readManagedCoreArtifact(this.pluginRoot, expectedPlatform);
+        if (!localArtifact) {
+            const platformMessage = releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)
+                ? `Managed authority-core artifacts target ${releasePlatforms.join(', ')}, but this runtime needs ${expectedPlatform}.`
+                : `Managed authority-core metadata is missing for ${expectedPlatform}.`;
             return {
                 ok: false,
-                message: `Managed authority-core artifacts target ${releasePlatforms.join(', ')}, but this runtime needs ${expectedPlatform}.`,
+                message: [platformMessage, this.coreBuildMessage].filter(Boolean).join(' '),
             };
         }
 
-        const platformDir = path.join(this.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
-        const metadataPath = path.join(platformDir, 'authority-core.json');
-        if (!fs.existsSync(metadataPath)) {
-            return {
-                ok: false,
-                message: `Managed authority-core metadata is missing for ${expectedPlatform}.`,
-            };
-        }
-
-        const metadata = readJsonFile<AuthorityCoreManagedMetadata | null>(metadataPath, null);
-        if (!metadata || metadata.managedBy !== AUTHORITY_PLUGIN_ID) {
+        const { metadata, binarySha256, platformDir } = localArtifact;
+        if (metadata.managedBy !== AUTHORITY_PLUGIN_ID) {
             return {
                 ok: false,
                 message: `Managed authority-core metadata for ${expectedPlatform} is invalid.`,
@@ -341,15 +417,6 @@ export class InstallService {
             };
         }
 
-        const binaryPath = path.join(platformDir, metadata.binaryName);
-        if (!fs.existsSync(binaryPath)) {
-            return {
-                ok: false,
-                message: `Managed authority-core binary is missing: ${binaryPath}.`,
-            };
-        }
-
-        const binarySha256 = hashFile(binaryPath);
         if (metadata.binarySha256 !== binarySha256) {
             return {
                 ok: false,
@@ -364,8 +431,7 @@ export class InstallService {
                 message: 'Managed authority-core binary hash does not match platform release metadata.',
             };
         }
-
-        if (!releaseArtifact && release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
+        if (!releaseArtifact && releasePlatforms.includes(expectedPlatform) && release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
             return {
                 ok: false,
                 message: 'Managed authority-core binary hash does not match release metadata.',
@@ -373,6 +439,12 @@ export class InstallService {
         }
 
         const warnings: string[] = [];
+        if (!releaseArtifact && releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)) {
+            warnings.push(`Managed authority-core release metadata targets ${releasePlatforms.join(', ')}, but ${expectedPlatform} is available locally and verified against its local metadata.`);
+        }
+        if (this.coreBuildMessage) {
+            warnings.push(this.coreBuildMessage);
+        }
         if (releaseArtifact) {
             const platformArtifactHash = hashDirectory(platformDir);
             if (releaseArtifact.artifactHash !== platformArtifactHash) {
@@ -519,6 +591,48 @@ function getReleaseCorePlatforms(release: AuthorityReleaseMetadata | null): stri
     }
 
     return release.coreArtifactPlatform ? [release.coreArtifactPlatform] : [];
+}
+
+function getManagedCorePlatforms(pluginRoot: string): string[] {
+    const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
+    if (!fs.existsSync(coreRoot)) {
+        return [];
+    }
+
+    return fs.readdirSync(coreRoot, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+        .sort();
+}
+
+function readManagedCoreArtifact(pluginRoot: string, platformId: string): ManagedCoreArtifactSummary | null {
+    const platformDir = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR, platformId);
+    const metadataPath = path.join(platformDir, 'authority-core.json');
+    const metadata = readJsonFile<AuthorityCoreManagedMetadata | null>(metadataPath, null);
+    if (!metadata) {
+        return null;
+    }
+
+    const binaryPath = path.join(platformDir, metadata.binaryName);
+    if (!fs.existsSync(binaryPath)) {
+        return null;
+    }
+
+    return {
+        platformDir,
+        binaryPath,
+        metadata,
+        binarySha256: hashFile(binaryPath),
+    };
+}
+
+function isCoreAutobuildDisabled(env: NodeJS.ProcessEnv): boolean {
+    return CORE_AUTOBUILD_DISABLED_VALUES.has(env.AUTHORITY_CORE_AUTOBUILD?.trim().toLowerCase() ?? '');
+}
+
+function canBuildCoreFromSource(pluginRoot: string): boolean {
+    return fs.existsSync(path.join(pluginRoot, 'scripts', 'build-core.mjs'))
+        && fs.existsSync(path.join(pluginRoot, 'crates', 'authority-core', 'Cargo.toml'));
 }
 
 function readPackageVersion(pluginRoot: string): string | null {

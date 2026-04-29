@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import childProcess from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -137,15 +138,54 @@ describe('InstallService', () => {
     it('deploys the SDK but reports a core warning when the bundled core artifact is absent', async () => {
         const setup = createInstallFixture();
         fs.rmSync(path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR), { recursive: true, force: true });
-        const service = createService(setup);
+        const service = createService(setup, { AUTHORITY_CORE_AUTOBUILD: '0' });
 
         const status = await service.bootstrap();
 
         expect(status.installStatus).toBe('installed');
         expect(status.coreVerified).toBe(false);
         expect(status.installMessage).toContain('Core verification warning');
-        expect(status.coreMessage).toContain('Managed authority-core metadata is missing');
+        expect(status.coreMessage).toContain('local core build is disabled');
         expect(fs.existsSync(path.join(getTargetDir(setup.sillyTavernRoot), 'index.js'))).toBe(true);
+    });
+
+    it('builds the current platform core locally when release metadata only lists another platform', async () => {
+        const setup = createInstallFixture();
+        rewriteReleaseAsOtherPlatformOnly(setup.pluginRoot);
+        writeSourceBuildMarkers(setup.pluginRoot);
+        vi.spyOn(childProcess, 'spawnSync').mockImplementation((command, args) => {
+            if (command === 'cargo') {
+                return { status: 0, stdout: 'cargo 1.0.0\n', stderr: '' } as childProcess.SpawnSyncReturns<string>;
+            }
+            if (command === process.execPath && Array.isArray(args) && args.includes('./scripts/build-core.mjs')) {
+                writeBundledCore(setup.pluginRoot, AUTHORITY_VERSION, false);
+                return { status: 0, stdout: 'built\n', stderr: '' } as childProcess.SpawnSyncReturns<string>;
+            }
+            throw new Error(`Unexpected spawnSync call: ${String(command)} ${String(args)}`);
+        });
+        const service = createService(setup);
+
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.coreVerified).toBe(true);
+        expect(status.coreArtifactPlatform).toBe(`${process.platform}-${process.arch}`);
+        expect(status.coreArtifactPlatforms).toContain(`${process.platform}-${process.arch}`);
+        expect(status.coreMessage).toContain('was built locally from source');
+        expect(status.coreMessage).toContain('release metadata targets');
+    });
+
+    it('reports a precise warning when current platform core is missing and local source is unavailable', async () => {
+        const setup = createInstallFixture();
+        rewriteReleaseAsOtherPlatformOnly(setup.pluginRoot);
+        const service = createService(setup);
+
+        const status = await service.bootstrap();
+
+        expect(status.installStatus).toBe('installed');
+        expect(status.coreVerified).toBe(false);
+        expect(status.coreMessage).toContain(`this runtime needs ${process.platform}-${process.arch}`);
+        expect(status.coreMessage).toContain('local source build is unavailable');
     });
 
     it('verifies the current platform from multi-platform core metadata', async () => {
@@ -242,11 +282,11 @@ function createInstallFixture(options: { sdkVersion?: string; sdkScript?: string
     };
 }
 
-function createService(setup: InstallFixture): InstallService {
+function createService(setup: InstallFixture, env: NodeJS.ProcessEnv = {}): InstallService {
     return new InstallService({
         runtimeDir: path.join(setup.pluginRoot, 'runtime'),
         cwd: setup.sillyTavernRoot,
-        env: {},
+        env,
         logger: {
             info() {},
             warn() {},
@@ -298,13 +338,15 @@ function writeBundledSdk(pluginRoot: string, sdkVersion: string, sdkScript: stri
     fs.writeFileSync(path.join(pluginRoot, AUTHORITY_RELEASE_FILE), JSON.stringify(release, null, 2), 'utf8');
 }
 
-function writeBundledCore(pluginRoot: string, version: string): { artifactHash: string; artifactPlatform: string; binaryName: string; binarySha256: string; platformArtifactHash: string } {
+function writeBundledCore(pluginRoot: string, version: string, clearRoot = true): { artifactHash: string; artifactPlatform: string; binaryName: string; binarySha256: string; platformArtifactHash: string } {
     const artifactPlatform = `${process.platform}-${process.arch}`;
     const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
     const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
     const platformDir = path.join(coreRoot, artifactPlatform);
     const binaryPath = path.join(platformDir, binaryName);
-    fs.rmSync(coreRoot, { recursive: true, force: true });
+    if (clearRoot) {
+        fs.rmSync(coreRoot, { recursive: true, force: true });
+    }
     fs.mkdirSync(platformDir, { recursive: true });
     fs.writeFileSync(binaryPath, `authority-core ${version}\n`, 'utf8');
     const binarySha256 = hashFile(binaryPath);
@@ -324,6 +366,84 @@ function writeBundledCore(pluginRoot: string, version: string): { artifactHash: 
         binarySha256,
         platformArtifactHash: hashDirectory(platformDir),
     };
+}
+
+function rewriteReleaseAsOtherPlatformOnly(pluginRoot: string): void {
+    const releasePath = path.join(pluginRoot, AUTHORITY_RELEASE_FILE);
+    const release = readJson<AuthorityReleaseMetadata>(releasePath);
+    const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
+    const { platform, arch } = getOtherPlatform();
+    const platformId = `${platform}-${arch}`;
+    const platformDir = path.join(coreRoot, platformId);
+    const binaryName = platform === 'win32' ? 'authority-core.exe' : 'authority-core';
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.mkdirSync(platformDir, { recursive: true });
+    const binaryPath = path.join(platformDir, binaryName);
+    fs.writeFileSync(binaryPath, `authority-core ${release.coreVersion} ${platformId}\n`, 'utf8');
+    const binarySha256 = hashFile(binaryPath);
+    fs.writeFileSync(path.join(platformDir, 'authority-core.json'), JSON.stringify({
+        managedBy: AUTHORITY_PLUGIN_ID,
+        version: release.coreVersion,
+        platform,
+        arch,
+        binaryName,
+        binarySha256,
+        builtAt: new Date().toISOString(),
+    }, null, 2), 'utf8');
+
+    release.coreArtifactPlatform = platformId;
+    release.coreArtifactPlatforms = [platformId];
+    release.coreArtifacts = {
+        [platformId]: {
+            platform,
+            arch,
+            binaryName,
+            binarySha256,
+            artifactHash: hashDirectory(platformDir),
+        },
+    };
+    release.coreArtifactHash = hashDirectory(coreRoot);
+    release.coreBinarySha256 = binarySha256;
+    fs.writeFileSync(releasePath, JSON.stringify(release, null, 2), 'utf8');
+}
+
+function writeSourceBuildMarkers(pluginRoot: string): void {
+    fs.mkdirSync(path.join(pluginRoot, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(pluginRoot, 'crates', 'authority-core'), { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, 'scripts', 'build-core.mjs'), `
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const root = process.cwd();
+const platform = process.env.AUTHORITY_CORE_TARGET_PLATFORM || process.platform;
+const arch = process.env.AUTHORITY_CORE_TARGET_ARCH || process.arch;
+const binaryName = process.env.AUTHORITY_CORE_BINARY_NAME || (platform === 'win32' ? 'authority-core.exe' : 'authority-core');
+const platformDir = path.join(root, 'managed', 'core', platform + '-' + arch);
+const binaryPath = path.join(platformDir, binaryName);
+fs.mkdirSync(platformDir, { recursive: true });
+fs.writeFileSync(binaryPath, 'authority-core ${AUTHORITY_VERSION} ' + platform + '-' + arch + '\\n', 'utf8');
+const binarySha256 = crypto.createHash('sha256').update(fs.readFileSync(binaryPath)).digest('hex');
+fs.writeFileSync(path.join(platformDir, 'authority-core.json'), JSON.stringify({
+  managedBy: 'authority',
+  version: '${AUTHORITY_VERSION}',
+  platform,
+  arch,
+  binaryName,
+  binarySha256,
+  builtAt: new Date().toISOString()
+}, null, 2), 'utf8');
+console.log('built ' + binaryPath);
+`, 'utf8');
+    fs.writeFileSync(path.join(pluginRoot, 'crates', 'authority-core', 'Cargo.toml'), '[package]\nname = "authority-core"\n', 'utf8');
+}
+
+function getOtherPlatform(): { platform: NodeJS.Platform; arch: NodeJS.Architecture } {
+    const current = `${process.platform}-${process.arch}`;
+    if (current !== 'win32-x64') {
+        return { platform: 'win32', arch: 'x64' };
+    }
+    return { platform: 'linux', arch: 'x64' };
 }
 
 function addExtraCoreArtifact(pluginRoot: string, platform: string, arch: string): void {
