@@ -171,8 +171,8 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('installed');
         expect(status.coreVerified).toBe(true);
-        expect(status.coreArtifactPlatform).toBe(`${process.platform}-${process.arch}`);
-        expect(status.coreArtifactPlatforms).toContain(`${process.platform}-${process.arch}`);
+        expect(status.coreArtifactPlatform).toBe(getCurrentTestCorePlatform({ AUTHORITY_CORE_LIBC: 'glibc' }));
+        expect(status.coreArtifactPlatforms).toContain(getCurrentTestCorePlatform({ AUTHORITY_CORE_LIBC: 'glibc' }));
         expect(status.coreMessage).toContain('was built locally from source');
         expect(status.coreMessage).toContain('release metadata targets');
     });
@@ -186,7 +186,7 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('installed');
         expect(status.coreVerified).toBe(false);
-        expect(status.coreMessage).toContain(`this runtime needs ${process.platform}-${process.arch}`);
+        expect(status.coreMessage).toContain(`this runtime needs ${getCurrentTestCorePlatform()}`);
         expect(status.coreMessage).toContain('local source build is unavailable');
     });
 
@@ -199,8 +199,8 @@ describe('InstallService', () => {
 
         expect(status.installStatus).toBe('installed');
         expect(status.coreVerified).toBe(true);
-        expect(status.coreArtifactPlatform).toBe(`${process.platform}-${process.arch}`);
-        expect(status.coreArtifactPlatforms).toContain(`${process.platform}-${process.arch}`);
+        expect(status.coreArtifactPlatform).toBe(getCurrentTestCorePlatform());
+        expect(status.coreArtifactPlatforms).toContain(getCurrentTestCorePlatform());
         expect(status.coreArtifactPlatforms).toContain('android-arm64');
     });
 
@@ -222,7 +222,7 @@ describe('InstallService', () => {
 
     it('accepts managed core text files with CRLF line endings when release metadata was hashed with LF', async () => {
         const setup = createInstallFixture();
-        const platformDir = path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, `${process.platform}-${process.arch}`);
+        const platformDir = path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, getCurrentTestCorePlatform());
         const metadataPath = path.join(platformDir, 'authority-core.json');
         const metadataText = fs.readFileSync(metadataPath, 'utf8');
         fs.writeFileSync(metadataPath, metadataText.replace(/\n/g, '\r\n'), 'utf8');
@@ -236,7 +236,7 @@ describe('InstallService', () => {
 
     it('keeps SDK deployment enabled when core platform artifact hash drifts but binary verification still passes', async () => {
         const setup = createInstallFixture();
-        const platformDir = path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, `${process.platform}-${process.arch}`);
+        const platformDir = path.join(setup.pluginRoot, AUTHORITY_MANAGED_CORE_DIR, getCurrentTestCorePlatform());
         const metadataPath = path.join(platformDir, 'authority-core.json');
         const metadata = readJson<Record<string, unknown>>(metadataPath);
         fs.writeFileSync(metadataPath, JSON.stringify({
@@ -304,7 +304,10 @@ function createService(setup: InstallFixture, env: NodeJS.ProcessEnv = {}): Inst
     return new InstallService({
         runtimeDir: path.join(setup.pluginRoot, 'runtime'),
         cwd: setup.sillyTavernRoot,
-        env,
+        env: {
+            ...process.env,
+            ...env,
+        },
         logger: {
             info() {},
             warn() {},
@@ -357,7 +360,8 @@ function writeBundledSdk(pluginRoot: string, sdkVersion: string, sdkScript: stri
 }
 
 function writeBundledCore(pluginRoot: string, version: string, clearRoot = true): { artifactHash: string; artifactPlatform: string; binaryName: string; binarySha256: string; platformArtifactHash: string } {
-    const artifactPlatform = `${process.platform}-${process.arch}`;
+    const libc = getCurrentTestLibc();
+    const artifactPlatform = libc === 'musl' ? `${process.platform}-${process.arch}-musl` : `${process.platform}-${process.arch}`;
     const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
     const coreRoot = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR);
     const platformDir = path.join(coreRoot, artifactPlatform);
@@ -373,6 +377,7 @@ function writeBundledCore(pluginRoot: string, version: string, clearRoot = true)
         version,
         platform: process.platform,
         arch: process.arch,
+        ...(libc === 'musl' ? { libc } : {}),
         binaryName,
         binarySha256,
         builtAt: new Date().toISOString(),
@@ -407,6 +412,29 @@ function writeBuiltCoreFromEnv(pluginRoot: string, version: string, env: NodeJS.
         binarySha256,
         builtAt: new Date().toISOString(),
     }, null, 2), 'utf8');
+}
+
+function getCurrentTestCorePlatform(env: NodeJS.ProcessEnv = process.env): string {
+    const libc = getCurrentTestLibc(env);
+    return libc === 'musl' ? `${process.platform}-${process.arch}-musl` : `${process.platform}-${process.arch}`;
+}
+
+function getCurrentTestLibc(env: NodeJS.ProcessEnv = process.env): 'musl' | 'gnu' | null {
+    if (process.platform !== 'linux') {
+        return null;
+    }
+
+    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+
+    const report = process.report?.getReport?.() as { header?: { glibcVersionRuntime?: string; glibcVersionCompiler?: string } } | undefined;
+    const header = report?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
 }
 
 function rewriteReleaseAsOtherPlatformOnly(pluginRoot: string): void {
