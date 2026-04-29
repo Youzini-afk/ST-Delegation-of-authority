@@ -35,18 +35,6 @@ async function openSecurityCenterPopup(createView, options) {
 }
 async function doBootstrapSecurityCenter(createView) {
     try {
-        const menu = await waitForElement('#extensionsMenu');
-        if (!menu.querySelector('#authority-security-center-button')) {
-            const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'menu-button', {}, false, false);
-            const button = htmlToElement(html);
-            button.addEventListener('click', () => void openSecurityCenter(createView));
-            menu.appendChild(button);
-        }
-    }
-    catch (error) {
-        console.warn('扩展权限中心菜单入口挂载失败：', error);
-    }
-    try {
         await waitForElement('#top-settings-holder');
         mountSecurityCenterTopBarButton(createView);
     }
