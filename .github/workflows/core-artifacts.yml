@@ -2,22 +2,11 @@ name: Core Artifacts
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/core-artifacts.yml
-      - .github/workflows/version-bump.yml
-      - crates/authority-core/**
-      - packages/**
-      - scripts/**
-      - scripts/build-core.mjs
-      - scripts/installable.mjs
-      - package.json
-      - package-lock.json
-      - Cargo.lock
-      - README.md
-      - LICENSE
+  workflow_run:
+    workflows:
+      - Version Bump
+    types:
+      - completed
   pull_request:
     paths:
       - .github/workflows/core-artifacts.yml
@@ -42,6 +31,7 @@ permissions:
 
 jobs:
   build-core:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     name: Build ${{ matrix.platform_id }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -81,6 +71,13 @@ jobs:
             binary_name: authority-core
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_run'
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_run'
 
       - uses: actions/setup-node@v4
         with:
@@ -159,6 +156,13 @@ jobs:
     needs: build-core
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_run'
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_run'
 
       - uses: actions/setup-node@v4
         with:
@@ -223,7 +227,7 @@ jobs:
           node ./scripts/installable.mjs check
 
       - name: Commit synchronized multi-platform installable
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
         shell: bash
         run: |
           if git diff --quiet -- .authority-release.json runtime managed; then
@@ -232,17 +236,20 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .authority-release.json runtime managed
           git fetch origin main
           if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
-            echo "Main advanced while this workflow was running; skipping stale installable sync commit."
-            exit 0
+            git stash push --include-untracked --message core-artifacts-sync
+            git rebase origin/main
+            git stash pop
           fi
           git add .authority-release.json runtime managed
-          git commit -m "build: synchronize multi-platform installable artifacts [skip ci]"
-          if ! git push origin HEAD:main; then
-            echo "Main advanced during push; skipping stale installable sync commit. A newer workflow run will regenerate artifacts."
+          if git diff --cached --quiet; then
+            echo "Installable runtime already synchronized after rebase."
             exit 0
           fi
+          git commit -m "build: synchronize multi-platform installable artifacts [skip ci]"
+          git push origin HEAD:main
 
       - name: Upload multi-platform installable
         uses: actions/upload-artifact@v4
