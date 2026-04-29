@@ -1,12 +1,19 @@
 name: Core Artifacts
 
 on:
+  workflow_call:
+    inputs:
+      commitInstallable:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      - Version Bump
-    types:
-      - completed
+    inputs:
+      commitInstallable:
+        description: Commit synchronized installable artifacts to main
+        required: false
+        type: boolean
+        default: true
   pull_request:
     paths:
       - .github/workflows/core-artifacts.yml
@@ -31,7 +38,6 @@ permissions:
 
 jobs:
   build-core:
-    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     name: Build ${{ matrix.platform_id }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -71,13 +77,13 @@ jobs:
             binary_name: authority-core
     steps:
       - uses: actions/checkout@v4
-        if: github.event_name == 'workflow_run'
+        if: github.event_name != 'pull_request'
         with:
           ref: main
           fetch-depth: 0
 
       - uses: actions/checkout@v4
-        if: github.event_name != 'workflow_run'
+        if: github.event_name == 'pull_request'
 
       - uses: actions/setup-node@v4
         with:
@@ -156,13 +162,13 @@ jobs:
     needs: build-core
     steps:
       - uses: actions/checkout@v4
-        if: github.event_name == 'workflow_run'
+        if: github.event_name != 'pull_request'
         with:
           ref: main
           fetch-depth: 0
 
       - uses: actions/checkout@v4
-        if: github.event_name != 'workflow_run'
+        if: github.event_name == 'pull_request'
 
       - uses: actions/setup-node@v4
         with:
@@ -226,8 +232,36 @@ jobs:
           node ./scripts/installable.mjs sync
           node ./scripts/installable.mjs check
 
+      - name: Validate synchronized artifact versions
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const expectedVersion = require('./package.json').version;
+          const release = require('./.authority-release.json');
+          const failures = [];
+          if (release.pluginVersion !== expectedVersion) {
+            failures.push(`release pluginVersion ${release.pluginVersion} !== package version ${expectedVersion}`);
+          }
+          if (release.coreVersion !== expectedVersion) {
+            failures.push(`release coreVersion ${release.coreVersion} !== package version ${expectedVersion}`);
+          }
+          for (const platformId of release.coreArtifactPlatforms || []) {
+            const metadataPath = path.join('managed', 'core', platformId, 'authority-core.json');
+            const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+            if (metadata.version !== expectedVersion) {
+              failures.push(`${metadataPath} version ${metadata.version} !== package version ${expectedVersion}`);
+            }
+          }
+          if (failures.length > 0) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          console.log(`All managed core artifacts match version ${expectedVersion}.`);
+          NODE
+
       - name: Commit synchronized multi-platform installable
-        if: github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        if: inputs.commitInstallable
         shell: bash
         run: |
           if git diff --quiet -- .authority-release.json runtime managed; then
@@ -243,6 +277,30 @@ jobs:
             git rebase origin/main
             git stash pop
           fi
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const expectedVersion = require('./package.json').version;
+          const release = require('./.authority-release.json');
+          const failures = [];
+          if (release.pluginVersion !== expectedVersion) {
+            failures.push(`release pluginVersion ${release.pluginVersion} !== package version ${expectedVersion}`);
+          }
+          if (release.coreVersion !== expectedVersion) {
+            failures.push(`release coreVersion ${release.coreVersion} !== package version ${expectedVersion}`);
+          }
+          for (const platformId of release.coreArtifactPlatforms || []) {
+            const metadataPath = path.join('managed', 'core', platformId, 'authority-core.json');
+            const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+            if (metadata.version !== expectedVersion) {
+              failures.push(`${metadataPath} version ${metadata.version} !== package version ${expectedVersion}`);
+            }
+          }
+          if (failures.length > 0) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          NODE
           git add .authority-release.json runtime managed
           if git diff --cached --quiet; then
             echo "Installable runtime already synchronized after rebase."

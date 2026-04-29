@@ -7,7 +7,7 @@ on:
       - main
 
 concurrency:
-  group: authority-version-bump-main
+  group: authority-release-main
   cancel-in-progress: false
 
 jobs:
@@ -75,3 +75,12 @@ jobs:
           }
           git commit -m "chore: bump version to $version"
           git push origin HEAD:main
+
+  synchronize-core-artifacts:
+    needs: bump-version
+    if: needs.bump-version.result == 'success'
+    uses: ./.github/workflows/core-artifacts.yml
+    permissions:
+      contents: write
+    with:
+      commitInstallable: true
