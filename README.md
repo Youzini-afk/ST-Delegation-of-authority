@@ -4,7 +4,7 @@ Authority 是一个 SillyTavern 服务端插件，给第三方扩展提供统一
 
 同时它不是裸放后端，上面盖了一层权限治理：扩展要先用先声明，用户可以放行或拒绝，管理员可以统一收口。
 
-**版本** `1.0.8` · **插件 ID** `authority` · **SDK** `third-party/st-authority-sdk` · **平台** Windows x64 / Linux x64 / Linux arm64 / Android arm64
+**插件 ID** `authority` · **SDK** `third-party/st-authority-sdk` · **平台** Windows x64 / Linux x64 / Linux arm64 / Android arm64
 
 ---
 
@@ -299,4 +299,4 @@ npm run sync:installable && npm run check:installable
 - 更多内建 job 类型
 - 更完善的事件订阅模型
 - Security Center 深度运维视图
-- 公开发布后的升级迁移策略
+- **公开发布后的升级迁移策略**
