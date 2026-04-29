@@ -153,12 +153,12 @@ describe('InstallService', () => {
         const setup = createInstallFixture();
         rewriteReleaseAsOtherPlatformOnly(setup.pluginRoot);
         writeSourceBuildMarkers(setup.pluginRoot);
-        vi.spyOn(childProcess, 'spawnSync').mockImplementation((command, args) => {
+        vi.spyOn(childProcess, 'spawnSync').mockImplementation((command, args, options) => {
             if (command === 'cargo') {
                 return { status: 0, stdout: 'cargo 1.0.0\n', stderr: '' } as childProcess.SpawnSyncReturns<string>;
             }
             if (command === process.execPath && Array.isArray(args) && args.includes('./scripts/build-core.mjs')) {
-                writeBundledCore(setup.pluginRoot, AUTHORITY_VERSION, false);
+                writeBuiltCoreFromEnv(setup.pluginRoot, AUTHORITY_VERSION, options?.env);
                 return { status: 0, stdout: 'built\n', stderr: '' } as childProcess.SpawnSyncReturns<string>;
             }
             throw new Error(`Unexpected spawnSync call: ${String(command)} ${String(args)}`);
@@ -382,6 +382,29 @@ function writeBundledCore(pluginRoot: string, version: string, clearRoot = true)
         binarySha256,
         platformArtifactHash: hashDirectory(platformDir),
     };
+}
+
+function writeBuiltCoreFromEnv(pluginRoot: string, version: string, env: NodeJS.ProcessEnv | undefined): void {
+    const platform = env?.AUTHORITY_CORE_TARGET_PLATFORM ?? process.platform;
+    const arch = env?.AUTHORITY_CORE_TARGET_ARCH ?? process.arch;
+    const platformId = env?.AUTHORITY_CORE_PLATFORM_ID ?? `${platform}-${arch}`;
+    const libc = env?.AUTHORITY_CORE_TARGET_LIBC ?? (platformId.endsWith('-musl') ? 'musl' : null);
+    const binaryName = env?.AUTHORITY_CORE_BINARY_NAME ?? (platform === 'win32' ? 'authority-core.exe' : 'authority-core');
+    const platformDir = path.join(pluginRoot, AUTHORITY_MANAGED_CORE_DIR, platformId);
+    const binaryPath = path.join(platformDir, binaryName);
+    fs.mkdirSync(platformDir, { recursive: true });
+    fs.writeFileSync(binaryPath, `authority-core ${version} ${platformId}\n`, 'utf8');
+    const binarySha256 = hashFile(binaryPath);
+    fs.writeFileSync(path.join(platformDir, 'authority-core.json'), JSON.stringify({
+        managedBy: AUTHORITY_PLUGIN_ID,
+        version,
+        platform,
+        arch,
+        ...(libc ? { libc } : {}),
+        binaryName,
+        binarySha256,
+        builtAt: new Date().toISOString(),
+    }, null, 2), 'utf8');
 }
 
 function rewriteReleaseAsOtherPlatformOnly(pluginRoot: string): void {
