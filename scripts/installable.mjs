@@ -20,6 +20,13 @@ const TEXT_HASH_EXTENSIONS = new Set([
     '.yaml',
     '.yml',
 ]);
+const REQUIRED_CORE_ARTIFACT_PLATFORMS = [
+    'android-arm64',
+    'linux-arm64',
+    'linux-x64',
+    'linux-x64-musl',
+    'win32-x64',
+];
 
 if (mode !== 'sync' && mode !== 'check') {
     console.error('Usage: node scripts/installable.mjs <sync|check>');
@@ -142,6 +149,7 @@ function stageInstallable() {
     const buildTime = resolveBuildTime(pluginVersion, assetHash, coreArtifactHash);
     const coreArtifacts = readCoreArtifacts(managedCoreDir);
     const coreArtifactPlatforms = Object.keys(coreArtifacts).sort();
+    validateRequiredCoreArtifactPlatforms(coreArtifactPlatforms);
     const coreArtifactPlatform = choosePrimaryCoreArtifactPlatform(coreArtifactPlatforms);
 
     const release = {
@@ -168,6 +176,13 @@ function stageInstallable() {
         managedCoreDir,
         releasePath,
     };
+}
+
+function validateRequiredCoreArtifactPlatforms(coreArtifactPlatforms) {
+    const missing = REQUIRED_CORE_ARTIFACT_PLATFORMS.filter(platformId => !coreArtifactPlatforms.includes(platformId));
+    if (missing.length > 0) {
+        throw new Error(`Managed authority-core artifacts are incomplete. Missing: ${missing.join(', ')}.`);
+    }
 }
 
 function syncInstallable(staged) {
