@@ -144,6 +144,7 @@ jobs:
 
       - name: Build JS artifacts
         run: |
+          npm run version:sync
           npm run build --workspace @stdo/shared-types
           npm run build --workspace @stdo/server-plugin
           npm run build --workspace @stdo/sdk-extension
@@ -160,10 +161,33 @@ jobs:
         run: |
           rm -rf managed/core
           mkdir -p managed/core
+          expected_platforms=(win32-x64 linux-x64 linux-arm64 android-arm64)
+          for platform_id in "${expected_platforms[@]}"; do
+            artifact_dir="downloaded-core/managed-core-${platform_id}"
+            if [ ! -d "$artifact_dir" ]; then
+              echo "::error::Missing managed core artifact for ${platform_id}"
+              exit 1
+            fi
+          done
           for artifact_dir in downloaded-core/managed-core-*; do
             platform_id="${artifact_dir##*/managed-core-}"
             mkdir -p "managed/core/${platform_id}"
             cp -R "${artifact_dir}/." "managed/core/${platform_id}/"
+          done
+          for platform_id in "${expected_platforms[@]}"; do
+            metadata_path="managed/core/${platform_id}/authority-core.json"
+            if [ ! -f "$metadata_path" ]; then
+              echo "::error::Missing authority-core.json for ${platform_id}"
+              exit 1
+            fi
+            binary_name="authority-core"
+            if [ "$platform_id" = "win32-x64" ]; then
+              binary_name="authority-core.exe"
+            fi
+            if [ ! -f "managed/core/${platform_id}/${binary_name}" ]; then
+              echo "::error::Missing ${binary_name} for ${platform_id}"
+              exit 1
+            fi
           done
           find managed/core -maxdepth 2 -type f | sort
 
@@ -184,7 +208,22 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .authority-release.json runtime managed
           git commit -m "build: synchronize multi-platform installable artifacts [skip ci]"
-          git push
+          for attempt in 1 2; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Push failed on attempt ${attempt}; rebasing onto origin/main and regenerating installable runtime."
+            git fetch origin main
+            git rebase origin/main
+            node ./scripts/installable.mjs sync
+            node ./scripts/installable.mjs check
+            if git diff --quiet -- .authority-release.json runtime managed; then
+              continue
+            fi
+            git add .authority-release.json runtime managed
+            git commit --amend --no-edit
+          done
+          git push origin HEAD:main
 
       - name: Upload multi-platform installable
         uses: actions/upload-artifact@v4
