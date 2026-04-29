@@ -1,11 +1,11 @@
 {
   "pluginId": "authority",
-  "pluginVersion": "1.1.0",
+  "pluginVersion": "1.1.1",
   "sdkExtensionId": "third-party/st-authority-sdk",
-  "sdkVersion": "1.1.0",
-  "assetHash": "1ef4db9eb49717819122ac41b9c9790e6c4b9329722b6c7b804f676d16ee1f95",
-  "coreVersion": "1.1.0",
-  "coreArtifactHash": "db23de49044edad9c76afc91c8665b0199bce61f8c4ef386017448017c696441",
+  "sdkVersion": "1.1.1",
+  "assetHash": "6d0527e7669d433eb8c629e8887d945a2152721ee7d64df95cbe143f06d7333d",
+  "coreVersion": "1.1.1",
+  "coreArtifactHash": "2e8181f7aad424365686d85cd80bc0c1064d988a72e1728b298bf1bc6d63ed7f",
   "coreArtifactPlatform": "win32-x64",
   "coreArtifactPlatforms": [
     "android-arm64",
@@ -39,10 +39,10 @@
       "platform": "win32",
       "arch": "x64",
       "binaryName": "authority-core.exe",
-      "binarySha256": "c77ff674105dc3bcabe79cc4feae34c4aae5ef5218263d3e9da3e7a6a07157d5",
-      "artifactHash": "db2bb101f6e40b5e4927ab2bc3033755afea18022c6c0456eb91beac29ab029b"
+      "binarySha256": "cbc8e766f84aeff242a49992b8ef01bb16b5815efded2eedc762fe483148952b",
+      "artifactHash": "139ee3bbb3d6b2b0373baeec01750c13769fdb33725fbbd6481eb0a4947bd7dc"
     }
   },
-  "coreBinarySha256": "c77ff674105dc3bcabe79cc4feae34c4aae5ef5218263d3e9da3e7a6a07157d5",
-  "buildTime": "2026-04-29T14:00:18.541Z"
+  "coreBinarySha256": "cbc8e766f84aeff242a49992b8ef01bb16b5815efded2eedc762fe483148952b",
+  "buildTime": "2026-04-29T14:05:19.088Z"
 }
