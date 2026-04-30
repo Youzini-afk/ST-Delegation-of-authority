@@ -1542,7 +1542,7 @@
 .authority-diagnostics-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(140px, 1.05fr) repeat(4, minmax(92px, 1fr));
+  grid-template-columns: minmax(100px, 1.05fr) repeat(4, minmax(74px, 1fr));
   margin-top: 12px;
   min-width: 0;
 }
@@ -1577,6 +1577,16 @@
 .authority-diagnostic-primary {
   border-left: 2px solid var(--authority-runtime);
   grid-row: span 2;
+  overflow: hidden;
+}
+
+.authority-diagnostic-primary .authority-pill {
+  box-sizing: border-box;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .authority-diagnostic-primary strong {
@@ -2025,7 +2035,7 @@
 }
 
 .authority-panel--drawer .authority-diagnostics-grid {
-  grid-template-columns: minmax(130px, 0.95fr) repeat(4, minmax(86px, 1fr));
+  grid-template-columns: minmax(100px, 0.95fr) repeat(4, minmax(74px, 1fr));
 }
 
 @media (max-width: 1100px) {
