@@ -888,7 +888,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             if (!user.isAdmin) {
                 throw new AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
             }
-            ok(res, runtime.stManagerBridge.getPublicConfig(user));
+            ok(res, runtime.stManagerBridge.getAdminConfig(user));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
         }
@@ -951,7 +951,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     router.get('/st-manager/control/config', async (req, res) => {
         try {
             getAdminUser(req);
-            ok(res, runtime.stManagerControl.getPublicConfig());
+            ok(res, runtime.stManagerControl.getAdminConfig());
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
         }

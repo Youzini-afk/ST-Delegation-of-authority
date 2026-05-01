@@ -387,11 +387,12 @@ describe('registerRoutes', () => {
         };
         const runtime = {
             stManagerBridge: {
-                getPublicConfig: vi.fn(() => ({
+                getAdminConfig: vi.fn(() => ({
                     enabled: true,
                     bound_user_handle: 'alice',
                     key_fingerprint: 'abcdef123456',
                     key_masked: 'stmb_abcd...3456',
+                    bridge_key: 'stmb_plain_key',
                     max_file_size: 104857600,
                     resource_types: ['characters'],
                 })),
@@ -422,7 +423,7 @@ describe('registerRoutes', () => {
             headers: {},
         }, response);
 
-        expect(runtime.stManagerBridge.getPublicConfig).toHaveBeenCalledWith(expect.objectContaining({
+        expect(runtime.stManagerBridge.getAdminConfig).toHaveBeenCalledWith(expect.objectContaining({
             handle: 'alice',
             isAdmin: true,
         }));
@@ -430,6 +431,7 @@ describe('registerRoutes', () => {
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
             enabled: true,
             key_masked: 'stmb_abcd...3456',
+            bridge_key: 'stmb_plain_key',
         }));
     });
 
@@ -492,7 +494,7 @@ describe('registerRoutes', () => {
         };
         const runtime = {
             stManagerControl: {
-                getPublicConfig: vi.fn(() => ({ enabled: true, manager_url: 'https://manager.example' })),
+                getAdminConfig: vi.fn(() => ({ enabled: true, manager_url: 'https://manager.example', control_key: 'stmc_plain_key' })),
                 startBackup: vi.fn(async () => ({ success: true, backup: { backup_id: 'backup-001' } })),
             },
             audit: {
@@ -520,9 +522,9 @@ describe('registerRoutes', () => {
         await gets.get('/st-manager/control/config')?.(adminRequest, response);
         await posts.get('/st-manager/control/backup/start')?.(adminRequest, response);
 
-        expect(runtime.stManagerControl.getPublicConfig).toHaveBeenCalled();
+        expect(runtime.stManagerControl.getAdminConfig).toHaveBeenCalled();
         expect(runtime.stManagerControl.startBackup).toHaveBeenCalledWith({ resource_types: ['characters'] });
-        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ manager_url: 'https://manager.example' }));
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ manager_url: 'https://manager.example', control_key: 'stmc_plain_key' }));
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 });

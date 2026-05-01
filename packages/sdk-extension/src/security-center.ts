@@ -244,6 +244,12 @@ class SecurityCenterView {
                 return;
             }
 
+            const toggleSecretButton = target.closest<HTMLButtonElement>('[data-action="toggle-secret-visibility"]');
+            if (toggleSecretButton) {
+                this.toggleSecretVisibility(toggleSecretButton);
+                return;
+            }
+
             const saveStManagerControlButton = target.closest<HTMLElement>('[data-action="save-st-manager-control"]');
             if (saveStManagerControlButton) {
                 void this.updateStManagerControlConfig();
@@ -384,8 +390,7 @@ class SecurityCenterView {
                 this.state.policies = policies;
                 this.state.usageSummary = usageSummary;
                 this.state.packageOperations = packageOperations.operations;
-                this.state.stManagerBridgeConfig = normalizeStManagerBridgeConfig(stManagerBridgeConfig);
-                this.state.stManagerBridgeGeneratedKey = null;
+                this.applyStManagerBridgeConfig(stManagerBridgeConfig);
                 this.state.stManagerControlConfig = normalizeStManagerControlConfig(stManagerControlConfig);
             } else {
                 this.state.policies = null;
@@ -503,14 +508,14 @@ class SecurityCenterView {
         if (!this.state.isAdmin || this.state.stManagerControlActionInProgress) {
             return;
         }
+        const payload = buildStManagerControlPayload({
+            enabled: true,
+            managerUrl: this.root.querySelector<HTMLInputElement>('[data-role="st-manager-control-url"]')?.value ?? '',
+            controlKey: this.root.querySelector<HTMLInputElement>('[data-role="st-manager-control-key"]')?.value ?? '',
+        });
         this.state.stManagerControlActionInProgress = true;
         void this.renderUpdatesSection();
         try {
-            const payload = buildStManagerControlPayload({
-                enabled: true,
-                managerUrl: this.root.querySelector<HTMLInputElement>('[data-role="st-manager-control-url"]')?.value ?? '',
-                controlKey: this.root.querySelector<HTMLInputElement>('[data-role="st-manager-control-key"]')?.value ?? '',
-            });
             const response = await authorityRequest<StManagerControlConfig>('/st-manager/control/config', {
                 method: 'POST',
                 body: payload,
@@ -637,6 +642,22 @@ class SecurityCenterView {
 
     private getSelectedStManagerBackupId(): string {
         return this.root.querySelector<HTMLInputElement>('[data-role="st-manager-control-backup"]:checked')?.value ?? '';
+    }
+
+    private toggleSecretVisibility(button: HTMLButtonElement): void {
+        const targetRole = button.dataset.targetRole;
+        if (!targetRole) {
+            return;
+        }
+        const input = Array.from(this.root.querySelectorAll<HTMLInputElement>('input[data-role]'))
+            .find(item => item.dataset.role === targetRole);
+        if (!input) {
+            return;
+        }
+        const shouldReveal = input.type === 'password';
+        input.type = shouldReveal ? 'text' : 'password';
+        button.textContent = shouldReveal ? '🙈' : '👁';
+        button.setAttribute('aria-pressed', shouldReveal ? 'true' : 'false');
     }
 
     private async runAdminUpdate(action: AdminUpdateAction): Promise<void> {

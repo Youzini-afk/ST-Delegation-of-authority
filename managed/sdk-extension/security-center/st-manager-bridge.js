@@ -64,10 +64,11 @@ export function renderStManagerBridgeSection(config, generatedKey, busy) {
                 <div class="authority-inline-note authority-inline-note--warning" data-role="st-manager-bridge-key-note">
                     <strong>新 Bridge Key</strong>
                     <div class="authority-page-actions authority-page-actions--inline">
-                        <input class="authority-bridge-key-field" data-role="st-manager-bridge-key" type="text" readonly value="${escapeHtml(generatedKey)}" />
+                        <input class="authority-bridge-key-field" data-role="st-manager-bridge-key" type="password" readonly value="${escapeHtml(generatedKey)}" />
+                        <button type="button" class="authority-action-button" data-action="toggle-secret-visibility" data-target-role="st-manager-bridge-key" title="显示或隐藏 Bridge Key" aria-pressed="false" ${disabledAttr}>👁</button>
                         <button type="button" class="authority-action-button authority-action-button--primary" data-action="copy-st-manager-bridge-key" ${disabledAttr}>复制 Key</button>
                     </div>
-                    <div class="authority-muted">明文只在这一次显示。</div>
+                    <div class="authority-muted">Key 默认隐藏，可用小眼睛临时查看。</div>
                 </div>
             ` : ''}
             <div class="authority-settings-list">

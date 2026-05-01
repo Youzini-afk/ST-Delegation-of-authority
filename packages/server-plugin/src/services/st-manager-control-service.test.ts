@@ -15,7 +15,7 @@ describe('StManagerControlService', () => {
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
-    it('saves control config without returning plaintext key', () => {
+    it('saves control config and returns the key to the admin config view', () => {
         const service = new StManagerControlService({
             statePath: path.join(tempDir, 'control.json'),
         });
@@ -29,8 +29,10 @@ describe('StManagerControlService', () => {
             enabled: true,
             manager_url: 'https://manager.example',
             control_key_masked: 'stmc..._key',
+            control_key: 'stmc_secret_key',
         });
-        expect(JSON.stringify(saved)).not.toContain('stmc_secret_key');
+        expect(service.getPublicConfig()).not.toHaveProperty('control_key');
+        expect(service.getAdminConfig()).toHaveProperty('control_key', 'stmc_secret_key');
         expect(service.getPublicConfig().control_key_fingerprint).toMatch(/^[a-f0-9]{12}$/);
     });
 

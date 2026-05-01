@@ -152,6 +152,11 @@ class SecurityCenterView {
                 void this.copyStManagerBridgeKey();
                 return;
             }
+            const toggleSecretButton = target.closest('[data-action="toggle-secret-visibility"]');
+            if (toggleSecretButton) {
+                this.toggleSecretVisibility(toggleSecretButton);
+                return;
+            }
             const saveStManagerControlButton = target.closest('[data-action="save-st-manager-control"]');
             if (saveStManagerControlButton) {
                 void this.updateStManagerControlConfig();
@@ -273,8 +278,7 @@ class SecurityCenterView {
                 this.state.policies = policies;
                 this.state.usageSummary = usageSummary;
                 this.state.packageOperations = packageOperations.operations;
-                this.state.stManagerBridgeConfig = normalizeStManagerBridgeConfig(stManagerBridgeConfig);
-                this.state.stManagerBridgeGeneratedKey = null;
+                this.applyStManagerBridgeConfig(stManagerBridgeConfig);
                 this.state.stManagerControlConfig = normalizeStManagerControlConfig(stManagerControlConfig);
             }
             else {
@@ -387,14 +391,14 @@ class SecurityCenterView {
         if (!this.state.isAdmin || this.state.stManagerControlActionInProgress) {
             return;
         }
+        const payload = buildStManagerControlPayload({
+            enabled: true,
+            managerUrl: this.root.querySelector('[data-role="st-manager-control-url"]')?.value ?? '',
+            controlKey: this.root.querySelector('[data-role="st-manager-control-key"]')?.value ?? '',
+        });
         this.state.stManagerControlActionInProgress = true;
         void this.renderUpdatesSection();
         try {
-            const payload = buildStManagerControlPayload({
-                enabled: true,
-                managerUrl: this.root.querySelector('[data-role="st-manager-control-url"]')?.value ?? '',
-                controlKey: this.root.querySelector('[data-role="st-manager-control-key"]')?.value ?? '',
-            });
             const response = await authorityRequest('/st-manager/control/config', {
                 method: 'POST',
                 body: payload,
@@ -517,6 +521,21 @@ class SecurityCenterView {
     }
     getSelectedStManagerBackupId() {
         return this.root.querySelector('[data-role="st-manager-control-backup"]:checked')?.value ?? '';
+    }
+    toggleSecretVisibility(button) {
+        const targetRole = button.dataset.targetRole;
+        if (!targetRole) {
+            return;
+        }
+        const input = Array.from(this.root.querySelectorAll('input[data-role]'))
+            .find(item => item.dataset.role === targetRole);
+        if (!input) {
+            return;
+        }
+        const shouldReveal = input.type === 'password';
+        input.type = shouldReveal ? 'text' : 'password';
+        button.textContent = shouldReveal ? '🙈' : '👁';
+        button.setAttribute('aria-pressed', shouldReveal ? 'true' : 'false');
     }
     async runAdminUpdate(action) {
         if (!this.state.isAdmin || this.state.updateInProgress) {

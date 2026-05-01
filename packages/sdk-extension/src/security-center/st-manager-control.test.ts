@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
     buildStManagerControlPayload,
     normalizeStManagerControlConfig,
@@ -47,5 +49,31 @@ describe('st-manager control view helpers', () => {
         expect(html).toContain('data-action="restore-st-manager-backup"');
         expect(html).toContain('允许覆盖');
         expect(html).toContain('backup-001');
+    });
+
+    it('renders the control key as a hideable password field', () => {
+        const html = renderStManagerControlSection({
+            enabled: true,
+            manager_url: 'https://manager.example',
+            control_key_masked: 'stmc...abcd',
+            control_key_fingerprint: 'abcdef123456',
+        }, [], false);
+
+        expect(html).toContain('data-role="st-manager-control-key" type="password"');
+        expect(html).toContain('data-action="toggle-secret-visibility"');
+        expect(html).toContain('data-target-role="st-manager-control-key"');
+    });
+
+    it('captures control form values before rendering the busy state', () => {
+        const source = fs.readFileSync(path.resolve(__dirname, '../security-center.ts'), 'utf8');
+        const methodStart = source.indexOf('private async updateStManagerControlConfig()');
+        const methodEnd = source.indexOf('private async probeStManagerControl()', methodStart);
+        const method = source.slice(methodStart, methodEnd);
+
+        expect(method.indexOf('const payload = buildStManagerControlPayload')).toBeGreaterThanOrEqual(0);
+        expect(method.indexOf('this.state.stManagerControlActionInProgress = true')).toBeGreaterThanOrEqual(0);
+        expect(method.indexOf('const payload = buildStManagerControlPayload')).toBeLessThan(
+            method.indexOf('this.state.stManagerControlActionInProgress = true'),
+        );
     });
 });

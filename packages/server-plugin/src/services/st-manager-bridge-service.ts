@@ -9,6 +9,7 @@ import { ST_MANAGER_RESOURCE_TYPES, StManagerResourceLocator, type StManagerReso
 interface StManagerBridgeState {
     enabled?: boolean;
     key_hash?: string;
+    key_plaintext?: string;
     key_fingerprint?: string;
     max_file_size?: number;
     resource_types?: StManagerResourceType[];
@@ -119,6 +120,14 @@ export class StManagerBridgeService {
         };
     }
 
+    getAdminConfig(user: UserContext) {
+        const state = this.readState();
+        return {
+            ...this.getPublicConfig(user),
+            bridge_key: state.key_plaintext ?? '',
+        };
+    }
+
     updateAdminConfig(user: UserContext, payload: Record<string, unknown>) {
         if (!user.isAdmin) {
             throw new AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
@@ -144,6 +153,7 @@ export class StManagerBridgeService {
         if (payload.rotate_key === true || (next.enabled && !next.key_hash)) {
             bridgeKey = generateBridgeKey();
             next.key_hash = hashKey(bridgeKey);
+            next.key_plaintext = bridgeKey;
             next.key_fingerprint = next.key_hash.slice(0, 12);
         }
         if (payload.enabled === true || payload.rotate_key === true || (next.enabled && !current.key_hash)) {
@@ -152,8 +162,8 @@ export class StManagerBridgeService {
 
         this.writeState(next);
         return {
-            ...this.getPublicConfig(user),
-            ...(bridgeKey ? { bridge_key: bridgeKey, key_masked: maskedKey(bridgeKey) } : {}),
+            ...this.getAdminConfig(user),
+            ...(bridgeKey ? { key_masked: maskedKey(bridgeKey) } : {}),
         };
     }
 

@@ -59,6 +59,13 @@ function publicState(state: StManagerControlState) {
     };
 }
 
+function adminState(state: StManagerControlState) {
+    return {
+        ...publicState(state),
+        control_key: state.control_key ?? '',
+    };
+}
+
 export class StManagerControlService {
     private readonly statePath: string;
     private readonly fetcher: typeof fetch;
@@ -70,6 +77,10 @@ export class StManagerControlService {
 
     getPublicConfig() {
         return publicState(this.readState());
+    }
+
+    getAdminConfig() {
+        return adminState(this.readState());
     }
 
     updateConfig(payload: StManagerControlPayload) {
@@ -88,7 +99,7 @@ export class StManagerControlService {
         }
         next.enabled = Boolean(next.enabled || (next.manager_url && next.control_key));
         this.writeState(next);
-        return publicState(next);
+        return adminState(next);
     }
 
     probe() {

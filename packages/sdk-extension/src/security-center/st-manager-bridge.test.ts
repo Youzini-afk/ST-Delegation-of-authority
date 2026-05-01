@@ -29,7 +29,7 @@ describe('st-manager bridge view helpers', () => {
         }
     });
 
-    it('renders a newly generated bridge key as a one-time copy field', () => {
+    it('renders a newly generated bridge key as a hideable copy field', () => {
         const html = renderStManagerBridgeSection({
             ...config,
             enabled: true,
@@ -39,9 +39,13 @@ describe('st-manager bridge view helpers', () => {
         }, 'stmb_plain_key', false);
 
         expect(html).toContain('value="stmb_plain_key"');
+        expect(html).toContain('data-role="st-manager-bridge-key" type="password"');
+        expect(html).toContain('data-action="toggle-secret-visibility"');
+        expect(html).toContain('data-target-role="st-manager-bridge-key"');
         expect(html).toContain('data-action="copy-st-manager-bridge-key"');
         expect(html).toContain('alice');
         expect(html).toContain('stmb_abc...1234');
+        expect(html).not.toContain('明文只在这一次显示');
     });
 
     it('builds a safe admin config payload from form values', () => {

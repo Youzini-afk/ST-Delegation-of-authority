@@ -929,7 +929,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!user.isAdmin) {
                 throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
             }
-            ok(res, runtime.stManagerBridge.getPublicConfig(user));
+            ok(res, runtime.stManagerBridge.getAdminConfig(user));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
@@ -992,7 +992,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     router.get('/st-manager/control/config', async (req, res) => {
         try {
             getAdminUser(req);
-            ok(res, runtime.stManagerControl.getPublicConfig());
+            ok(res, runtime.stManagerControl.getAdminConfig());
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
@@ -7207,6 +7207,13 @@ class StManagerBridgeService {
             resource_types: stableResourceTypes(state.resource_types),
         };
     }
+    getAdminConfig(user) {
+        const state = this.readState();
+        return {
+            ...this.getPublicConfig(user),
+            bridge_key: state.key_plaintext ?? '',
+        };
+    }
     updateAdminConfig(user, payload) {
         if (!user.isAdmin) {
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
@@ -7230,6 +7237,7 @@ class StManagerBridgeService {
         if (payload.rotate_key === true || (next.enabled && !next.key_hash)) {
             bridgeKey = generateBridgeKey();
             next.key_hash = hashKey(bridgeKey);
+            next.key_plaintext = bridgeKey;
             next.key_fingerprint = next.key_hash.slice(0, 12);
         }
         if (payload.enabled === true || payload.rotate_key === true || (next.enabled && !current.key_hash)) {
@@ -7237,8 +7245,8 @@ class StManagerBridgeService {
         }
         this.writeState(next);
         return {
-            ...this.getPublicConfig(user),
-            ...(bridgeKey ? { bridge_key: bridgeKey, key_masked: maskedKey(bridgeKey) } : {}),
+            ...this.getAdminConfig(user),
+            ...(bridgeKey ? { key_masked: maskedKey(bridgeKey) } : {}),
         };
     }
     resolveAuthorizedUser(user, headers) {
@@ -7459,6 +7467,12 @@ function publicState(state) {
         control_key_fingerprint: state.control_key_fingerprint ?? '',
     };
 }
+function adminState(state) {
+    return {
+        ...publicState(state),
+        control_key: state.control_key ?? '',
+    };
+}
 class StManagerControlService {
     statePath;
     fetcher;
@@ -7468,6 +7482,9 @@ class StManagerControlService {
     }
     getPublicConfig() {
         return publicState(this.readState());
+    }
+    getAdminConfig() {
+        return adminState(this.readState());
     }
     updateConfig(payload) {
         const current = this.readState();
@@ -7485,7 +7502,7 @@ class StManagerControlService {
         }
         next.enabled = Boolean(next.enabled || (next.manager_url && next.control_key));
         this.writeState(next);
-        return publicState(next);
+        return adminState(next);
     }
     probe() {
         return this.request('POST', '/api/remote_backups/probe');

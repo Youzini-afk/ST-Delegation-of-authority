@@ -5,6 +5,7 @@ export interface StManagerControlConfig {
     manager_url: string;
     control_key_masked: string;
     control_key_fingerprint: string;
+    control_key?: string;
 }
 
 export interface StManagerControlFormValues {
@@ -29,6 +30,7 @@ export function normalizeStManagerControlConfig(value: unknown): StManagerContro
         manager_url: typeof record.manager_url === 'string' ? record.manager_url : '',
         control_key_masked: typeof record.control_key_masked === 'string' ? record.control_key_masked : '',
         control_key_fingerprint: typeof record.control_key_fingerprint === 'string' ? record.control_key_fingerprint : '',
+        ...(typeof record.control_key === 'string' ? { control_key: record.control_key } : {}),
     };
 }
 
@@ -48,6 +50,7 @@ export function renderStManagerControlSection(
     const enabled = Boolean(config?.enabled);
     const disabledAttr = busy ? 'disabled' : '';
     const managerUrl = config?.manager_url ?? '';
+    const controlKey = config?.control_key ?? '';
     const keyLabel = config?.control_key_masked || '未保存';
     return `
         <section class="authority-card authority-card--flat" data-role="st-manager-control-panel">
@@ -69,7 +72,10 @@ export function renderStManagerControlSection(
                     </div>
                     <div class="authority-settings-row__control authority-settings-row__control--stacked">
                         <input class="authority-bridge-key-field" data-role="st-manager-control-url" type="url" value="${escapeHtml(managerUrl)}" placeholder="https://manager.example" ${disabledAttr} />
-                        <input class="authority-bridge-key-field" data-role="st-manager-control-key" type="password" value="" placeholder="stmc_..." ${disabledAttr} />
+                        <div class="authority-page-actions authority-page-actions--inline">
+                            <input class="authority-bridge-key-field" data-role="st-manager-control-key" type="password" value="${escapeHtml(controlKey)}" placeholder="stmc_..." ${disabledAttr} />
+                            <button type="button" class="authority-action-button" data-action="toggle-secret-visibility" data-target-role="st-manager-control-key" title="显示或隐藏 Control Key" aria-pressed="false" ${disabledAttr}>👁</button>
+                        </div>
                     </div>
                 </div>
                 <div class="authority-settings-row">

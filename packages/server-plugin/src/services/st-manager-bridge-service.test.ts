@@ -48,6 +48,15 @@ describe('StManagerBridgeService', () => {
         expect(() => service.probe(user(), {})).toThrow(/Bridge disabled/);
     });
 
+    it('keeps the rotated bridge key available only in the admin config view', () => {
+        const updated = service.updateAdminConfig(user(), { enabled: true, rotate_key: true });
+
+        expect(updated.bridge_key).toMatch(/^stmb_/);
+        expect(service.getAdminConfig(user()).bridge_key).toBe(updated.bridge_key);
+        expect(service.getPublicConfig(user())).not.toHaveProperty('bridge_key');
+        expect(service.probe(user(), { authorization: `Bearer ${updated.bridge_key}` }).bridge).not.toHaveProperty('bridge_key');
+    });
+
     it('rotates a key for admins and requires it for protected operations', () => {
         const updated = service.updateAdminConfig(user(), { enabled: true, rotate_key: true });
         expect(updated.bridge_key).toMatch(/^stmb_/);
