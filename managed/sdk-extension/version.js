@@ -1,2 +1,2 @@
-export const AUTHORITY_VERSION = '1.2.7';
+export const AUTHORITY_VERSION = '1.2.8';
 //# sourceMappingURL=version.js.map
