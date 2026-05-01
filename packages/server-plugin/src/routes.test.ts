@@ -478,4 +478,51 @@ describe('registerRoutes', () => {
         expect(runtime.stManagerBridge.probe).toHaveBeenCalledWith(boundUser, { authorization: 'Bearer stmb_key' });
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
+
+    it('exposes ST-Manager control routes for admins', async () => {
+        const gets = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                gets.set(path, handler);
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+        const runtime = {
+            stManagerControl: {
+                getPublicConfig: vi.fn(() => ({ enabled: true, manager_url: 'https://manager.example' })),
+                startBackup: vi.fn(async () => ({ success: true, backup: { backup_id: 'backup-001' } })),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+        const adminRequest = {
+            user: {
+                profile: { handle: 'alice', admin: true },
+                directories: { root: 'C:/users/alice' },
+            },
+            headers: {},
+            body: { resource_types: ['characters'] },
+        };
+
+        registerRoutes(router, runtime);
+        await gets.get('/st-manager/control/config')?.(adminRequest, response);
+        await posts.get('/st-manager/control/backup/start')?.(adminRequest, response);
+
+        expect(runtime.stManagerControl.getPublicConfig).toHaveBeenCalled();
+        expect(runtime.stManagerControl.startBackup).toHaveBeenCalledWith({ resource_types: ['characters'] });
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ manager_url: 'https://manager.example' }));
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
 });

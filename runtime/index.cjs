@@ -902,6 +902,13 @@ function getOptionalUserContext(req) {
 function getStManagerBridgeUser(runtime, req) {
     return runtime.stManagerBridge.resolveAuthorizedUser(getOptionalUserContext(req), req.headers);
 }
+function getAdminUser(req) {
+    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+    if (!user.isAdmin) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
+    }
+    return user;
+}
 function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_3__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -980,6 +987,87 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+    router.get('/st-manager/control/config', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, runtime.stManagerControl.getPublicConfig());
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.post('/st-manager/control/config', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, runtime.stManagerControl.updateConfig(req.body ?? {}));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.post('/st-manager/control/probe', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.probe());
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.post('/st-manager/control/backup/start', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.startBackup(req.body ?? {}));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.post('/st-manager/control/pair', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.pair(req.body ?? {}));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.get('/st-manager/control/backups', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.listBackups());
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.get('/st-manager/control/backups/:backup_id', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.getBackupDetail(String(req.params?.backup_id ?? '')));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.post('/st-manager/control/restore-preview', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restorePreview(req.body ?? {}));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+    router.post('/st-manager/control/restore', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restoreBackup(req.body ?? {}));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
         }
     });
     router.post('/session/init', async (req, res) => {
@@ -2917,7 +3005,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
 /* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
 /* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -2946,10 +3036,11 @@ function createAuthorityRuntime() {
     const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__.SessionService(core);
     const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__.StorageService(core);
     const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_14__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_15__.StManagerControlService();
     const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_11__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
     const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_15__.TriviumService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_16__.TriviumService(core);
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     return {
         adminPackages,
@@ -2964,6 +3055,7 @@ function createAuthorityRuntime() {
         sessions,
         storage,
         stManagerBridge,
+        stManagerControl,
         files,
         http,
         jobs,
@@ -7307,6 +7399,148 @@ class StManagerBridgeService {
         const tempPath = `${this.statePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, this.statePath);
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/st-manager-control-service.ts"
+/*!****************************************************!*\
+  !*** ./src/services/st-manager-control-service.ts ***!
+  \****************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   StManagerControlService: () => (/* binding */ StManagerControlService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+function defaultStatePath() {
+    return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getGlobalAuthorityPaths)().controlDbFile), 'st-manager-control.json');
+}
+function normalizeManagerUrl(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return '';
+    }
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('ST-Manager URL must be http or https', 400, 'validation_error', 'validation');
+    }
+    return parsed.toString().replace(/\/+$/, '');
+}
+function fingerprintKey(key) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(key).digest('hex').slice(0, 12);
+}
+function maskKey(key) {
+    if (!key) {
+        return '';
+    }
+    return key.length <= 10 ? 'stmc...' : `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+function publicState(state) {
+    return {
+        enabled: Boolean(state.enabled),
+        manager_url: state.manager_url ?? '',
+        control_key_masked: state.control_key_masked ?? '',
+        control_key_fingerprint: state.control_key_fingerprint ?? '',
+    };
+}
+class StManagerControlService {
+    statePath;
+    fetcher;
+    constructor(options = {}) {
+        this.statePath = options.statePath ?? defaultStatePath();
+        this.fetcher = options.fetcher ?? fetch;
+    }
+    getPublicConfig() {
+        return publicState(this.readState());
+    }
+    updateConfig(payload) {
+        const current = this.readState();
+        const next = { ...current };
+        if (typeof payload.enabled === 'boolean') {
+            next.enabled = payload.enabled;
+        }
+        if (payload.manager_url !== undefined) {
+            next.manager_url = normalizeManagerUrl(payload.manager_url);
+        }
+        if (payload.control_key !== undefined && String(payload.control_key).trim()) {
+            next.control_key = String(payload.control_key).trim();
+            next.control_key_masked = maskKey(next.control_key);
+            next.control_key_fingerprint = fingerprintKey(next.control_key);
+        }
+        next.enabled = Boolean(next.enabled || (next.manager_url && next.control_key));
+        this.writeState(next);
+        return publicState(next);
+    }
+    probe() {
+        return this.request('POST', '/api/remote_backups/probe');
+    }
+    startBackup(payload) {
+        return this.request('POST', '/api/remote_backups/start', payload);
+    }
+    listBackups() {
+        return this.request('GET', '/api/remote_backups/list');
+    }
+    getBackupDetail(backupId) {
+        return this.request('GET', `/api/remote_backups/detail?backup_id=${encodeURIComponent(backupId)}`);
+    }
+    restorePreview(payload) {
+        return this.request('POST', '/api/remote_backups/restore-preview', payload);
+    }
+    restoreBackup(payload) {
+        return this.request('POST', '/api/remote_backups/restore', payload);
+    }
+    async pair(payload) {
+        return await this.request('POST', '/api/remote_backups/config', payload);
+    }
+    async request(method, apiPath, payload) {
+        const state = this.readState();
+        if (!state.manager_url || !state.control_key) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('ST-Manager URL and Control Key are required', 400, 'validation_error', 'validation');
+        }
+        const response = await this.fetcher(`${state.manager_url}${apiPath}`, {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                'X-ST-Manager-Control-Key': state.control_key,
+            },
+            ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+        });
+        const text = await response.text();
+        let data = {};
+        try {
+            data = text ? JSON.parse(text) : {};
+        }
+        catch {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('ST-Manager returned invalid JSON', 502, 'validation_error', 'core');
+        }
+        if (!response.ok) {
+            const message = typeof data === 'object' && data && 'error' in data ? String(data.error) : text;
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(message || `ST-Manager request failed: ${response.status}`, response.status, 'validation_error', 'core');
+        }
+        return data;
+    }
+    readState() {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.statePath, {});
+    }
+    writeState(state) {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath), { recursive: true });
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.statePath, state);
     }
 }
 

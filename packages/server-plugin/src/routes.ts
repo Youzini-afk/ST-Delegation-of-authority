@@ -858,6 +858,14 @@ function getStManagerBridgeUser(runtime: AuthorityRuntime, req: AuthorityRequest
     return runtime.stManagerBridge.resolveAuthorizedUser(getOptionalUserContext(req), req.headers);
 }
 
+function getAdminUser(req: AuthorityRequest): ReturnType<typeof getUserContext> {
+    const user = getUserContext(req);
+    if (!user.isAdmin) {
+        throw new AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
+    }
+    return user;
+}
+
 export function registerRoutes(router: RouterLike, runtime = createAuthorityRuntime()): AuthorityRuntime {
 
     router.post('/probe', async (req, res) => {
@@ -937,6 +945,87 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             ok(res, runtime.stManagerBridge.writeCommit(user, String(req.params?.type ?? '') as StManagerResourceType, req.body ?? {}, req.headers));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+
+    router.get('/st-manager/control/config', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, runtime.stManagerControl.getPublicConfig());
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.post('/st-manager/control/config', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, runtime.stManagerControl.updateConfig(req.body ?? {}));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.post('/st-manager/control/probe', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.probe());
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.post('/st-manager/control/backup/start', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.startBackup(req.body ?? {}));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.post('/st-manager/control/pair', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.pair(req.body ?? {}));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.get('/st-manager/control/backups', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.listBackups());
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.get('/st-manager/control/backups/:backup_id', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.getBackupDetail(String(req.params?.backup_id ?? '')));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.post('/st-manager/control/restore-preview', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restorePreview(req.body ?? {}));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
+        }
+    });
+
+    router.post('/st-manager/control/restore', async (req, res) => {
+        try {
+            getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restoreBackup(req.body ?? {}));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-control', error);
         }
     });
 

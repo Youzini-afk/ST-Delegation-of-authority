@@ -4,6 +4,7 @@ import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, render
 import { RESOURCE_OPTIONS, SECURITY_CENTER_CONFIG, STATUS_OPTIONS, } from './security-center/constants.js';
 import { formatBytes, getCoreStateLabel, getDeclaredPermissionLabels, getExtensionRiskLevel, getInstallStatusLabel, getInstallTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, sortByTimestampDesc, } from './security-center/formatters.js';
 import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, renderStManagerBridgeSection, } from './security-center/st-manager-bridge.js';
+import { buildStManagerControlPayload, normalizeStManagerControlConfig, renderStManagerControlSection, } from './security-center/st-manager-control.js';
 import { bootstrapSecurityCenter as bootstrapSecurityCenterHost, openSecurityCenter as openSecurityCenterHost, } from './security-center/host.js';
 import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
 const TOAST_TITLE = '权限中心';
@@ -50,6 +51,9 @@ class SecurityCenterView {
             stManagerBridgeConfig: null,
             stManagerBridgeGeneratedKey: null,
             stManagerBridgeActionInProgress: false,
+            stManagerControlConfig: null,
+            stManagerControlBackups: [],
+            stManagerControlActionInProgress: false,
             updateResult: null,
             updateInProgress: false,
         };
@@ -148,6 +152,41 @@ class SecurityCenterView {
                 void this.copyStManagerBridgeKey();
                 return;
             }
+            const saveStManagerControlButton = target.closest('[data-action="save-st-manager-control"]');
+            if (saveStManagerControlButton) {
+                void this.updateStManagerControlConfig();
+                return;
+            }
+            const probeStManagerControlButton = target.closest('[data-action="probe-st-manager-control"]');
+            if (probeStManagerControlButton) {
+                void this.probeStManagerControl();
+                return;
+            }
+            const startStManagerBackupButton = target.closest('[data-action="start-st-manager-backup"]');
+            if (startStManagerBackupButton) {
+                void this.startStManagerBackup();
+                return;
+            }
+            const pairStManagerControlButton = target.closest('[data-action="pair-st-manager-control"]');
+            if (pairStManagerControlButton) {
+                void this.pairStManagerControl();
+                return;
+            }
+            const refreshStManagerBackupsButton = target.closest('[data-action="refresh-st-manager-backups"]');
+            if (refreshStManagerBackupsButton) {
+                void this.refreshStManagerBackups();
+                return;
+            }
+            const previewStManagerRestoreButton = target.closest('[data-action="preview-st-manager-restore"]');
+            if (previewStManagerRestoreButton) {
+                void this.previewStManagerRestore();
+                return;
+            }
+            const restoreStManagerBackupButton = target.closest('[data-action="restore-st-manager-backup"]');
+            if (restoreStManagerBackupButton) {
+                void this.restoreStManagerBackup();
+                return;
+            }
             const exportDiagnosticBundleButton = target.closest('[data-action="export-diagnostic-bundle"]');
             if (exportDiagnosticBundleButton) {
                 void this.exportDiagnosticBundle();
@@ -224,17 +263,19 @@ class SecurityCenterView {
             this.state.selectedExtensionId = this.resolveSelectedExtensionId();
             this.state.policyEditorExtensionId = this.resolvePolicyEditorExtensionId();
             if (this.state.isAdmin) {
-                const [policies, usageSummary, packageOperations, stManagerBridgeConfig] = await Promise.all([
+                const [policies, usageSummary, packageOperations, stManagerBridgeConfig, stManagerControlConfig] = await Promise.all([
                     authorityRequest('/admin/policies'),
                     authorityRequest('/admin/usage-summary'),
                     authorityRequest('/admin/import-export/operations'),
                     authorityRequest('/st-manager/bridge/admin/config'),
+                    authorityRequest('/st-manager/control/config'),
                 ]);
                 this.state.policies = policies;
                 this.state.usageSummary = usageSummary;
                 this.state.packageOperations = packageOperations.operations;
                 this.state.stManagerBridgeConfig = normalizeStManagerBridgeConfig(stManagerBridgeConfig);
                 this.state.stManagerBridgeGeneratedKey = null;
+                this.state.stManagerControlConfig = normalizeStManagerControlConfig(stManagerControlConfig);
             }
             else {
                 this.state.policies = null;
@@ -242,6 +283,8 @@ class SecurityCenterView {
                 this.state.packageOperations = [];
                 this.state.stManagerBridgeConfig = null;
                 this.state.stManagerBridgeGeneratedKey = null;
+                this.state.stManagerControlConfig = null;
+                this.state.stManagerControlBackups = [];
             }
             if (!this.state.isAdmin && (this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
                 this.state.selectedTab = 'overview';
@@ -339,6 +382,141 @@ class SecurityCenterView {
         catch (error) {
             toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
         }
+    }
+    async updateStManagerControlConfig() {
+        if (!this.state.isAdmin || this.state.stManagerControlActionInProgress) {
+            return;
+        }
+        this.state.stManagerControlActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const payload = buildStManagerControlPayload({
+                enabled: true,
+                managerUrl: this.root.querySelector('[data-role="st-manager-control-url"]')?.value ?? '',
+                controlKey: this.root.querySelector('[data-role="st-manager-control-key"]')?.value ?? '',
+            });
+            const response = await authorityRequest('/st-manager/control/config', {
+                method: 'POST',
+                body: payload,
+            });
+            this.state.stManagerControlConfig = normalizeStManagerControlConfig(response);
+            toastr.success('ST-Manager 控制配置已保存', TOAST_TITLE);
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.stManagerControlActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async probeStManagerControl() {
+        await this.runStManagerControlAction(async () => {
+            await authorityRequest('/st-manager/control/probe', { method: 'POST' });
+            toastr.success('ST-Manager 连接可用', TOAST_TITLE);
+        });
+    }
+    async startStManagerBackup() {
+        await this.runStManagerControlAction(async () => {
+            await authorityRequest('/st-manager/control/backup/start', {
+                method: 'POST',
+                body: {
+                    resource_types: this.getStManagerBridgeResourceTypes(),
+                    description: 'manual backup from Authority',
+                    ingest: true,
+                },
+            });
+            toastr.success('已触发 ST-Manager 备份', TOAST_TITLE);
+            await this.refreshStManagerBackups(false);
+        });
+    }
+    async pairStManagerControl() {
+        const bridgeKey = this.state.stManagerBridgeGeneratedKey;
+        if (!bridgeKey) {
+            toastr.warning('请先在 Authority 里生成或轮换 Bridge Key，再同步给 ST-Manager。', TOAST_TITLE);
+            return;
+        }
+        await this.runStManagerControlAction(async () => {
+            await authorityRequest('/st-manager/control/pair', {
+                method: 'POST',
+                body: {
+                    st_url: window.location.origin,
+                    remote_connection_mode: 'authority_bridge',
+                    remote_bridge_key: bridgeKey,
+                    enabled_resource_types: this.getStManagerBridgeResourceTypes(),
+                },
+            });
+            toastr.success('已同步 Bridge 配置到 ST-Manager', TOAST_TITLE);
+        });
+    }
+    async refreshStManagerBackups(showToast = true) {
+        await this.runStManagerControlAction(async () => {
+            const response = await authorityRequest('/st-manager/control/backups');
+            this.state.stManagerControlBackups = Array.isArray(response.backups) ? response.backups : [];
+            if (showToast) {
+                toastr.success('备份列表已刷新', TOAST_TITLE);
+            }
+        });
+    }
+    async previewStManagerRestore() {
+        const backupId = this.getSelectedStManagerBackupId();
+        if (!backupId) {
+            toastr.warning('请先选择一个备份', TOAST_TITLE);
+            return;
+        }
+        await this.runStManagerControlAction(async () => {
+            const preview = await authorityRequest('/st-manager/control/restore-preview', {
+                method: 'POST',
+                body: {
+                    backup_id: backupId,
+                    resource_types: this.getStManagerBridgeResourceTypes(),
+                },
+            });
+            toastr.success(`恢复预览完成：${JSON.stringify(preview).slice(0, 80)}`, TOAST_TITLE);
+        });
+    }
+    async restoreStManagerBackup() {
+        const backupId = this.getSelectedStManagerBackupId();
+        if (!backupId) {
+            toastr.warning('请先选择一个备份', TOAST_TITLE);
+            return;
+        }
+        const overwrite = Boolean(this.root.querySelector('[data-role="st-manager-control-overwrite"]')?.checked);
+        const confirmed = confirm(overwrite ? '将允许覆盖酒馆已有同路径资源，确定恢复？' : '将跳过酒馆已有同路径资源，确定恢复？');
+        if (!confirmed) {
+            return;
+        }
+        await this.runStManagerControlAction(async () => {
+            await authorityRequest('/st-manager/control/restore', {
+                method: 'POST',
+                body: {
+                    backup_id: backupId,
+                    overwrite,
+                    resource_types: this.getStManagerBridgeResourceTypes(),
+                },
+            });
+            toastr.success('已触发 ST-Manager 恢复', TOAST_TITLE);
+        });
+    }
+    async runStManagerControlAction(action) {
+        if (!this.state.isAdmin || this.state.stManagerControlActionInProgress) {
+            return;
+        }
+        this.state.stManagerControlActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            await action();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.stManagerControlActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    getSelectedStManagerBackupId() {
+        return this.root.querySelector('[data-role="st-manager-control-backup"]:checked')?.value ?? '';
     }
     async runAdminUpdate(action) {
         if (!this.state.isAdmin || this.state.updateInProgress) {
@@ -1243,6 +1421,7 @@ class SecurityCenterView {
                     </div>
                 </section>
                 ${renderStManagerBridgeSection(this.state.stManagerBridgeConfig, this.state.stManagerBridgeGeneratedKey, this.state.stManagerBridgeActionInProgress)}
+                ${renderStManagerControlSection(this.state.stManagerControlConfig, this.state.stManagerControlBackups, this.state.stManagerControlActionInProgress)}
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
