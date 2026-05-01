@@ -12,6 +12,7 @@ import { PolicyService } from './services/policy-service.js';
 import { PrivateFsService } from './services/private-fs-service.js';
 import { SessionService } from './services/session-service.js';
 import { StorageService } from './services/storage-service.js';
+import { StManagerBridgeService } from './services/st-manager-bridge-service.js';
 import { TriviumService } from './services/trivium-service.js';
 
 export interface AuthorityRuntime {
@@ -26,6 +27,7 @@ export interface AuthorityRuntime {
     permissions: PermissionService;
     sessions: SessionService;
     storage: StorageService;
+    stManagerBridge: StManagerBridgeService;
     files: PrivateFsService;
     http: HttpService;
     jobs: JobService;
@@ -43,6 +45,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const permissions = new PermissionService(policies, core);
     const sessions = new SessionService(core);
     const storage = new StorageService(core);
+    const stManagerBridge = new StManagerBridgeService();
     const files = new PrivateFsService(core);
     const http = new HttpService(core);
     const jobs = new JobService(core);
@@ -61,6 +64,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         permissions,
         sessions,
         storage,
+        stManagerBridge,
         files,
         http,
         jobs,

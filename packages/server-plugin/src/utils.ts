@@ -80,6 +80,7 @@ export function getUserContext(request: AuthorityRequest): UserContext {
         handle: request.user.profile.handle,
         isAdmin: Boolean(request.user.profile.admin),
         rootDir: request.user.directories.root,
+        directories: request.user.directories,
     };
 }
 
