@@ -27,6 +27,7 @@ const REQUIRED_CORE_ARTIFACT_PLATFORMS = [
     'linux-x64-musl',
     'win32-x64',
 ];
+const PRIMARY_CORE_ARTIFACT_PLATFORM = 'linux-x64';
 
 if (mode !== 'sync' && mode !== 'check') {
     console.error('Usage: node scripts/installable.mjs <sync|check>');
@@ -71,9 +72,8 @@ function readCoreArtifacts(managedCoreDir) {
 }
 
 function choosePrimaryCoreArtifactPlatform(coreArtifactPlatforms) {
-    const currentPlatform = getCurrentCorePlatform();
-    return coreArtifactPlatforms.includes(currentPlatform)
-        ? currentPlatform
+    return coreArtifactPlatforms.includes(PRIMARY_CORE_ARTIFACT_PLATFORM)
+        ? PRIMARY_CORE_ARTIFACT_PLATFORM
         : coreArtifactPlatforms[0];
 }
 

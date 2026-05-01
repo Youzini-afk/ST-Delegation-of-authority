@@ -3,6 +3,7 @@ import { clearChildren, escapeHtml, formatDate } from './dom.js';
 import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseAssetSections, renderDatabaseGroupTable, renderGrantSettingsRows, renderJobTable, renderMetricTile, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
 import { RESOURCE_OPTIONS, SECURITY_CENTER_CONFIG, STATUS_OPTIONS, } from './security-center/constants.js';
 import { formatBytes, getCoreStateLabel, getDeclaredPermissionLabels, getExtensionRiskLevel, getInstallStatusLabel, getInstallTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, sortByTimestampDesc, } from './security-center/formatters.js';
+import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, renderStManagerBridgeSection, } from './security-center/st-manager-bridge.js';
 import { bootstrapSecurityCenter as bootstrapSecurityCenterHost, openSecurityCenter as openSecurityCenterHost, } from './security-center/host.js';
 import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
 const TOAST_TITLE = '权限中心';
@@ -46,6 +47,9 @@ class SecurityCenterView {
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
             packageActionInProgress: false,
+            stManagerBridgeConfig: null,
+            stManagerBridgeGeneratedKey: null,
+            stManagerBridgeActionInProgress: false,
             updateResult: null,
             updateInProgress: false,
         };
@@ -124,6 +128,26 @@ class SecurityCenterView {
                 }
                 return;
             }
+            const saveStManagerBridgeButton = target.closest('[data-action="save-st-manager-bridge-config"]');
+            if (saveStManagerBridgeButton) {
+                void this.updateStManagerBridgeConfig();
+                return;
+            }
+            const rotateStManagerBridgeKeyButton = target.closest('[data-action="rotate-st-manager-bridge-key"]');
+            if (rotateStManagerBridgeKeyButton) {
+                void this.updateStManagerBridgeConfig({ rotateKey: true, forceEnabled: true });
+                return;
+            }
+            const disableStManagerBridgeButton = target.closest('[data-action="disable-st-manager-bridge"]');
+            if (disableStManagerBridgeButton) {
+                void this.updateStManagerBridgeConfig({ forceEnabled: false });
+                return;
+            }
+            const copyStManagerBridgeKeyButton = target.closest('[data-action="copy-st-manager-bridge-key"]');
+            if (copyStManagerBridgeKeyButton) {
+                void this.copyStManagerBridgeKey();
+                return;
+            }
             const exportDiagnosticBundleButton = target.closest('[data-action="export-diagnostic-bundle"]');
             if (exportDiagnosticBundleButton) {
                 void this.exportDiagnosticBundle();
@@ -200,19 +224,24 @@ class SecurityCenterView {
             this.state.selectedExtensionId = this.resolveSelectedExtensionId();
             this.state.policyEditorExtensionId = this.resolvePolicyEditorExtensionId();
             if (this.state.isAdmin) {
-                const [policies, usageSummary, packageOperations] = await Promise.all([
+                const [policies, usageSummary, packageOperations, stManagerBridgeConfig] = await Promise.all([
                     authorityRequest('/admin/policies'),
                     authorityRequest('/admin/usage-summary'),
                     authorityRequest('/admin/import-export/operations'),
+                    authorityRequest('/st-manager/bridge/admin/config'),
                 ]);
                 this.state.policies = policies;
                 this.state.usageSummary = usageSummary;
                 this.state.packageOperations = packageOperations.operations;
+                this.state.stManagerBridgeConfig = normalizeStManagerBridgeConfig(stManagerBridgeConfig);
+                this.state.stManagerBridgeGeneratedKey = null;
             }
             else {
                 this.state.policies = null;
                 this.state.usageSummary = null;
                 this.state.packageOperations = [];
+                this.state.stManagerBridgeConfig = null;
+                this.state.stManagerBridgeGeneratedKey = null;
             }
             if (!this.state.isAdmin && (this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
                 this.state.selectedTab = 'overview';
@@ -224,6 +253,84 @@ class SecurityCenterView {
         finally {
             this.state.loading = false;
             void this.render();
+        }
+    }
+    async updateStManagerBridgeConfig(options = {}) {
+        if (!this.state.isAdmin || this.state.stManagerBridgeActionInProgress) {
+            return;
+        }
+        this.state.stManagerBridgeActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const payload = buildStManagerBridgePayload({
+                enabled: options.forceEnabled ?? this.getStManagerBridgeEnabled(),
+                maxFileSizeMiB: this.getStManagerBridgeMaxFileSizeMiB(),
+                resourceTypes: this.getStManagerBridgeResourceTypes(),
+                ...(options.rotateKey ? { rotateKey: true } : {}),
+            });
+            const response = await authorityRequest('/st-manager/bridge/admin/config', {
+                method: 'POST',
+                body: payload,
+            });
+            this.applyStManagerBridgeConfig(response);
+            toastr.success(options.rotateKey ? 'Bridge Key 已生成' : '桥接配置已保存', TOAST_TITLE);
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.stManagerBridgeActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    applyStManagerBridgeConfig(value) {
+        const config = normalizeStManagerBridgeConfig(value);
+        if (!config) {
+            this.state.stManagerBridgeConfig = null;
+            this.state.stManagerBridgeGeneratedKey = null;
+            return;
+        }
+        const { bridge_key: bridgeKey, ...publicConfig } = config;
+        this.state.stManagerBridgeConfig = publicConfig;
+        if (bridgeKey) {
+            this.state.stManagerBridgeGeneratedKey = bridgeKey;
+        }
+    }
+    getStManagerBridgeEnabled() {
+        const input = this.root.querySelector('[data-role="st-manager-bridge-enabled"]');
+        return input?.checked ?? Boolean(this.state.stManagerBridgeConfig?.enabled);
+    }
+    getStManagerBridgeMaxFileSizeMiB() {
+        const input = this.root.querySelector('[data-role="st-manager-bridge-max-file-size"]');
+        const value = Number(input?.value ?? 0);
+        if (Number.isFinite(value) && value > 0) {
+            return value;
+        }
+        return Math.max(1, Math.ceil((this.state.stManagerBridgeConfig?.max_file_size ?? 100 * 1024 * 1024) / (1024 * 1024)));
+    }
+    getStManagerBridgeResourceTypes() {
+        const checked = Array.from(this.root.querySelectorAll('[data-role="st-manager-bridge-resource"]:checked'))
+            .map(input => input.value);
+        return checked.length ? checked : this.state.stManagerBridgeConfig?.resource_types ?? [];
+    }
+    async copyStManagerBridgeKey() {
+        const input = this.root.querySelector('[data-role="st-manager-bridge-key"]');
+        const key = input?.value || this.state.stManagerBridgeGeneratedKey;
+        if (!key) {
+            toastr.warning('当前没有可复制的 Bridge Key', TOAST_TITLE);
+            return;
+        }
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(key);
+            }
+            else {
+                copyTextWithFallback(key);
+            }
+            toastr.success('Bridge Key 已复制', TOAST_TITLE);
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
         }
     }
     async runAdminUpdate(action) {
@@ -1128,6 +1235,7 @@ class SecurityCenterView {
                         <div><strong>最近操作</strong><div>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</div></div>
                     </div>
                 </section>
+                ${renderStManagerBridgeSection(this.state.stManagerBridgeConfig, this.state.stManagerBridgeGeneratedKey, this.state.stManagerBridgeActionInProgress)}
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
@@ -1505,5 +1613,16 @@ function downloadJsonFile(fileName, value) {
     anchor.download = fileName;
     anchor.click();
     URL.revokeObjectURL(url);
+}
+function copyTextWithFallback(value) {
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
 }
 //# sourceMappingURL=security-center.js.map

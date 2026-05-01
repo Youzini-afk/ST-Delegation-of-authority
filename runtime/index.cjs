@@ -916,6 +916,18 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
         }
     });
+    router.get('/st-manager/bridge/admin/config', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            if (!user.isAdmin) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
+            }
+            ok(res, runtime.stManagerBridge.getPublicConfig(user));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
     router.post('/st-manager/bridge/admin/config', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -4247,7 +4259,7 @@ class CoreService {
         const port = await getAvailablePort();
         const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.randomToken)();
         const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_5__.spawn)(artifact.binaryPath, [], {
-            cwd: node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(artifact.binaryPath),
+            cwd: this.cwd,
             env: {
                 ...this.env,
                 AUTHORITY_CORE_HOST: '127.0.0.1',
@@ -4255,6 +4267,7 @@ class CoreService {
                 AUTHORITY_CORE_TOKEN: token,
                 AUTHORITY_CORE_VERSION: artifact.metadata.version,
                 AUTHORITY_CORE_API_VERSION: CORE_API_VERSION,
+                AUTHORITY_CORE_DATA_ROOT: resolveCoreDataRoot(this.env.AUTHORITY_CORE_DATA_ROOT, this.cwd),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
@@ -5076,6 +5089,12 @@ function listManagedCorePlatforms(root) {
     catch {
         return [];
     }
+}
+function resolveCoreDataRoot(value, cwd) {
+    const configuredRoot = typeof value === 'string' && value.trim()
+        ? value
+        : 'data';
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.resolveRuntimePath)(configuredRoot, cwd);
 }
 function buildTriviumOpenPayload(dbPath, request) {
     return {
@@ -9525,6 +9544,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 function getUserAuthorityPaths(user) {
@@ -9544,7 +9565,10 @@ function getUserAuthorityPaths(user) {
 }
 function getGlobalAuthorityPaths() {
     const globalState = globalThis;
-    const dataRoot = String(globalState.DATA_ROOT ?? process.cwd());
+    const configuredDataRoot = typeof globalState.DATA_ROOT === 'string' && globalState.DATA_ROOT.trim()
+        ? globalState.DATA_ROOT
+        : 'data';
+    const dataRoot = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.resolveRuntimePath)(configuredDataRoot);
     const baseDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(dataRoot, '_authority-global', 'authority');
     const stateDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'state');
     return {
@@ -9579,6 +9603,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   nowIso: () => (/* binding */ nowIso),
 /* harmony export */   randomToken: () => (/* binding */ randomToken),
 /* harmony export */   readJsonFile: () => (/* binding */ readJsonFile),
+/* harmony export */   resolveRuntimePath: () => (/* binding */ resolveRuntimePath),
 /* harmony export */   safeJsonParse: () => (/* binding */ safeJsonParse),
 /* harmony export */   sanitizeFileSegment: () => (/* binding */ sanitizeFileSegment)
 /* harmony export */ });
@@ -9653,15 +9678,21 @@ function readJsonFile(filePath, fallback) {
 function sanitizeFileSegment(input) {
     return input.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
+function resolveRuntimePath(value, baseDir = process.cwd()) {
+    return node_path__WEBPACK_IMPORTED_MODULE_3___default().isAbsolute(value)
+        ? node_path__WEBPACK_IMPORTED_MODULE_3___default().normalize(value)
+        : node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(baseDir, value);
+}
 function getUserContext(request) {
     if (!request.user) {
         throw new AuthorityServiceError('Unauthorized', 401, 'unauthorized', 'auth');
     }
+    const directories = resolveUserDirectories(request.user.directories);
     return {
         handle: request.user.profile.handle,
         isAdmin: Boolean(request.user.profile.admin),
-        rootDir: request.user.directories.root,
-        directories: request.user.directories,
+        rootDir: directories.root,
+        directories,
     };
 }
 function getSessionToken(request) {
@@ -9787,6 +9818,20 @@ function stripTrailingDot(value) {
 }
 function looksLikeAbsoluteUrl(value) {
     return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
+}
+function resolveUserDirectories(directories) {
+    const resolved = {
+        root: resolveRuntimePath(directories.root),
+    };
+    for (const [key, value] of Object.entries(directories)) {
+        if (key === 'root') {
+            continue;
+        }
+        if (typeof value === 'string' && value.trim()) {
+            resolved[key] = resolveRuntimePath(value);
+        }
+    }
+    return resolved;
 }
 
 
