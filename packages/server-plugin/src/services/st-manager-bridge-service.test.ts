@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,6 +38,7 @@ describe('StManagerBridgeService', () => {
     it('keeps the bridge disabled by default and never exposes stored key material', () => {
         expect(service.getPublicConfig(user())).toEqual({
             enabled: false,
+            bound_user_handle: null,
             key_fingerprint: null,
             key_masked: null,
             max_file_size: 104857600,
@@ -78,5 +80,35 @@ describe('StManagerBridgeService', () => {
         service.writeChunk(user(), 'characters', { upload_id: init.upload_id, offset: 0, data_base64: Buffer.from('new').toString('base64') }, headers);
         expect(() => service.writeCommit(user(), 'characters', { upload_id: init.upload_id }, headers)).toThrow(/sha256 mismatch/);
         expect(fs.existsSync(path.join(userRoot, 'characters', 'Bex.png'))).toBe(false);
+    });
+
+    it('binds the current admin user when enabling or rotating the bridge key', () => {
+        const updated = service.updateAdminConfig(user(), { enabled: true, rotate_key: true });
+
+        expect(updated.bridge_key).toMatch(/^stmb_/);
+        expect(updated.bound_user_handle).toBe('alice');
+        expect(JSON.stringify(updated)).not.toContain(userRoot);
+        expect(JSON.stringify(updated)).not.toContain('key_hash');
+
+        const resolved = service.resolveAuthorizedUser(undefined, {
+            authorization: `Bearer ${updated.bridge_key}`,
+        });
+
+        expect(resolved.handle).toBe('alice');
+        expect(resolved.rootDir).toBe(userRoot);
+    });
+
+    it('requires a bound user for key-only bridge access', () => {
+        const updated = service.updateAdminConfig(user(), { enabled: true, rotate_key: true });
+        const bridgeKey = String(updated.bridge_key);
+        fs.writeFileSync(path.join(tempDir, 'bridge-state.json'), JSON.stringify({
+            enabled: true,
+            key_hash: crypto.createHash('sha256').update(bridgeKey).digest('hex'),
+            key_fingerprint: 'legacy',
+        }));
+
+        expect(() => service.resolveAuthorizedUser(undefined, {
+            authorization: `Bearer ${bridgeKey}`,
+        })).toThrow(/Bridge key is not bound/);
     });
 });

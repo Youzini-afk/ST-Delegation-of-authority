@@ -12,6 +12,7 @@ interface StManagerBridgeState {
     key_fingerprint?: string;
     max_file_size?: number;
     resource_types?: StManagerResourceType[];
+    bound_user?: UserContext;
 }
 
 interface StManagerTransfer {
@@ -55,6 +56,18 @@ function stableResourceTypes(value: unknown): StManagerResourceType[] {
     return selected.length ? selected : [...ST_MANAGER_RESOURCE_TYPES];
 }
 
+function snapshotUser(user: UserContext): UserContext {
+    const snapshot: UserContext = {
+        handle: user.handle,
+        isAdmin: user.isAdmin,
+        rootDir: user.rootDir,
+    };
+    if (user.directories) {
+        snapshot.directories = { ...user.directories };
+    }
+    return snapshot;
+}
+
 function headerValue(headers: Record<string, string | string[] | undefined>, name: string): string {
     const direct = headers[name] ?? headers[name.toLowerCase()];
     if (Array.isArray(direct)) {
@@ -87,6 +100,7 @@ export class StManagerBridgeService {
         const state = this.readState();
         return {
             enabled: Boolean(state.enabled),
+            bound_user_handle: state.bound_user?.handle ?? null,
             key_fingerprint: state.key_fingerprint ?? null,
             key_masked: state.key_fingerprint ? `stmb_${state.key_fingerprint.slice(0, 4)}...${state.key_fingerprint.slice(-4)}` : null,
             max_file_size: Number(state.max_file_size || DEFAULT_MAX_FILE_SIZE),
@@ -121,12 +135,27 @@ export class StManagerBridgeService {
             next.key_hash = hashKey(bridgeKey);
             next.key_fingerprint = next.key_hash.slice(0, 12);
         }
+        if (payload.enabled === true || payload.rotate_key === true || (next.enabled && !current.key_hash)) {
+            next.bound_user = snapshotUser(user);
+        }
 
         this.writeState(next);
         return {
             ...this.getPublicConfig(user),
             ...(bridgeKey ? { bridge_key: bridgeKey, key_masked: maskedKey(bridgeKey) } : {}),
         };
+    }
+
+    resolveAuthorizedUser(user: UserContext | undefined, headers: Record<string, string | string[] | undefined>): UserContext {
+        this.assertAuthorized(headers);
+        if (user) {
+            return user;
+        }
+        const boundUser = this.readState().bound_user;
+        if (!boundUser) {
+            throw new AuthorityServiceError('Bridge key is not bound to a user; rotate the key in Authority.', 403, 'unauthorized', 'auth');
+        }
+        return boundUser;
     }
 
     probe(user: UserContext, headers: Record<string, string | string[] | undefined>) {

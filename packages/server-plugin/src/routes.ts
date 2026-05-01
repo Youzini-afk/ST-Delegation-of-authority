@@ -850,6 +850,14 @@ function shouldRedactDiagnosticKey(key: string | undefined): boolean {
         || normalized.includes('secret');
 }
 
+function getOptionalUserContext(req: AuthorityRequest): ReturnType<typeof getUserContext> | undefined {
+    return req.user ? getUserContext(req) : undefined;
+}
+
+function getStManagerBridgeUser(runtime: AuthorityRuntime, req: AuthorityRequest): ReturnType<typeof getUserContext> {
+    return runtime.stManagerBridge.resolveAuthorizedUser(getOptionalUserContext(req), req.headers);
+}
+
 export function registerRoutes(router: RouterLike, runtime = createAuthorityRuntime()): AuthorityRuntime {
 
     router.post('/probe', async (req, res) => {
@@ -859,7 +867,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.get('/st-manager/bridge/probe', async (req, res) => {
         try {
-            const user = getUserContext(req);
+            const user = getStManagerBridgeUser(runtime, req);
             ok(res, runtime.stManagerBridge.probe(user, req.headers));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
@@ -877,7 +885,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.get('/st-manager/resources/:type/manifest', async (req, res) => {
         try {
-            const user = getUserContext(req);
+            const user = getStManagerBridgeUser(runtime, req);
             ok(res, runtime.stManagerBridge.buildManifest(user, String(req.params?.type ?? '') as StManagerResourceType, req.headers));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
@@ -886,7 +894,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.post('/st-manager/resources/:type/file/read', async (req, res) => {
         try {
-            const user = getUserContext(req);
+            const user = getStManagerBridgeUser(runtime, req);
             ok(res, runtime.stManagerBridge.readFile(user, String(req.params?.type ?? '') as StManagerResourceType, req.body ?? {}, req.headers));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
@@ -895,7 +903,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.post('/st-manager/resources/:type/file/write-init', async (req, res) => {
         try {
-            const user = getUserContext(req);
+            const user = getStManagerBridgeUser(runtime, req);
             ok(res, runtime.stManagerBridge.writeInit(user, String(req.params?.type ?? '') as StManagerResourceType, req.body ?? {}, req.headers));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
@@ -904,7 +912,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.post('/st-manager/resources/:type/file/write-chunk', async (req, res) => {
         try {
-            const user = getUserContext(req);
+            const user = getStManagerBridgeUser(runtime, req);
             ok(res, runtime.stManagerBridge.writeChunk(user, String(req.params?.type ?? '') as StManagerResourceType, req.body ?? {}, req.headers));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
@@ -913,7 +921,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.post('/st-manager/resources/:type/file/write-commit', async (req, res) => {
         try {
-            const user = getUserContext(req);
+            const user = getStManagerBridgeUser(runtime, req);
             ok(res, runtime.stManagerBridge.writeCommit(user, String(req.params?.type ?? '') as StManagerResourceType, req.body ?? {}, req.headers));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-bridge', error);
