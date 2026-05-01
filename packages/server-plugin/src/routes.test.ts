@@ -32,6 +32,7 @@ describe('registerRoutes', () => {
             '/jobs/:id',
             '/events/stream',
             '/st-manager/bridge/probe',
+            '/st-manager/bridge/admin/config',
             '/st-manager/resources/:type/manifest',
             '/admin/policies',
             '/admin/import-export/operations',
@@ -372,6 +373,64 @@ describe('registerRoutes', () => {
             cwdSpy.mockRestore();
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
+    });
+
+    it('exposes ST-Manager bridge admin config without rotating or rewriting it', async () => {
+        const gets = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                gets.set(path, handler);
+            },
+            post() {
+                return undefined;
+            },
+        };
+        const runtime = {
+            stManagerBridge: {
+                getPublicConfig: vi.fn(() => ({
+                    enabled: true,
+                    bound_user_handle: 'alice',
+                    key_fingerprint: 'abcdef123456',
+                    key_masked: 'stmb_abcd...3456',
+                    max_file_size: 104857600,
+                    resource_types: ['characters'],
+                })),
+                updateAdminConfig: vi.fn(),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await gets.get('/st-manager/bridge/admin/config')?.({
+            user: {
+                profile: {
+                    handle: 'alice',
+                    admin: true,
+                },
+                directories: {
+                    root: 'C:/users/alice',
+                },
+            },
+            headers: {},
+        }, response);
+
+        expect(runtime.stManagerBridge.getPublicConfig).toHaveBeenCalledWith(expect.objectContaining({
+            handle: 'alice',
+            isAdmin: true,
+        }));
+        expect(runtime.stManagerBridge.updateAdminConfig).not.toHaveBeenCalled();
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            enabled: true,
+            key_masked: 'stmb_abcd...3456',
+        }));
     });
 
     it('allows ST-Manager bridge probe with Bridge Key only', async () => {

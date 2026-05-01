@@ -15,6 +15,7 @@ import type {
     TriviumDatabaseRecord,
 } from '@stdo/shared-types';
 import type { AuthorityPolicyEntry, PermissionResource, PermissionStatus } from '@stdo/shared-types';
+import type { StManagerBridgeConfig } from './st-manager-bridge.js';
 
 export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies' | 'updates';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
@@ -118,6 +119,9 @@ export interface SecurityCenterState {
     policyEditorExtensionId: string | null;
     packageOperations: PackageOperation[];
     packageActionInProgress: boolean;
+    stManagerBridgeConfig: StManagerBridgeConfig | null;
+    stManagerBridgeGeneratedKey: string | null;
+    stManagerBridgeActionInProgress: boolean;
     updateResult: AdminUpdateResponse | null;
     updateInProgress: boolean;
 }
