@@ -896,10 +896,79 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
+function getOptionalUserContext(req) {
+    return req.user ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req) : undefined;
+}
+function getStManagerBridgeUser(runtime, req) {
+    return runtime.stManagerBridge.resolveAuthorizedUser(getOptionalUserContext(req), req.headers);
+}
 function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_3__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
+    });
+    router.get('/st-manager/bridge/probe', async (req, res) => {
+        try {
+            const user = getStManagerBridgeUser(runtime, req);
+            ok(res, runtime.stManagerBridge.probe(user, req.headers));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+    router.post('/st-manager/bridge/admin/config', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            ok(res, runtime.stManagerBridge.updateAdminConfig(user, req.body ?? {}));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+    router.get('/st-manager/resources/:type/manifest', async (req, res) => {
+        try {
+            const user = getStManagerBridgeUser(runtime, req);
+            ok(res, runtime.stManagerBridge.buildManifest(user, String(req.params?.type ?? ''), req.headers));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+    router.post('/st-manager/resources/:type/file/read', async (req, res) => {
+        try {
+            const user = getStManagerBridgeUser(runtime, req);
+            ok(res, runtime.stManagerBridge.readFile(user, String(req.params?.type ?? ''), req.body ?? {}, req.headers));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+    router.post('/st-manager/resources/:type/file/write-init', async (req, res) => {
+        try {
+            const user = getStManagerBridgeUser(runtime, req);
+            ok(res, runtime.stManagerBridge.writeInit(user, String(req.params?.type ?? ''), req.body ?? {}, req.headers));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+    router.post('/st-manager/resources/:type/file/write-chunk', async (req, res) => {
+        try {
+            const user = getStManagerBridgeUser(runtime, req);
+            ok(res, runtime.stManagerBridge.writeChunk(user, String(req.params?.type ?? ''), req.body ?? {}, req.headers));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+    router.post('/st-manager/resources/:type/file/write-commit', async (req, res) => {
+        try {
+            const user = getStManagerBridgeUser(runtime, req);
+            ok(res, runtime.stManagerBridge.writeCommit(user, String(req.params?.type ?? ''), req.body ?? {}, req.headers));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
     });
     router.post('/session/init', async (req, res) => {
         try {
@@ -2835,7 +2904,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
 /* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
 /* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -2862,10 +2933,11 @@ function createAuthorityRuntime() {
     const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_9__.PermissionService(policies, core);
     const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__.SessionService(core);
     const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_14__.StManagerBridgeService();
     const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_11__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
     const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_14__.TriviumService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_15__.TriviumService(core);
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     return {
         adminPackages,
@@ -2879,6 +2951,7 @@ function createAuthorityRuntime() {
         permissions,
         sessions,
         storage,
+        stManagerBridge,
         files,
         http,
         jobs,
@@ -6922,6 +6995,647 @@ class SessionService {
 
 /***/ },
 
+/***/ "./src/services/st-manager-bridge-service.ts"
+/*!***************************************************!*\
+  !*** ./src/services/st-manager-bridge-service.ts ***!
+  \***************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   StManagerBridgeService: () => (/* binding */ StManagerBridgeService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./st-manager-resource-locator.js */ "./src/services/st-manager-resource-locator.ts");
+
+
+
+
+
+
+const DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024;
+function defaultStatePath() {
+    return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getGlobalAuthorityPaths)().controlDbFile), 'st-manager-bridge.json');
+}
+function hashKey(key) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(key).digest('hex');
+}
+function generateBridgeKey() {
+    return `stmb_${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomBytes(24).toString('base64url')}`;
+}
+function maskedKey(key) {
+    return `${key.slice(0, 8)}...${key.slice(-4)}`;
+}
+function stableResourceTypes(value) {
+    if (!Array.isArray(value)) {
+        return [..._st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES];
+    }
+    const selected = value.filter((item) => _st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES.includes(item));
+    return selected.length ? selected : [..._st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES];
+}
+function snapshotUser(user) {
+    const snapshot = {
+        handle: user.handle,
+        isAdmin: user.isAdmin,
+        rootDir: user.rootDir,
+    };
+    if (user.directories) {
+        snapshot.directories = { ...user.directories };
+    }
+    return snapshot;
+}
+function headerValue(headers, name) {
+    const direct = headers[name] ?? headers[name.toLowerCase()];
+    if (Array.isArray(direct)) {
+        return String(direct[0] ?? '').trim();
+    }
+    return String(direct ?? '').trim();
+}
+function extractBridgeKey(headers) {
+    const bearer = headerValue(headers, 'authorization');
+    if (bearer.toLowerCase().startsWith('bearer ')) {
+        return bearer.slice(7).trim();
+    }
+    return headerValue(headers, 'x-st-manager-key');
+}
+class StManagerBridgeService {
+    statePath;
+    transferRoot;
+    locator;
+    transfers = new Map();
+    constructor(options = {}) {
+        this.statePath = options.statePath ?? defaultStatePath();
+        this.transferRoot = options.transferRoot ?? node_path__WEBPACK_IMPORTED_MODULE_2___default().join(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath), 'st-manager-transfers');
+        this.locator = options.locator ?? new _st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.StManagerResourceLocator();
+    }
+    getPublicConfig(_user) {
+        const state = this.readState();
+        return {
+            enabled: Boolean(state.enabled),
+            bound_user_handle: state.bound_user?.handle ?? null,
+            key_fingerprint: state.key_fingerprint ?? null,
+            key_masked: state.key_fingerprint ? `stmb_${state.key_fingerprint.slice(0, 4)}...${state.key_fingerprint.slice(-4)}` : null,
+            max_file_size: Number(state.max_file_size || DEFAULT_MAX_FILE_SIZE),
+            resource_types: stableResourceTypes(state.resource_types),
+        };
+    }
+    updateAdminConfig(user, payload) {
+        if (!user.isAdmin) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
+        }
+        const current = this.readState();
+        const next = { ...current };
+        if (typeof payload.enabled === 'boolean') {
+            next.enabled = payload.enabled;
+        }
+        if (payload.resource_types !== undefined) {
+            next.resource_types = stableResourceTypes(payload.resource_types);
+        }
+        if (payload.max_file_size !== undefined) {
+            const maxFileSize = Number(payload.max_file_size);
+            if (!Number.isFinite(maxFileSize) || maxFileSize <= 0) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Invalid max_file_size', 400, 'validation_error', 'validation');
+            }
+            next.max_file_size = Math.floor(maxFileSize);
+        }
+        let bridgeKey = null;
+        if (payload.rotate_key === true || (next.enabled && !next.key_hash)) {
+            bridgeKey = generateBridgeKey();
+            next.key_hash = hashKey(bridgeKey);
+            next.key_fingerprint = next.key_hash.slice(0, 12);
+        }
+        if (payload.enabled === true || payload.rotate_key === true || (next.enabled && !current.key_hash)) {
+            next.bound_user = snapshotUser(user);
+        }
+        this.writeState(next);
+        return {
+            ...this.getPublicConfig(user),
+            ...(bridgeKey ? { bridge_key: bridgeKey, key_masked: maskedKey(bridgeKey) } : {}),
+        };
+    }
+    resolveAuthorizedUser(user, headers) {
+        this.assertAuthorized(headers);
+        if (user) {
+            return user;
+        }
+        const boundUser = this.readState().bound_user;
+        if (!boundUser) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Bridge key is not bound to a user; rotate the key in Authority.', 403, 'unauthorized', 'auth');
+        }
+        return boundUser;
+    }
+    probe(user, headers) {
+        this.assertAuthorized(headers);
+        const config = this.getPublicConfig(user);
+        const resources = {};
+        for (const type of config.resource_types) {
+            const root = this.locator.resolveResourceRoot(user, type);
+            const manifest = this.locator.buildManifest(user, type);
+            resources[type] = {
+                count: manifest.files.length,
+                root: manifest.root,
+                available: Boolean(root?.exists),
+            };
+        }
+        return {
+            success: true,
+            version: 1,
+            user: {
+                handle: user.handle,
+                root: user.rootDir,
+            },
+            bridge: config,
+            resources,
+            server_time: new Date().toISOString(),
+        };
+    }
+    buildManifest(user, resourceType, headers) {
+        this.assertResourceAllowed(resourceType, headers);
+        return this.locator.buildManifest(user, resourceType);
+    }
+    readFile(user, resourceType, payload, headers) {
+        this.assertResourceAllowed(resourceType, headers);
+        const filePath = String(payload.path ?? '');
+        const offset = Math.max(0, Number(payload.offset ?? 0) || 0);
+        const limit = Math.max(1, Math.min(Number(payload.limit ?? 1024 * 1024) || 1024 * 1024, 16 * 1024 * 1024));
+        const file = this.locator.readResourceFile(user, resourceType, filePath);
+        const chunk = file.buffer.subarray(offset, Math.min(file.buffer.length, offset + limit));
+        return {
+            path: filePath,
+            offset,
+            bytes_read: chunk.length,
+            size: file.size,
+            sha256: file.sha256,
+            mtime: file.mtime,
+            eof: offset + chunk.length >= file.buffer.length,
+            data_base64: chunk.toString('base64'),
+        };
+    }
+    writeInit(user, resourceType, payload, headers) {
+        this.assertResourceAllowed(resourceType, headers);
+        const size = Number(payload.size ?? -1);
+        const expectedSha = String(payload.sha256 ?? '').trim();
+        const relativePath = String(payload.path ?? '');
+        const overwriteMode = String(payload.overwrite_mode ?? 'skip');
+        const maxFileSize = this.getPublicConfig(user).max_file_size;
+        if (!Number.isFinite(size) || size < 0 || size > maxFileSize) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Invalid transfer size', 400, 'validation_error', 'validation');
+        }
+        if (!/^[a-f0-9]{64}$/i.test(expectedSha)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Invalid sha256', 400, 'validation_error', 'validation');
+        }
+        this.locator.resolveWritePath(user, resourceType, relativePath);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(this.transferRoot);
+        const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const tempPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.transferRoot, `${transferId}.tmp`);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, Buffer.alloc(0));
+        this.transfers.set(transferId, {
+            type: resourceType,
+            path: relativePath,
+            tempPath,
+            size,
+            sha256: expectedSha.toLowerCase(),
+            overwriteMode: overwriteMode === 'overwrite' ? 'overwrite' : 'skip',
+        });
+        return { upload_id: transferId, transfer_id: transferId, offset: 0 };
+    }
+    writeChunk(user, resourceType, payload, headers) {
+        this.assertResourceAllowed(resourceType, headers);
+        const uploadId = String(payload.upload_id ?? payload.transfer_id ?? '');
+        const transfer = this.getTransfer(resourceType, uploadId);
+        const offset = Number(payload.offset ?? -1);
+        const chunk = Buffer.from(String(payload.data_base64 ?? ''), 'base64');
+        const currentSize = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(transfer.tempPath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(transfer.tempPath).size : 0;
+        if (offset !== currentSize) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Invalid transfer offset', 409, 'validation_error', 'validation');
+        }
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().appendFileSync(transfer.tempPath, chunk);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(transfer.tempPath).size > transfer.size) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Transfer exceeds declared size', 400, 'validation_error', 'validation');
+        }
+        return { upload_id: uploadId, transfer_id: uploadId, offset: node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(transfer.tempPath).size };
+    }
+    writeCommit(user, resourceType, payload, headers) {
+        this.assertResourceAllowed(resourceType, headers);
+        const transferId = String(payload.upload_id ?? payload.transfer_id ?? '');
+        const transfer = this.getTransfer(resourceType, transferId);
+        const buffer = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(transfer.tempPath);
+        if (buffer.length !== transfer.size) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Transfer size mismatch', 400, 'validation_error', 'validation');
+        }
+        const binarySha = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(buffer).digest('hex');
+        if (binarySha !== transfer.sha256) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('sha256 mismatch', 400, 'validation_error', 'validation');
+        }
+        const result = this.locator.writeResourceFile(user, resourceType, transfer.path, buffer, transfer.overwriteMode);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(transfer.tempPath, { force: true });
+        this.transfers.delete(transferId);
+        return {
+            upload_id: transferId,
+            transfer_id: transferId,
+            path: transfer.path,
+            skipped: result.skipped,
+        };
+    }
+    assertAuthorized(headers) {
+        const state = this.readState();
+        if (!state.enabled) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Bridge disabled', 403, 'unauthorized', 'auth');
+        }
+        const provided = extractBridgeKey(headers);
+        if (!provided || !state.key_hash || hashKey(provided) !== state.key_hash) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Invalid bridge key', 401, 'unauthorized', 'auth');
+        }
+    }
+    assertResourceAllowed(resourceType, headers) {
+        this.assertAuthorized(headers);
+        if (!_st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES.includes(resourceType)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Unsupported resource type', 400, 'validation_error', 'validation');
+        }
+        if (!stableResourceTypes(this.readState().resource_types).includes(resourceType)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Resource type disabled', 403, 'unauthorized', 'auth');
+        }
+    }
+    getTransfer(resourceType, transferId) {
+        const transfer = this.transfers.get(transferId);
+        if (!transfer || transfer.type !== resourceType) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Transfer not found', 404, 'validation_error', 'validation');
+        }
+        return transfer;
+    }
+    readState() {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.statePath, {});
+    }
+    writeState(state) {
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
+        const tempPath = `${this.statePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, this.statePath);
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/st-manager-resource-locator.ts"
+/*!*****************************************************!*\
+  !*** ./src/services/st-manager-resource-locator.ts ***!
+  \*****************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   ST_MANAGER_RESOURCE_TYPES: () => (/* binding */ ST_MANAGER_RESOURCE_TYPES),
+/* harmony export */   StManagerResourceLocator: () => (/* binding */ StManagerResourceLocator)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+const ST_MANAGER_RESOURCE_TYPES = ['characters', 'chats', 'worlds', 'presets', 'regex', 'quick_replies'];
+const SETTINGS_REGEX_BUNDLE_PATH = 'settings.regex.json';
+const REGEX_SETTINGS_KEYS = ['regex', 'regex_presets', 'character_allowed_regex', 'preset_allowed_regex'];
+function sha256(buffer) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(buffer).digest('hex');
+}
+function isPathInside(base, candidate) {
+    const relative = node_path__WEBPACK_IMPORTED_MODULE_2___default().relative(base, candidate);
+    return relative === '' || (!relative.startsWith('..') && !node_path__WEBPACK_IMPORTED_MODULE_2___default().isAbsolute(relative));
+}
+function normalizeResourcePath(relativePath) {
+    const value = String(relativePath || '').trim();
+    if (!value || value.includes('\\') || node_path__WEBPACK_IMPORTED_MODULE_2___default().isAbsolute(value) || node_path__WEBPACK_IMPORTED_MODULE_2___default().win32.isAbsolute(value) || /^[a-zA-Z]:[\\/]/.test(value)) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Invalid resource path', 400, 'validation_error', 'validation');
+    }
+    const normalized = node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.normalize(value.replace(/\/+/g, '/'));
+    if (!normalized || normalized === '.' || normalized.startsWith('../') || normalized === '..') {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Invalid resource path', 400, 'validation_error', 'validation');
+    }
+    if (normalized.split('/').includes('..')) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Invalid resource path', 400, 'validation_error', 'validation');
+    }
+    return normalized;
+}
+function sortedDirEntries(dirPath) {
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(dirPath)) {
+        return [];
+    }
+    return node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+}
+function readJsonObject(filePath) {
+    try {
+        const raw = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'));
+        return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+    }
+    catch {
+        return null;
+    }
+}
+function atomicWriteBuffer(filePath, buffer) {
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+    const tempPath = `${filePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
+    node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, buffer);
+    node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
+}
+function atomicWriteJson(filePath, value) {
+    atomicWriteBuffer(filePath, Buffer.from(JSON.stringify(value, null, 2), 'utf8'));
+}
+class StManagerResourceLocator {
+    resolveResourceRoot(user, resourceType) {
+        const directories = user.directories ?? { root: user.rootDir };
+        const rootDir = directories.root || user.rootDir;
+        const candidates = [];
+        switch (resourceType) {
+            case 'characters':
+                candidates.push({ path: directories.characters, source: 'request.user.directories.characters' });
+                candidates.push({ path: node_path__WEBPACK_IMPORTED_MODULE_2___default().join(rootDir, 'characters'), source: 'root/characters' });
+                break;
+            case 'chats':
+                candidates.push({ path: directories.chats, source: 'request.user.directories.chats' });
+                candidates.push({ path: node_path__WEBPACK_IMPORTED_MODULE_2___default().join(rootDir, 'chats'), source: 'root/chats' });
+                break;
+            case 'worlds':
+                candidates.push({ path: directories.worlds, source: 'request.user.directories.worlds' });
+                candidates.push({ path: node_path__WEBPACK_IMPORTED_MODULE_2___default().join(rootDir, 'worlds'), source: 'root/worlds' });
+                break;
+            case 'presets':
+                candidates.push({ path: directories.openAI_Settings, source: 'request.user.directories.openAI_Settings' });
+                candidates.push({ path: node_path__WEBPACK_IMPORTED_MODULE_2___default().join(rootDir, 'OpenAI Settings'), source: 'root/OpenAI Settings' });
+                candidates.push({ path: node_path__WEBPACK_IMPORTED_MODULE_2___default().join(rootDir, 'presets'), source: 'root/presets' });
+                break;
+            case 'quick_replies':
+                candidates.push({ path: directories.quickreplies, source: 'request.user.directories.quickreplies' });
+                candidates.push({ path: node_path__WEBPACK_IMPORTED_MODULE_2___default().join(rootDir, 'QuickReplies'), source: 'root/QuickReplies' });
+                break;
+            case 'regex':
+                candidates.push({ path: node_path__WEBPACK_IMPORTED_MODULE_2___default().join(rootDir, 'regex'), source: 'root/regex' });
+                break;
+        }
+        for (const candidate of candidates) {
+            if (!candidate.path) {
+                continue;
+            }
+            const normalized = node_path__WEBPACK_IMPORTED_MODULE_2___default().normalize(candidate.path);
+            if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(normalized) && node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(normalized).isDirectory()) {
+                return { path: normalized, source: candidate.source, exists: true };
+            }
+        }
+        const fallback = candidates.find(candidate => candidate.path);
+        return fallback?.path ? { path: node_path__WEBPACK_IMPORTED_MODULE_2___default().normalize(fallback.path), source: fallback.source, exists: false } : null;
+    }
+    resolveSettingsPath(user) {
+        const directories = user.directories ?? { root: user.rootDir };
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().normalize(directories.settings || node_path__WEBPACK_IMPORTED_MODULE_2___default().join(directories.root || user.rootDir, 'settings.json'));
+    }
+    buildManifest(user, resourceType) {
+        this.assertResourceType(resourceType);
+        const root = this.resolveResourceRoot(user, resourceType);
+        const files = [];
+        if (resourceType === 'regex') {
+            if (root?.exists) {
+                for (const entry of sortedDirEntries(root.path)) {
+                    if (entry.isFile() && entry.name.toLowerCase().endsWith('.json')) {
+                        files.push(this.fileManifestItem(root.path, entry.name, 'root/regex'));
+                    }
+                }
+            }
+            const bundle = this.buildRegexSettingsBundle(user);
+            if (bundle) {
+                files.push(this.bufferManifestItem(SETTINGS_REGEX_BUNDLE_PATH, bundle, 'settings.json', 'settings-regex-bundle'));
+            }
+            return { resource_type: resourceType, root: root?.path ?? null, files };
+        }
+        if (!root?.exists) {
+            return { resource_type: resourceType, root: root?.path ?? null, files: [] };
+        }
+        switch (resourceType) {
+            case 'characters':
+                for (const entry of sortedDirEntries(root.path)) {
+                    const lower = entry.name.toLowerCase();
+                    if (entry.isFile() && (lower.endsWith('.png') || lower.endsWith('.json'))) {
+                        files.push(this.fileManifestItem(root.path, entry.name, root.source));
+                    }
+                }
+                break;
+            case 'chats':
+                for (const relPath of this.walkFiles(root.path, file => file.toLowerCase().endsWith('.jsonl'))) {
+                    files.push(this.fileManifestItem(root.path, relPath, root.source));
+                }
+                break;
+            case 'worlds':
+                for (const relPath of this.walkFiles(root.path, file => {
+                    const lower = file.toLowerCase();
+                    return (file.split('/').length === 1 && lower.endsWith('.json')) || lower.endsWith('/world_info.json');
+                })) {
+                    files.push(this.fileManifestItem(root.path, relPath, root.source));
+                }
+                break;
+            case 'presets':
+            case 'quick_replies':
+                for (const entry of sortedDirEntries(root.path)) {
+                    if (entry.isFile() && entry.name.toLowerCase().endsWith('.json')) {
+                        files.push(this.fileManifestItem(root.path, entry.name, root.source));
+                    }
+                }
+                break;
+        }
+        return { resource_type: resourceType, root: root.path, files };
+    }
+    readResourceFile(user, resourceType, relativePath) {
+        this.assertResourceType(resourceType);
+        const normalized = normalizeResourcePath(relativePath);
+        if (resourceType === 'regex' && normalized === SETTINGS_REGEX_BUNDLE_PATH) {
+            const bundle = this.buildRegexSettingsBundle(user);
+            if (!bundle) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Resource not found', 404, 'validation_error', 'validation');
+            }
+            const buffer = Buffer.from(JSON.stringify(bundle, null, 2), 'utf8');
+            const settingsPath = this.resolveSettingsPath(user);
+            const mtime = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(settingsPath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(settingsPath).mtimeMs : Date.now();
+            return { buffer, size: buffer.length, mtime, sha256: sha256(buffer), source: 'settings.json', kind: 'settings-regex-bundle' };
+        }
+        const root = this.requireExistingRoot(user, resourceType);
+        const filePath = this.resolveExistingPath(root.path, normalized);
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(filePath);
+        if (!stat.isFile()) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Resource not found', 404, 'validation_error', 'validation');
+        }
+        const buffer = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath);
+        return { buffer, size: stat.size, mtime: stat.mtimeMs, sha256: sha256(buffer), source: root.source, kind: 'file' };
+    }
+    resolveWritePath(user, resourceType, relativePath) {
+        this.assertResourceType(resourceType);
+        const normalized = normalizeResourcePath(relativePath);
+        if (resourceType === 'regex' && normalized === SETTINGS_REGEX_BUNDLE_PATH) {
+            return this.resolveSettingsPath(user);
+        }
+        const root = this.resolveResourceRoot(user, resourceType);
+        if (!root) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Resource root unavailable', 404, 'validation_error', 'validation');
+        }
+        return this.resolveWritablePath(root.path, normalized);
+    }
+    writeResourceFile(user, resourceType, relativePath, buffer, overwriteMode = 'skip') {
+        const normalized = normalizeResourcePath(relativePath);
+        if (resourceType === 'regex' && normalized === SETTINGS_REGEX_BUNDLE_PATH) {
+            const settingsPath = this.resolveSettingsPath(user);
+            if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(settingsPath) && overwriteMode === 'skip') {
+                return { path: settingsPath, skipped: true };
+            }
+            this.patchRegexSettings(settingsPath, JSON.parse(buffer.toString('utf8')));
+            return { path: settingsPath, skipped: false };
+        }
+        const filePath = this.resolveWritePath(user, resourceType, normalized);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath) && overwriteMode === 'skip') {
+            return { path: filePath, skipped: true };
+        }
+        atomicWriteBuffer(filePath, buffer);
+        return { path: filePath, skipped: false };
+    }
+    assertResourceType(resourceType) {
+        if (!ST_MANAGER_RESOURCE_TYPES.includes(resourceType)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Unsupported resource type', 400, 'validation_error', 'validation');
+        }
+    }
+    requireExistingRoot(user, resourceType) {
+        const root = this.resolveResourceRoot(user, resourceType);
+        if (!root?.exists) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Resource root unavailable', 404, 'validation_error', 'validation');
+        }
+        return root;
+    }
+    resolveExistingPath(rootPath, relativePath) {
+        const rootReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
+        const candidate = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(rootReal, relativePath.split('/').join((node_path__WEBPACK_IMPORTED_MODULE_2___default().sep)));
+        const candidateReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(candidate);
+        if (!isPathInside(rootReal, candidateReal)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Invalid resource path', 400, 'validation_error', 'validation');
+        }
+        return candidateReal;
+    }
+    resolveWritablePath(rootPath, relativePath) {
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
+        const rootReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
+        const candidate = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(rootReal, relativePath.split('/').join((node_path__WEBPACK_IMPORTED_MODULE_2___default().sep)));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(candidate));
+        const parentReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(candidate));
+        if (!isPathInside(rootReal, parentReal)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Invalid resource path', 400, 'validation_error', 'validation');
+        }
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(parentReal, node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(candidate));
+    }
+    fileManifestItem(rootPath, relativePath, source) {
+        const normalized = normalizeResourcePath(relativePath);
+        const filePath = this.resolveExistingPath(rootPath, normalized);
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(filePath);
+        const buffer = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath);
+        return {
+            relative_path: normalized,
+            kind: 'file',
+            source,
+            size: stat.size,
+            mtime: stat.mtimeMs,
+            sha256: sha256(buffer),
+        };
+    }
+    bufferManifestItem(relativePath, payload, source, kind) {
+        const settingsPath = this.resolveSettingsPathFromPayloadSource(source);
+        const buffer = Buffer.from(JSON.stringify(payload, null, 2), 'utf8');
+        const mtime = settingsPath && node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(settingsPath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(settingsPath).mtimeMs : Date.now();
+        return {
+            relative_path: relativePath,
+            kind,
+            source,
+            size: buffer.length,
+            mtime,
+            sha256: sha256(buffer),
+        };
+    }
+    resolveSettingsPathFromPayloadSource(_source) {
+        return '';
+    }
+    walkFiles(rootPath, accepts) {
+        const results = [];
+        const visit = (current, prefix = '') => {
+            for (const entry of sortedDirEntries(current)) {
+                if (entry.name.startsWith('.') || entry.isSymbolicLink()) {
+                    continue;
+                }
+                const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+                const fullPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, entry.name);
+                if (entry.isDirectory()) {
+                    visit(fullPath, relPath);
+                    continue;
+                }
+                if (entry.isFile() && accepts(relPath)) {
+                    results.push(relPath);
+                }
+            }
+        };
+        visit(rootPath);
+        return results.sort((a, b) => a.localeCompare(b));
+    }
+    buildRegexSettingsBundle(user) {
+        const settingsPath = this.resolveSettingsPath(user);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(settingsPath)) {
+            return null;
+        }
+        const settings = readJsonObject(settingsPath);
+        const extensionSettings = settings?.extension_settings;
+        if (!extensionSettings || typeof extensionSettings !== 'object' || Array.isArray(extensionSettings)) {
+            return null;
+        }
+        const picked = {};
+        for (const key of REGEX_SETTINGS_KEYS) {
+            if (Object.prototype.hasOwnProperty.call(extensionSettings, key)) {
+                picked[key] = extensionSettings[key];
+            }
+        }
+        if (Object.keys(picked).length === 0) {
+            return null;
+        }
+        return { extension_settings: picked };
+    }
+    patchRegexSettings(settingsPath, bundle) {
+        if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Invalid regex settings bundle', 400, 'validation_error', 'validation');
+        }
+        const extensionSettings = bundle.extension_settings;
+        if (!extensionSettings || typeof extensionSettings !== 'object' || Array.isArray(extensionSettings)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Invalid regex settings bundle', 400, 'validation_error', 'validation');
+        }
+        const settings = readJsonObject(settingsPath) ?? {};
+        const currentExtensionSettings = settings.extension_settings;
+        const nextExtensionSettings = currentExtensionSettings && typeof currentExtensionSettings === 'object' && !Array.isArray(currentExtensionSettings)
+            ? { ...currentExtensionSettings }
+            : {};
+        for (const key of REGEX_SETTINGS_KEYS) {
+            if (Object.prototype.hasOwnProperty.call(extensionSettings, key)) {
+                nextExtensionSettings[key] = extensionSettings[key];
+            }
+        }
+        settings.extension_settings = nextExtensionSettings;
+        atomicWriteJson(settingsPath, settings);
+    }
+}
+
+
+/***/ },
+
 /***/ "./src/services/storage-service.ts"
 /*!*****************************************!*\
   !*** ./src/services/storage-service.ts ***!
@@ -8947,6 +9661,7 @@ function getUserContext(request) {
         handle: request.user.profile.handle,
         isAdmin: Boolean(request.user.profile.admin),
         rootDir: request.user.directories.root,
+        directories: request.user.directories,
     };
 }
 function getSessionToken(request) {
