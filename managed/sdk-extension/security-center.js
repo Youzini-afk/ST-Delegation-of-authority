@@ -303,10 +303,17 @@ class SecurityCenterView {
     getStManagerBridgeMaxFileSizeMiB() {
         const input = this.root.querySelector('[data-role="st-manager-bridge-max-file-size"]');
         const value = Number(input?.value ?? 0);
+        if (Number.isFinite(value) && value < 0) {
+            return -1;
+        }
         if (Number.isFinite(value) && value > 0) {
             return value;
         }
-        return Math.max(1, Math.ceil((this.state.stManagerBridgeConfig?.max_file_size ?? 100 * 1024 * 1024) / (1024 * 1024)));
+        const configuredMaxFileSize = this.state.stManagerBridgeConfig?.max_file_size ?? 100 * 1024 * 1024;
+        if (configuredMaxFileSize < 0) {
+            return -1;
+        }
+        return Math.max(1, Math.ceil(configuredMaxFileSize / (1024 * 1024)));
     }
     getStManagerBridgeResourceTypes() {
         const checked = Array.from(this.root.querySelectorAll('[data-role="st-manager-bridge-resource"]:checked'))

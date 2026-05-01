@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     buildStManagerBridgePayload,
+    normalizeStManagerBridgeConfig,
     renderStManagerBridgeSection,
     ST_MANAGER_RESOURCE_OPTIONS,
     type StManagerBridgeConfig,
@@ -54,6 +55,26 @@ describe('st-manager bridge view helpers', () => {
             max_file_size: 256 * 1024 * 1024,
             resource_types: ['characters', 'regex'],
             rotate_key: true,
+        });
+    });
+
+    it('normalizes, renders, and saves negative max file size as unlimited', () => {
+        const unlimitedConfig = normalizeStManagerBridgeConfig({
+            ...config,
+            max_file_size: -1024,
+        });
+
+        expect(unlimitedConfig?.max_file_size).toBe(-1);
+        expect(renderStManagerBridgeSection(unlimitedConfig, null, false)).toContain('单文件上限：不限制');
+        expect(renderStManagerBridgeSection(unlimitedConfig, null, false)).toContain('value="-1"');
+        expect(buildStManagerBridgePayload({
+            enabled: true,
+            maxFileSizeMiB: -1,
+            resourceTypes: ['characters'],
+        })).toEqual({
+            enabled: true,
+            max_file_size: -1,
+            resource_types: ['characters'],
         });
     });
 });

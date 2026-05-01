@@ -82,6 +82,23 @@ describe('StManagerBridgeService', () => {
         expect(fs.existsSync(path.join(userRoot, 'characters', 'Bex.png'))).toBe(false);
     });
 
+    it('treats negative max file size as unlimited for uploads', () => {
+        const updated = service.updateAdminConfig(user(), {
+            enabled: true,
+            rotate_key: true,
+            max_file_size: -1,
+        });
+        const headers = { authorization: `Bearer ${updated.bridge_key}` };
+
+        expect(updated.max_file_size).toBe(-1);
+        expect(service.getPublicConfig(user()).max_file_size).toBe(-1);
+        expect(() => service.writeInit(user(), 'characters', {
+            path: 'Huge.png',
+            size: 101 * 1024 * 1024,
+            sha256: '0'.repeat(64),
+        }, headers)).not.toThrow();
+    });
+
     it('binds the current admin user when enabling or rotating the bridge key', () => {
         const updated = service.updateAdminConfig(user(), { enabled: true, rotate_key: true });
 

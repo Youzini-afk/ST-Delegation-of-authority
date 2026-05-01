@@ -27,16 +27,20 @@ export function normalizeStManagerBridgeConfig(value) {
     };
 }
 export function buildStManagerBridgePayload(values) {
+    const maxFileSizeMiB = Number(values.maxFileSizeMiB);
     return {
         enabled: values.enabled,
-        max_file_size: Math.max(1, Math.floor(values.maxFileSizeMiB || 1)) * MIB,
+        max_file_size: Number.isFinite(maxFileSizeMiB) && maxFileSizeMiB < 0
+            ? -1
+            : Math.max(1, Math.floor(maxFileSizeMiB || 1)) * MIB,
         resource_types: normalizeResourceTypes(values.resourceTypes),
         ...(values.rotateKey ? { rotate_key: true } : {}),
     };
 }
 export function renderStManagerBridgeSection(config, generatedKey, busy) {
     const enabled = Boolean(config?.enabled);
-    const maxFileSizeMiB = Math.max(1, Math.ceil((config?.max_file_size ?? DEFAULT_MAX_FILE_SIZE) / MIB));
+    const maxFileSize = config?.max_file_size ?? DEFAULT_MAX_FILE_SIZE;
+    const maxFileSizeMiB = maxFileSize < 0 ? -1 : Math.max(1, Math.ceil(maxFileSize / MIB));
     const resourceTypes = new Set(config?.resource_types ?? RESOURCE_TYPES);
     const statusTone = enabled ? 'granted' : 'warning';
     const statusLabel = enabled ? '已启用' : '未启用';
@@ -70,7 +74,7 @@ export function renderStManagerBridgeSection(config, generatedKey, busy) {
                 <div class="authority-settings-row authority-settings-row--${enabled ? 'success' : 'warning'}">
                     <div>
                         <strong>桥接状态</strong>
-                        <div class="authority-muted">绑定用户：${escapeHtml(boundUser)} · 单文件上限：${escapeHtml(formatBytes(config?.max_file_size ?? DEFAULT_MAX_FILE_SIZE))}</div>
+                        <div class="authority-muted">绑定用户：${escapeHtml(boundUser)} · 单文件上限：${escapeHtml(formatBridgeMaxFileSize(maxFileSize))}</div>
                     </div>
                     <div class="authority-settings-row__control">
                         <label class="authority-bridge-toggle">
@@ -82,10 +86,10 @@ export function renderStManagerBridgeSection(config, generatedKey, busy) {
                 <div class="authority-settings-row">
                     <div>
                         <strong>最大文件大小</strong>
-                        <div class="authority-muted">聊天 jsonl 和角色卡传输会按这个上限校验。</div>
+                        <div class="authority-muted">聊天 jsonl 和角色卡传输会按这个上限校验；填 -1 表示不限制。</div>
                     </div>
                     <div class="authority-settings-row__control">
-                        <input class="authority-bridge-size-input" data-role="st-manager-bridge-max-file-size" type="number" min="1" step="1" value="${escapeHtml(String(maxFileSizeMiB))}" ${disabledAttr} />
+                        <input class="authority-bridge-size-input" data-role="st-manager-bridge-max-file-size" type="number" min="-1" step="1" value="${escapeHtml(String(maxFileSizeMiB))}" ${disabledAttr} />
                         <span class="authority-muted">MiB</span>
                     </div>
                 </div>
@@ -121,10 +125,16 @@ export function renderStManagerBridgeSection(config, generatedKey, busy) {
 }
 function normalizeMaxFileSize(value) {
     const size = Number(value);
-    if (!Number.isFinite(size) || size <= 0) {
+    if (!Number.isFinite(size) || size === 0) {
         return DEFAULT_MAX_FILE_SIZE;
     }
-    return Math.floor(size);
+    if (size < 0) {
+        return -1;
+    }
+    return Math.max(1, Math.floor(size));
+}
+function formatBridgeMaxFileSize(value) {
+    return value < 0 ? '不限制' : formatBytes(value);
 }
 function normalizeResourceTypes(value) {
     if (!Array.isArray(value)) {

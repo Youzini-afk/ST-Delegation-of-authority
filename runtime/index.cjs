@@ -7059,6 +7059,16 @@ function stableResourceTypes(value) {
     const selected = value.filter((item) => _st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES.includes(item));
     return selected.length ? selected : [..._st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES];
 }
+function normalizePublicMaxFileSize(value) {
+    const maxFileSize = Number(value);
+    if (!Number.isFinite(maxFileSize) || maxFileSize === 0) {
+        return DEFAULT_MAX_FILE_SIZE;
+    }
+    if (maxFileSize < 0) {
+        return -1;
+    }
+    return Math.max(1, Math.floor(maxFileSize));
+}
 function snapshotUser(user) {
     const snapshot = {
         handle: user.handle,
@@ -7101,7 +7111,7 @@ class StManagerBridgeService {
             bound_user_handle: state.bound_user?.handle ?? null,
             key_fingerprint: state.key_fingerprint ?? null,
             key_masked: state.key_fingerprint ? `stmb_${state.key_fingerprint.slice(0, 4)}...${state.key_fingerprint.slice(-4)}` : null,
-            max_file_size: Number(state.max_file_size || DEFAULT_MAX_FILE_SIZE),
+            max_file_size: normalizePublicMaxFileSize(state.max_file_size),
             resource_types: stableResourceTypes(state.resource_types),
         };
     }
@@ -7119,10 +7129,10 @@ class StManagerBridgeService {
         }
         if (payload.max_file_size !== undefined) {
             const maxFileSize = Number(payload.max_file_size);
-            if (!Number.isFinite(maxFileSize) || maxFileSize <= 0) {
+            if (!Number.isFinite(maxFileSize) || maxFileSize === 0) {
                 throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Invalid max_file_size', 400, 'validation_error', 'validation');
             }
-            next.max_file_size = Math.floor(maxFileSize);
+            next.max_file_size = maxFileSize < 0 ? -1 : Math.max(1, Math.floor(maxFileSize));
         }
         let bridgeKey = null;
         if (payload.rotate_key === true || (next.enabled && !next.key_hash)) {
@@ -7204,7 +7214,7 @@ class StManagerBridgeService {
         const relativePath = String(payload.path ?? '');
         const overwriteMode = String(payload.overwrite_mode ?? 'skip');
         const maxFileSize = this.getPublicConfig(user).max_file_size;
-        if (!Number.isFinite(size) || size < 0 || size > maxFileSize) {
+        if (!Number.isFinite(size) || size < 0 || (maxFileSize >= 0 && size > maxFileSize)) {
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('Invalid transfer size', 400, 'validation_error', 'validation');
         }
         if (!/^[a-f0-9]{64}$/i.test(expectedSha)) {
