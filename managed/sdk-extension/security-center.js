@@ -3,7 +3,7 @@ import { clearChildren, escapeHtml, formatDate } from './dom.js';
 import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseAssetSections, renderDatabaseGroupTable, renderGrantSettingsRows, renderJobTable, renderMetricTile, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
 import { RESOURCE_OPTIONS, SECURITY_CENTER_CONFIG, STATUS_OPTIONS, } from './security-center/constants.js';
 import { formatBytes, getCoreStateLabel, getDeclaredPermissionLabels, getExtensionRiskLevel, getInstallStatusLabel, getInstallTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, sortByTimestampDesc, } from './security-center/formatters.js';
-import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, renderStManagerBridgeSection, } from './security-center/st-manager-bridge.js';
+import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, renderStManagerBridgeSection, ST_MANAGER_RESOURCE_OPTIONS, } from './security-center/st-manager-bridge.js';
 import { buildStManagerControlPayload, normalizeStManagerControlConfig, renderStManagerControlSection, } from './security-center/st-manager-control.js';
 import { bootstrapSecurityCenter as bootstrapSecurityCenterHost, openSecurityCenter as openSecurityCenterHost, } from './security-center/host.js';
 import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
@@ -367,6 +367,11 @@ class SecurityCenterView {
             .map(input => input.value);
         return checked.length ? checked : this.state.stManagerBridgeConfig?.resource_types ?? [];
     }
+    getStManagerControlResourceTypes() {
+        const checked = Array.from(this.root.querySelectorAll('[data-role="st-manager-control-resource"]:checked'))
+            .map(input => input.value);
+        return checked.length ? checked : ST_MANAGER_RESOURCE_OPTIONS.map(option => option.type);
+    }
     async copyStManagerBridgeKey() {
         const input = this.root.querySelector('[data-role="st-manager-bridge-key"]');
         const key = input?.value || this.state.stManagerBridgeGeneratedKey;
@@ -425,7 +430,7 @@ class SecurityCenterView {
             await authorityRequest('/st-manager/control/backup/start', {
                 method: 'POST',
                 body: {
-                    resource_types: this.getStManagerBridgeResourceTypes(),
+                    resource_types: this.getStManagerControlResourceTypes(),
                     description: 'manual backup from Authority',
                     ingest: true,
                 },
@@ -473,7 +478,7 @@ class SecurityCenterView {
                 method: 'POST',
                 body: {
                     backup_id: backupId,
-                    resource_types: this.getStManagerBridgeResourceTypes(),
+                    resource_types: this.getStManagerControlResourceTypes(),
                 },
             });
             toastr.success(`恢复预览完成：${JSON.stringify(preview).slice(0, 80)}`, TOAST_TITLE);
@@ -496,7 +501,7 @@ class SecurityCenterView {
                 body: {
                     backup_id: backupId,
                     overwrite,
-                    resource_types: this.getStManagerBridgeResourceTypes(),
+                    resource_types: this.getStManagerControlResourceTypes(),
                 },
             });
             toastr.success('已触发 ST-Manager 恢复', TOAST_TITLE);

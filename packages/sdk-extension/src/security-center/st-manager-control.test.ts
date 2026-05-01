@@ -42,8 +42,11 @@ describe('st-manager control view helpers', () => {
         }, [{ backup_id: 'backup-001', created_at: '2026-05-01', total_files: 2 }], false);
 
         expect(html).toContain('ST-Manager 控制');
+        expect(html).toContain('只需要 ST-Manager URL 和 Control Key');
         expect(html).toContain('data-action="probe-st-manager-control"');
         expect(html).toContain('data-action="pair-st-manager-control"');
+        expect(html).toContain('同步回连配置（可选）');
+        expect(html).toContain('data-role="st-manager-control-resource"');
         expect(html).toContain('data-action="start-st-manager-backup"');
         expect(html).toContain('data-action="preview-st-manager-restore"');
         expect(html).toContain('data-action="restore-st-manager-backup"');

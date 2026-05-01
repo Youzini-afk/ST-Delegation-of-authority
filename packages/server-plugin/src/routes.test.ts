@@ -523,7 +523,10 @@ describe('registerRoutes', () => {
         await posts.get('/st-manager/control/backup/start')?.(adminRequest, response);
 
         expect(runtime.stManagerControl.getAdminConfig).toHaveBeenCalled();
-        expect(runtime.stManagerControl.startBackup).toHaveBeenCalledWith({ resource_types: ['characters'] });
+        expect(runtime.stManagerControl.startBackup).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice', isAdmin: true }),
+            { resource_types: ['characters'] },
+        );
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ manager_url: 'https://manager.example', control_key: 'stmc_plain_key' }));
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });

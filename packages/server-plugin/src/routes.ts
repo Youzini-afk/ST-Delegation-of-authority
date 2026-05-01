@@ -977,8 +977,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.post('/st-manager/control/backup/start', async (req, res) => {
         try {
-            getAdminUser(req);
-            ok(res, await runtime.stManagerControl.startBackup(req.body ?? {}));
+            const user = getAdminUser(req);
+            ok(res, await runtime.stManagerControl.startBackup(user, req.body ?? {}));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
         }
@@ -1013,8 +1013,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.post('/st-manager/control/restore-preview', async (req, res) => {
         try {
-            getAdminUser(req);
-            ok(res, await runtime.stManagerControl.restorePreview(req.body ?? {}));
+            const user = getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restorePreview(user, req.body ?? {}));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
         }
@@ -1022,8 +1022,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
 
     router.post('/st-manager/control/restore', async (req, res) => {
         try {
-            getAdminUser(req);
-            ok(res, await runtime.stManagerControl.restoreBackup(req.body ?? {}));
+            const user = getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restoreBackup(user, req.body ?? {}));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
         }

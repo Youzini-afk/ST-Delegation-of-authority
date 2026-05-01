@@ -1,4 +1,5 @@
 import { escapeHtml } from '../dom.js';
+import { ST_MANAGER_RESOURCE_OPTIONS } from './st-manager-bridge.js';
 export function normalizeStManagerControlConfig(value) {
     if (!value || typeof value !== 'object') {
         return null;
@@ -30,7 +31,7 @@ export function renderStManagerControlSection(config, backups, busy) {
             <div class="authority-card__header">
                 <div>
                     <h3>ST-Manager 控制</h3>
-                    <div class="authority-muted">从酒馆侧触发 ST-Manager 备份、恢复预览与恢复。</div>
+                    <div class="authority-muted">酒馆侧主动推送备份和恢复只需要 ST-Manager URL 和 Control Key。</div>
                 </div>
                 <div class="authority-page-actions authority-page-actions--inline">
                     <span class="authority-pill authority-pill--${enabled ? 'granted' : 'warning'}">${enabled ? '已配置' : '未配置'}</span>
@@ -41,7 +42,7 @@ export function renderStManagerControlSection(config, backups, busy) {
                 <div class="authority-settings-row">
                     <div>
                         <strong>连接</strong>
-                        <div class="authority-muted">${escapeHtml(managerUrl || '填写 ST-Manager URL 和 Control Key')}</div>
+                        <div class="authority-muted">${escapeHtml(managerUrl || '填写 ST-Manager URL 和 Control Key；不要求酒馆公网可访问')}</div>
                     </div>
                     <div class="authority-settings-row__control authority-settings-row__control--stacked">
                         <input class="authority-bridge-key-field" data-role="st-manager-control-url" type="url" value="${escapeHtml(managerUrl)}" placeholder="https://manager.example" ${disabledAttr} />
@@ -49,6 +50,20 @@ export function renderStManagerControlSection(config, backups, busy) {
                             <input class="authority-bridge-key-field" data-role="st-manager-control-key" type="password" value="${escapeHtml(controlKey)}" placeholder="stmc_..." ${disabledAttr} />
                             <button type="button" class="authority-action-button" data-action="toggle-secret-visibility" data-target-role="st-manager-control-key" title="显示或隐藏 Control Key" aria-pressed="false" ${disabledAttr}>👁</button>
                         </div>
+                    </div>
+                </div>
+                <div class="authority-settings-row">
+                    <div>
+                        <strong>发送 / 恢复资源</strong>
+                        <div class="authority-muted">这组选择只用于酒馆侧主动推送到 ST-Manager，与 Bridge 回连开关分开。</div>
+                    </div>
+                    <div class="authority-bridge-resource-grid">
+                        ${ST_MANAGER_RESOURCE_OPTIONS.map(option => `
+                            <label class="authority-bridge-resource">
+                                <input type="checkbox" data-role="st-manager-control-resource" value="${option.type}" checked ${disabledAttr} />
+                                <span>${escapeHtml(option.label)}</span>
+                            </label>
+                        `).join('')}
                     </div>
                 </div>
                 <div class="authority-settings-row">
@@ -83,7 +98,7 @@ export function renderStManagerControlSection(config, backups, busy) {
                 <div class="authority-page-actions authority-page-actions--inline">
                     <button type="button" class="authority-action-button" data-action="save-st-manager-control" ${disabledAttr}>保存控制配置</button>
                     <button type="button" class="authority-action-button" data-action="probe-st-manager-control" ${disabledAttr}>测试连接</button>
-                    <button type="button" class="authority-action-button" data-action="pair-st-manager-control" ${disabledAttr}>同步 Bridge 配置</button>
+                    <button type="button" class="authority-action-button" data-action="pair-st-manager-control" ${disabledAttr}>同步回连配置（可选）</button>
                     <button type="button" class="authority-action-button authority-action-button--primary" data-action="start-st-manager-backup" ${disabledAttr}>立即备份</button>
                     <button type="button" class="authority-action-button" data-action="refresh-st-manager-backups" ${disabledAttr}>刷新列表</button>
                     <button type="button" class="authority-action-button" data-action="preview-st-manager-restore" ${disabledAttr}>恢复预览</button>

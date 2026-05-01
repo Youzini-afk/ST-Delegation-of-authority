@@ -1018,8 +1018,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/st-manager/control/backup/start', async (req, res) => {
         try {
-            getAdminUser(req);
-            ok(res, await runtime.stManagerControl.startBackup(req.body ?? {}));
+            const user = getAdminUser(req);
+            ok(res, await runtime.stManagerControl.startBackup(user, req.body ?? {}));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
@@ -1054,8 +1054,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/st-manager/control/restore-preview', async (req, res) => {
         try {
-            getAdminUser(req);
-            ok(res, await runtime.stManagerControl.restorePreview(req.body ?? {}));
+            const user = getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restorePreview(user, req.body ?? {}));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
@@ -1063,8 +1063,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/st-manager/control/restore', async (req, res) => {
         try {
-            getAdminUser(req);
-            ok(res, await runtime.stManagerControl.restoreBackup(req.body ?? {}));
+            const user = getAdminUser(req);
+            ok(res, await runtime.stManagerControl.restoreBackup(user, req.body ?? {}));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-manager-control', error);
@@ -7431,6 +7431,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
 /* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./st-manager-resource-locator.js */ "./src/services/st-manager-resource-locator.ts");
+
 
 
 
@@ -7476,9 +7478,13 @@ function adminState(state) {
 class StManagerControlService {
     statePath;
     fetcher;
+    locator;
+    chunkSize;
     constructor(options = {}) {
         this.statePath = options.statePath ?? defaultStatePath();
         this.fetcher = options.fetcher ?? fetch;
+        this.locator = options.locator ?? new _st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.StManagerResourceLocator();
+        this.chunkSize = Math.max(1, Number(options.chunkSize ?? 1024 * 1024) || 1024 * 1024);
     }
     getPublicConfig() {
         return publicState(this.readState());
@@ -7505,10 +7511,13 @@ class StManagerControlService {
         return adminState(next);
     }
     probe() {
-        return this.request('POST', '/api/remote_backups/probe');
+        return this.request('GET', '/api/remote_backups/control');
     }
-    startBackup(payload) {
-        return this.request('POST', '/api/remote_backups/start', payload);
+    startBackup(userOrPayload, maybePayload) {
+        if (maybePayload === undefined) {
+            return this.request('POST', '/api/remote_backups/start', userOrPayload);
+        }
+        return this.pushBackup(userOrPayload, maybePayload);
     }
     listBackups() {
         return this.request('GET', '/api/remote_backups/list');
@@ -7516,14 +7525,221 @@ class StManagerControlService {
     getBackupDetail(backupId) {
         return this.request('GET', `/api/remote_backups/detail?backup_id=${encodeURIComponent(backupId)}`);
     }
-    restorePreview(payload) {
-        return this.request('POST', '/api/remote_backups/restore-preview', payload);
+    restorePreview(userOrPayload, maybePayload) {
+        if (maybePayload === undefined) {
+            return this.request('POST', '/api/remote_backups/restore-preview', userOrPayload);
+        }
+        return this.previewRestoreToAuthority(userOrPayload, maybePayload);
     }
-    restoreBackup(payload) {
-        return this.request('POST', '/api/remote_backups/restore', payload);
+    restoreBackup(userOrPayload, maybePayload) {
+        if (maybePayload === undefined) {
+            return this.request('POST', '/api/remote_backups/restore', userOrPayload);
+        }
+        return this.restoreToAuthority(userOrPayload, maybePayload);
     }
     async pair(payload) {
         return await this.request('POST', '/api/remote_backups/config', payload);
+    }
+    async pushBackup(user, payload) {
+        const resourceTypes = this.resolveResourceTypes(payload.resource_types);
+        const startResponse = await this.request('POST', '/api/remote_backups/incoming/start', {
+            backup_id: payload.backup_id,
+            description: payload.description ?? 'manual backup from Authority',
+            source: 'authority_control',
+            resource_types: resourceTypes,
+        });
+        const backup = this.extractObject(startResponse.backup, 'ST-Manager incoming start response missing backup');
+        const backupId = String(backup.backup_id || payload.backup_id || '');
+        if (!backupId) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('ST-Manager incoming start response missing backup_id', 502, 'validation_error', 'core');
+        }
+        for (const resourceType of resourceTypes) {
+            const manifest = this.locator.buildManifest(user, resourceType);
+            for (const entry of manifest.files) {
+                const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
+                const digest = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(file.buffer).digest('hex');
+                await this.uploadBackupFile(backupId, resourceType, entry, file.buffer, digest);
+            }
+        }
+        return await this.request('POST', '/api/remote_backups/incoming/complete', {
+            backup_id: backupId,
+            ingest: payload.ingest !== false,
+        });
+    }
+    async uploadBackupFile(backupId, resourceType, entry, buffer, digest) {
+        const initResponse = await this.request('POST', '/api/remote_backups/incoming/file/write-init', {
+            backup_id: backupId,
+            resource_type: resourceType,
+            relative_path: entry.relative_path,
+            size: buffer.length,
+            sha256: digest,
+            metadata: {
+                kind: entry.kind,
+                source: entry.source,
+                mtime: entry.mtime,
+            },
+        });
+        const transfer = this.extractObject(initResponse.transfer, 'ST-Manager write-init response missing transfer');
+        const uploadId = String(transfer.upload_id || '');
+        if (!uploadId) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('ST-Manager write-init response missing upload_id', 502, 'validation_error', 'core');
+        }
+        let offset = 0;
+        while (offset < buffer.length) {
+            const chunk = buffer.subarray(offset, offset + this.chunkSize);
+            await this.request('POST', '/api/remote_backups/incoming/file/write-chunk', {
+                upload_id: uploadId,
+                offset,
+                data_base64: chunk.toString('base64'),
+            });
+            offset += chunk.length;
+        }
+        await this.request('POST', '/api/remote_backups/incoming/file/write-commit', {
+            upload_id: uploadId,
+        });
+    }
+    async previewRestoreToAuthority(user, payload) {
+        const backupId = this.requiredBackupId(payload);
+        const manifest = await this.getRemoteBackupManifest(backupId);
+        const resourceTypes = this.resolveResourceTypes(payload.resource_types ?? manifest.resource_types);
+        const preview = { backup_id: backupId, items: [], create: 0, overwrite: 0, same: 0 };
+        for (const resourceType of resourceTypes) {
+            const localEntries = new Map(this.locator.buildManifest(user, resourceType).files.map(entry => [entry.relative_path, entry]));
+            for (const entry of this.backupEntries(manifest, resourceType)) {
+                const relativePath = String(entry.relative_path || entry.path || '');
+                const localEntry = localEntries.get(relativePath);
+                const same = Boolean(localEntry && localEntry.sha256 === entry.sha256);
+                const action = same ? 'same' : (localEntry ? 'overwrite' : 'create');
+                preview[action] += 1;
+                preview.items.push({
+                    resource_type: resourceType,
+                    relative_path: relativePath,
+                    exists_local: Boolean(localEntry),
+                    same_sha256: same,
+                    action,
+                });
+            }
+        }
+        return preview;
+    }
+    async restoreToAuthority(user, payload) {
+        const backupId = this.requiredBackupId(payload);
+        const overwrite = Boolean(payload.overwrite);
+        const manifest = await this.getRemoteBackupManifest(backupId);
+        const resourceTypes = this.resolveResourceTypes(payload.resource_types ?? manifest.resource_types);
+        const result = { backup_id: backupId, uploaded: 0, skipped: 0, failed: 0, items: [] };
+        for (const resourceType of resourceTypes) {
+            const localEntries = new Map(this.locator.buildManifest(user, resourceType).files.map(entry => [entry.relative_path, entry]));
+            for (const entry of this.backupEntries(manifest, resourceType)) {
+                const relativePath = String(entry.relative_path || entry.path || '');
+                if (localEntries.has(relativePath) && !overwrite) {
+                    result.skipped += 1;
+                    result.items.push({ resource_type: resourceType, relative_path: relativePath, status: 'skipped_existing' });
+                    continue;
+                }
+                try {
+                    const data = await this.downloadBackupFile(backupId, resourceType, relativePath, String(entry.sha256 || ''));
+                    const write = this.locator.writeResourceFile(user, resourceType, relativePath, data, overwrite ? 'overwrite' : 'skip');
+                    if (write.skipped) {
+                        result.skipped += 1;
+                        result.items.push({ resource_type: resourceType, relative_path: relativePath, status: 'skipped_existing' });
+                    }
+                    else {
+                        result.uploaded += 1;
+                        result.items.push({ resource_type: resourceType, relative_path: relativePath, status: 'uploaded' });
+                    }
+                }
+                catch (error) {
+                    result.failed += 1;
+                    result.items.push({
+                        resource_type: resourceType,
+                        relative_path: relativePath,
+                        status: 'failed',
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                }
+            }
+        }
+        return result;
+    }
+    async downloadBackupFile(backupId, resourceType, relativePath, expectedSha256 = '') {
+        const chunks = [];
+        let offset = 0;
+        let remoteSha256 = '';
+        while (true) {
+            const response = await this.request('POST', '/api/remote_backups/file/read', {
+                backup_id: backupId,
+                resource_type: resourceType,
+                path: relativePath,
+                offset,
+                limit: this.chunkSize,
+            });
+            const file = this.extractObject(response.file, 'ST-Manager file read response missing file');
+            const chunk = Buffer.from(String(file.data_base64 || ''), 'base64');
+            const bytesRead = Number(file.bytes_read ?? chunk.length);
+            if (bytesRead !== chunk.length) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`chunk size mismatch for ${relativePath}`, 502, 'validation_error', 'core');
+            }
+            chunks.push(chunk);
+            offset += chunk.length;
+            remoteSha256 = String(file.sha256 || remoteSha256);
+            if (file.eof) {
+                break;
+            }
+            if (chunk.length === 0) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`file read stalled for ${relativePath}`, 502, 'validation_error', 'core');
+            }
+        }
+        const data = Buffer.concat(chunks);
+        const actualSha256 = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(data).digest('hex');
+        const expected = expectedSha256 || remoteSha256;
+        if (expected && actualSha256 !== expected) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`sha256 mismatch for ${relativePath}`, 502, 'validation_error', 'core');
+        }
+        if (remoteSha256 && actualSha256 !== remoteSha256) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`sha256 mismatch for ${relativePath}`, 502, 'validation_error', 'core');
+        }
+        return data;
+    }
+    async getRemoteBackupManifest(backupId) {
+        const response = await this.getBackupDetail(backupId);
+        return this.extractObject(response.backup, 'ST-Manager detail response missing backup');
+    }
+    backupEntries(manifest, resourceType) {
+        const resources = manifest.resources;
+        if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
+            return [];
+        }
+        const entries = resources[resourceType];
+        return Array.isArray(entries)
+            ? entries.filter((entry) => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+            : [];
+    }
+    resolveResourceTypes(value) {
+        const values = Array.isArray(value) && value.length ? value : _st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES;
+        const result = [];
+        for (const item of values) {
+            if (!_st_manager_resource_locator_js__WEBPACK_IMPORTED_MODULE_5__.ST_MANAGER_RESOURCE_TYPES.includes(item)) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`Unsupported resource type: ${String(item)}`, 400, 'validation_error', 'validation');
+            }
+            if (!result.includes(item)) {
+                result.push(item);
+            }
+        }
+        return result;
+    }
+    requiredBackupId(payload) {
+        const backupId = String(payload.backup_id || '').trim();
+        if (!backupId) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('backup_id is required', 400, 'validation_error', 'validation');
+        }
+        return backupId;
+    }
+    extractObject(value, message) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(message, 502, 'validation_error', 'core');
+        }
+        return value;
     }
     async request(method, apiPath, payload) {
         const state = this.readState();
@@ -7549,6 +7765,10 @@ class StManagerControlService {
         if (!response.ok) {
             const message = typeof data === 'object' && data && 'error' in data ? String(data.error) : text;
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(message || `ST-Manager request failed: ${response.status}`, response.status, 'validation_error', 'core');
+        }
+        if (typeof data === 'object' && data && data.success === false) {
+            const message = 'error' in data ? String(data.error) : 'ST-Manager request failed';
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(message, 502, 'validation_error', 'core');
         }
         return data;
     }

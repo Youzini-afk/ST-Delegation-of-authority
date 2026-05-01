@@ -63,6 +63,7 @@ import {
     buildStManagerBridgePayload,
     normalizeStManagerBridgeConfig,
     renderStManagerBridgeSection,
+    ST_MANAGER_RESOURCE_OPTIONS,
     type StManagerBridgeConfig,
 } from './security-center/st-manager-bridge.js';
 import {
@@ -484,6 +485,12 @@ class SecurityCenterView {
         return checked.length ? checked : this.state.stManagerBridgeConfig?.resource_types ?? [];
     }
 
+    private getStManagerControlResourceTypes(): string[] {
+        const checked = Array.from(this.root.querySelectorAll<HTMLInputElement>('[data-role="st-manager-control-resource"]:checked'))
+            .map(input => input.value);
+        return checked.length ? checked : ST_MANAGER_RESOURCE_OPTIONS.map(option => option.type);
+    }
+
     private async copyStManagerBridgeKey(): Promise<void> {
         const input = this.root.querySelector<HTMLInputElement>('[data-role="st-manager-bridge-key"]');
         const key = input?.value || this.state.stManagerBridgeGeneratedKey;
@@ -542,7 +549,7 @@ class SecurityCenterView {
             await authorityRequest('/st-manager/control/backup/start', {
                 method: 'POST',
                 body: {
-                    resource_types: this.getStManagerBridgeResourceTypes(),
+                    resource_types: this.getStManagerControlResourceTypes(),
                     description: 'manual backup from Authority',
                     ingest: true,
                 },
@@ -593,7 +600,7 @@ class SecurityCenterView {
                 method: 'POST',
                 body: {
                     backup_id: backupId,
-                    resource_types: this.getStManagerBridgeResourceTypes(),
+                    resource_types: this.getStManagerControlResourceTypes(),
                 },
             });
             toastr.success(`恢复预览完成：${JSON.stringify(preview).slice(0, 80)}`, TOAST_TITLE);
@@ -617,7 +624,7 @@ class SecurityCenterView {
                 body: {
                     backup_id: backupId,
                     overwrite,
-                    resource_types: this.getStManagerBridgeResourceTypes(),
+                    resource_types: this.getStManagerControlResourceTypes(),
                 },
             });
             toastr.success('已触发 ST-Manager 恢复', TOAST_TITLE);
