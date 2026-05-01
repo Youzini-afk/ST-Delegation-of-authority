@@ -1,9 +1,7 @@
-import { Popup, POPUP_TYPE } from '/scripts/popup.js';
 import { renderExtensionTemplateAsync } from '/scripts/extensions.js';
 import { AUTHORITY_EXTENSION_NAME } from '../api.js';
 import { clearChildren, htmlToElement, waitForElement } from '../dom.js';
 import { TOP_BAR_CONTENT_ID, TOP_BAR_DRAWER_ID, TOP_BAR_ICON_ID, } from './constants.js';
-const POPUP_TEXT_TYPE = POPUP_TYPE.TEXT ?? 0;
 let bootPromise = null;
 let workspaceRenderToken = 0;
 export function bootstrapSecurityCenter(createView) {
@@ -23,15 +21,21 @@ async function openSecurityCenterPopup(createView, options) {
     const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'security-center', {}, false, false);
     const root = htmlToElement(html);
     root.classList.add('authority-panel--popup');
+    const overlay = document.createElement('div');
+    overlay.className = 'authority-floating-overlay';
+    overlay.appendChild(root);
+    document.body.appendChild(overlay);
     const view = createView(root, options.focusExtensionId);
-    const popup = new Popup(root, POPUP_TEXT_TYPE, '', {
-        okButton: '关闭',
-        wide: true,
-        large: true,
-        allowVerticalScrolling: true,
-        onOpen: () => view.initialize(),
-    });
-    await popup.show();
+    const close = () => {
+        document.removeEventListener('keydown', onKeyDown);
+        overlay.remove();
+    };
+    const onKeyDown = (e) => {
+        if (e.key === 'Escape') close();
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', onKeyDown);
+    await view.initialize();
 }
 async function doBootstrapSecurityCenter(createView) {
     try {
