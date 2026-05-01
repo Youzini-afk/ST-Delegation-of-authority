@@ -874,6 +874,18 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
         }
     });
 
+    router.get('/st-manager/bridge/admin/config', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            if (!user.isAdmin) {
+                throw new AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
+            }
+            ok(res, runtime.stManagerBridge.getPublicConfig(user));
+        } catch (error) {
+            fail(runtime, req, res, 'third-party/st-manager-bridge', error);
+        }
+    });
+
     router.post('/st-manager/bridge/admin/config', async (req, res) => {
         try {
             const user = getUserContext(req);

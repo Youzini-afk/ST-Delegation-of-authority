@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from './version.js';
 import { registerRoutes } from './routes.js';
@@ -28,6 +32,7 @@ describe('registerRoutes', () => {
             '/jobs/:id',
             '/events/stream',
             '/st-manager/bridge/probe',
+            '/st-manager/bridge/admin/config',
             '/st-manager/resources/:type/manifest',
             '/admin/policies',
             '/admin/import-export/operations',
@@ -297,6 +302,134 @@ describe('registerRoutes', () => {
                     httpFetchResponse: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
                 }),
             }),
+        }));
+    });
+
+    it('resolves relative SillyTavern user directories from the server root before probing', async () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-st-root-'));
+        const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tempRoot);
+        try {
+            const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+            const router = {
+                get() {
+                    return undefined;
+                },
+                post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                    posts.set(path, handler);
+                },
+            };
+
+            const runtime = {
+                core: {
+                    refreshHealth: vi.fn().mockResolvedValue(undefined),
+                    getStatus: vi.fn(() => ({ health: { limits: {} } })),
+                },
+                install: {
+                    getStatus: vi.fn(() => ({
+                        pluginVersion: AUTHORITY_VERSION,
+                        sdkBundledVersion: AUTHORITY_VERSION,
+                        sdkDeployedVersion: AUTHORITY_VERSION,
+                        coreBundledVersion: AUTHORITY_VERSION,
+                        coreArtifactPlatform: 'win32-x64',
+                        coreArtifactPlatforms: ['win32-x64'],
+                        coreArtifactHash: 'hash',
+                        coreBinarySha256: 'sha256',
+                        coreVerified: true,
+                        coreMessage: null,
+                        installStatus: 'ready',
+                        installMessage: 'ready',
+                    })),
+                },
+            } as unknown as AuthorityRuntime;
+
+            registerRoutes(router, runtime);
+            const response = {
+                status: vi.fn().mockReturnThis(),
+                json: vi.fn(),
+                send: vi.fn(),
+                setHeader: vi.fn(),
+                write: vi.fn(),
+                end: vi.fn(),
+            };
+
+            await posts.get('/probe')?.({
+                user: {
+                    profile: {
+                        handle: 'alice',
+                        admin: false,
+                    },
+                    directories: {
+                        root: 'data/default-user',
+                    },
+                },
+                body: {},
+                headers: {},
+            }, response);
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                storageRoot: path.join(tempRoot, 'data', 'default-user', 'extensions-data', 'authority', 'storage'),
+            }));
+        } finally {
+            cwdSpy.mockRestore();
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('exposes ST-Manager bridge admin config without rotating or rewriting it', async () => {
+        const gets = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                gets.set(path, handler);
+            },
+            post() {
+                return undefined;
+            },
+        };
+        const runtime = {
+            stManagerBridge: {
+                getPublicConfig: vi.fn(() => ({
+                    enabled: true,
+                    bound_user_handle: 'alice',
+                    key_fingerprint: 'abcdef123456',
+                    key_masked: 'stmb_abcd...3456',
+                    max_file_size: 104857600,
+                    resource_types: ['characters'],
+                })),
+                updateAdminConfig: vi.fn(),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await gets.get('/st-manager/bridge/admin/config')?.({
+            user: {
+                profile: {
+                    handle: 'alice',
+                    admin: true,
+                },
+                directories: {
+                    root: 'C:/users/alice',
+                },
+            },
+            headers: {},
+        }, response);
+
+        expect(runtime.stManagerBridge.getPublicConfig).toHaveBeenCalledWith(expect.objectContaining({
+            handle: 'alice',
+            isAdmin: true,
+        }));
+        expect(runtime.stManagerBridge.updateAdminConfig).not.toHaveBeenCalled();
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            enabled: true,
+            key_masked: 'stmb_abcd...3456',
         }));
     });
 

@@ -1520,6 +1520,53 @@
   min-width: 142px;
 }
 
+.authority-bridge-key-field,
+.authority-bridge-size-input {
+  background: var(--authority-surface-highest);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--authority-text);
+  font-size: 0.74rem;
+  min-height: 30px;
+  min-width: 0;
+  padding: 7px 9px;
+}
+
+.authority-bridge-key-field {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  width: min(420px, 100%);
+}
+
+.authority-bridge-size-input {
+  width: 92px;
+}
+
+.authority-bridge-toggle,
+.authority-bridge-resource {
+  align-items: center;
+  color: var(--authority-text);
+  display: inline-flex;
+  font-size: 0.76rem;
+  font-weight: 700;
+  gap: 6px;
+  line-height: 1.2;
+}
+
+.authority-bridge-resource-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(116px, 1fr));
+  min-width: min(430px, 100%);
+}
+
+.authority-bridge-resource {
+  background: var(--authority-surface-high);
+  border: 1px solid var(--authority-outline-soft);
+  border-radius: 4px;
+  min-height: 30px;
+  padding: 6px 8px;
+}
+
 .authority-action-button:hover {
   background: rgba(124, 109, 255, 0.22);
   border-color: rgba(124, 109, 255, 0.5);
@@ -1946,6 +1993,11 @@
   .authority-policy-footer {
     grid-template-columns: 1fr;
     flex-direction: column;
+  }
+
+  .authority-bridge-resource-grid {
+    grid-template-columns: 1fr;
+    min-width: 100%;
   }
 }
 

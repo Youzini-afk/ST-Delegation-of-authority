@@ -120,7 +120,7 @@ import type {
 } from '@stdo/shared-types';
 import { AUTHORITY_MANAGED_CORE_DIR } from '../constants.js';
 import type { AuthorityCoreHealthSnapshot, AuthorityCoreManagedMetadata, AuthorityCoreStatus, CoreRuntimeState } from '../types.js';
-import { asErrorMessage, AuthorityServiceError, randomToken } from '../utils.js';
+import { asErrorMessage, AuthorityServiceError, randomToken, resolveRuntimePath } from '../utils.js';
 
 interface CoreArtifact {
     binaryPath: string;
@@ -233,7 +233,7 @@ export class CoreService {
         const port = await getAvailablePort();
         const token = randomToken();
         const child = spawn(artifact.binaryPath, [], {
-            cwd: path.dirname(artifact.binaryPath),
+            cwd: this.cwd,
             env: {
                 ...this.env,
                 AUTHORITY_CORE_HOST: '127.0.0.1',
@@ -241,6 +241,7 @@ export class CoreService {
                 AUTHORITY_CORE_TOKEN: token,
                 AUTHORITY_CORE_VERSION: artifact.metadata.version,
                 AUTHORITY_CORE_API_VERSION: CORE_API_VERSION,
+                AUTHORITY_CORE_DATA_ROOT: resolveCoreDataRoot(this.env.AUTHORITY_CORE_DATA_ROOT, this.cwd),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
@@ -1187,6 +1188,13 @@ function listManagedCorePlatforms(root: string): string[] {
     } catch {
         return [];
     }
+}
+
+function resolveCoreDataRoot(value: string | undefined, cwd: string): string {
+    const configuredRoot = typeof value === 'string' && value.trim()
+        ? value
+        : 'data';
+    return resolveRuntimePath(configuredRoot, cwd);
 }
 
 function buildTriviumOpenPayload(dbPath: string, request: {

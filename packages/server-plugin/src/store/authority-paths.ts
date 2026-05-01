@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { AUTHORITY_DATA_FOLDER } from '../constants.js';
 import type { UserContext } from '../types.js';
+import { resolveRuntimePath } from '../utils.js';
 
 export interface UserAuthorityPaths {
     sqlPrivateDir: string;
@@ -34,7 +35,10 @@ export function getUserAuthorityPaths(user: UserContext): UserAuthorityPaths {
 
 export function getGlobalAuthorityPaths(): GlobalAuthorityPaths {
     const globalState = globalThis as typeof globalThis & { DATA_ROOT?: string };
-    const dataRoot = String(globalState.DATA_ROOT ?? process.cwd());
+    const configuredDataRoot = typeof globalState.DATA_ROOT === 'string' && globalState.DATA_ROOT.trim()
+        ? globalState.DATA_ROOT
+        : 'data';
+    const dataRoot = resolveRuntimePath(configuredDataRoot);
     const baseDir = path.join(dataRoot, '_authority-global', 'authority');
     const stateDir = path.join(baseDir, 'state');
     return {

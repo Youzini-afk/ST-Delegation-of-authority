@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import process from 'node:process';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from '../version.js';
 import { DEFAULT_POLICY_STATUS } from '../constants.js';
 import { PermissionService } from './permission-service.js';
@@ -45,6 +46,36 @@ describe('PermissionService', () => {
         const denied = await permissions.resolve(user, session, { resource: 'storage.blob' }, 'deny');
         expect(denied.status).toBe('denied');
         expect((await permissions.evaluate(user, session, { resource: 'storage.blob' })).decision).toBe('denied');
+    });
+
+    it('resolves relative global DATA_ROOT from the SillyTavern server root', async () => {
+        const sillyTavernRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-st-root-'));
+        cleanupDirs.push(sillyTavernRoot);
+        globalState.DATA_ROOT = 'data';
+        const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(sillyTavernRoot);
+        const core = createMockCore();
+        const capturedPaths: string[] = [];
+        core.getControlPolicies = async (dbPath: string) => {
+            capturedPaths.push(dbPath);
+            return {
+                defaults: DEFAULT_POLICY_STATUS,
+                extensions: {},
+                limits: { extensions: {} },
+                updatedAt: new Date().toISOString(),
+            };
+        };
+        try {
+            const policies = new PolicyService(core);
+            const user = createUser(false);
+            globalState.DATA_ROOT = 'data';
+            await policies.getPolicies(user);
+
+            expect(capturedPaths).toEqual([
+                path.join(sillyTavernRoot, 'data', '_authority-global', 'authority', 'state', 'control.sqlite'),
+            ]);
+        } finally {
+            cwdSpy.mockRestore();
+        }
     });
 
     it('consumes allow-once session grants after a single authorization', async () => {

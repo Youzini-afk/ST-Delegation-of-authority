@@ -4,7 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 import type { AuthorityErrorCategory, AuthorityErrorCode, AuthorityErrorPayload, PermissionResource } from '@stdo/shared-types';
 import { RESOURCE_RISK, SESSION_HEADER, SESSION_QUERY, SUPPORTED_RESOURCES } from './constants.js';
-import type { AuthorityRequest, PermissionDescriptor, UserContext } from './types.js';
+import type { AuthorityRequest, PermissionDescriptor, RequestUser, UserContext } from './types.js';
 
 export class AuthorityServiceError extends Error {
     constructor(
@@ -71,16 +71,23 @@ export function sanitizeFileSegment(input: string): string {
     return input.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+export function resolveRuntimePath(value: string, baseDir = process.cwd()): string {
+    return path.isAbsolute(value)
+        ? path.normalize(value)
+        : path.resolve(baseDir, value);
+}
+
 export function getUserContext(request: AuthorityRequest): UserContext {
     if (!request.user) {
         throw new AuthorityServiceError('Unauthorized', 401, 'unauthorized', 'auth');
     }
 
+    const directories = resolveUserDirectories(request.user.directories);
     return {
         handle: request.user.profile.handle,
         isAdmin: Boolean(request.user.profile.admin),
-        rootDir: request.user.directories.root,
-        directories: request.user.directories,
+        rootDir: directories.root,
+        directories,
     };
 }
 
@@ -223,4 +230,21 @@ function stripTrailingDot(value: string): string {
 
 function looksLikeAbsoluteUrl(value: string): boolean {
     return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
+}
+
+function resolveUserDirectories(directories: RequestUser['directories']): RequestUser['directories'] {
+    const resolved: RequestUser['directories'] = {
+        root: resolveRuntimePath(directories.root),
+    };
+
+    for (const [key, value] of Object.entries(directories)) {
+        if (key === 'root') {
+            continue;
+        }
+        if (typeof value === 'string' && value.trim()) {
+            resolved[key] = resolveRuntimePath(value);
+        }
+    }
+
+    return resolved;
 }
