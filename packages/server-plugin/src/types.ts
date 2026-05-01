@@ -20,6 +20,14 @@ export interface RequestUser {
     };
     directories: {
         root: string;
+        settings?: string;
+        worlds?: string;
+        chats?: string;
+        groupChats?: string;
+        characters?: string;
+        openAI_Settings?: string;
+        quickreplies?: string;
+        [key: string]: string | undefined;
     };
 }
 
@@ -93,6 +101,7 @@ export interface UserContext {
     handle: string;
     isAdmin: boolean;
     rootDir: string;
+    directories?: RequestUser['directories'];
 }
 
 export interface ActivityRecord {

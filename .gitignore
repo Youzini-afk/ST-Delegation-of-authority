@@ -4,5 +4,7 @@ dist/
 target/
 coverage/
 .vitest/
+.worktrees
+.worktrees/
 *.log
 *.tsbuildinfo

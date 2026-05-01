@@ -27,6 +27,8 @@ describe('registerRoutes', () => {
             '/jobs',
             '/jobs/:id',
             '/events/stream',
+            '/st-manager/bridge/probe',
+            '/st-manager/resources/:type/manifest',
             '/admin/policies',
             '/admin/import-export/operations',
             '/admin/usage-summary',
@@ -65,6 +67,11 @@ describe('registerRoutes', () => {
             '/http/fetch-open',
             '/fs/private/delete',
             '/fs/private/stat',
+            '/st-manager/bridge/admin/config',
+            '/st-manager/resources/:type/file/read',
+            '/st-manager/resources/:type/file/write-init',
+            '/st-manager/resources/:type/file/write-chunk',
+            '/st-manager/resources/:type/file/write-commit',
             '/admin/import-export/export',
             '/admin/import-export/import-transfer/init',
             '/admin/import-export/import',
@@ -291,5 +298,51 @@ describe('registerRoutes', () => {
                 }),
             }),
         }));
+    });
+
+    it('allows ST-Manager bridge probe with Bridge Key only', async () => {
+        const gets = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                gets.set(path, handler);
+            },
+            post() {
+                return undefined;
+            },
+        };
+
+        const boundUser = {
+            handle: 'alice',
+            isAdmin: true,
+            rootDir: 'C:/users/alice',
+            directories: { root: 'C:/users/alice' },
+        };
+        const runtime = {
+            stManagerBridge: {
+                resolveAuthorizedUser: vi.fn(() => boundUser),
+                probe: vi.fn(() => ({ success: true, user: { handle: 'alice', root: 'C:/users/alice' } })),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await gets.get('/st-manager/bridge/probe')?.({
+            headers: { authorization: 'Bearer stmb_key' },
+        }, response);
+
+        expect(runtime.stManagerBridge.resolveAuthorizedUser).toHaveBeenCalledWith(undefined, { authorization: 'Bearer stmb_key' });
+        expect(runtime.stManagerBridge.probe).toHaveBeenCalledWith(boundUser, { authorization: 'Bearer stmb_key' });
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 });
