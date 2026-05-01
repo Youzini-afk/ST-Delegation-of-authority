@@ -418,16 +418,16 @@ class SecurityCenterView {
             return;
         }
 
+        const payload = buildStManagerBridgePayload({
+            enabled: options.forceEnabled ?? this.getStManagerBridgeEnabled(),
+            maxFileSizeMiB: this.getStManagerBridgeMaxFileSizeMiB(),
+            resourceTypes: this.getStManagerBridgeResourceTypes(),
+            ...(options.rotateKey ? { rotateKey: true } : {}),
+        });
         this.state.stManagerBridgeActionInProgress = true;
         void this.renderUpdatesSection();
 
         try {
-            const payload = buildStManagerBridgePayload({
-                enabled: options.forceEnabled ?? this.getStManagerBridgeEnabled(),
-                maxFileSizeMiB: this.getStManagerBridgeMaxFileSizeMiB(),
-                resourceTypes: this.getStManagerBridgeResourceTypes(),
-                ...(options.rotateKey ? { rotateKey: true } : {}),
-            });
             const response = await authorityRequest<StManagerBridgeConfig>('/st-manager/bridge/admin/config', {
                 method: 'POST',
                 body: payload,

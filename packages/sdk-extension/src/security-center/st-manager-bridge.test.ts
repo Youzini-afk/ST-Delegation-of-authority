@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
     buildStManagerBridgePayload,
@@ -80,5 +82,18 @@ describe('st-manager bridge view helpers', () => {
             max_file_size: -1,
             resource_types: ['characters'],
         });
+    });
+
+    it('captures bridge form values before rendering the busy state', () => {
+        const source = fs.readFileSync(path.resolve(__dirname, '../security-center.ts'), 'utf8');
+        const methodStart = source.indexOf('private async updateStManagerBridgeConfig(');
+        const methodEnd = source.indexOf('private applyStManagerBridgeConfig(', methodStart);
+        const method = source.slice(methodStart, methodEnd);
+
+        expect(method.indexOf('const payload = buildStManagerBridgePayload')).toBeGreaterThanOrEqual(0);
+        expect(method.indexOf('this.state.stManagerBridgeActionInProgress = true')).toBeGreaterThanOrEqual(0);
+        expect(method.indexOf('const payload = buildStManagerBridgePayload')).toBeLessThan(
+            method.indexOf('this.state.stManagerBridgeActionInProgress = true'),
+        );
     });
 });
