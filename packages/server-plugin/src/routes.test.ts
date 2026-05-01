@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from './version.js';
 import { registerRoutes } from './routes.js';
@@ -298,6 +302,76 @@ describe('registerRoutes', () => {
                 }),
             }),
         }));
+    });
+
+    it('resolves relative SillyTavern user directories from the server root before probing', async () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-st-root-'));
+        const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tempRoot);
+        try {
+            const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+            const router = {
+                get() {
+                    return undefined;
+                },
+                post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                    posts.set(path, handler);
+                },
+            };
+
+            const runtime = {
+                core: {
+                    refreshHealth: vi.fn().mockResolvedValue(undefined),
+                    getStatus: vi.fn(() => ({ health: { limits: {} } })),
+                },
+                install: {
+                    getStatus: vi.fn(() => ({
+                        pluginVersion: AUTHORITY_VERSION,
+                        sdkBundledVersion: AUTHORITY_VERSION,
+                        sdkDeployedVersion: AUTHORITY_VERSION,
+                        coreBundledVersion: AUTHORITY_VERSION,
+                        coreArtifactPlatform: 'win32-x64',
+                        coreArtifactPlatforms: ['win32-x64'],
+                        coreArtifactHash: 'hash',
+                        coreBinarySha256: 'sha256',
+                        coreVerified: true,
+                        coreMessage: null,
+                        installStatus: 'ready',
+                        installMessage: 'ready',
+                    })),
+                },
+            } as unknown as AuthorityRuntime;
+
+            registerRoutes(router, runtime);
+            const response = {
+                status: vi.fn().mockReturnThis(),
+                json: vi.fn(),
+                send: vi.fn(),
+                setHeader: vi.fn(),
+                write: vi.fn(),
+                end: vi.fn(),
+            };
+
+            await posts.get('/probe')?.({
+                user: {
+                    profile: {
+                        handle: 'alice',
+                        admin: false,
+                    },
+                    directories: {
+                        root: 'data/default-user',
+                    },
+                },
+                body: {},
+                headers: {},
+            }, response);
+
+            expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+                storageRoot: path.join(tempRoot, 'data', 'default-user', 'extensions-data', 'authority', 'storage'),
+            }));
+        } finally {
+            cwdSpy.mockRestore();
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
     });
 
     it('allows ST-Manager bridge probe with Bridge Key only', async () => {
