@@ -2611,10 +2611,11 @@ fn handle_sql_stat(request: SqlStatRequest) -> Result<JsonValue, ApiError> {
 
 fn handle_trivium_insert(request: TriviumInsertRequest) -> Result<JsonValue, ApiError> {
     let TriviumInsertRequest {
-        open,
+        mut open,
         vector,
         payload,
     } = request;
+    infer_trivium_open_dimension(&mut open, Some(vector.len()));
     let id = match parse_trivium_dtype(open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
             let mut db = open_trivium_f32(&open)?;
@@ -2653,11 +2654,12 @@ fn handle_trivium_insert_with_id(
     request: TriviumInsertWithIdRequest,
 ) -> Result<JsonValue, ApiError> {
     let TriviumInsertWithIdRequest {
-        open,
+        mut open,
         id,
         vector,
         payload,
     } = request;
+    infer_trivium_open_dimension(&mut open, Some(vector.len()));
     match parse_trivium_dtype(open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
             let mut db = open_trivium_f32(&open)?;
@@ -2696,7 +2698,11 @@ fn handle_trivium_insert_with_id(
 
 fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonValue, ApiError> {
     validate_trivium_bulk_item_count(request.items.len())?;
-    let total_count = request.items.len();
+    let TriviumBulkUpsertRequest {
+        mut open,
+        items: input_items,
+    } = request;
+    let total_count = input_items.len();
     if total_count == 0 {
         return Ok(serde_json::to_value(TriviumBulkUpsertResponse {
             total_count,
@@ -2707,22 +2713,39 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
         })
         .expect("trivium bulk upsert response should serialize"));
     }
+    infer_trivium_open_dimension(
+        &mut open,
+        input_items
+            .iter()
+            .find(|item| !item.vector.is_empty())
+            .map(|item| item.vector.len()),
+    );
 
     let mut failures = Vec::new();
     let mut items = Vec::new();
-    match parse_trivium_dtype(request.open.dtype.as_deref())? {
+    match parse_trivium_dtype(open.dtype.as_deref())? {
         TriviumDTypeTag::F32 => {
-            let mut db = open_trivium_f32(&request.open)?;
-            for (index, item) in request.items.into_iter().enumerate() {
-                let exists = db.contains(item.id);
+            let mut db = open_trivium_f32(&open)?;
+            for (index, item) in input_items.into_iter().enumerate() {
+                let existing_node = db.get(item.id);
+                let exists = existing_node.is_some();
                 let vector = item
                     .vector
                     .iter()
                     .map(|&value| value as f32)
                     .collect::<Vec<_>>();
-                let result = if exists {
-                    db.update_vector(item.id, &vector)
-                        .and_then(|_| db.update_payload(item.id, item.payload))
+                let result = if let Some(existing_node) = existing_node {
+                    let previous_vector = existing_node.vector;
+                    match db.update_vector(item.id, &vector) {
+                        Ok(()) => match db.update_payload(item.id, item.payload) {
+                            Ok(()) => Ok(()),
+                            Err(error) => {
+                                let _ = db.update_vector(item.id, &previous_vector);
+                                Err(error)
+                            }
+                        },
+                        Err(error) => Err(error),
+                    }
                 } else {
                     db.insert_with_id(item.id, &vector, item.payload)
                         .map(|_| ())
@@ -2741,17 +2764,27 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
             }
         }
         TriviumDTypeTag::F16 => {
-            let mut db = open_trivium_f16(&request.open)?;
-            for (index, item) in request.items.into_iter().enumerate() {
-                let exists = db.contains(item.id);
+            let mut db = open_trivium_f16(&open)?;
+            for (index, item) in input_items.into_iter().enumerate() {
+                let existing_node = db.get(item.id);
+                let exists = existing_node.is_some();
                 let vector = item
                     .vector
                     .iter()
                     .map(|&value| f16::from_f64(value))
                     .collect::<Vec<_>>();
-                let result = if exists {
-                    db.update_vector(item.id, &vector)
-                        .and_then(|_| db.update_payload(item.id, item.payload))
+                let result = if let Some(existing_node) = existing_node {
+                    let previous_vector = existing_node.vector;
+                    match db.update_vector(item.id, &vector) {
+                        Ok(()) => match db.update_payload(item.id, item.payload) {
+                            Ok(()) => Ok(()),
+                            Err(error) => {
+                                let _ = db.update_vector(item.id, &previous_vector);
+                                Err(error)
+                            }
+                        },
+                        Err(error) => Err(error),
+                    }
                 } else {
                     db.insert_with_id(item.id, &vector, item.payload)
                         .map(|_| ())
@@ -2770,17 +2803,27 @@ fn handle_trivium_bulk_upsert(request: TriviumBulkUpsertRequest) -> Result<JsonV
             }
         }
         TriviumDTypeTag::U64 => {
-            let mut db = open_trivium_u64(&request.open)?;
-            for (index, item) in request.items.into_iter().enumerate() {
-                let exists = db.contains(item.id);
+            let mut db = open_trivium_u64(&open)?;
+            for (index, item) in input_items.into_iter().enumerate() {
+                let existing_node = db.get(item.id);
+                let exists = existing_node.is_some();
                 let vector = item
                     .vector
                     .iter()
                     .map(|&value| value as u64)
                     .collect::<Vec<_>>();
-                let result = if exists {
-                    db.update_vector(item.id, &vector)
-                        .and_then(|_| db.update_payload(item.id, item.payload))
+                let result = if let Some(existing_node) = existing_node {
+                    let previous_vector = existing_node.vector;
+                    match db.update_vector(item.id, &vector) {
+                        Ok(()) => match db.update_payload(item.id, item.payload) {
+                            Ok(()) => Ok(()),
+                            Err(error) => {
+                                let _ = db.update_vector(item.id, &previous_vector);
+                                Err(error)
+                            }
+                        },
+                        Err(error) => Err(error),
+                    }
                 } else {
                     db.insert_with_id(item.id, &vector, item.payload)
                         .map(|_| ())
@@ -3532,6 +3575,7 @@ fn handle_trivium_flush(request: TriviumFlushRequest) -> Result<JsonValue, ApiEr
 fn handle_trivium_stat(request: TriviumStatRequest) -> Result<JsonValue, ApiError> {
     let TriviumStatRequest { open } = request;
     validate_non_empty("dbPath", &open.db_path)?;
+    validate_trivium_dim(open.dim)?;
 
     let dtype = parse_trivium_dtype(open.dtype.as_deref())?;
     let sync_mode = parse_trivium_sync_mode(open.sync_mode.as_deref())?;
@@ -5380,11 +5424,50 @@ fn parse_trivium_storage_mode(value: Option<&str>) -> Result<TriviumStorageMode,
 
 fn build_trivium_config(request: &TriviumOpenRequest) -> Result<TriviumConfig, ApiError> {
     validate_non_empty("dbPath", &request.db_path)?;
+    let db_path = Path::new(&request.db_path);
+    let stored_dim = if db_path.exists() {
+        read_trivium_dimension_from_file(db_path)
+    } else {
+        None
+    };
+    if matches!(request.dim, Some(0)) {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("trivium dim must be positive"),
+        });
+    }
+    if let (Some(request_dim), Some(stored_dim)) = (request.dim, stored_dim) {
+        if request_dim != stored_dim {
+            return Err(ApiError {
+                status_code: 400,
+                message: format!(
+                    "trivium database is {stored_dim}-dimensional; request dim is {request_dim}"
+                ),
+            });
+        }
+    }
     Ok(TriviumConfig {
-        dim: request.dim.unwrap_or(1536),
+        dim: request.dim.or(stored_dim).unwrap_or(1536),
         sync_mode: parse_trivium_sync_mode(request.sync_mode.as_deref())?,
         storage_mode: parse_trivium_storage_mode(request.storage_mode.as_deref())?,
     })
+}
+
+fn validate_trivium_dim(dim: Option<usize>) -> Result<(), ApiError> {
+    if matches!(dim, Some(0)) {
+        return Err(ApiError {
+            status_code: 400,
+            message: String::from("trivium dim must be positive"),
+        });
+    }
+    Ok(())
+}
+
+fn infer_trivium_open_dimension(request: &mut TriviumOpenRequest, vector_dim: Option<usize>) {
+    if request.dim.is_some() {
+        return;
+    }
+    request.dim = read_trivium_dimension_from_file(Path::new(&request.db_path)).or(vector_dim);
 }
 
 fn open_trivium_f32(request: &TriviumOpenRequest) -> Result<TriviumDatabase<f32>, ApiError> {
@@ -5682,7 +5765,8 @@ fn read_trivium_dimension_from_file(path: &Path) -> Option<usize> {
     if &header[0..4] != b"TVDB" {
         return None;
     }
-    Some(u32::from_le_bytes([header[6], header[7], header[8], header[9]]) as usize)
+    let dim = u32::from_le_bytes([header[6], header[7], header[8], header[9]]) as usize;
+    (dim > 0).then_some(dim)
 }
 
 fn build_trivium_database_record(
@@ -9035,6 +9119,122 @@ mod tests {
         assert_eq!(response["successCount"], json!(1));
         assert_eq!(response["failureCount"], json!(1));
         assert_eq!(response["failures"][0]["index"], json!(1));
+    }
+
+    #[test]
+    fn trivium_insert_infers_dimension_from_vector_when_dim_is_omitted() {
+        let db_path = test_trivium_path("insert-infers-vector-dim");
+        let inserted = handle_trivium_insert(TriviumInsertRequest {
+            open: TriviumOpenRequest {
+                db_path: db_path.clone(),
+                dim: None,
+                dtype: Some(String::from("f32")),
+                sync_mode: None,
+                storage_mode: None,
+            },
+            vector: vec![1.0, 0.0, 0.0, 0.0, 0.0],
+            payload: json!({ "name": "alpha" }),
+        })
+        .expect("insert without dim should infer from vector");
+        assert_eq!(inserted["id"], json!(1));
+        handle_trivium_flush(TriviumFlushRequest {
+            open: test_trivium_open_request(db_path.clone(), 5),
+        })
+        .expect("flush should persist inferred database header");
+
+        let stat = handle_trivium_stat(TriviumStatRequest {
+            open: TriviumOpenRequest {
+                db_path,
+                dim: None,
+                dtype: Some(String::from("f32")),
+                sync_mode: None,
+                storage_mode: None,
+            },
+        })
+        .expect("stat without dim should read inferred database");
+        assert_eq!(stat["vectorDim"], json!(5));
+    }
+
+    #[test]
+    fn trivium_open_rejects_zero_dimension() {
+        let error = handle_trivium_stat(TriviumStatRequest {
+            open: test_trivium_open_request(test_trivium_path("zero-dim"), 0),
+        })
+        .expect_err("zero dim should fail validation");
+
+        assert_eq!(error.status_code, 400);
+        assert_eq!(error.message, "trivium dim must be positive");
+    }
+
+    #[test]
+    fn trivium_bulk_upsert_reopens_existing_database_without_explicit_dim() {
+        let db_path = test_trivium_path("bulk-upsert-existing-dim");
+        handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path.clone(), 4),
+            items: vec![TriviumBulkUpsertItem {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: json!({ "name": "alpha" }),
+            }],
+        })
+        .expect("initial 4-dim upsert should succeed");
+        handle_trivium_flush(TriviumFlushRequest {
+            open: test_trivium_open_request(db_path.clone(), 4),
+        })
+        .expect("flush should persist trivium header");
+
+        let response = handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: TriviumOpenRequest {
+                db_path,
+                dim: None,
+                dtype: Some(String::from("f32")),
+                sync_mode: None,
+                storage_mode: None,
+            },
+            items: vec![TriviumBulkUpsertItem {
+                id: 2,
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                payload: json!({ "name": "beta" }),
+            }],
+        })
+        .expect("existing database dim should be read from header");
+
+        assert_eq!(response["successCount"], json!(1));
+        assert_eq!(response["failureCount"], json!(0));
+    }
+
+    #[test]
+    fn trivium_bulk_upsert_rejects_explicit_dim_conflicting_with_existing_header() {
+        let db_path = test_trivium_path("bulk-upsert-header-dim-conflict");
+        handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path.clone(), 4),
+            items: vec![TriviumBulkUpsertItem {
+                id: 1,
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                payload: json!({ "name": "alpha" }),
+            }],
+        })
+        .expect("initial 4-dim upsert should succeed");
+        handle_trivium_flush(TriviumFlushRequest {
+            open: test_trivium_open_request(db_path.clone(), 4),
+        })
+        .expect("flush should persist trivium header");
+
+        let error = handle_trivium_bulk_upsert(TriviumBulkUpsertRequest {
+            open: test_trivium_open_request(db_path, 1536),
+            items: vec![TriviumBulkUpsertItem {
+                id: 2,
+                vector: vec![0.0; 1536],
+                payload: json!({ "name": "beta" }),
+            }],
+        })
+        .expect_err("explicit conflicting dim should fail before opening");
+
+        assert_eq!(error.status_code, 400);
+        assert_eq!(
+            error.message,
+            "trivium database is 4-dimensional; request dim is 1536"
+        );
     }
 
     #[test]
