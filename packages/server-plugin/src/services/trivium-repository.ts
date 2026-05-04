@@ -35,6 +35,7 @@ import type {
     TriviumTqlRequest,
     TriviumTqlResponse,
     TriviumUpdatePayloadRequest,
+    TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
@@ -85,6 +86,10 @@ export class TriviumRepository {
 
     async updatePayload(dbPath: string, request: TriviumUpdatePayloadRequest): Promise<void> {
         await this.core.updateTriviumPayload(dbPath, request);
+    }
+
+    async updateVector(dbPath: string, request: TriviumUpdateVectorRequest): Promise<void> {
+        await this.core.updateTriviumVector(dbPath, request);
     }
 
     async indexText(dbPath: string, request: TriviumIndexTextRequest): Promise<void> {

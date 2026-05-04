@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StManagerResourceLocator } from './st-manager-resource-locator.js';
 import type { UserContext } from '../types.js';
 
@@ -100,5 +100,29 @@ describe('StManagerResourceLocator', () => {
 
         expect(() => locator.readResourceFile(user(), 'characters', '../settings.json')).toThrow(/Invalid resource path/);
         expect(() => locator.resolveWritePath(user(), 'characters', 'C:/escape.png')).toThrow(/Invalid resource path/);
+    });
+
+    it('reuses manifest hashes while size and mtime stay unchanged', () => {
+        const characters = path.join(userRoot, 'characters');
+        const cardPath = path.join(characters, 'Ava.png');
+        fs.mkdirSync(characters, { recursive: true });
+        fs.writeFileSync(cardPath, Buffer.from('png-card'));
+        const originalReadFileSync = fs.readFileSync;
+        const readCalls: string[] = [];
+        const locator = new StManagerResourceLocator();
+
+        const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+            readCalls.push(String(file));
+            return originalReadFileSync(file, ...(args as []));
+        });
+        try {
+            const first = locator.buildManifest(user(), 'characters').files[0]!;
+            const second = locator.buildManifest(user(), 'characters').files[0]!;
+
+            expect(second.sha256).toBe(first.sha256);
+            expect(readCalls.filter(file => file === cardPath)).toHaveLength(1);
+        } finally {
+            spy.mockRestore();
+        }
     });
 });

@@ -85,6 +85,289 @@ describe('TriviumService', () => {
         expect(neighbors.nodes?.map(item => item.externalId)).toEqual(['beta']);
     });
 
+    it('infers Trivium dim from the first bulk-upsert vector when dim is omitted', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        const seenDims: Array<number | undefined> = [];
+        const originalBulkUpsert = core.bulkUpsertTrivium.bind(core);
+        core.bulkUpsertTrivium = async (dbPath, request) => {
+            seenDims.push(request.dim);
+            return await originalBulkUpsert(dbPath, request);
+        };
+
+        const upserted = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [
+                { externalId: 'alpha', vector: [1, 0, 0, 0], payload: { name: 'alpha' } },
+                { externalId: 'beta', vector: [0, 1, 0, 0], payload: { name: 'beta' } },
+            ],
+        });
+
+        expect(upserted.successCount).toBe(2);
+        expect(seenDims).toEqual([4]);
+    });
+
+    it('infers Trivium dim for single upsert requests when dim is omitted', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        const seenDims: Array<number | undefined> = [];
+        const originalBulkUpsert = core.bulkUpsertTrivium.bind(core);
+        core.bulkUpsertTrivium = async (dbPath, request) => {
+            seenDims.push(request.dim);
+            return await originalBulkUpsert(dbPath, request);
+        };
+
+        await trivium.upsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            externalId: 'alpha',
+            vector: [1, 0, 0, 0, 0, 0],
+            payload: { name: 'alpha' },
+        });
+
+        expect(seenDims).toEqual([6]);
+    });
+
+    it('infers Trivium dim for direct insert and update-vector requests', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        const seenInsertDims: Array<number | undefined> = [];
+        const seenUpdateDims: Array<number | undefined> = [];
+        const originalInsert = core.insertTrivium.bind(core);
+        const originalUpdate = core.updateTriviumVector.bind(core);
+        core.insertTrivium = async (dbPath, request) => {
+            seenInsertDims.push(request.dim);
+            return await originalInsert(dbPath, request);
+        };
+        core.updateTriviumVector = async (dbPath, request) => {
+            seenUpdateDims.push(request.dim);
+            return await originalUpdate(dbPath, request);
+        };
+
+        const inserted = await trivium.insert(user, 'third-party/ext-a', {
+            database: 'graph',
+            vector: [1, 0, 0, 0, 0, 0, 0],
+            payload: {},
+        });
+        await trivium.updateVector(user, 'third-party/ext-a', {
+            database: 'graph',
+            id: inserted.id,
+            vector: [0, 1, 0, 0, 0, 0, 0],
+        });
+
+        expect(seenInsertDims).toEqual([7]);
+        expect(seenUpdateDims).toEqual([7]);
+    });
+
+    it('does not persist a synthetic dim for empty bulk-upsert requests', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        const seenDims: Array<number | undefined> = [];
+        const originalBulkUpsert = core.bulkUpsertTrivium.bind(core);
+        core.bulkUpsertTrivium = async (dbPath, request) => {
+            seenDims.push(request.dim);
+            return await originalBulkUpsert(dbPath, request);
+        };
+
+        const empty = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [],
+        });
+        const upserted = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [{ externalId: 'alpha', vector: Array.from({ length: 4096 }, () => 0), payload: {} }],
+        });
+
+        expect(empty).toEqual({ totalCount: 0, successCount: 0, failureCount: 0, failures: [], items: [] });
+        expect(upserted.successCount).toBe(1);
+        expect(seenDims).toEqual([4096]);
+    });
+
+    it('rejects all-empty-vector bulk-upsert requests without defaulting to 1536', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        let coreCalls = 0;
+        const originalBulkUpsert = core.bulkUpsertTrivium.bind(core);
+        core.bulkUpsertTrivium = async (dbPath, request) => {
+            coreCalls += 1;
+            return await originalBulkUpsert(dbPath, request);
+        };
+
+        const rejected = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [{ externalId: 'alpha', vector: [], payload: {} }],
+        });
+
+        expect(coreCalls).toBe(0);
+        expect(rejected).toMatchObject({ totalCount: 1, successCount: 0, failureCount: 1, items: [] });
+        expect(rejected.failures[0]?.message).toBe('Cannot infer Trivium dim for database graph; provide dim or at least one non-empty vector');
+
+        const upserted = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [{ externalId: 'beta', vector: Array.from({ length: 4096 }, () => 0), payload: {} }],
+        });
+
+        expect(upserted.successCount).toBe(1);
+    });
+
+    it('allows explicit dim to replace stale metadata when the Trivium file is absent', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            dim: 3,
+            items: [{ externalId: 'alpha', vector: [1, 0, 0], payload: {} }],
+        });
+        const dbPath = path.join(
+            getUserAuthorityPaths(user).triviumPrivateDir,
+            sanitizeFileSegment('third-party/ext-a'),
+            'graph.tdb',
+        );
+        fs.rmSync(dbPath, { force: true });
+
+        const upserted = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            dim: 4096,
+            items: [{ externalId: 'beta', vector: Array.from({ length: 4096 }, () => 0), payload: {} }],
+        });
+
+        expect(upserted.successCount).toBe(1);
+    });
+
+    it('allows explicit dtype to replace stale metadata when the Trivium file is absent', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        const seenDTypes: Array<string | undefined> = [];
+        const originalBulkUpsert = core.bulkUpsertTrivium.bind(core);
+        core.bulkUpsertTrivium = async (dbPath, request) => {
+            seenDTypes.push(request.dtype);
+            return await originalBulkUpsert(dbPath, request);
+        };
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            dim: 3,
+            dtype: 'f16',
+            items: [{ externalId: 'alpha', vector: [1, 0, 0], payload: {} }],
+        });
+        const dbPath = path.join(
+            getUserAuthorityPaths(user).triviumPrivateDir,
+            sanitizeFileSegment('third-party/ext-a'),
+            'graph.tdb',
+        );
+        fs.rmSync(dbPath, { force: true });
+
+        const upserted = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            dim: 3,
+            dtype: 'f32',
+            items: [{ externalId: 'beta', vector: [0, 1, 0], payload: {} }],
+        });
+
+        expect(upserted.successCount).toBe(1);
+        expect(seenDTypes).toEqual(['f16', 'f32']);
+    });
+
+    it('cleans up newly-created mappings when core bulk-upsert throws', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        core.bulkUpsertTrivium = async () => {
+            throw new Error('core unavailable');
+        };
+
+        await expect(trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [{ externalId: 'alpha', vector: [1, 0], payload: {} }],
+        })).rejects.toThrow('core unavailable');
+
+        const mappings = await trivium.listMappingsPage(user, 'third-party/ext-a', { database: 'graph' });
+        expect(mappings.mappings).toEqual([]);
+    });
+
+    it('rejects oversized bulk-upsert requests before mapping or core work', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        let coreCalls = 0;
+        const originalBulkUpsert = core.bulkUpsertTrivium.bind(core);
+        core.bulkUpsertTrivium = async (dbPath, request) => {
+            coreCalls += 1;
+            return await originalBulkUpsert(dbPath, request);
+        };
+
+        await expect(trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: Array.from({ length: 2001 }, (_value, index) => ({
+                externalId: `item-${index}`,
+                vector: [1, 0],
+                payload: {},
+            })),
+        })).rejects.toThrow('Trivium bulk-upsert supports at most 2000 items per request');
+
+        const mappings = await trivium.listMappingsPage(user, 'third-party/ext-a', { database: 'graph' });
+        expect(coreCalls).toBe(0);
+        expect(mappings.mappings).toEqual([]);
+    });
+
+    it('reuses the stored Trivium dim and rejects mismatched vectors before core upsert', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        let coreCalls = 0;
+        const originalBulkUpsert = core.bulkUpsertTrivium.bind(core);
+        core.bulkUpsertTrivium = async (dbPath, request) => {
+            coreCalls += 1;
+            return await originalBulkUpsert(dbPath, request);
+        };
+
+        await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            dim: 3,
+            items: [{ externalId: 'alpha', vector: [1, 0, 0], payload: { name: 'alpha' } }],
+        });
+        const rejected = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            items: [{ externalId: 'beta', vector: [0, 1], payload: { name: 'beta' } }],
+        });
+
+        expect(coreCalls).toBe(1);
+        expect(rejected).toMatchObject({ successCount: 0, failureCount: 1 });
+        expect(rejected.failures[0]?.message).toBe('Trivium database graph expects 3-dimensional vectors; item 0 has 2');
+    });
+
+    it('rejects explicit dim that conflicts with an existing Trivium database header', async () => {
+        const user = createUser(dirs);
+        const core = createMockCore();
+        const trivium = new TriviumService(core);
+        const dbPath = path.join(
+            getUserAuthorityPaths(user).triviumPrivateDir,
+            sanitizeFileSegment('third-party/ext-a'),
+            'graph.tdb',
+        );
+        fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+        const header = Buffer.alloc(10);
+        header.write('TVDB', 0, 'utf8');
+        header.writeUInt32LE(4096, 6);
+        fs.writeFileSync(dbPath, header);
+
+        const rejected = await trivium.bulkUpsert(user, 'third-party/ext-a', {
+            database: 'graph',
+            dim: 1536,
+            items: [{ externalId: 'alpha', vector: Array.from({ length: 1536 }, () => 0), payload: {} }],
+        });
+
+        expect(rejected).toMatchObject({ successCount: 0, failureCount: 1 });
+        expect(rejected.failures[0]?.message).toBe('Trivium database graph is 4096-dimensional; request dim is 1536');
+    });
+
     it('removes externalId mappings when mapped nodes are bulk deleted', async () => {
         const user = createUser(dirs);
         const trivium = new TriviumService(createMockCore());
@@ -617,6 +900,37 @@ function createMockCore(): CoreService {
                 return toExecResult(1, null);
             }
             return toExecResult(0, null);
+        },
+        async insertTrivium(dbPath: string, request: { vector: number[]; payload: unknown }): Promise<{ id: number }> {
+            touch(dbPath);
+            const store = getDatabase(dbPath);
+            const id = store.size === 0 ? 1 : Math.max(...store.keys()) + 1;
+            store.set(id, {
+                id,
+                vector: [...request.vector],
+                payload: request.payload,
+                edges: [],
+                numEdges: 0,
+            });
+            return { id };
+        },
+        async insertTriviumWithId(dbPath: string, request: { id: number; vector: number[]; payload: unknown }): Promise<void> {
+            touch(dbPath);
+            const store = getDatabase(dbPath);
+            store.set(request.id, {
+                id: request.id,
+                vector: [...request.vector],
+                payload: request.payload,
+                edges: [],
+                numEdges: 0,
+            });
+        },
+        async updateTriviumVector(dbPath: string, request: { id: number; vector: number[] }): Promise<void> {
+            const node = getDatabase(dbPath).get(request.id);
+            if (!node) {
+                throw new Error('missing node');
+            }
+            node.vector = [...request.vector];
         },
         async bulkUpsertTrivium(dbPath: string, request: ControlTriviumBulkUpsertRequest): Promise<ControlTriviumBulkUpsertResponse> {
             touch(dbPath);
