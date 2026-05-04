@@ -2004,11 +2004,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
 
-            const dbPath = resolvePrivateTriviumDatabasePath(user, session.extension.id, database);
-            await runtime.core.updateTriviumVector(dbPath, {
-                ...payload,
-                database,
-            });
+            await runtime.trivium.updateVector(user, session.extension.id, payload);
             await runtime.audit.logUsage(user, session.extension.id, 'Trivium update vector', {
                 database,
                 id: payload.id,
