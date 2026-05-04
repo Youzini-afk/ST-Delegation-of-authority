@@ -1,13 +1,9 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import type {
     ControlTriviumBulkDeleteRequest,
     ControlTriviumBulkLinkRequest,
     ControlTriviumBulkUnlinkRequest,
-    ControlTriviumBulkUpsertRequest,
     ControlTriviumBulkUpsertResponse,
-    CursorPageInfo,
-    CursorPageRequest,
     TriviumBulkDeleteRequest,
     TriviumBulkFailure,
     TriviumBulkLinkRequest,
@@ -38,7 +34,6 @@ import type {
     TriviumListMappingsRequest,
     TriviumListMappingsResponse,
     TriviumMappingIntegrityIssue,
-    TriviumMappingRecord,
     TriviumNeighborsRequest,
     TriviumNeighborsResponse,
     TriviumNodeReference,
@@ -66,10 +61,10 @@ import type {
     TriviumUpsertRequest,
     TriviumUpsertResponse,
     TriviumUpdatePayloadRequest,
+    TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
-import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
-import { asErrorMessage, sanitizeFileSegment } from '../utils.js';
+import { asErrorMessage } from '../utils.js';
 import { CoreService } from './core-service.js';
 import {
     DEFAULT_INTEGRITY_SAMPLE_LIMIT,
@@ -82,16 +77,19 @@ import {
     type MappingIntegrityAnalysis,
     type ResolvedReference,
     type TriviumDatabaseConfigMeta,
-    type TriviumIndexLifecycleMeta,
     type TriviumPathSet,
     getBoundedPositiveInteger,
     getRequiredExternalId,
     getRequiredNumericId,
     getTriviumDatabaseName,
     getTriviumNamespace,
+    readTriviumDimension,
 } from './trivium-internal.js';
 import { TriviumMappingMetaStore } from './trivium-mapping-meta-store.js';
 import { TriviumRepository } from './trivium-repository.js';
+
+const MAX_TRIVIUM_BULK_ITEMS = 2000;
+type ResolvedTriviumOpenOptions = { dim: number; dtype?: TriviumDType };
 
 export class TriviumService {
     private readonly repository: TriviumRepository;
@@ -119,8 +117,11 @@ export class TriviumService {
     async insert(user: UserContext, extensionId: string, request: TriviumInsertRequest): Promise<TriviumInsertResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        const response = await this.repository.insert(dbPath, { ...request, database });
+        await this.ensureSchema(mappingDbPath);
+        const openOptions = await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, request.vector);
+        this.validateVectorDimension(request.vector, openOptions.dim, `Trivium database ${database}`);
+        const response = await this.repository.insert(dbPath, { ...request, database, ...openOptions });
+        await this.rememberDatabaseConfig(mappingDbPath, { ...request, ...openOptions });
         await this.markContentMutation(mappingDbPath);
         return response;
     }
@@ -128,47 +129,61 @@ export class TriviumService {
     async insertWithId(user: UserContext, extensionId: string, request: TriviumInsertWithIdRequest): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.repository.insertWithId(dbPath, { ...request, database });
+        await this.ensureSchema(mappingDbPath);
+        const openOptions = await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, request.vector);
+        this.validateVectorDimension(request.vector, openOptions.dim, `Trivium database ${database}`);
+        await this.repository.insertWithId(dbPath, { ...request, database, ...openOptions });
+        await this.rememberDatabaseConfig(mappingDbPath, { ...request, ...openOptions });
         await this.markContentMutation(mappingDbPath);
     }
 
     async updatePayload(user: UserContext, extensionId: string, request: TriviumUpdatePayloadRequest): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.repository.updatePayload(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.updatePayload(dbPath, { ...request, database, ...openOptions });
+        await this.markContentMutation(mappingDbPath);
+    }
+
+    async updateVector(user: UserContext, extensionId: string, request: TriviumUpdateVectorRequest): Promise<void> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const openOptions = await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, request.vector);
+        this.validateVectorDimension(request.vector, openOptions.dim, `Trivium database ${database}`);
+        await this.repository.updateVector(dbPath, { ...request, database, ...openOptions });
+        await this.rememberDatabaseConfig(mappingDbPath, { ...request, ...openOptions });
         await this.markContentMutation(mappingDbPath);
     }
 
     async indexText(user: UserContext, extensionId: string, request: TriviumIndexTextRequest): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.repository.indexText(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.indexText(dbPath, { ...request, database, ...openOptions });
         await this.markTextIndexWrite(mappingDbPath);
     }
 
     async indexKeyword(user: UserContext, extensionId: string, request: TriviumIndexKeywordRequest): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.repository.indexKeyword(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.indexKeyword(dbPath, { ...request, database, ...openOptions });
         await this.markTextIndexWrite(mappingDbPath);
     }
 
     async buildTextIndex(user: UserContext, extensionId: string, request: TriviumBuildTextIndexRequest = {}): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.repository.buildTextIndex(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.buildTextIndex(dbPath, { ...request, database, ...openOptions });
         await this.markTextIndexRebuild(mappingDbPath);
     }
 
     async compact(user: UserContext, extensionId: string, request: TriviumCompactRequest = {}): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.repository.compact(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.compact(dbPath, { ...request, database, ...openOptions });
         await this.markCompaction(mappingDbPath);
     }
 
@@ -263,14 +278,37 @@ export class TriviumService {
     async bulkUpsert(user: UserContext, extensionId: string, request: TriviumBulkUpsertRequest): Promise<TriviumBulkUpsertResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        if (request.items.length > MAX_TRIVIUM_BULK_ITEMS) {
+            throw new Error(`Trivium bulk-upsert supports at most ${MAX_TRIVIUM_BULK_ITEMS} items per request`);
+        }
+        if (request.items.length === 0) {
+            return {
+                totalCount: 0,
+                successCount: 0,
+                failureCount: 0,
+                failures: [],
+                items: [],
+            };
+        }
         await this.ensureSchema(mappingDbPath);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
+        const openResolution = await this.resolveBulkUpsertOpenOptions(dbPath, mappingDbPath, database, request);
+        if ('error' in openResolution) {
+            return {
+                totalCount: request.items.length,
+                successCount: 0,
+                failureCount: request.items.length,
+                failures: request.items.map((_item, index) => ({ index, message: openResolution.error })),
+                items: [],
+            };
+        }
+        const openOptions = openResolution;
 
         const failures: TriviumBulkFailure[] = [];
         const prepared: IndexedCoreUpsertItem[] = [];
 
         for (const [index, item] of request.items.entries()) {
             try {
+                this.validateVectorDimension(item.vector, openOptions.dim, `Trivium database ${database}`, index);
                 const mapping = await this.resolveReference(mappingDbPath, item, true);
                 prepared.push({
                     originalIndex: index,
@@ -288,11 +326,23 @@ export class TriviumService {
 
         let successItems: TriviumBulkUpsertResponse['items'] = [];
         if (prepared.length > 0) {
-            const coreResponse = await this.repository.bulkUpsert(dbPath, {
-                ...request,
-                database,
-                items: prepared.map(item => item.request),
-            });
+            let coreResponse: ControlTriviumBulkUpsertResponse;
+            try {
+                coreResponse = await this.repository.bulkUpsert(dbPath, {
+                    ...request,
+                    database,
+                    ...openOptions,
+                    items: prepared.map(item => item.request),
+                });
+            } catch (error) {
+                const cleanupIds = prepared
+                    .filter(item => item.mapping.createdMapping)
+                    .map(item => item.mapping.id);
+                if (cleanupIds.length > 0) {
+                    await this.deleteMappingsByInternalIds(mappingDbPath, cleanupIds);
+                }
+                throw error;
+            }
             const failedPreparedIndexes = new Set(coreResponse.failures.map(item => item.index));
             const cleanupIds = prepared
                 .filter((item, index) => item.mapping.createdMapping && failedPreparedIndexes.has(index))
@@ -321,6 +371,7 @@ export class TriviumService {
                 .filter((item): item is TriviumBulkUpsertResponse['items'][number] => item !== null)
                 .sort((left: TriviumBulkUpsertResponse['items'][number], right: TriviumBulkUpsertResponse['items'][number]) => left.index - right.index);
             if (successItems.length > 0) {
+                await this.rememberDatabaseConfig(mappingDbPath, { ...request, ...openOptions });
                 await this.markContentMutation(mappingDbPath);
             }
         }
@@ -337,6 +388,7 @@ export class TriviumService {
     async bulkLink(user: UserContext, extensionId: string, request: TriviumBulkLinkRequest): Promise<TriviumBulkMutationResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
         const failures: TriviumBulkFailure[] = [];
         const prepared: IndexedCoreMutationItem<ControlTriviumBulkLinkRequest['items'][number]>[] = [];
 
@@ -361,6 +413,7 @@ export class TriviumService {
         return await this.runBulkMutation(prepared, failures, request.items.length, items => this.repository.bulkLink(dbPath, {
             ...request,
             database,
+            ...openOptions,
             items,
         }));
     }
@@ -368,6 +421,7 @@ export class TriviumService {
     async bulkUnlink(user: UserContext, extensionId: string, request: TriviumBulkUnlinkRequest): Promise<TriviumBulkMutationResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
         const failures: TriviumBulkFailure[] = [];
         const prepared: IndexedCoreMutationItem<ControlTriviumBulkUnlinkRequest['items'][number]>[] = [];
 
@@ -390,6 +444,7 @@ export class TriviumService {
         return await this.runBulkMutation(prepared, failures, request.items.length, items => this.repository.bulkUnlink(dbPath, {
             ...request,
             database,
+            ...openOptions,
             items,
         }));
     }
@@ -397,6 +452,7 @@ export class TriviumService {
     async bulkDelete(user: UserContext, extensionId: string, request: TriviumBulkDeleteRequest): Promise<TriviumBulkMutationResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
         const failures: TriviumBulkFailure[] = [];
         const prepared: Array<IndexedCoreMutationItem<ControlTriviumBulkDeleteRequest['items'][number]> & { id: number }> = [];
 
@@ -416,6 +472,7 @@ export class TriviumService {
         const response = await this.runBulkMutation(prepared, failures, request.items.length, items => this.repository.bulkDelete(dbPath, {
             ...request,
             database,
+            ...openOptions,
             items,
         }));
         const failedOriginalIndexes = new Set(response.failures.map(item => item.index));
@@ -442,7 +499,8 @@ export class TriviumService {
     async get(user: UserContext, extensionId: string, request: TriviumGetRequest): Promise<TriviumNodeView | null> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const node = await this.repository.get(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        const node = await this.repository.get(dbPath, { ...request, database, ...openOptions });
         if (!node) {
             return null;
         }
@@ -453,7 +511,8 @@ export class TriviumService {
     async neighbors(user: UserContext, extensionId: string, request: TriviumNeighborsRequest): Promise<TriviumNeighborsResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const response = await this.repository.neighbors(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        const response = await this.repository.neighbors(dbPath, { ...request, database, ...openOptions });
         return {
             ...response,
             nodes: await this.resolveMappingsByInternalIds(mappingDbPath, response.ids),
@@ -463,19 +522,25 @@ export class TriviumService {
     async search(user: UserContext, extensionId: string, request: TriviumSearchRequest): Promise<TriviumSearchHit[]> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichSearchHits(mappingDbPath, await this.repository.search(dbPath, { ...request, database }));
+        const openOptions = await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, request.vector);
+        this.validateVectorDimension(request.vector, openOptions.dim, `Trivium database ${database}`);
+        return await this.enrichSearchHits(mappingDbPath, await this.repository.search(dbPath, { ...request, database, ...openOptions }));
     }
 
     async searchAdvanced(user: UserContext, extensionId: string, request: TriviumSearchAdvancedRequest): Promise<TriviumSearchHit[]> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichSearchHits(mappingDbPath, await this.repository.searchAdvanced(dbPath, { ...request, database }));
+        const openOptions = await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, request.vector);
+        this.validateVectorDimension(request.vector, openOptions.dim, `Trivium database ${database}`);
+        return await this.enrichSearchHits(mappingDbPath, await this.repository.searchAdvanced(dbPath, { ...request, database, ...openOptions }));
     }
 
     async searchHybrid(user: UserContext, extensionId: string, request: TriviumSearchHybridRequest): Promise<TriviumSearchHit[]> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        return await this.enrichSearchHits(mappingDbPath, await this.repository.searchHybrid(dbPath, { ...request, database }));
+        const openOptions = await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, request.vector);
+        this.validateVectorDimension(request.vector, openOptions.dim, `Trivium database ${database}`);
+        return await this.enrichSearchHits(mappingDbPath, await this.repository.searchHybrid(dbPath, { ...request, database, ...openOptions }));
     }
 
     async searchHybridWithContext(
@@ -485,7 +550,9 @@ export class TriviumService {
     ): Promise<TriviumSearchHybridWithContextResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const response = await this.repository.searchHybridWithContext(dbPath, { ...request, database });
+        const openOptions = await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, request.vector);
+        this.validateVectorDimension(request.vector, openOptions.dim, `Trivium database ${database}`);
+        const response = await this.repository.searchHybridWithContext(dbPath, { ...request, database, ...openOptions });
         return {
             ...response,
             hits: await this.enrichSearchHits(mappingDbPath, response.hits),
@@ -500,7 +567,8 @@ export class TriviumService {
     async tqlPage(user: UserContext, extensionId: string, request: TriviumTqlRequest): Promise<TriviumTqlResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const response = await this.repository.tqlPage(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        const response = await this.repository.tqlPage(dbPath, { ...request, database, ...openOptions });
         return {
             ...response,
             rows: await this.enrichRows(mappingDbPath, response.rows),
@@ -510,9 +578,10 @@ export class TriviumService {
     async tqlMut(user: UserContext, extensionId: string, request: TriviumTqlMutRequest): Promise<TriviumTqlMutResponse> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        const response = await this.repository.tqlMut(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        const response = await this.repository.tqlMut(dbPath, { ...request, database, ...openOptions });
         if (response.affected > 0 || response.createdIds.length > 0) {
+            await this.rememberDatabaseConfig(mappingDbPath, { ...request, ...openOptions });
             await this.markContentMutation(mappingDbPath);
             await this.reconcileMappingsAfterTqlMutation(dbPath, mappingDbPath, database, response.createdIds);
         }
@@ -522,26 +591,27 @@ export class TriviumService {
     async createIndex(user: UserContext, extensionId: string, request: TriviumCreateIndexRequest): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.repository.createIndex(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.createIndex(dbPath, { ...request, database, ...openOptions });
         await this.upsertPropertyIndexMetadata(mappingDbPath, request.field, 'manual');
     }
 
     async dropIndex(user: UserContext, extensionId: string, request: TriviumDropIndexRequest): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.rememberDatabaseConfig(mappingDbPath, request);
-        await this.repository.dropIndex(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.dropIndex(dbPath, { ...request, database, ...openOptions });
         await this.deletePropertyIndexMetadata(mappingDbPath, request.field);
     }
 
     async flush(user: UserContext, extensionId: string, request: TriviumFlushRequest = {}): Promise<void> {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        await this.repository.flush(dbPath, { ...request, database });
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        await this.repository.flush(dbPath, { ...request, database, ...openOptions });
         await this.ensureSchema(mappingDbPath);
         if (fs.existsSync(dbPath)) {
-            await this.rememberDatabaseConfig(mappingDbPath, request);
+            await this.rememberDatabaseConfig(mappingDbPath, { ...request, ...openOptions });
         }
         await this.writeMetaValue(mappingDbPath, LAST_FLUSH_META_KEY, new Date().toISOString());
     }
@@ -550,7 +620,21 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
         if (fs.existsSync(dbPath)) {
-            await this.rememberDatabaseConfig(mappingDbPath, request);
+            const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+            const stat = await this.repository.stat(dbPath, { ...request, database, ...openOptions });
+            const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
+            const mappingCount = await this.countMappings(mappingDbPath);
+            const indexHealth = await this.readIndexHealth(mappingDbPath, stat.exists);
+            const orphanMappingCount = request.includeMappingIntegrity
+                ? await this.countOrphanMappings(dbPath, mappingDbPath, database)
+                : null;
+            return {
+                ...stat,
+                lastFlushAt,
+                mappingCount,
+                orphanMappingCount,
+                indexHealth,
+            };
         }
         const stat = await this.repository.stat(dbPath, { ...request, database });
         const lastFlushAt = await this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY);
@@ -786,6 +870,88 @@ export class TriviumService {
 
     private async readDatabaseConfigMeta(mappingDbPath: string): Promise<TriviumDatabaseConfigMeta> {
         return await this.mappingStore.readDatabaseConfigMeta(mappingDbPath);
+    }
+
+    private async resolveBulkUpsertOpenOptions(
+        dbPath: string,
+        mappingDbPath: string,
+        database: string,
+        request: TriviumBulkUpsertRequest,
+    ): Promise<ResolvedTriviumOpenOptions | { error: string }> {
+        const inferredDim = request.items.find(item => Array.isArray(item.vector) && item.vector.length > 0)?.vector.length;
+        try {
+            return await this.resolveVectorWriteOptions(dbPath, mappingDbPath, database, request, inferredDim);
+        } catch (error) {
+            return { error: asErrorMessage(error) };
+        }
+    }
+
+    private async resolveKnownDatabaseOptions(
+        dbPath: string,
+        mappingDbPath: string,
+        database: string,
+        request: { dim?: number; dtype?: TriviumDType },
+    ): Promise<Partial<ResolvedTriviumOpenOptions>> {
+        const meta = await this.readDatabaseConfigMeta(mappingDbPath);
+
+        const dbExists = fs.existsSync(dbPath);
+        this.validateDTypeCompatibility(meta.dtype, request.dtype, database, dbExists);
+
+        const fileDim = dbExists ? readTriviumDimension(dbPath) : null;
+        const explicitDim = request.dim;
+        if (explicitDim !== undefined && (!Number.isSafeInteger(explicitDim) || explicitDim <= 0)) {
+            throw new Error(`Trivium dim must be a positive safe integer, got ${explicitDim}`);
+        }
+        if (explicitDim !== undefined && fileDim !== null && explicitDim !== fileDim) {
+            throw new Error(`Trivium database ${database} is ${fileDim}-dimensional; request dim is ${explicitDim}`);
+        }
+
+        return {
+            ...(explicitDim !== undefined ? { dim: explicitDim } : fileDim !== null ? { dim: fileDim } : meta.dim !== null ? { dim: meta.dim } : {}),
+            ...(request.dtype !== undefined ? { dtype: request.dtype } : meta.dtype !== null ? { dtype: meta.dtype } : {}),
+        };
+    }
+
+    private async resolveVectorWriteOptions(
+        dbPath: string,
+        mappingDbPath: string,
+        database: string,
+        request: { dim?: number; dtype?: TriviumDType },
+        vectorOrDim: number[] | number | undefined,
+    ): Promise<ResolvedTriviumOpenOptions> {
+        const openOptions = await this.resolveKnownDatabaseOptions(dbPath, mappingDbPath, database, request);
+        if (openOptions.dim !== undefined) {
+            return { ...openOptions, dim: openOptions.dim };
+        }
+        if (Array.isArray(vectorOrDim) && vectorOrDim.length > 0) {
+            return { ...openOptions, dim: vectorOrDim.length };
+        }
+        if (typeof vectorOrDim === 'number' && Number.isSafeInteger(vectorOrDim) && vectorOrDim > 0) {
+            return { ...openOptions, dim: vectorOrDim };
+        }
+        throw new Error(`Cannot infer Trivium dim for database ${database}; provide dim or at least one non-empty vector`);
+    }
+
+    private validateDTypeCompatibility(
+        storedDType: TriviumDType | null,
+        requestedDType: TriviumDType | undefined,
+        database: string,
+        dbExists: boolean,
+    ): void {
+        if (dbExists && storedDType !== null && requestedDType !== undefined && requestedDType !== storedDType) {
+            throw new Error(`Trivium database ${database} uses dtype ${storedDType}; request dtype is ${requestedDType}`);
+        }
+    }
+
+    private validateVectorDimension(vector: number[], expectedDim: number, context: string, index?: number): void {
+        if (!Array.isArray(vector)) {
+            throw new Error(index === undefined ? `${context} vector must be an array` : `Trivium bulk-upsert item ${index} vector must be an array`);
+        }
+        if (vector.length !== expectedDim) {
+            throw new Error(index === undefined
+                ? `${context} expects ${expectedDim}-dimensional vectors; vector has ${vector.length}`
+                : `${context} expects ${expectedDim}-dimensional vectors; item ${index} has ${vector.length}`);
+        }
     }
 
     private async readIndexHealth(mappingDbPath: string, exists: boolean): Promise<TriviumIndexHealth | null> {

@@ -115,7 +115,7 @@ export function buildTriviumDatabaseRecord(
     };
 }
 
-function readTriviumDimension(filePath: string): number | null {
+export function readTriviumDimension(filePath: string): number | null {
     try {
         const handle = fs.openSync(filePath, 'r');
         try {
@@ -124,7 +124,8 @@ function readTriviumDimension(filePath: string): number | null {
             if (bytesRead < 10 || header.toString('utf8', 0, 4) !== 'TVDB') {
                 return null;
             }
-            return header.readUInt32LE(6);
+            const dim = header.readUInt32LE(6);
+            return dim > 0 ? dim : null;
         } finally {
             fs.closeSync(handle);
         }
