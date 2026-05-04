@@ -99,6 +99,9 @@ describe('StManagerControlService', () => {
         const fetcher = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
             const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
             calls.push({ url: String(url), body });
+            if (String(url).endsWith('/control')) {
+                return new Response(JSON.stringify({ success: true, features: {} }), { status: 200 });
+            }
             if (String(url).endsWith('/incoming/start')) {
                 return new Response(JSON.stringify({ success: true, backup: { backup_id: 'push-001' } }), { status: 200 });
             }
@@ -152,6 +155,7 @@ describe('StManagerControlService', () => {
 
         expect(result).toMatchObject({ success: true, backup: { backup_id: 'push-001' } });
         expect(calls.map(call => call.url)).toEqual([
+            'https://manager.example/api/remote_backups/control',
             'https://manager.example/api/remote_backups/incoming/start',
             'https://manager.example/api/remote_backups/incoming/file/write-init',
             'https://manager.example/api/remote_backups/incoming/file/write-chunk',
@@ -160,6 +164,72 @@ describe('StManagerControlService', () => {
             'https://manager.example/api/remote_backups/incoming/complete',
         ]);
         expect(calls.map(call => call.url)).not.toContain('https://manager.example/api/remote_backups/start');
+    });
+
+    it('skips Authority file reads when ST-Manager already has the incoming file sha', async () => {
+        const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+        const fetcher = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+            const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+            calls.push({ url: String(url), body });
+            if (String(url).endsWith('/control')) {
+                return new Response(JSON.stringify({
+                    success: true,
+                    protocol_version: 2,
+                    features: { incoming_skip_by_sha: true },
+                }), { status: 200 });
+            }
+            if (String(url).endsWith('/incoming/start')) {
+                return new Response(JSON.stringify({ success: true, backup: { backup_id: 'push-001' } }), { status: 200 });
+            }
+            if (String(url).endsWith('/incoming/file/write-init')) {
+                return new Response(JSON.stringify({
+                    success: true,
+                    transfer: { upload_required: false, status: 'already_present' },
+                }), { status: 200 });
+            }
+            if (String(url).endsWith('/incoming/complete')) {
+                return new Response(JSON.stringify({ success: true, backup: { backup_id: 'push-001', total_files: 1 } }), { status: 200 });
+            }
+            return new Response(JSON.stringify({ success: true }), { status: 200 });
+        });
+        const locator = {
+            buildManifest: vi.fn(() => ({
+                files: [{
+                    relative_path: 'Ava.png',
+                    kind: 'file' as const,
+                    source: 'root/characters',
+                    size: 4,
+                    mtime: 123,
+                    sha256: '8367cd66fdd136bba8ba23f8805bb050dd6289401c8ec3b0be44a3c233eef90d',
+                }],
+            })),
+            readResourceFile: vi.fn(() => ({ buffer: Buffer.from('card') })),
+            writeResourceFile: vi.fn(),
+        };
+        const service = new StManagerControlService({
+            statePath: path.join(tempDir, 'control.json'),
+            fetcher,
+            locator,
+            chunkSize: 2,
+        });
+        service.updateConfig({
+            manager_url: 'https://manager.example',
+            control_key: 'stmc_secret_key',
+        });
+
+        await service.startBackup(user(), { resource_types: ['characters'], backup_id: 'push-001', ingest: false });
+
+        expect(locator.readResourceFile).not.toHaveBeenCalled();
+        expect(calls.map(call => call.url)).toEqual([
+            'https://manager.example/api/remote_backups/control',
+            'https://manager.example/api/remote_backups/incoming/start',
+            'https://manager.example/api/remote_backups/incoming/file/write-init',
+            'https://manager.example/api/remote_backups/incoming/complete',
+        ]);
+        expect(calls.at(2)?.body).toMatchObject({
+            allow_skip_by_sha: true,
+            sha256: '8367cd66fdd136bba8ba23f8805bb050dd6289401c8ec3b0be44a3c233eef90d',
+        });
     });
 
     it('restores ST-Manager backup files through the control channel into Authority resources', async () => {

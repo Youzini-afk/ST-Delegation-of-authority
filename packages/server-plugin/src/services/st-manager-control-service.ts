@@ -14,6 +14,10 @@ interface StManagerControlState {
     control_key_fingerprint?: string;
 }
 
+interface StManagerControlFeatures {
+    incomingSkipBySha: boolean;
+}
+
 export interface StManagerControlServiceOptions {
     statePath?: string;
     fetcher?: typeof fetch;
@@ -167,6 +171,7 @@ export class StManagerControlService {
 
     private async pushBackup(user: UserContext, payload: Record<string, unknown>) {
         const resourceTypes = this.resolveResourceTypes(payload.resource_types);
+        const features = await this.getControlFeatures();
         const startResponse = await this.request('POST', '/api/remote_backups/incoming/start', {
             backup_id: payload.backup_id,
             description: payload.description ?? 'manual backup from Authority',
@@ -182,9 +187,7 @@ export class StManagerControlService {
         for (const resourceType of resourceTypes) {
             const manifest = this.locator.buildManifest(user, resourceType);
             for (const entry of manifest.files) {
-                const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
-                const digest = crypto.createHash('sha256').update(file.buffer).digest('hex');
-                await this.uploadBackupFile(backupId, resourceType, entry, file.buffer, digest);
+                await this.uploadBackupFile(user, backupId, resourceType, entry, features);
             }
         }
 
@@ -195,18 +198,33 @@ export class StManagerControlService {
     }
 
     private async uploadBackupFile(
+        user: UserContext,
         backupId: string,
         resourceType: StManagerResourceType,
         entry: StManagerManifestFile,
-        buffer: Buffer,
-        digest: string,
+        features: StManagerControlFeatures,
     ) {
+        const declaredSha256 = String(entry.sha256 || '').trim().toLowerCase();
+        let buffer: Buffer | undefined;
+        let digest = declaredSha256;
+        let size = Number(entry.size);
+        const canSkipBySha = features.incomingSkipBySha
+            && /^[a-f0-9]{64}$/.test(declaredSha256)
+            && Number.isFinite(size)
+            && size >= 0;
+        if (!canSkipBySha) {
+            const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
+            buffer = file.buffer;
+            size = buffer.length;
+            digest = crypto.createHash('sha256').update(buffer).digest('hex');
+        }
         const initResponse = await this.request('POST', '/api/remote_backups/incoming/file/write-init', {
             backup_id: backupId,
             resource_type: resourceType,
             relative_path: entry.relative_path,
-            size: buffer.length,
+            size,
             sha256: digest,
+            allow_skip_by_sha: canSkipBySha,
             metadata: {
                 kind: entry.kind,
                 source: entry.source,
@@ -214,9 +232,24 @@ export class StManagerControlService {
             },
         }) as Record<string, unknown>;
         const transfer = this.extractObject(initResponse.transfer, 'ST-Manager write-init response missing transfer');
+        if (transfer.upload_required === false) {
+            return;
+        }
         const uploadId = String(transfer.upload_id || '');
         if (!uploadId) {
             throw new AuthorityServiceError('ST-Manager write-init response missing upload_id', 502, 'validation_error', 'core');
+        }
+
+        if (!buffer) {
+            const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
+            buffer = file.buffer;
+            const actualDigest = crypto.createHash('sha256').update(buffer).digest('hex');
+            if (actualDigest !== digest) {
+                throw new AuthorityServiceError(`sha256 mismatch for ${entry.relative_path}`, 502, 'validation_error', 'core');
+            }
+        }
+        if (buffer.length !== size) {
+            throw new AuthorityServiceError(`sha256 mismatch for ${entry.relative_path}`, 502, 'validation_error', 'core');
         }
 
         let offset = 0;
@@ -233,6 +266,18 @@ export class StManagerControlService {
         await this.request('POST', '/api/remote_backups/incoming/file/write-commit', {
             upload_id: uploadId,
         });
+    }
+
+    private async getControlFeatures(): Promise<StManagerControlFeatures> {
+        try {
+            const response = await this.probe() as Record<string, unknown>;
+            const features = this.extractObject(response.features, 'ST-Manager control response missing features');
+            return {
+                incomingSkipBySha: features.incoming_skip_by_sha === true,
+            };
+        } catch {
+            return { incomingSkipBySha: false };
+        }
     }
 
     private async previewRestoreToAuthority(user: UserContext, payload: Record<string, unknown>) {
