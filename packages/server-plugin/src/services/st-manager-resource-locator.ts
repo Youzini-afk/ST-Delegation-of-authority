@@ -40,6 +40,11 @@ export interface StManagerResourceRead {
 const SETTINGS_REGEX_BUNDLE_PATH = 'settings.regex.json';
 const REGEX_SETTINGS_KEYS = ['regex', 'regex_presets', 'character_allowed_regex', 'preset_allowed_regex'];
 
+interface ManifestHashCacheEntry {
+    key: string;
+    sha256: string;
+}
+
 function sha256(buffer: Buffer): string {
     return crypto.createHash('sha256').update(buffer).digest('hex');
 }
@@ -69,7 +74,7 @@ function sortedDirEntries(dirPath: string): fs.Dirent[] {
     if (!fs.existsSync(dirPath)) {
         return [];
     }
-    return fs.readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    return fs.readdirSync(dirPath, { withFileTypes: true }).sort((a: fs.Dirent, b: fs.Dirent) => a.name.localeCompare(b.name));
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
@@ -93,6 +98,8 @@ function atomicWriteJson(filePath: string, value: unknown): void {
 }
 
 export class StManagerResourceLocator {
+    private readonly manifestHashCache = new Map<string, ManifestHashCacheEntry>();
+
     resolveResourceRoot(user: UserContext, resourceType: StManagerResourceType): StManagerResourceRoot | null {
         const directories = user.directories ?? { root: user.rootDir };
         const rootDir = directories.root || user.rootDir;
@@ -299,15 +306,27 @@ export class StManagerResourceLocator {
         const normalized = normalizeResourcePath(relativePath);
         const filePath = this.resolveExistingPath(rootPath, normalized);
         const stat = fs.statSync(filePath);
-        const buffer = fs.readFileSync(filePath);
+        const digest = this.cachedFileSha256(rootPath, normalized, filePath, stat);
         return {
             relative_path: normalized,
             kind: 'file',
             source,
             size: stat.size,
             mtime: stat.mtimeMs,
-            sha256: sha256(buffer),
+            sha256: digest,
         };
+    }
+
+    private cachedFileSha256(rootPath: string, relativePath: string, filePath: string, stat: fs.Stats): string {
+        const cacheId = `${path.resolve(rootPath)}\0${relativePath}`;
+        const cacheKey = `${filePath}\0${stat.size}\0${stat.mtimeMs}`;
+        const cached = this.manifestHashCache.get(cacheId);
+        if (cached?.key === cacheKey) {
+            return cached.sha256;
+        }
+        const digest = sha256(fs.readFileSync(filePath));
+        this.manifestHashCache.set(cacheId, { key: cacheKey, sha256: digest });
+        return digest;
     }
 
     private bufferManifestItem(relativePath: string, payload: unknown, source: string, kind: StManagerManifestFile['kind']): StManagerManifestFile {
