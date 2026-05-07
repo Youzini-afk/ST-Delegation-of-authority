@@ -30,7 +30,7 @@ import type {
 } from '@stdo/shared-types';
 import { getGlobalAuthorityPaths, getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
-import { asErrorMessage, atomicWriteJson, ensureDir, nowIso, readJsonFile, sanitizeFileSegment } from '../utils.js';
+import { asErrorMessage, atomicWriteJson, ensureDir, nowIso, readJsonFile, resolveContainedPath, sanitizeFileSegment } from '../utils.js';
 import { CoreService } from './core-service.js';
 import { ExtensionService } from './extension-service.js';
 import { PermissionService } from './permission-service.js';
@@ -623,7 +623,7 @@ export class AdminPackageService {
             await this.storage.deleteBlob(user, extensionId, blob.id);
         }
         fs.rmSync(this.resolvePrivateFilesRoot(user, extensionId), { recursive: true, force: true });
-        fs.rmSync(path.join(paths.kvDir, `${sanitizeFileSegment(extensionId)}.sqlite`), { force: true });
+        fs.rmSync(resolveContainedPath(paths.kvDir, `${sanitizeFileSegment(extensionId)}.sqlite`), { force: true });
         fs.rmSync(this.resolvePrivateSqlDatabaseDir(user, extensionId), { recursive: true, force: true });
         fs.rmSync(this.resolvePrivateTriviumDatabaseDir(user, extensionId), { recursive: true, force: true });
     }
@@ -1224,11 +1224,11 @@ export class AdminPackageService {
     }
 
     private getOperationStatePath(user: UserContext, operationId: string): string {
-        return path.join(this.getOperationsDir(user), `${sanitizeFileSegment(operationId)}.json`);
+        return resolveContainedPath(this.getOperationsDir(user), `${sanitizeFileSegment(operationId)}.json`);
     }
 
     private getOperationWorkDir(user: UserContext, operationId: string): string {
-        return path.join(this.getPackagesRoot(user), 'work', sanitizeFileSegment(operationId));
+        return resolveContainedPath(this.getPackagesRoot(user), 'work', sanitizeFileSegment(operationId));
     }
 
     private getPackagesRoot(user: UserContext): string {
@@ -1236,27 +1236,27 @@ export class AdminPackageService {
     }
 
     private resolvePrivateFilesRoot(user: UserContext, extensionId: string): string {
-        return path.join(getUserAuthorityPaths(user).filesDir, sanitizeFileSegment(extensionId));
+        return resolveContainedPath(getUserAuthorityPaths(user).filesDir, sanitizeFileSegment(extensionId));
     }
 
     private resolvePrivateSqlDatabaseDir(user: UserContext, extensionId: string): string {
-        return path.join(getUserAuthorityPaths(user).sqlPrivateDir, sanitizeFileSegment(extensionId));
+        return resolveContainedPath(getUserAuthorityPaths(user).sqlPrivateDir, sanitizeFileSegment(extensionId));
     }
 
     private resolvePrivateSqlDatabasePath(user: UserContext, extensionId: string, databaseName: string): string {
-        return path.join(this.resolvePrivateSqlDatabaseDir(user, extensionId), `${sanitizeFileSegment(databaseName)}.sqlite`);
+        return resolveContainedPath(this.resolvePrivateSqlDatabaseDir(user, extensionId), `${sanitizeFileSegment(databaseName)}.sqlite`);
     }
 
     private resolvePrivateTriviumDatabaseDir(user: UserContext, extensionId: string): string {
-        return path.join(getUserAuthorityPaths(user).triviumPrivateDir, sanitizeFileSegment(extensionId));
+        return resolveContainedPath(getUserAuthorityPaths(user).triviumPrivateDir, sanitizeFileSegment(extensionId));
     }
 
     private resolvePrivateTriviumDatabasePath(user: UserContext, extensionId: string, databaseName: string): string {
-        return path.join(this.resolvePrivateTriviumDatabaseDir(user, extensionId), `${sanitizeFileSegment(databaseName)}.tdb`);
+        return resolveContainedPath(this.resolvePrivateTriviumDatabaseDir(user, extensionId), `${sanitizeFileSegment(databaseName)}.tdb`);
     }
 
     private resolvePrivateTriviumMappingPath(user: UserContext, extensionId: string, databaseName: string): string {
-        return path.join(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${sanitizeFileSegment(databaseName)}.sqlite`);
+        return resolveContainedPath(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${sanitizeFileSegment(databaseName)}.sqlite`);
     }
 }
 
@@ -1270,7 +1270,7 @@ function normalizeExportRequest(request: AuthorityExportPackageRequest | undefin
 
 function sanitizeArtifactFileName(value: string): string {
     const trimmed = value.trim();
-    return trimmed ? trimmed.replace(/[^a-zA-Z0-9._-]/g, '_') : `artifact-${crypto.randomUUID()}.json.gz`;
+    return trimmed ? sanitizeFileSegment(trimmed) : `artifact-${crypto.randomUUID()}.json.gz`;
 }
 
 function sanitizeTimestamp(value: string): string {

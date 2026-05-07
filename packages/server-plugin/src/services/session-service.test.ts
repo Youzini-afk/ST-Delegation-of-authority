@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AUTHORITY_VERSION } from '../version.js';
+import { UNMANAGED_TRANSFER_MAX_BYTES } from '../constants.js';
 import { SessionService } from './session-service.js';
 import type { CoreService } from './core-service.js';
 import type { SessionRecord } from '../types.js';
@@ -33,12 +34,12 @@ describe('SessionService', () => {
                 httpFetchResponse: { bytes: 256 * 1024, source: 'runtime' },
             },
             effectiveTransferMaxBytes: {
-                storageBlobWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                storageBlobRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                privateFileWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                privateFileRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                httpFetchRequest: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                httpFetchResponse: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                storageBlobWrite: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                storageBlobRead: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                privateFileWrite: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                privateFileRead: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                httpFetchRequest: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                httpFetchResponse: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
             },
         });
 

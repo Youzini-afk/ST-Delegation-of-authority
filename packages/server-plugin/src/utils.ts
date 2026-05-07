@@ -68,7 +68,25 @@ export function readJsonFile<T>(filePath: string, fallback: T): T {
 }
 
 export function sanitizeFileSegment(input: string): string {
-    return input.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const sanitized = input
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .replace(/\.{2,}/g, match => '_'.repeat(match.length));
+    return sanitized === '' || sanitized === '.' || sanitized === '..' ? '_' : sanitized;
+}
+
+export function isPathInside(basePath: string, candidatePath: string): boolean {
+    const base = path.resolve(basePath);
+    const candidate = path.resolve(candidatePath);
+    const relative = path.relative(base, candidate);
+    return relative === '' || (relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+export function resolveContainedPath(basePath: string, ...segments: string[]): string {
+    const candidate = path.resolve(basePath, ...segments);
+    if (!isPathInside(basePath, candidate)) {
+        throw new Error(`Path escapes base directory: ${candidate}`);
+    }
+    return candidate;
 }
 
 export function resolveRuntimePath(value: string, baseDir = process.cwd()): string {

@@ -14,7 +14,7 @@ import type {
 } from '@stdo/shared-types';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
-import { sanitizeFileSegment } from '../utils.js';
+import { resolveContainedPath, sanitizeFileSegment } from '../utils.js';
 import { CoreService } from './core-service.js';
 
 export class PrivateFsService {
@@ -150,7 +150,7 @@ export class PrivateFsService {
 
     private getRootDir(user: UserContext, extensionId: string): string {
         const paths = getUserAuthorityPaths(user);
-        return path.join(paths.filesDir, sanitizeFileSegment(extensionId));
+        return resolveContainedPath(paths.filesDir, sanitizeFileSegment(extensionId));
     }
 }
 

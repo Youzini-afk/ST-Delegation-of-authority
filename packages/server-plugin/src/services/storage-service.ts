@@ -1,8 +1,7 @@
-import path from 'node:path';
 import type { BlobGetResponse, BlobRecord, ControlBlobOpenReadResponse } from '@stdo/shared-types';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
-import { sanitizeFileSegment } from '../utils.js';
+import { resolveContainedPath, sanitizeFileSegment } from '../utils.js';
 import { CoreService } from './core-service.js';
 
 export class StorageService {
@@ -101,7 +100,6 @@ export class StorageService {
     }
 
     private getKvDbPath(kvDir: string, extensionId: string): string {
-        return path.join(kvDir, `${sanitizeFileSegment(extensionId)}.sqlite`);
+        return resolveContainedPath(kvDir, `${sanitizeFileSegment(extensionId)}.sqlite`);
     }
 }
-

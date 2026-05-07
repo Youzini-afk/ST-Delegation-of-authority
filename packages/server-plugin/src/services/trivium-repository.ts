@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import type {
     ControlTriviumBulkDeleteRequest,
     ControlTriviumBulkLinkRequest,
@@ -39,7 +38,7 @@ import type {
 } from '@stdo/shared-types';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
-import { sanitizeFileSegment } from '../utils.js';
+import { resolveContainedPath, sanitizeFileSegment } from '../utils.js';
 import { CoreService } from './core-service.js';
 import type { TriviumDatabaseEntry, TriviumPathSet } from './trivium-internal.js';
 
@@ -67,8 +66,8 @@ export class TriviumRepository {
     resolvePaths(user: UserContext, extensionId: string, database: string): TriviumPathSet {
         const directory = this.getDatabaseDirectory(user, extensionId);
         return {
-            dbPath: path.join(directory, `${sanitizeFileSegment(database)}.tdb`),
-            mappingDbPath: path.join(directory, '__mapping__', `${sanitizeFileSegment(database)}.sqlite`),
+            dbPath: resolveContainedPath(directory, `${sanitizeFileSegment(database)}.tdb`),
+            mappingDbPath: resolveContainedPath(directory, '__mapping__', `${sanitizeFileSegment(database)}.sqlite`),
         };
     }
 
@@ -181,6 +180,6 @@ export class TriviumRepository {
 
     private getDatabaseDirectory(user: UserContext, extensionId: string): string {
         const paths = getUserAuthorityPaths(user);
-        return path.join(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
+        return resolveContainedPath(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
     }
 }
