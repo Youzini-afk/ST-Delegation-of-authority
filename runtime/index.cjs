@@ -25,6 +25,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   MAX_AUDIT_LINES: () => (/* binding */ MAX_AUDIT_LINES),
 /* harmony export */   MAX_BLOB_BYTES: () => (/* binding */ MAX_BLOB_BYTES),
 /* harmony export */   MAX_KV_VALUE_BYTES: () => (/* binding */ MAX_KV_VALUE_BYTES),
+/* harmony export */   MAX_SQL_BATCH_STATEMENTS: () => (/* binding */ MAX_SQL_BATCH_STATEMENTS),
 /* harmony export */   RESOURCE_RISK: () => (/* binding */ RESOURCE_RISK),
 /* harmony export */   SESSION_HEADER: () => (/* binding */ SESSION_HEADER),
 /* harmony export */   SESSION_QUERY: () => (/* binding */ SESSION_QUERY),
@@ -46,7 +47,8 @@ const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_AUDIT_LINES = 200;
 const DATA_TRANSFER_CHUNK_BYTES = 256 * 1024;
 const DATA_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
-const UNMANAGED_TRANSFER_MAX_BYTES = Number.MAX_SAFE_INTEGER;
+const UNMANAGED_TRANSFER_MAX_BYTES = 256 * 1024 * 1024;
+const MAX_SQL_BATCH_STATEMENTS = 100;
 const SUPPORTED_RESOURCES = [
     'storage.kv',
     'storage.blob',
@@ -529,10 +531,10 @@ function readSqlSchemaObjectRecord(row) {
 }
 function resolvePrivateSqlDatabaseDir(user, extensionId) {
     const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
 }
 function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
 }
 async function sqlMigrationTableExists(runtime, dbPath, tableName) {
     const result = await runtime.core.querySql(dbPath, {
@@ -598,10 +600,10 @@ function decodeHttpResponseBody(bytes, encoding) {
 }
 function resolvePrivateTriviumDatabaseDir(user, extensionId) {
     const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
 }
 function resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
-    return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
 }
 async function listPrivateTriviumDatabases(runtime, user, extensionId) {
     return await runtime.trivium.listDatabases(user, extensionId);
@@ -635,6 +637,14 @@ async function listPrivateSqlDatabases(runtime, user, extensionId) {
 function previewSqlStatement(statement) {
     const normalized = statement.replace(/\s+/g, ' ').trim();
     return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+function assertSqlStatementCount(statements, label) {
+    if (!Array.isArray(statements)) {
+        return;
+    }
+    if (statements.length > _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_SQL_BATCH_STATEMENTS) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError(`${label} exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_SQL_BATCH_STATEMENTS} statements`, 400, 'validation_error', 'validation', { statementCount: statements.length, maxStatements: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_SQL_BATCH_STATEMENTS });
+    }
 }
 function summarizeBlobRecords(records) {
     return {
@@ -1664,6 +1674,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
+            assertSqlStatementCount(payload.statements, 'SQL batch');
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
             const result = await runtime.core.batchSql(dbPath, {
                 ...payload,
@@ -1688,6 +1699,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
+            assertSqlStatementCount(payload.statements, 'SQL transaction');
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
             const result = await runtime.core.transactionSql(dbPath, {
                 ...payload,
@@ -3589,7 +3601,7 @@ class AdminPackageService {
             await this.storage.deleteBlob(user, extensionId, blob.id);
         }
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateFilesRoot(user, extensionId), { recursive: true, force: true });
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(paths.kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId)}.sqlite`), { force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(paths.kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId)}.sqlite`), { force: true });
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateSqlDatabaseDir(user, extensionId), { recursive: true, force: true });
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateTriviumDatabaseDir(user, extensionId), { recursive: true, force: true });
     }
@@ -4066,31 +4078,31 @@ class AdminPackageService {
         return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getPackagesRoot(user), 'standalone');
     }
     getOperationStatePath(user, operationId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getOperationsDir(user), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId)}.json`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getOperationsDir(user), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId)}.json`);
     }
     getOperationWorkDir(user, operationId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getPackagesRoot(user), 'work', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getPackagesRoot(user), 'work', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId));
     }
     getPackagesRoot(user) {
         return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).controlDbFile), 'admin-packages');
     }
     resolvePrivateFilesRoot(user, extensionId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
     }
     resolvePrivateSqlDatabaseDir(user, extensionId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
     }
     resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
     }
     resolvePrivateTriviumDatabaseDir(user, extensionId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
     }
     resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
     }
     resolvePrivateTriviumMappingPath(user, extensionId, databaseName) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
     }
 }
 function normalizeExportRequest(request) {
@@ -4102,7 +4114,7 @@ function normalizeExportRequest(request) {
 }
 function sanitizeArtifactFileName(value) {
     const trimmed = value.trim();
-    return trimmed ? trimmed.replace(/[^a-zA-Z0-9._-]/g, '_') : `artifact-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.json.gz`;
+    return trimmed ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(trimmed) : `artifact-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.json.gz`;
 }
 function sanitizeTimestamp(value) {
     return value.replace(/[:.]/g, '-');
@@ -5533,16 +5545,16 @@ class DataTransferService {
     getTransferBaseDir(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
         const stateDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(paths.controlDbFile);
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(stateDir, 'transfers', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(stateDir, 'transfers', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
     }
     getTransferDataDir(user, extensionId, resource) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getTransferBaseDir(user, extensionId), (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(resource));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getTransferBaseDir(user, extensionId), (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(resource));
     }
     getTransferRecordDir(user, extensionId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getTransferBaseDir(user, extensionId), 'records');
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getTransferBaseDir(user, extensionId), 'records');
     }
     getTransferRecordPath(user, extensionId, transferId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
     }
 }
 function toInitResponse(record) {
@@ -5601,7 +5613,7 @@ function normalizeTransferPurpose(resource, purpose) {
 }
 function resolveTransferMaxBytes(maxBytesOverride) {
     if (typeof maxBytesOverride !== 'number' || !Number.isFinite(maxBytesOverride)) {
-        return Number.MAX_SAFE_INTEGER;
+        return _constants_js__WEBPACK_IMPORTED_MODULE_3__.UNMANAGED_TRANSFER_MAX_BYTES;
     }
     if (maxBytesOverride <= 0) {
         throw new Error('Transfer maxBytes must be a positive integer');
@@ -6996,7 +7008,7 @@ class PrivateFsService {
     }
     getRootDir(user, extensionId) {
         const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.getUserAuthorityPaths)(user);
-        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.resolveContainedPath)(paths.filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
     }
 }
 function isRootPath(value) {
@@ -7562,20 +7574,11 @@ class StManagerControlService {
         });
     }
     async uploadBackupFile(user, backupId, resourceType, entry, features) {
-        const declaredSha256 = String(entry.sha256 || '').trim().toLowerCase();
-        let buffer;
-        let digest = declaredSha256;
-        let size = Number(entry.size);
-        const canSkipBySha = features.incomingSkipBySha
-            && /^[a-f0-9]{64}$/.test(declaredSha256)
-            && Number.isFinite(size)
-            && size >= 0;
-        if (!canSkipBySha) {
-            const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
-            buffer = file.buffer;
-            size = buffer.length;
-            digest = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(buffer).digest('hex');
-        }
+        const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
+        const buffer = file.buffer;
+        const size = buffer.length;
+        const digest = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(buffer).digest('hex');
+        const canSkipBySha = features.incomingSkipBySha && /^[a-f0-9]{64}$/.test(digest);
         const initResponse = await this.request('POST', '/api/remote_backups/incoming/file/write-init', {
             backup_id: backupId,
             resource_type: resourceType,
@@ -7596,17 +7599,6 @@ class StManagerControlService {
         const uploadId = String(transfer.upload_id || '');
         if (!uploadId) {
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError('ST-Manager write-init response missing upload_id', 502, 'validation_error', 'core');
-        }
-        if (!buffer) {
-            const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
-            buffer = file.buffer;
-            const actualDigest = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(buffer).digest('hex');
-            if (actualDigest !== digest) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`sha256 mismatch for ${entry.relative_path}`, 502, 'validation_error', 'core');
-            }
-        }
-        if (buffer.length !== size) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`sha256 mismatch for ${entry.relative_path}`, 502, 'validation_error', 'core');
         }
         let offset = 0;
         while (offset < buffer.length) {
@@ -7891,7 +7883,6 @@ function atomicWriteJson(filePath, value) {
     atomicWriteBuffer(filePath, Buffer.from(JSON.stringify(value, null, 2), 'utf8'));
 }
 class StManagerResourceLocator {
-    manifestHashCache = new Map();
     resolveResourceRoot(user, resourceType) {
         const directories = user.directories ?? { root: user.rootDir };
         const rootDir = directories.root || user.rootDir;
@@ -8079,26 +8070,14 @@ class StManagerResourceLocator {
         const normalized = normalizeResourcePath(relativePath);
         const filePath = this.resolveExistingPath(rootPath, normalized);
         const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(filePath);
-        const digest = this.cachedFileSha256(rootPath, normalized, filePath, stat);
         return {
             relative_path: normalized,
             kind: 'file',
             source,
             size: stat.size,
             mtime: stat.mtimeMs,
-            sha256: digest,
+            sha256: sha256(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath)),
         };
-    }
-    cachedFileSha256(rootPath, relativePath, filePath, stat) {
-        const cacheId = `${node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(rootPath)}\0${relativePath}`;
-        const cacheKey = `${filePath}\0${stat.size}\0${stat.mtimeMs}`;
-        const cached = this.manifestHashCache.get(cacheId);
-        if (cached?.key === cacheKey) {
-            return cached.sha256;
-        }
-        const digest = sha256(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath));
-        this.manifestHashCache.set(cacheId, { key: cacheKey, sha256: digest });
-        return digest;
     }
     bufferManifestItem(relativePath, payload, source, kind) {
         const settingsPath = this.resolveSettingsPathFromPayloadSource(source);
@@ -8194,11 +8173,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   StorageService: () => (/* binding */ StorageService)
 /* harmony export */ });
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
 
 
 class StorageService {
@@ -8207,23 +8183,23 @@ class StorageService {
         this.core = core;
     }
     async getKv(user, extensionId, key) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         return await this.core.getStorageKv(this.getKvDbPath(paths.kvDir, extensionId), { key });
     }
     async setKv(user, extensionId, key, value) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         await this.core.setStorageKv(this.getKvDbPath(paths.kvDir, extensionId), { key, value });
     }
     async deleteKv(user, extensionId, key) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         await this.core.deleteStorageKv(this.getKvDbPath(paths.kvDir, extensionId), { key });
     }
     async listKv(user, extensionId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         return await this.core.listStorageKv(this.getKvDbPath(paths.kvDir, extensionId));
     }
     async putBlob(user, extensionId, name, content, encoding = 'utf8', contentType = 'application/octet-stream') {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         return await this.core.putStorageBlob(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
@@ -8235,7 +8211,7 @@ class StorageService {
         });
     }
     async putBlobFromSource(user, extensionId, name, sourcePath, contentType = 'application/octet-stream') {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         return await this.core.putStorageBlob(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
@@ -8247,7 +8223,7 @@ class StorageService {
         });
     }
     async getBlob(user, extensionId, blobId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         return await this.core.getStorageBlob(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
@@ -8256,7 +8232,7 @@ class StorageService {
         });
     }
     async openBlobRead(user, extensionId, blobId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         return await this.core.openStorageBlobRead(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
@@ -8265,7 +8241,7 @@ class StorageService {
         });
     }
     async deleteBlob(user, extensionId, blobId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         await this.core.deleteStorageBlob(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
@@ -8274,7 +8250,7 @@ class StorageService {
         });
     }
     async listBlobs(user, extensionId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
         return await this.core.listStorageBlobs(paths.controlDbFile, {
             userHandle: user.handle,
             extensionId,
@@ -8282,7 +8258,7 @@ class StorageService {
         });
     }
     getKvDbPath(kvDir, extensionId) {
-        return node_path__WEBPACK_IMPORTED_MODULE_0___default().join(kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(extensionId)}.sqlite`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.resolveContainedPath)(kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.sanitizeFileSegment)(extensionId)}.sqlite`);
     }
 }
 
@@ -9041,11 +9017,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
 
 
 
@@ -9074,8 +9047,8 @@ class TriviumRepository {
     resolvePaths(user, extensionId, database) {
         const directory = this.getDatabaseDirectory(user, extensionId);
         return {
-            dbPath: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(directory, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(database)}.tdb`),
-            mappingDbPath: node_path__WEBPACK_IMPORTED_MODULE_1___default().join(directory, '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(database)}.sqlite`),
+            dbPath: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.resolveContainedPath)(directory, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(database)}.tdb`),
+            mappingDbPath: (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.resolveContainedPath)(directory, '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(database)}.sqlite`),
         };
     }
     getMappingDbPath(user, extensionId, database) {
@@ -9157,8 +9130,8 @@ class TriviumRepository {
         return await this.core.statTrivium(dbPath, request);
     }
     getDatabaseDirectory(user, extensionId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.getUserAuthorityPaths)(user);
-        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(user);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.resolveContainedPath)(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(extensionId));
     }
 }
 
@@ -10271,6 +10244,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   getSessionToken: () => (/* binding */ getSessionToken),
 /* harmony export */   getUserContext: () => (/* binding */ getUserContext),
 /* harmony export */   isAuthorityServiceError: () => (/* binding */ isAuthorityServiceError),
+/* harmony export */   isPathInside: () => (/* binding */ isPathInside),
 /* harmony export */   isRestrictedHttpFetchTarget: () => (/* binding */ isRestrictedHttpFetchTarget),
 /* harmony export */   normalizeHostname: () => (/* binding */ normalizeHostname),
 /* harmony export */   normalizeHttpFetchTarget: () => (/* binding */ normalizeHttpFetchTarget),
@@ -10278,6 +10252,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   nowIso: () => (/* binding */ nowIso),
 /* harmony export */   randomToken: () => (/* binding */ randomToken),
 /* harmony export */   readJsonFile: () => (/* binding */ readJsonFile),
+/* harmony export */   resolveContainedPath: () => (/* binding */ resolveContainedPath),
 /* harmony export */   resolveRuntimePath: () => (/* binding */ resolveRuntimePath),
 /* harmony export */   safeJsonParse: () => (/* binding */ safeJsonParse),
 /* harmony export */   sanitizeFileSegment: () => (/* binding */ sanitizeFileSegment)
@@ -10351,7 +10326,23 @@ function readJsonFile(filePath, fallback) {
     return safeJsonParse(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), fallback);
 }
 function sanitizeFileSegment(input) {
-    return input.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const sanitized = input
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .replace(/\.{2,}/g, match => '_'.repeat(match.length));
+    return sanitized === '' || sanitized === '.' || sanitized === '..' ? '_' : sanitized;
+}
+function isPathInside(basePath, candidatePath) {
+    const base = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(basePath);
+    const candidate = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(candidatePath);
+    const relative = node_path__WEBPACK_IMPORTED_MODULE_3___default().relative(base, candidate);
+    return relative === '' || (relative !== '' && !relative.startsWith('..') && !node_path__WEBPACK_IMPORTED_MODULE_3___default().isAbsolute(relative));
+}
+function resolveContainedPath(basePath, ...segments) {
+    const candidate = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(basePath, ...segments);
+    if (!isPathInside(basePath, candidate)) {
+        throw new Error(`Path escapes base directory: ${candidate}`);
+    }
+    return candidate;
 }
 function resolveRuntimePath(value, baseDir = process.cwd()) {
     return node_path__WEBPACK_IMPORTED_MODULE_3___default().isAbsolute(value)

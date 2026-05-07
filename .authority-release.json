@@ -5,7 +5,7 @@
   "sdkVersion": "1.3.0",
   "assetHash": "839034ca9db64173506c78d228bc8ecc59598b8165560d8f63012d0292b33058",
   "coreVersion": "1.3.0",
-  "coreArtifactHash": "1a5f00e6c7fb6dc4983fa217deac9e4a52ee702bfeeb49719fbbee129e18844f",
+  "coreArtifactHash": "65efc5e5b2dac8f3d5ce413e93811a7bc8e1d2a3802ad74daca2e7ef287bcd4e",
   "coreArtifactPlatform": "linux-x64",
   "coreArtifactPlatforms": [
     "android-arm64",
@@ -33,8 +33,8 @@
       "platform": "linux",
       "arch": "x64",
       "binaryName": "authority-core",
-      "binarySha256": "b0dc44e63cf97668d2985a071215011b61b18812e0a0ec67679848017edca290",
-      "artifactHash": "c769196798bd392ae3d06e9faaaaa0dbd1c125070596a555de442f43c8630658"
+      "binarySha256": "d5077565b8019e042a5686c8afbee65987d7b44871e2700e3e706b5976426702",
+      "artifactHash": "67b1f74345a14fa993f852a3cd2a3f70a2b45cc5dd35823f3c1b5d3abe11946e"
     },
     "linux-x64-musl": {
       "platform": "linux",
@@ -52,6 +52,6 @@
       "artifactHash": "24f0951dd30c01c59441a22bb6a2c1b98f003ca9875c733b59c4c05a96882dd6"
     }
   },
-  "coreBinarySha256": "b0dc44e63cf97668d2985a071215011b61b18812e0a0ec67679848017edca290",
-  "buildTime": "2026-05-04T16:00:30.024Z"
+  "coreBinarySha256": "d5077565b8019e042a5686c8afbee65987d7b44871e2700e3e706b5976426702",
+  "buildTime": "2026-05-07T13:23:14.871Z"
 }
