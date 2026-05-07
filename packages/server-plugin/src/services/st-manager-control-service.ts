@@ -204,20 +204,11 @@ export class StManagerControlService {
         entry: StManagerManifestFile,
         features: StManagerControlFeatures,
     ) {
-        const declaredSha256 = String(entry.sha256 || '').trim().toLowerCase();
-        let buffer: Buffer | undefined;
-        let digest = declaredSha256;
-        let size = Number(entry.size);
-        const canSkipBySha = features.incomingSkipBySha
-            && /^[a-f0-9]{64}$/.test(declaredSha256)
-            && Number.isFinite(size)
-            && size >= 0;
-        if (!canSkipBySha) {
-            const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
-            buffer = file.buffer;
-            size = buffer.length;
-            digest = crypto.createHash('sha256').update(buffer).digest('hex');
-        }
+        const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
+        const buffer = file.buffer;
+        const size = buffer.length;
+        const digest = crypto.createHash('sha256').update(buffer).digest('hex');
+        const canSkipBySha = features.incomingSkipBySha && /^[a-f0-9]{64}$/.test(digest);
         const initResponse = await this.request('POST', '/api/remote_backups/incoming/file/write-init', {
             backup_id: backupId,
             resource_type: resourceType,
@@ -238,18 +229,6 @@ export class StManagerControlService {
         const uploadId = String(transfer.upload_id || '');
         if (!uploadId) {
             throw new AuthorityServiceError('ST-Manager write-init response missing upload_id', 502, 'validation_error', 'core');
-        }
-
-        if (!buffer) {
-            const file = this.locator.readResourceFile(user, resourceType, entry.relative_path);
-            buffer = file.buffer;
-            const actualDigest = crypto.createHash('sha256').update(buffer).digest('hex');
-            if (actualDigest !== digest) {
-                throw new AuthorityServiceError(`sha256 mismatch for ${entry.relative_path}`, 502, 'validation_error', 'core');
-            }
-        }
-        if (buffer.length !== size) {
-            throw new AuthorityServiceError(`sha256 mismatch for ${entry.relative_path}`, 502, 'validation_error', 'core');
         }
 
         let offset = 0;

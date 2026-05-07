@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { StManagerResourceLocator } from './st-manager-resource-locator.js';
 import type { UserContext } from '../types.js';
 
@@ -102,27 +102,22 @@ describe('StManagerResourceLocator', () => {
         expect(() => locator.resolveWritePath(user(), 'characters', 'C:/escape.png')).toThrow(/Invalid resource path/);
     });
 
-    it('reuses manifest hashes while size and mtime stay unchanged', () => {
+    it('recomputes manifest hashes when bytes change without size or mtime changes', () => {
         const characters = path.join(userRoot, 'characters');
         const cardPath = path.join(characters, 'Ava.png');
         fs.mkdirSync(characters, { recursive: true });
         fs.writeFileSync(cardPath, Buffer.from('png-card'));
-        const originalReadFileSync = fs.readFileSync;
-        const readCalls: string[] = [];
+        const fixedTime = new Date('2026-01-01T00:00:00.000Z');
+        fs.utimesSync(cardPath, fixedTime, fixedTime);
         const locator = new StManagerResourceLocator();
 
-        const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((file: fs.PathOrFileDescriptor, ...args: unknown[]) => {
-            readCalls.push(String(file));
-            return originalReadFileSync(file, ...(args as []));
-        });
-        try {
-            const first = locator.buildManifest(user(), 'characters').files[0]!;
-            const second = locator.buildManifest(user(), 'characters').files[0]!;
+        const first = locator.buildManifest(user(), 'characters').files[0]!;
+        fs.writeFileSync(cardPath, Buffer.from('new-card'));
+        fs.utimesSync(cardPath, fixedTime, fixedTime);
+        const second = locator.buildManifest(user(), 'characters').files[0]!;
 
-            expect(second.sha256).toBe(first.sha256);
-            expect(readCalls.filter(file => file === cardPath)).toHaveLength(1);
-        } finally {
-            spy.mockRestore();
-        }
+        expect(second.size).toBe(first.size);
+        expect(second.mtime).toBe(first.mtime);
+        expect(second.sha256).not.toBe(first.sha256);
     });
 });

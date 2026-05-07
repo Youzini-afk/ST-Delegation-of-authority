@@ -166,7 +166,7 @@ describe('StManagerControlService', () => {
         expect(calls.map(call => call.url)).not.toContain('https://manager.example/api/remote_backups/start');
     });
 
-    it('skips Authority file reads when ST-Manager already has the incoming file sha', async () => {
+    it('verifies current Authority file bytes before using incoming skip-by-sha', async () => {
         const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
         const fetcher = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
             const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
@@ -219,7 +219,7 @@ describe('StManagerControlService', () => {
 
         await service.startBackup(user(), { resource_types: ['characters'], backup_id: 'push-001', ingest: false });
 
-        expect(locator.readResourceFile).not.toHaveBeenCalled();
+        expect(locator.readResourceFile).toHaveBeenCalledWith(expect.any(Object), 'characters', 'Ava.png');
         expect(calls.map(call => call.url)).toEqual([
             'https://manager.example/api/remote_backups/control',
             'https://manager.example/api/remote_backups/incoming/start',
@@ -230,6 +230,81 @@ describe('StManagerControlService', () => {
             allow_skip_by_sha: true,
             sha256: '8367cd66fdd136bba8ba23f8805bb050dd6289401c8ec3b0be44a3c233eef90d',
         });
+    });
+
+    it('uses freshly hashed file bytes when manifest sha is stale', async () => {
+        const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+        const currentBytes = Buffer.from('new-card');
+        const currentSha = 'b679a2e7b21f0676d92b08820a9914c814666a2844018e00380dc73ea28c2f7e';
+        const fetcher = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+            const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+            calls.push({ url: String(url), body });
+            if (String(url).endsWith('/control')) {
+                return new Response(JSON.stringify({
+                    success: true,
+                    protocol_version: 2,
+                    features: { incoming_skip_by_sha: true },
+                }), { status: 200 });
+            }
+            if (String(url).endsWith('/incoming/start')) {
+                return new Response(JSON.stringify({ success: true, backup: { backup_id: 'push-001' } }), { status: 200 });
+            }
+            if (String(url).endsWith('/incoming/file/write-init')) {
+                return new Response(JSON.stringify({
+                    success: true,
+                    transfer: { upload_required: true, upload_id: 'upload-001' },
+                }), { status: 200 });
+            }
+            if (String(url).endsWith('/incoming/complete')) {
+                return new Response(JSON.stringify({ success: true, backup: { backup_id: 'push-001', total_files: 1 } }), { status: 200 });
+            }
+            return new Response(JSON.stringify({ success: true }), { status: 200 });
+        });
+        const locator = {
+            buildManifest: vi.fn(() => ({
+                files: [{
+                    relative_path: 'Ava.png',
+                    kind: 'file' as const,
+                    source: 'root/characters',
+                    size: 4,
+                    mtime: 123,
+                    sha256: '8367cd66fdd136bba8ba23f8805bb050dd6289401c8ec3b0be44a3c233eef90d',
+                }],
+            })),
+            readResourceFile: vi.fn(() => ({ buffer: currentBytes })),
+            writeResourceFile: vi.fn(),
+        };
+        const service = new StManagerControlService({
+            statePath: path.join(tempDir, 'control.json'),
+            fetcher,
+            locator,
+            chunkSize: 4,
+        });
+        service.updateConfig({
+            manager_url: 'https://manager.example',
+            control_key: 'stmc_secret_key',
+        });
+
+        await service.startBackup(user(), { resource_types: ['characters'], backup_id: 'push-001', ingest: false });
+
+        expect(calls.find(call => call.url.endsWith('/incoming/file/write-init'))?.body).toMatchObject({
+            allow_skip_by_sha: true,
+            size: currentBytes.length,
+            sha256: currentSha,
+        });
+        const chunks = calls.filter(call => call.url.endsWith('/incoming/file/write-chunk'));
+        expect(chunks.map(call => call.body)).toEqual([
+            {
+                upload_id: 'upload-001',
+                offset: 0,
+                data_base64: currentBytes.subarray(0, 4).toString('base64'),
+            },
+            {
+                upload_id: 'upload-001',
+                offset: 4,
+                data_base64: currentBytes.subarray(4).toString('base64'),
+            },
+        ]);
     });
 
     it('restores ST-Manager backup files through the control channel into Authority resources', async () => {
