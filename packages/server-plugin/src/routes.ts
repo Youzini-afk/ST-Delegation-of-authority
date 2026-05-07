@@ -100,6 +100,7 @@ import {
     DATA_TRANSFER_CHUNK_BYTES,
     MAX_BLOB_BYTES,
     MAX_KV_VALUE_BYTES,
+    MAX_SQL_BATCH_STATEMENTS,
     UNMANAGED_TRANSFER_MAX_BYTES,
     buildAuthorityFeatureFlags,
 } from './constants.js';
@@ -107,7 +108,7 @@ import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import type { StManagerResourceType } from './services/st-manager-resource-locator.js';
 import { getUserAuthorityPaths } from './store/authority-paths.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
-import { asErrorMessage, AuthorityServiceError, buildPermissionDescriptor, getSessionToken, getUserContext, isAuthorityServiceError, normalizeHostname, sanitizeFileSegment } from './utils.js';
+import { asErrorMessage, AuthorityServiceError, buildPermissionDescriptor, getSessionToken, getUserContext, isAuthorityServiceError, normalizeHostname, resolveContainedPath, sanitizeFileSegment } from './utils.js';
 
 type RouterLike = {
     get(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
@@ -382,11 +383,11 @@ function readSqlSchemaObjectRecord(row: Record<string, unknown>): SqlSchemaObjec
 
 function resolvePrivateSqlDatabaseDir(user: ReturnType<typeof getUserContext>, extensionId: string): string {
     const paths = getUserAuthorityPaths(user);
-    return path.join(paths.sqlPrivateDir, sanitizeFileSegment(extensionId));
+    return resolveContainedPath(paths.sqlPrivateDir, sanitizeFileSegment(extensionId));
 }
 
 function resolvePrivateSqlDatabasePath(user: ReturnType<typeof getUserContext>, extensionId: string, databaseName: string): string {
-    return path.join(
+    return resolveContainedPath(
         resolvePrivateSqlDatabaseDir(user, extensionId),
         `${sanitizeFileSegment(databaseName)}.sqlite`,
     );
@@ -474,11 +475,11 @@ function decodeHttpResponseBody(bytes: Buffer, encoding: 'utf8' | 'base64'): str
 
 function resolvePrivateTriviumDatabaseDir(user: ReturnType<typeof getUserContext>, extensionId: string): string {
     const paths = getUserAuthorityPaths(user);
-    return path.join(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
+    return resolveContainedPath(paths.triviumPrivateDir, sanitizeFileSegment(extensionId));
 }
 
 function resolvePrivateTriviumDatabasePath(user: ReturnType<typeof getUserContext>, extensionId: string, databaseName: string): string {
-    return path.join(
+    return resolveContainedPath(
         resolvePrivateTriviumDatabaseDir(user, extensionId),
         `${sanitizeFileSegment(databaseName)}.tdb`,
     );
@@ -536,6 +537,21 @@ async function listPrivateSqlDatabases(
 function previewSqlStatement(statement: string): string {
     const normalized = statement.replace(/\s+/g, ' ').trim();
     return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+
+function assertSqlStatementCount(statements: unknown, label: string): void {
+    if (!Array.isArray(statements)) {
+        return;
+    }
+    if (statements.length > MAX_SQL_BATCH_STATEMENTS) {
+        throw new AuthorityServiceError(
+            `${label} exceeds ${MAX_SQL_BATCH_STATEMENTS} statements`,
+            400,
+            'validation_error',
+            'validation',
+            { statementCount: statements.length, maxStatements: MAX_SQL_BATCH_STATEMENTS },
+        );
+    }
 }
 
 function summarizeBlobRecords(records: BlobRecord[]): { count: number; totalSizeBytes: number } {
@@ -1665,6 +1681,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
+            assertSqlStatementCount(payload.statements, 'SQL batch');
 
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
             const result = await runtime.core.batchSql(dbPath, {
@@ -1690,6 +1707,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
+            assertSqlStatementCount(payload.statements, 'SQL transaction');
 
             const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
             const result = await runtime.core.transactionSql(dbPath, {

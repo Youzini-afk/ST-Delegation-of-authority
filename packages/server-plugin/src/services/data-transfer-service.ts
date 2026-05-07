@@ -14,10 +14,11 @@ import type {
 } from '@stdo/shared-types';
 import {
     DATA_TRANSFER_CHUNK_BYTES,
+    UNMANAGED_TRANSFER_MAX_BYTES,
 } from '../constants.js';
 import { getUserAuthorityPaths } from '../store/authority-paths.js';
 import type { UserContext } from '../types.js';
-import { sanitizeFileSegment } from '../utils.js';
+import { resolveContainedPath, sanitizeFileSegment } from '../utils.js';
 
 interface DataTransferOpenReadRequest {
     resource: DataTransferResource;
@@ -283,7 +284,7 @@ export class DataTransferService {
     private getTransferBaseDir(user: UserContext, extensionId: string): string {
         const paths = getUserAuthorityPaths(user);
         const stateDir = path.dirname(paths.controlDbFile);
-        return path.join(
+        return resolveContainedPath(
             stateDir,
             'transfers',
             sanitizeFileSegment(extensionId),
@@ -291,15 +292,15 @@ export class DataTransferService {
     }
 
     private getTransferDataDir(user: UserContext, extensionId: string, resource: DataTransferResource): string {
-        return path.join(this.getTransferBaseDir(user, extensionId), sanitizeFileSegment(resource));
+        return resolveContainedPath(this.getTransferBaseDir(user, extensionId), sanitizeFileSegment(resource));
     }
 
     private getTransferRecordDir(user: UserContext, extensionId: string): string {
-        return path.join(this.getTransferBaseDir(user, extensionId), 'records');
+        return resolveContainedPath(this.getTransferBaseDir(user, extensionId), 'records');
     }
 
     private getTransferRecordPath(user: UserContext, extensionId: string, transferId: string): string {
-        return path.join(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
+        return resolveContainedPath(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
     }
 }
 
@@ -370,7 +371,7 @@ function resolveTransferMaxBytes(
     maxBytesOverride?: number,
 ): number {
     if (typeof maxBytesOverride !== 'number' || !Number.isFinite(maxBytesOverride)) {
-        return Number.MAX_SAFE_INTEGER;
+        return UNMANAGED_TRANSFER_MAX_BYTES;
     }
     if (maxBytesOverride <= 0) {
         throw new Error('Transfer maxBytes must be a positive integer');

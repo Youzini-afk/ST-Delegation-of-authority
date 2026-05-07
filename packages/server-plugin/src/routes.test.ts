@@ -5,6 +5,7 @@ import process from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from './version.js';
 import { registerRoutes } from './routes.js';
+import { MAX_SQL_BATCH_STATEMENTS, UNMANAGED_TRANSFER_MAX_BYTES } from './constants.js';
 import type { AuthorityRuntime } from './runtime.js';
 import { AuthorityServiceError } from './utils.js';
 
@@ -296,13 +297,75 @@ describe('registerRoutes', () => {
                     httpFetchResponse: { bytes: 256 * 1024, source: 'runtime' },
                 }),
                 effectiveTransferMaxBytes: expect.objectContaining({
-                    storageBlobWrite: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                    privateFileRead: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                    httpFetchRequest: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
-                    httpFetchResponse: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
+                    storageBlobWrite: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                    privateFileRead: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                    httpFetchRequest: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
+                    httpFetchResponse: { bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' },
                 }),
             }),
         }));
+    });
+
+    it('rejects oversized SQL transaction statement batches before core execution', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/ext-a' } }),
+            },
+            permissions: {
+                authorize: vi.fn().mockResolvedValue(true),
+            },
+            core: {
+                transactionSql: vi.fn(),
+            },
+            audit: {
+                logPermission: vi.fn().mockResolvedValue(undefined),
+                logUsage: vi.fn().mockResolvedValue(undefined),
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await posts.get('/sql/transaction')?.({
+            user: {
+                profile: { handle: 'alice', admin: false },
+                directories: { root: 'C:/users/alice' },
+            },
+            body: {
+                database: 'default',
+                statements: Array.from({ length: MAX_SQL_BATCH_STATEMENTS + 1 }, () => ({ statement: 'SELECT 1' })),
+            },
+            headers: {},
+        }, response);
+
+        expect(runtime.core.transactionSql).not.toHaveBeenCalled();
+        expect(response.status).toHaveBeenCalledWith(400);
+        expect(response.json).toHaveBeenCalledWith({
+            error: `SQL transaction exceeds ${MAX_SQL_BATCH_STATEMENTS} statements`,
+            code: 'validation_error',
+            category: 'validation',
+            details: {
+                statementCount: MAX_SQL_BATCH_STATEMENTS + 1,
+                maxStatements: MAX_SQL_BATCH_STATEMENTS,
+            },
+        });
     });
 
     it('resolves relative SillyTavern user directories from the server root before probing', async () => {

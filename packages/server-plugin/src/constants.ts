@@ -16,7 +16,8 @@ export const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 export const MAX_AUDIT_LINES = 200;
 export const DATA_TRANSFER_CHUNK_BYTES = 256 * 1024;
 export const DATA_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
-export const UNMANAGED_TRANSFER_MAX_BYTES = Number.MAX_SAFE_INTEGER;
+export const UNMANAGED_TRANSFER_MAX_BYTES = 256 * 1024 * 1024;
+export const MAX_SQL_BATCH_STATEMENTS = 100;
 
 export const SUPPORTED_RESOURCES: PermissionResource[] = [
     'storage.kv',

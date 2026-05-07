@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DataTransferService } from './data-transfer-service.js';
+import { UNMANAGED_TRANSFER_MAX_BYTES } from '../constants.js';
 import type { UserContext } from '../types.js';
 
 describe('DataTransferService', () => {
@@ -46,7 +47,7 @@ describe('DataTransferService', () => {
         expect(() => transfers.get(user, 'third-party/ext-b', initialized.transferId)).toThrow('Transfer not found');
     });
 
-    it('does not impose plugin-level transfer ceilings for http.fetch transfers', async () => {
+    it('uses the runtime default transfer ceiling when no override is supplied', async () => {
         const user = createUser(dirs);
         const transfers = new DataTransferService();
 
@@ -54,7 +55,7 @@ describe('DataTransferService', () => {
             resource: 'http.fetch',
             purpose: 'httpFetchRequest',
         });
-        expect(requestTransfer.maxBytes).toBe(Number.MAX_SAFE_INTEGER);
+        expect(requestTransfer.maxBytes).toBe(UNMANAGED_TRANSFER_MAX_BYTES);
         expect(requestTransfer.purpose).toBe('httpFetchRequest');
 
         const responseSourcePath = path.join(user.rootDir, 'large-response.bin');
@@ -65,6 +66,15 @@ describe('DataTransferService', () => {
             sourcePath: responseSourcePath,
         });
         expect(responseTransfer.sizeBytes).toBe(4 * 1024 * 1024);
+
+        const oversizedSourcePath = path.join(user.rootDir, 'oversized-response.bin');
+        fs.closeSync(fs.openSync(oversizedSourcePath, 'w'));
+        fs.truncateSync(oversizedSourcePath, UNMANAGED_TRANSFER_MAX_BYTES + 1);
+        await expect(transfers.openRead(user, 'third-party/ext-a', {
+            resource: 'http.fetch',
+            purpose: 'httpFetchResponse',
+            sourcePath: oversizedSourcePath,
+        })).rejects.toThrow(`Transfer exceeds ${UNMANAGED_TRANSFER_MAX_BYTES} bytes`);
     });
 
     it('enforces effective maxBytes overrides for staged upload transfers', async () => {

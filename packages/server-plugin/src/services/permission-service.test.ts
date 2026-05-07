@@ -4,7 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from '../version.js';
-import { DEFAULT_POLICY_STATUS } from '../constants.js';
+import { DEFAULT_POLICY_STATUS, UNMANAGED_TRANSFER_MAX_BYTES } from '../constants.js';
 import { PermissionService } from './permission-service.js';
 import { PolicyService } from './policy-service.js';
 import type { CoreService } from './core-service.js';
@@ -259,8 +259,8 @@ describe('PermissionService', () => {
         });
 
         const limits = await permissions.getEffectiveSessionLimits(user, session.extension.id);
-        expect(limits.effectiveTransferMaxBytes.storageBlobWrite).toEqual({ bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' });
-        expect(limits.effectiveTransferMaxBytes.httpFetchResponse).toEqual({ bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' });
+        expect(limits.effectiveTransferMaxBytes.storageBlobWrite).toEqual({ bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' });
+        expect(limits.effectiveTransferMaxBytes.httpFetchResponse).toEqual({ bytes: UNMANAGED_TRANSFER_MAX_BYTES, source: 'runtime' });
         expect(limits.effectiveTransferMaxBytes.privateFileRead.source).toBe('runtime');
     });
 });
