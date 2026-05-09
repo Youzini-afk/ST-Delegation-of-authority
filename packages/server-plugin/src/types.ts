@@ -189,6 +189,7 @@ export interface AdminGitUpdateSummary {
     previousRevision: string | null;
     currentRevision: string | null;
     changed: boolean;
+    preflightStatus: string | null;
     stdout: string | null;
     stderr: string | null;
 }

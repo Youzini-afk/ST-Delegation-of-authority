@@ -126,6 +126,64 @@ describe('CoreService', () => {
         });
     });
 
+    it('maps core job queue saturation to a structured 503 backpressure error', async () => {
+        const fetchMock = vi.fn(async () => {
+            return new Response(JSON.stringify({
+                error: 'core job queue is full',
+                code: 'job_queue_full',
+            }), {
+                status: 503,
+                headers: { 'content-type': 'application/json' },
+            });
+        });
+        globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+        const service = createRunningCoreService();
+        const error = await service.querySql('C:/tmp/example.sqlite', {
+            statement: 'SELECT 1',
+        }).catch(value => value);
+
+        expect(error).toBeInstanceOf(AuthorityServiceError);
+        expect(error).toMatchObject({
+            status: 503,
+            code: 'job_queue_full',
+            category: 'backpressure',
+        });
+        expect((error as AuthorityServiceError).details).toMatchObject({
+            source: 'core',
+            statusCode: 503,
+        });
+    });
+
+    it('maps core concurrency saturation to a structured 503 backpressure error', async () => {
+        const fetchMock = vi.fn(async () => {
+            return new Response(JSON.stringify({
+                error: 'concurrency limit exceeded',
+                code: 'concurrency_limit_exceeded',
+            }), {
+                status: 503,
+                headers: { 'content-type': 'application/json' },
+            });
+        });
+        globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+        const service = createRunningCoreService();
+        const error = await service.querySql('C:/tmp/example.sqlite', {
+            statement: 'SELECT 1',
+        }).catch(value => value);
+
+        expect(error).toBeInstanceOf(AuthorityServiceError);
+        expect(error).toMatchObject({
+            status: 503,
+            code: 'concurrency_limit_exceeded',
+            category: 'backpressure',
+        });
+        expect((error as AuthorityServiceError).details).toMatchObject({
+            source: 'core',
+            statusCode: 503,
+        });
+    });
+
     it('starts managed core from the SillyTavern root with an absolute data root', async () => {
         const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-core-service-'));
         cleanupDirs.push(baseDir);
@@ -223,6 +281,21 @@ describe('CoreService', () => {
         expect(status.lastError).toContain('glibc Linux binaries are not compatible');
     });
 });
+
+function createRunningCoreService(): CoreService {
+    const service = new CoreService();
+    const serviceWithState = service as unknown as {
+        status: { state: 'running'; port: number; lastError: string | null };
+        token: string;
+    };
+    serviceWithState.status = {
+        state: 'running',
+        port: 43123,
+        lastError: null,
+    };
+    serviceWithState.token = 'test-token';
+    return service;
+}
 
 function getOtherPlatform(): { platform: NodeJS.Platform; arch: NodeJS.Architecture } {
     const current = `${process.platform}-${process.arch}`;

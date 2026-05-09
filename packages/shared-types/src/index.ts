@@ -17,7 +17,7 @@ export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always'
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type GrantScope = 'session' | 'persistent' | 'policy';
 export type AuthorityLimitSource = 'runtime' | 'policy';
-export type AuthorityErrorCategory = 'permission' | 'auth' | 'session' | 'validation' | 'limit' | 'timeout' | 'core';
+export type AuthorityErrorCategory = 'permission' | 'auth' | 'session' | 'validation' | 'limit' | 'timeout' | 'core' | 'backpressure';
 export type AuthorityErrorCode =
     | 'permission_not_granted'
     | 'permission_denied'
@@ -27,6 +27,8 @@ export type AuthorityErrorCode =
     | 'session_user_mismatch'
     | 'validation_error'
     | 'limit_exceeded'
+    | 'job_queue_full'
+    | 'concurrency_limit_exceeded'
     | 'timeout'
     | 'core_unavailable'
     | 'core_request_failed';
