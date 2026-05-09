@@ -890,9 +890,10 @@ https://api.openai.com/v1/...
 - `auth`
 - `session`
 - `validation`
-- `limit`
-- `timeout`
-- `core`
+  - `limit`
+  - `timeout`
+  - `core`
+  - `backpressure`
 
 当前常见 `code` 包括：
 
@@ -901,9 +902,25 @@ https://api.openai.com/v1/...
 - `session_user_mismatch`
 - `validation_error`
 - `limit_exceeded`
+- `job_queue_full`
+- `concurrency_limit_exceeded`
 - `timeout`
 - `core_unavailable`
 - `core_request_failed`
+
+### 14.1 503 taxonomy
+
+公开 Node adapter 会保留 core 侧 503 的结构化含义：
+
+- `code: "core_unavailable"`, `category: "core"`
+  - Node 无法启动、连接或调用 `authority-core`。
+  - `details` 保留 `state` / `lastError` 或 `requestPath` / `source: "core"` 等诊断字段。
+- `code: "job_queue_full"`, `category: "backpressure"`
+  - core 已运行，但内部 job/request queue 已满；调用方应退避重试。
+- `code: "concurrency_limit_exceeded"`, `category: "backpressure"`
+  - core 已运行，但并发执行槽位达到上限；调用方应退避重试。
+
+真实 payload/大小限制仍按原语义返回 `413` / `429` 与 `code: "limit_exceeded"`, `category: "limit"`，不要把它们和 503 backpressure 混用。
 
 ## 15. 给开发者和 AI 的建议
 

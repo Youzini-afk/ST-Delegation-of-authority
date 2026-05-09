@@ -239,7 +239,7 @@ Trivium 数据库路径：
 重要边界：
 
 - Authority **不生成 embedding**
-- 调用方必须自己提供 `vector`
+- 调用方或 BME 等上游系统必须自己生成并提供 `vector`；Authority / Trivium 只存储、索引和检索这些向量
 - 不应让两个不同运行时直接并发读写同一个 `.tdb`
 - `checkMappingsIntegrity`、`deleteOrphanMappings` 与 `stat(includeMappingIntegrity)` 会触发 mapping / node 集分析，更适合 diagnostics / maintenance，而不是业务热路径
 

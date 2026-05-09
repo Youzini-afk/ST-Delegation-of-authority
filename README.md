@@ -4,7 +4,7 @@ Authority 是一个 SillyTavern 服务端插件，给第三方扩展提供统一
 
 同时它不是裸放后端，上面盖了一层权限治理：扩展要先用先声明，用户可以放行或拒绝，管理员可以统一收口。
 
-**插件 ID** `authority` · **SDK** `third-party/st-authority-sdk` · **平台** Windows x64 / Linux x64 / Linux arm64 / Android arm64
+**插件 ID** `authority` · **SDK** `third-party/st-authority-sdk` · **预构建平台** Windows x64 / Linux x64 / Linux arm64 / Android arm64（当前不含 `darwin-arm64`，macOS Apple Silicon 需源码构建 core）
 
 ---
 
@@ -111,7 +111,7 @@ const search = await client.trivium.searchHybridWithContext({
 });
 ```
 
-> Trivium 推荐用法：读路径用 `tql()` / `tqlPage()`，变更用 `tqlMut()`，字段过滤用 `createIndex()` / `dropIndex()`，检索上下文用 `searchHybridWithContext()`。`checkMappingsIntegrity` / `deleteOrphanMappings` 是诊断维护路径，不要用在热路径。
+> Trivium 推荐用法：读路径用 `tql()` / `tqlPage()`，变更用 `tqlMut()`，字段过滤用 `createIndex()` / `dropIndex()`，检索上下文用 `searchHybridWithContext()`。Authority / Trivium 不生成 embedding；调用方或 BME 必须提供 `vector`。`checkMappingsIntegrity` / `deleteOrphanMappings` 是诊断维护路径，不要用在热路径。
 
 ### KV / Blob / 文件 / HTTP / Jobs / Events
 
@@ -265,7 +265,22 @@ npm run sync:installable && npm run check:installable
 
 - 查看 `probe.core.state` 和 `probe.core.lastError`
 - 确认当前平台在 `.authority-release.json` 的 `coreArtifactPlatforms` 中
+- 当前预构建包不包含 `darwin-arm64`；macOS Apple Silicon 用户需从完整源码运行 `npm run build:core`，直到 CI 提供该平台 artifact
+- Termux 的 `dpkg was interrupted` 是包管理器状态问题，不是 Authority runtime；先按 Termux 提示修复 `dpkg`，再重试 Rust/Cargo 安装或 core 构建
 - 运行 `npm run check:installable`
+
+### 503 / backpressure
+
+- `core_unavailable` + `category: core`：Node 无法启动或连接 Rust core，查看 `details.state` / `details.lastError`
+- `job_queue_full` + `category: backpressure`：core 队列已满，调用方应退避重试
+- `concurrency_limit_exceeded` + `category: backpressure`：core 并发槽位已满，调用方应退避重试
+- 真正的请求体或资源大小限制仍返回 `413` / `429` 与 `limit_exceeded`
+
+### Git 更新失败
+
+- 先在插件目录运行 `git status` 查看本地修改、分支和远端状态
+- Authority 的安全更新只执行 `git pull --ff-only`；失败诊断会包含 preflight status
+- 不要把 `reset --hard` 当默认排障步骤；只有确认要丢弃本地改动且已备份时才手动使用破坏性 Git 命令
 
 ### SDK 状态 conflict
 

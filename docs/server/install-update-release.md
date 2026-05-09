@@ -127,6 +127,8 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 - 普通用户优先使用 GitHub Actions 产出的 `authority-installable-multiplatform`
 - Alpine / musl Docker 用户应使用包含 `linux-x64-musl` 的多平台产物，不能直接运行 glibc `linux-x64` binary
 - 源码 / Git 安装用户在 Linux 或 Termux 上需要确保 Rust/Cargo 可用，或等待 CI 同步多平台 `managed/core`
+- 当前预构建平台不包含 `darwin-arm64`；macOS Apple Silicon 用户需要从完整源码本地构建 core，直到 CI 发布对应 artifact。
+- Termux 中如果出现 `dpkg was interrupted` / `dpkg --configure -a` 一类提示，这是系统包管理器状态问题，不是 Authority runtime 错误；先修复 Termux 包管理器，再安装 Rust/Cargo 或重试本地构建。
 
 ## 6. 哪些 hash 漂移只是 warning
 
@@ -185,6 +187,9 @@ AUTHORITY_ST_ROOT=<path-to-sillytavern-root>
 但要特别注意：
 
 - 即使 git pull 成功了，如果 Node server-plugin 自身代码变了，**仍通常需要重启 SillyTavern** 才能应用新的 Node 代码
+- 更新失败时先在插件目录运行 `git status` 查看本地修改、分支和远端状态。
+- Authority 的安全更新路径只执行 `git pull --ff-only`，并在失败时回显 preflight `git status --short --branch`；它不会自动 `reset --hard`、rebase、clean、stash 或删除文件。
+- `reset --hard` 不是默认排障建议；只有在你确认要丢弃本地改动并已备份后，才应由管理员手动执行破坏性 Git 操作。
 
 ## 8.2 `redeploy-sdk`
 
