@@ -4,6 +4,6 @@
   "platform": "linux",
   "arch": "x64",
   "binaryName": "authority-core",
-  "binarySha256": "ee5c44a5ba89b4372e7760407da9b9acc063923b4d8487f6182899134bed71a5",
-  "builtAt": "2026-05-07T14:54:55.052Z"
+  "binarySha256": "6585f244c59b067b07a6af41706e1338ea5a9c23a538bc68176d2b49cadbda53",
+  "builtAt": "2026-05-09T09:08:08.024Z"
 }
