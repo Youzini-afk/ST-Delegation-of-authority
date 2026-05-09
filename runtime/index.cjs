@@ -5262,6 +5262,15 @@ function extractCoreErrorMessage(payload, statusCode) {
 }
 function buildCoreRequestError(requestPath, payload, statusCode) {
     const message = extractCoreErrorMessage(payload, statusCode);
+    const coreCode = extractCoreErrorCode(payload, message);
+    const backpressure = mapCoreBackpressureError(coreCode, statusCode);
+    if (backpressure) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, backpressure.status, backpressure.code, backpressure.category, {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
     if (statusCode === 408 || statusCode === 504 || /timed?\s*out|timeout/i.test(message)) {
         return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'timeout', 'timeout', {
             requestPath,
@@ -5269,7 +5278,7 @@ function buildCoreRequestError(requestPath, payload, statusCode) {
             statusCode,
         });
     }
-    if (statusCode === 413 || statusCode === 429 || /exceeds|too large|queue_full|max/i.test(message)) {
+    if (statusCode === 413 || statusCode === 429 || /exceeds|too large|max/i.test(message)) {
         return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'limit_exceeded', 'limit', {
             requestPath,
             source: 'core',
@@ -5288,6 +5297,37 @@ function buildCoreRequestError(requestPath, payload, statusCode) {
         source: 'core',
         statusCode,
     });
+}
+function extractCoreErrorCode(payload, message) {
+    if (payload && typeof payload === 'object') {
+        for (const key of ['code', 'errorCode', 'kind']) {
+            if (key in payload) {
+                const value = payload[key];
+                if (typeof value === 'string' && value.trim()) {
+                    return value.trim();
+                }
+            }
+        }
+    }
+    if (/\bjob_queue_full\b|\bqueue_full\b/i.test(message)) {
+        return 'job_queue_full';
+    }
+    if (/\bconcurrency_limit_exceeded\b/i.test(message)) {
+        return 'concurrency_limit_exceeded';
+    }
+    return null;
+}
+function mapCoreBackpressureError(code, statusCode) {
+    if (statusCode !== 503) {
+        return null;
+    }
+    if (code === 'job_queue_full' || code === 'queue_full') {
+        return { status: 503, code: 'job_queue_full', category: 'backpressure' };
+    }
+    if (code === 'concurrency_limit_exceeded') {
+        return { status: 503, code: 'concurrency_limit_exceeded', category: 'backpressure' };
+    }
+    return null;
 }
 function delay(durationMs) {
     return new Promise(resolve => setTimeout(resolve, durationMs));
@@ -5921,7 +5961,19 @@ class InstallService {
         }
         const branch = runGit(this.pluginRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], this.env).stdout || null;
         const previousRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
-        const pullResult = runGit(this.pluginRoot, ['pull', '--ff-only'], this.env, true);
+        const preflightStatus = runGit(this.pluginRoot, ['status', '--short', '--branch'], this.env, true).stdout || null;
+        let pullResult;
+        try {
+            pullResult = runGit(this.pluginRoot, ['pull', '--ff-only'], this.env, true);
+        }
+        catch (error) {
+            throw new Error(buildGitPullFailureMessage(error, {
+                pluginRoot: this.pluginRoot,
+                branch,
+                previousRevision,
+                preflightStatus,
+            }));
+        }
         const currentRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
         this.refreshReleaseMetadata();
         return {
@@ -5930,6 +5982,7 @@ class InstallService {
             previousRevision,
             currentRevision,
             changed: previousRevision !== currentRevision,
+            preflightStatus,
             stdout: pullResult.stdout || null,
             stderr: pullResult.stderr || null,
         };
@@ -6032,7 +6085,7 @@ class InstallService {
         if (!canBuildCoreFromSource(this.pluginRoot)) {
             return `Managed authority-core for ${expectedPlatform} is missing and local source build is unavailable. Install the multi-platform package, or run npm run build:core from a full source checkout.`;
         }
-        const cargoCheck = (0,node_child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)('cargo', ['--version'], {
+        const cargoCheck = node_child_process__WEBPACK_IMPORTED_MODULE_1___default().spawnSync('cargo', ['--version'], {
             cwd: this.pluginRoot,
             env: this.env,
             encoding: 'utf8',
@@ -6048,7 +6101,7 @@ class InstallService {
             node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(targetDir, beforeBuild, { recursive: true, force: true });
         }
         this.logger.info(`[authority] Managed authority-core for ${expectedPlatform} is missing; building it locally from source.`);
-        const build = (0,node_child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)(process.execPath, ['./scripts/build-core.mjs'], {
+        const build = node_child_process__WEBPACK_IMPORTED_MODULE_1___default().spawnSync(process.execPath, ['./scripts/build-core.mjs'], {
             cwd: this.pluginRoot,
             env: {
                 ...this.env,
@@ -6227,10 +6280,11 @@ function readReleaseMetadata(pluginRoot) {
     return (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_RELEASE_FILE), null);
 }
 function runGit(cwd, args, env, allowNoisyOutput = false) {
-    const result = (0,node_child_process__WEBPACK_IMPORTED_MODULE_1__.spawnSync)('git', args, {
+    const result = node_child_process__WEBPACK_IMPORTED_MODULE_1___default().spawnSync('git', args, {
         cwd,
         env,
         encoding: 'utf8',
+        timeout: 30_000,
         windowsHide: true,
     });
     const stdout = (result.stdout ?? '').trim();
@@ -6246,6 +6300,17 @@ function runGit(cwd, args, env, allowNoisyOutput = false) {
         return { stdout, stderr: '' };
     }
     return { stdout, stderr };
+}
+function buildGitPullFailureMessage(error, context) {
+    const message = error instanceof Error ? error.message : String(error);
+    return [
+        `Safe Git update failed while running git pull --ff-only: ${message}`,
+        `Plugin root: ${context.pluginRoot}`,
+        `Branch: ${context.branch ?? 'unknown'}`,
+        `Previous revision: ${context.previousRevision ?? 'unknown'}`,
+        context.preflightStatus ? `Preflight git status:\n${context.preflightStatus}` : 'Preflight git status: unavailable',
+        'Inspect the repository with git status before retrying. Authority does not reset, rebase, clean, or stash during safe updates.',
+    ].join('\n');
 }
 function getCurrentCorePlatform(env = process.env) {
     const basePlatform = `${process.platform}-${process.arch}`;
