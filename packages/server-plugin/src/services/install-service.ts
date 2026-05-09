@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import childProcess from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -198,7 +198,18 @@ export class InstallService {
 
         const branch = runGit(this.pluginRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], this.env).stdout || null;
         const previousRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
-        const pullResult = runGit(this.pluginRoot, ['pull', '--ff-only'], this.env, true);
+        const preflightStatus = runGit(this.pluginRoot, ['status', '--short', '--branch'], this.env, true).stdout || null;
+        let pullResult: { stdout: string; stderr: string };
+        try {
+            pullResult = runGit(this.pluginRoot, ['pull', '--ff-only'], this.env, true);
+        } catch (error) {
+            throw new Error(buildGitPullFailureMessage(error, {
+                pluginRoot: this.pluginRoot,
+                branch,
+                previousRevision,
+                preflightStatus,
+            }));
+        }
         const currentRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
 
         this.refreshReleaseMetadata();
@@ -209,6 +220,7 @@ export class InstallService {
             previousRevision,
             currentRevision,
             changed: previousRevision !== currentRevision,
+            preflightStatus,
             stdout: pullResult.stdout || null,
             stderr: pullResult.stderr || null,
         };
@@ -327,7 +339,7 @@ export class InstallService {
             return `Managed authority-core for ${expectedPlatform} is missing and local source build is unavailable. Install the multi-platform package, or run npm run build:core from a full source checkout.`;
         }
 
-        const cargoCheck = spawnSync('cargo', ['--version'], {
+        const cargoCheck = childProcess.spawnSync('cargo', ['--version'], {
             cwd: this.pluginRoot,
             env: this.env,
             encoding: 'utf8',
@@ -344,7 +356,7 @@ export class InstallService {
             fs.cpSync(targetDir, beforeBuild, { recursive: true, force: true });
         }
         this.logger.info(`[authority] Managed authority-core for ${expectedPlatform} is missing; building it locally from source.`);
-        const build = spawnSync(process.execPath, ['./scripts/build-core.mjs'], {
+        const build = childProcess.spawnSync(process.execPath, ['./scripts/build-core.mjs'], {
             cwd: this.pluginRoot,
             env: {
                 ...this.env,
@@ -557,10 +569,11 @@ function runGit(
     env: NodeJS.ProcessEnv,
     allowNoisyOutput = false,
 ): { stdout: string; stderr: string } {
-    const result = spawnSync('git', args, {
+    const result = childProcess.spawnSync('git', args, {
         cwd,
         env,
         encoding: 'utf8',
+        timeout: 30_000,
         windowsHide: true,
     });
 
@@ -581,6 +594,23 @@ function runGit(
     }
 
     return { stdout, stderr };
+}
+
+function buildGitPullFailureMessage(error: unknown, context: {
+    pluginRoot: string;
+    branch: string | null;
+    previousRevision: string | null;
+    preflightStatus: string | null;
+}): string {
+    const message = error instanceof Error ? error.message : String(error);
+    return [
+        `Safe Git update failed while running git pull --ff-only: ${message}`,
+        `Plugin root: ${context.pluginRoot}`,
+        `Branch: ${context.branch ?? 'unknown'}`,
+        `Previous revision: ${context.previousRevision ?? 'unknown'}`,
+        context.preflightStatus ? `Preflight git status:\n${context.preflightStatus}` : 'Preflight git status: unavailable',
+        'Inspect the repository with git status before retrying. Authority does not reset, rebase, clean, or stash during safe updates.',
+    ].join('\n');
 }
 
 function getCurrentCorePlatform(env: NodeJS.ProcessEnv = process.env): string {

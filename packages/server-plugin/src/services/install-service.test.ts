@@ -271,6 +271,41 @@ describe('InstallService', () => {
         expect(status.coreVerified).toBe(true);
         expect(status.coreMessage).toContain('artifact directory hash drift detected');
     });
+
+    it('adds preflight git status context when safe fast-forward update fails', () => {
+        const setup = createInstallFixture();
+        fs.mkdirSync(path.join(setup.pluginRoot, '.git'), { recursive: true });
+        vi.spyOn(childProcess, 'spawnSync').mockImplementation((command, args) => {
+            expect(command).toBe('git');
+            const gitArgs = Array.isArray(args) ? args.join(' ') : '';
+            if (gitArgs === 'rev-parse --abbrev-ref HEAD') {
+                return { status: 0, stdout: 'main\n', stderr: '' } as childProcess.SpawnSyncReturns<string>;
+            }
+            if (gitArgs === 'rev-parse HEAD') {
+                return { status: 0, stdout: 'abc123\n', stderr: '' } as childProcess.SpawnSyncReturns<string>;
+            }
+            if (gitArgs === 'status --short --branch') {
+                return { status: 0, stdout: '## main...origin/main [behind 1]\n M README.md\n', stderr: '' } as childProcess.SpawnSyncReturns<string>;
+            }
+            if (gitArgs === 'pull --ff-only') {
+                return { status: 128, stdout: '', stderr: 'error: Your local changes would be overwritten by merge.\n' } as childProcess.SpawnSyncReturns<string>;
+            }
+            throw new Error(`Unexpected git call: ${gitArgs}`);
+        });
+
+        const service = createService(setup);
+
+        let message = '';
+        try {
+            service.pullLatestFromGit();
+        } catch (error) {
+            message = error instanceof Error ? error.message : String(error);
+        }
+
+        expect(message).toContain('Safe Git update failed');
+        expect(message).toContain('Preflight git status:\n## main...origin/main [behind 1]\n M README.md');
+        expect(message).toContain('Authority does not reset, rebase, clean, or stash');
+    });
 });
 
 interface InstallFixture {
