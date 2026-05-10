@@ -48,6 +48,8 @@ class SecurityCenterView {
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
             packageActionInProgress: false,
+            nativeMigrationOperations: [],
+            nativeMigrationActionInProgress: false,
             stManagerBridgeConfig: null,
             stManagerBridgeGeneratedKey: null,
             stManagerBridgeActionInProgress: false,
@@ -212,6 +214,21 @@ class SecurityCenterView {
                 void this.importPortablePackage();
                 return;
             }
+            const previewNativeMigrationButton = target.closest('[data-action="preview-native-migration"]');
+            if (previewNativeMigrationButton?.dataset.target) {
+                void this.previewNativeMigration(previewNativeMigrationButton.dataset.target);
+                return;
+            }
+            const applyNativeMigrationButton = target.closest('[data-action="apply-native-migration"]');
+            if (applyNativeMigrationButton?.dataset.operationId) {
+                void this.applyNativeMigration(applyNativeMigrationButton.dataset.operationId);
+                return;
+            }
+            const rollbackNativeMigrationButton = target.closest('[data-action="rollback-native-migration"]');
+            if (rollbackNativeMigrationButton?.dataset.operationId) {
+                void this.rollbackNativeMigration(rollbackNativeMigrationButton.dataset.operationId);
+                return;
+            }
             const resumePackageButton = target.closest('[data-action="resume-package-operation"]');
             if (resumePackageButton?.dataset.operationId) {
                 void this.resumePackageOperation(resumePackageButton.dataset.operationId);
@@ -268,16 +285,18 @@ class SecurityCenterView {
             this.state.selectedExtensionId = this.resolveSelectedExtensionId();
             this.state.policyEditorExtensionId = this.resolvePolicyEditorExtensionId();
             if (this.state.isAdmin) {
-                const [policies, usageSummary, packageOperations, stManagerBridgeConfig, stManagerControlConfig] = await Promise.all([
+                const [policies, usageSummary, packageOperations, nativeMigrationOperations, stManagerBridgeConfig, stManagerControlConfig] = await Promise.all([
                     authorityRequest('/admin/policies'),
                     authorityRequest('/admin/usage-summary'),
                     authorityRequest('/admin/import-export/operations'),
+                    authorityRequest('/admin/native-migration/operations'),
                     authorityRequest('/st-manager/bridge/admin/config'),
                     authorityRequest('/st-manager/control/config'),
                 ]);
                 this.state.policies = policies;
                 this.state.usageSummary = usageSummary;
                 this.state.packageOperations = packageOperations.operations;
+                this.state.nativeMigrationOperations = nativeMigrationOperations.operations;
                 this.applyStManagerBridgeConfig(stManagerBridgeConfig);
                 this.state.stManagerControlConfig = normalizeStManagerControlConfig(stManagerControlConfig);
             }
@@ -285,6 +304,7 @@ class SecurityCenterView {
                 this.state.policies = null;
                 this.state.usageSummary = null;
                 this.state.packageOperations = [];
+                this.state.nativeMigrationOperations = [];
                 this.state.stManagerBridgeConfig = null;
                 this.state.stManagerBridgeGeneratedKey = null;
                 this.state.stManagerControlConfig = null;
@@ -666,6 +686,103 @@ class SecurityCenterView {
         }
         finally {
             this.state.packageActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async previewNativeMigration(target) {
+        if (!this.state.isAdmin || this.state.nativeMigrationActionInProgress) {
+            return;
+        }
+        const fileInput = this.root.querySelector(`[data-role="native-migration-file"][data-target="${target}"]`);
+        const file = fileInput?.files?.[0] ?? null;
+        if (!file) {
+            toastr.warning('请先选择要迁移导入的 ZIP 压缩包', TOAST_TITLE);
+            return;
+        }
+        this.state.nativeMigrationActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const transfer = await authorityRequest('/admin/native-migration/upload/init', {
+                method: 'POST',
+                body: { sizeBytes: file.size },
+            });
+            await this.uploadFileToTransfer(file, transfer);
+            const operation = await authorityRequest('/admin/native-migration/preview', {
+                method: 'POST',
+                body: {
+                    transferId: transfer.transferId,
+                    target,
+                    fileName: file.name,
+                },
+            });
+            if (fileInput) {
+                fileInput.value = '';
+            }
+            toastr.success(`迁移预览已生成：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+            this.state.selectedTab = 'updates';
+            void this.render();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.nativeMigrationActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async applyNativeMigration(operationId) {
+        if (!this.state.isAdmin || this.state.nativeMigrationActionInProgress) {
+            return;
+        }
+        const modeSelect = Array.from(this.root.querySelectorAll('[data-role="native-migration-mode"]'))
+            .find(select => select.dataset.operationId === operationId) ?? null;
+        const mode = (modeSelect?.value === 'overwrite' ? 'overwrite' : 'skip');
+        const confirmation = mode === 'overwrite'
+            ? globalThis.confirm?.('将覆盖目标目录中同名文件。Authority 会先创建回滚备份，但不会执行插件安装脚本。确定继续？')
+            : globalThis.confirm?.('将把压缩包中不存在于目标目录的文件导入到原生 SillyTavern 目录。确定继续？');
+        if (!confirmation) {
+            return;
+        }
+        this.state.nativeMigrationActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const operation = await authorityRequest(`/admin/native-migration/operations/${encodeURIComponent(operationId)}/apply`, {
+                method: 'POST',
+                body: { mode },
+            });
+            toastr.success(`迁移已应用：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.nativeMigrationActionInProgress = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async rollbackNativeMigration(operationId) {
+        if (!this.state.isAdmin || this.state.nativeMigrationActionInProgress) {
+            return;
+        }
+        if (!globalThis.confirm?.('回滚只会撤销本次迁移写入且仍未被用户修改的文件。确定回滚？')) {
+            return;
+        }
+        this.state.nativeMigrationActionInProgress = true;
+        void this.renderUpdatesSection();
+        try {
+            const operation = await authorityRequest(`/admin/native-migration/operations/${encodeURIComponent(operationId)}/rollback`, {
+                method: 'POST',
+            });
+            toastr.success(`迁移已回滚：${operation.id}`, TOAST_TITLE);
+            await this.refresh();
+        }
+        catch (error) {
+            toastr.error(getSystemMessageLabel(error instanceof Error ? error.message : String(error)), TOAST_TITLE);
+        }
+        finally {
+            this.state.nativeMigrationActionInProgress = false;
             void this.renderUpdatesSection();
         }
     }
@@ -1405,12 +1522,14 @@ class SecurityCenterView {
         const result = this.state.updateResult;
         const usageSummary = this.state.usageSummary;
         const packageOperations = [...this.state.packageOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const nativeMigrationOperations = [...this.state.nativeMigrationOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
         const installPath = result?.git?.pluginRoot ?? '未获取';
         const pullButtonLabel = this.state.updateInProgress ? '处理中…' : '拉取最新代码';
         const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端界面';
         const packageButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导出数据包';
         const diagnosticArchiveLabel = this.state.packageActionInProgress ? '处理中…' : '导出诊断压缩包';
         const importButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导入数据包';
+        const nativeMigrationButtonLabel = this.state.nativeMigrationActionInProgress ? '处理中…' : '上传并预览';
         container.innerHTML = `
             <div class="authority-page-stack">
                 <div class="authority-page-header authority-page-header--updates">
@@ -1446,6 +1565,55 @@ class SecurityCenterView {
                 </section>
                 ${renderStManagerBridgeSection(this.state.stManagerBridgeConfig, this.state.stManagerBridgeGeneratedKey, this.state.stManagerBridgeActionInProgress)}
                 ${renderStManagerControlSection(this.state.stManagerControlConfig, this.state.stManagerControlBackups, this.state.stManagerControlActionInProgress)}
+                <section class="authority-card authority-card--flat">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>原生酒馆迁移导入</h3>
+                            <div class="authority-muted">从旧 SillyTavern 前端上传 data 或 third-party 插件 ZIP，预览后解压到新酒馆对应目录。最大 12 GB。</div>
+                        </div>
+                        <span class="authority-pill authority-pill--warning">管理员高风险操作</span>
+                    </div>
+                    <div class="authority-stack">
+                        <div class="authority-list-card authority-list-card--column">
+                            <strong>导入旧酒馆 data 目录</strong>
+                            <div class="authority-muted">支持压缩包内为 <code>data/default-user/...</code> 或直接 <code>default-user/...</code>。默认不会删除目标目录中压缩包缺失的文件。</div>
+                            <div class="authority-page-actions">
+                                <input type="file" data-role="native-migration-file" data-target="data" accept=".zip,application/zip" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''} />
+                                <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="data" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
+                            </div>
+                        </div>
+                        <div class="authority-list-card authority-list-card--column">
+                            <strong>导入旧酒馆第三方插件目录</strong>
+                            <div class="authority-muted">支持压缩包内为 <code>public/scripts/extensions/third-party/...</code>、<code>extensions/third-party/...</code>、<code>third-party/...</code> 或直接插件文件夹。不会运行 npm install、重启或启用脚本。</div>
+                            <div class="authority-page-actions">
+                                <input type="file" data-role="native-migration-file" data-target="third-party" accept=".zip,application/zip" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''} />
+                                <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="third-party" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
+                            </div>
+                        </div>
+                        <div class="authority-inline-note">
+                            这是原生 SillyTavern 文件迁移，不是 Authority portable package，也不是 ST-Manager 远程备份。先预览，再选择跳过已有文件或覆盖已有文件；覆盖模式会创建回滚备份。
+                        </div>
+                        ${nativeMigrationOperations.length > 0 ? `
+                            <div class="authority-table-wrap">
+                                <table class="authority-data-table authority-policy-matrix">
+                                    <thead>
+                                        <tr>
+                                            <th>迁移任务</th>
+                                            <th>状态</th>
+                                            <th>预览统计</th>
+                                            <th>执行结果</th>
+                                            <th>更新时间</th>
+                                            <th>动作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${nativeMigrationOperations.map(operation => this.renderNativeMigrationOperationRow(operation)).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : '<div class="authority-empty">暂时还没有原生迁移任务。上传 ZIP 后会先生成预览。</div>'}
+                    </div>
+                </section>
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
@@ -1621,6 +1789,81 @@ class SecurityCenterView {
                 return 'runtime';
             default:
                 return 'prompt';
+        }
+    }
+    renderNativeMigrationOperationRow(operation) {
+        const rejectedCount = operation.entries?.filter(entry => entry.action === 'reject').length ?? 0;
+        const createCount = operation.entries?.filter(entry => entry.action === 'create').length ?? 0;
+        const overwriteCount = operation.entries?.filter(entry => entry.action === 'overwrite').length ?? 0;
+        const canApply = operation.status === 'previewed' && rejectedCount === 0;
+        const canRollback = operation.status === 'applied' || operation.status === 'needs_rollback';
+        return `
+            <tr>
+                <td>
+                    <strong>${escapeHtml(operation.target === 'data' ? 'Data 目录' : '第三方插件')}</strong>
+                    <div class="authority-muted">${escapeHtml(operation.id)}</div>
+                    <div class="authority-muted">${escapeHtml(operation.sourceFileName)} · ${escapeHtml(formatBytes(operation.sourceSizeBytes))}</div>
+                </td>
+                <td><span class="authority-pill authority-pill--${escapeHtml(this.getNativeMigrationOperationPill(operation.status))}">${escapeHtml(this.getNativeMigrationOperationStatusLabel(operation.status))}</span></td>
+                <td>
+                    <div>${escapeHtml(String(operation.entryCount))} 个文件 · ${escapeHtml(formatBytes(operation.totalSizeBytes))}</div>
+                    <div class="authority-muted">新增 ${escapeHtml(String(createCount))} · 覆盖候选 ${escapeHtml(String(overwriteCount))} · 拒绝 ${escapeHtml(String(rejectedCount))}</div>
+                    ${operation.warnings.length > 0 ? `<div class="authority-muted">${escapeHtml(operation.warnings.join('；'))}</div>` : ''}
+                </td>
+                <td>
+                    <div>已创建 ${escapeHtml(String(operation.createdCount))} · 已覆盖 ${escapeHtml(String(operation.overwrittenCount))} · 已跳过 ${escapeHtml(String(operation.skippedCount))}</div>
+                    ${operation.error ? `<div class="authority-muted">${escapeHtml(operation.error)}</div>` : ''}
+                </td>
+                <td>${escapeHtml(formatDate(operation.updatedAt))}</td>
+                <td>
+                    <div class="authority-page-actions authority-page-actions--inline">
+                        ${canApply ? `
+                            <select data-role="native-migration-mode" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>
+                                <option value="skip">跳过已有文件</option>
+                                <option value="overwrite">覆盖已有文件并保留回滚备份</option>
+                            </select>
+                            <button type="button" class="authority-action-button authority-action-button--primary" data-action="apply-native-migration" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>应用</button>
+                        ` : ''}
+                        ${canRollback ? `<button type="button" class="authority-action-button" data-action="rollback-native-migration" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>回滚</button>` : ''}
+                        ${rejectedCount > 0 ? '<span class="authority-muted">存在被拒绝文件，不能应用。</span>' : ''}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }
+    getNativeMigrationOperationPill(status) {
+        switch (status) {
+            case 'applied':
+            case 'rolled_back':
+                return 'granted';
+            case 'failed':
+            case 'needs_rollback':
+                return 'warning';
+            case 'applying':
+            case 'rolling_back':
+                return 'runtime';
+            default:
+                return 'prompt';
+        }
+    }
+    getNativeMigrationOperationStatusLabel(status) {
+        switch (status) {
+            case 'previewed':
+                return '已预览';
+            case 'applying':
+                return '导入中';
+            case 'applied':
+                return '已导入';
+            case 'rolling_back':
+                return '回滚中';
+            case 'rolled_back':
+                return '已回滚';
+            case 'needs_rollback':
+                return '需要回滚';
+            case 'failed':
+                return '失败';
+            default:
+                return '未知';
         }
     }
     getRequiredSessionToken() {

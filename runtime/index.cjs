@@ -26,6 +26,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   MAX_BLOB_BYTES: () => (/* binding */ MAX_BLOB_BYTES),
 /* harmony export */   MAX_KV_VALUE_BYTES: () => (/* binding */ MAX_KV_VALUE_BYTES),
 /* harmony export */   MAX_SQL_BATCH_STATEMENTS: () => (/* binding */ MAX_SQL_BATCH_STATEMENTS),
+/* harmony export */   NATIVE_MIGRATION_MAX_COMPRESSED_BYTES: () => (/* binding */ NATIVE_MIGRATION_MAX_COMPRESSED_BYTES),
+/* harmony export */   NATIVE_MIGRATION_MAX_ENTRY_COUNT: () => (/* binding */ NATIVE_MIGRATION_MAX_ENTRY_COUNT),
+/* harmony export */   NATIVE_MIGRATION_MAX_PATH_BYTES: () => (/* binding */ NATIVE_MIGRATION_MAX_PATH_BYTES),
+/* harmony export */   NATIVE_MIGRATION_MAX_PATH_DEPTH: () => (/* binding */ NATIVE_MIGRATION_MAX_PATH_DEPTH),
+/* harmony export */   NATIVE_MIGRATION_MAX_UNCOMPRESSED_BYTES: () => (/* binding */ NATIVE_MIGRATION_MAX_UNCOMPRESSED_BYTES),
+/* harmony export */   NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES: () => (/* binding */ NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES),
 /* harmony export */   RESOURCE_RISK: () => (/* binding */ RESOURCE_RISK),
 /* harmony export */   SESSION_HEADER: () => (/* binding */ SESSION_HEADER),
 /* harmony export */   SESSION_QUERY: () => (/* binding */ SESSION_QUERY),
@@ -48,6 +54,12 @@ const MAX_AUDIT_LINES = 200;
 const DATA_TRANSFER_CHUNK_BYTES = 256 * 1024;
 const DATA_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
 const UNMANAGED_TRANSFER_MAX_BYTES = 256 * 1024 * 1024;
+const NATIVE_MIGRATION_MAX_COMPRESSED_BYTES = 12 * 1024 * 1024 * 1024;
+const NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024;
+const NATIVE_MIGRATION_MAX_UNCOMPRESSED_BYTES = 48 * 1024 * 1024 * 1024;
+const NATIVE_MIGRATION_MAX_ENTRY_COUNT = 300_000;
+const NATIVE_MIGRATION_MAX_PATH_BYTES = 1024;
+const NATIVE_MIGRATION_MAX_PATH_DEPTH = 32;
 const MAX_SQL_BATCH_STATEMENTS = 100;
 const SUPPORTED_RESOURCES = [
     'storage.kv',
@@ -871,6 +883,16 @@ function parseAdminPackageSizeBytes(value) {
     }
     if (sizeBytes > ADMIN_PACKAGE_MAX_BYTES) {
         throw new Error(`Admin package upload exceeds ${ADMIN_PACKAGE_MAX_BYTES} bytes`);
+    }
+    return Math.floor(sizeBytes);
+}
+function parseNativeMigrationSizeBytes(value) {
+    const sizeBytes = Number(value ?? 0);
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+        throw new Error('sizeBytes must be a positive number');
+    }
+    if (sizeBytes > _constants_js__WEBPACK_IMPORTED_MODULE_2__.NATIVE_MIGRATION_MAX_COMPRESSED_BYTES) {
+        throw new Error(`Native migration upload exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_2__.NATIVE_MIGRATION_MAX_COMPRESSED_BYTES} bytes`);
     }
     return Math.floor(sizeBytes);
 }
@@ -2893,6 +2915,90 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
     });
+    router.get('/admin/native-migration/operations', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, {
+                operations: runtime.nativeMigrations.listOperations(),
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/upload/init', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
+            ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
+                resource: 'fs.private',
+                purpose: 'privateFileWrite',
+            }, sizeBytes, _constants_js__WEBPACK_IMPORTED_MODULE_2__.NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/preview', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {});
+            const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
+            const previewOptions = typeof payload.fileName === 'string' && payload.fileName.trim()
+                ? { sourceFileName: payload.fileName, adoptSource: true }
+                : { adoptSource: true };
+            const operation = await runtime.nativeMigrations.preview(payload.target, transfer.filePath, previewOptions);
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration preview created', {
+                operationId: operation.id,
+                target: operation.target,
+                entryCount: operation.entryCount,
+                sourceSizeBytes: operation.sourceSizeBytes,
+            });
+            await runtime.transfers.discard(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {});
+            const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration applied', {
+                operationId: operation.id,
+                target: operation.target,
+                mode: payload.mode ?? 'skip',
+                createdCount: operation.createdCount,
+                overwrittenCount: operation.overwrittenCount,
+                skippedCount: operation.skippedCount,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            assertAdminUser(user);
+            const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
+                operationId: operation.id,
+                target: operation.target,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
@@ -3007,14 +3113,16 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
 /* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
 /* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -3039,16 +3147,17 @@ function createAuthorityRuntime() {
     const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__.DataTransferService();
     const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__.ExtensionService(core);
     const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_10__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_9__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_12__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_13__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_14__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_15__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_11__.PrivateFsService(core);
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_11__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_10__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_13__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_14__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_15__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_16__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_12__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
     const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_16__.TriviumService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_17__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_9__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     return {
         adminPackages,
@@ -3068,6 +3177,7 @@ function createAuthorityRuntime() {
         http,
         jobs,
         trivium,
+        nativeMigrations,
     };
 }
 
@@ -5364,7 +5474,8 @@ __webpack_require__.r(__webpack_exports__);
 const EMPTY_FILE_SHA256 = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update('').digest('hex');
 class DataTransferService {
     transfers = new Map();
-    async init(user, extensionId, request, maxBytesOverride) {
+    uploadHashes = new Map();
+    async init(user, extensionId, request, maxBytesOverride, chunkSizeOverride) {
         const resource = normalizeTransferResource(request.resource);
         const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
@@ -5388,7 +5499,9 @@ class DataTransferService {
             direction: 'upload',
             ownedFile: true,
             checksumSha256: EMPTY_FILE_SHA256,
+            chunkSize: resolveTransferChunkSize(chunkSizeOverride),
         };
+        this.uploadHashes.set(transferId, node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256'));
         this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
@@ -5406,9 +5519,12 @@ class DataTransferService {
             throw new Error(`Transfer exceeds ${record.maxBytes} bytes`);
         }
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().appendFileSync(record.filePath, chunk);
+        const hasher = this.createHashFromRecord(record);
+        hasher.update(chunk);
         record.sizeBytes = nextSize;
         record.updatedAt = new Date().toISOString();
-        record.checksumSha256 = computeFileSha256(record.filePath);
+        this.uploadHashes.set(record.transferId, hasher);
+        record.checksumSha256 = hasher.copy().digest('hex');
         this.storeRecord(user, extensionId, record);
         return {
             transferId: record.transferId,
@@ -5442,6 +5558,7 @@ class DataTransferService {
             direction: 'download',
             ownedFile: false,
             checksumSha256: computeFileSha256(filePath),
+            chunkSize: _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES,
         };
         this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
@@ -5461,6 +5578,7 @@ class DataTransferService {
         record.direction = 'download';
         record.updatedAt = new Date().toISOString();
         record.checksumSha256 = computeFileSha256(filePath);
+        this.uploadHashes.delete(record.transferId);
         this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
@@ -5542,6 +5660,7 @@ class DataTransferService {
     async discard(user, extensionId, transferId) {
         const record = this.get(user, extensionId, transferId);
         this.transfers.delete(transferId);
+        this.uploadHashes.delete(transferId);
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.getTransferRecordPath(user, extensionId, transferId), { force: true });
         if (!record.ownedFile) {
             pruneEmptyTransferDirs(this.getTransferRecordDir(user, extensionId));
@@ -5565,9 +5684,17 @@ class DataTransferService {
             return null;
         }
         try {
+            if (!parsed.chunkSize) {
+                parsed.chunkSize = _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES;
+            }
             const readable = validateReadableTransferFile(parsed.filePath);
             parsed.sizeBytes = readable.sizeBytes;
-            if (!parsed.checksumSha256) {
+            if (parsed.direction === 'upload' && parsed.ownedFile) {
+                const hash = computeFileSha256Hash(parsed.filePath);
+                this.uploadHashes.set(parsed.transferId, hash);
+                parsed.checksumSha256 = hash.copy().digest('hex');
+            }
+            else if (!parsed.checksumSha256) {
                 parsed.checksumSha256 = computeFileSha256(parsed.filePath);
             }
         }
@@ -5596,13 +5723,23 @@ class DataTransferService {
     getTransferRecordPath(user, extensionId, transferId) {
         return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
     }
+    createHashFromRecord(record) {
+        const cached = this.uploadHashes.get(record.transferId);
+        if (cached) {
+            return cached;
+        }
+        if (record.sizeBytes === 0) {
+            return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256');
+        }
+        return computeFileSha256Hash(record.filePath);
+    }
 }
 function toInitResponse(record) {
     return {
         transferId: record.transferId,
         resource: record.resource,
         ...(record.purpose ? { purpose: record.purpose } : {}),
-        chunkSize: _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES,
+        chunkSize: record.chunkSize,
         maxBytes: record.maxBytes,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
@@ -5613,7 +5750,7 @@ function toInitResponse(record) {
     };
 }
 function toManifestResponse(record) {
-    const chunkSize = _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES;
+    const chunkSize = record.chunkSize;
     const chunkCount = Math.ceil(record.sizeBytes / chunkSize);
     return {
         ...toInitResponse(record),
@@ -5660,6 +5797,15 @@ function resolveTransferMaxBytes(maxBytesOverride) {
     }
     return Math.floor(maxBytesOverride);
 }
+function resolveTransferChunkSize(chunkSizeOverride) {
+    if (typeof chunkSizeOverride !== 'number' || !Number.isFinite(chunkSizeOverride)) {
+        return _constants_js__WEBPACK_IMPORTED_MODULE_3__.DATA_TRANSFER_CHUNK_BYTES;
+    }
+    if (chunkSizeOverride <= 0) {
+        throw new Error('Transfer chunkSize must be a positive integer');
+    }
+    return Math.floor(chunkSizeOverride);
+}
 function decodeTransferChunk(content) {
     try {
         return Buffer.from(content, 'base64');
@@ -5692,7 +5838,27 @@ function validateReadableTransferFile(sourcePath) {
     };
 }
 function computeFileSha256(filePath) {
-    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath)).digest('hex');
+    return computeFileSha256Hash(filePath).digest('hex');
+}
+function computeFileSha256Hash(filePath) {
+    const hash = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256');
+    const handle = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(filePath, 'r');
+    try {
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        let position = 0;
+        while (true) {
+            const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readSync(handle, buffer, 0, buffer.byteLength, position);
+            if (bytesRead === 0) {
+                break;
+            }
+            hash.update(buffer.subarray(0, bytesRead));
+            position += bytesRead;
+        }
+        return hash;
+    }
+    finally {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(handle);
+    }
 }
 function computeFileSliceSha256(filePath, offset, sizeBytes) {
     if (sizeBytes <= 0) {
@@ -6526,6 +6692,533 @@ class JobService {
 
 /***/ },
 
+/***/ "./src/services/native-migration-service.ts"
+/*!**************************************************!*\
+  !*** ./src/services/native-migration-service.ts ***!
+  \**************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   NativeMigrationService: () => (/* binding */ NativeMigrationService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _safe_zip_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./safe-zip.js */ "./src/services/safe-zip.ts");
+
+
+
+
+
+
+
+class NativeMigrationService {
+    options;
+    constructor(options = {}) {
+        this.options = options;
+    }
+    async preview(target, sourcePath, options = {}) {
+        const normalizedTarget = normalizeMigrationTarget(target);
+        const operationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const sourceFileName = options.sourceFileName?.trim() || node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(sourcePath);
+        const operationSourcePath = this.getOperationSourcePath(operationId, sourceFileName);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(operationSourcePath));
+        try {
+            stageSourceArchive(sourcePath, operationSourcePath, Boolean(options.adoptSource));
+            const scan = await (0,_safe_zip_js__WEBPACK_IMPORTED_MODULE_6__.scanSafeZip)(operationSourcePath, { maxCompressedBytes: _constants_js__WEBPACK_IMPORTED_MODULE_3__.NATIVE_MIGRATION_MAX_COMPRESSED_BYTES });
+            const rootPath = this.getTargetRoot(normalizedTarget);
+            const entries = markDuplicateTargetPaths(scan.entries.map(entry => mapMigrationEntry(normalizedTarget, rootPath, entry)));
+            const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            const rejectedCount = entries.filter(entry => entry.action === 'reject').length;
+            const operation = {
+                id: operationId,
+                target: normalizedTarget,
+                status: 'previewed',
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                sourceFileName,
+                sourceSizeBytes: scan.sizeBytes,
+                sourcePath: operationSourcePath,
+                rootPath,
+                entryCount: entries.length,
+                totalSizeBytes: entries.reduce((sum, entry) => sum + entry.sizeBytes, 0),
+                skippedCount: 0,
+                createdCount: 0,
+                overwrittenCount: 0,
+                warnings: rejectedCount > 0 ? [`${rejectedCount} entries are blocked and must be removed before apply.`] : [],
+                entries,
+                journal: [],
+            };
+            this.saveOperation(operation);
+            return this.toPublicOperation(operation);
+        }
+        catch (error) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.getOperationWorkDir(operationId), { recursive: true, force: true });
+            throw error;
+        }
+    }
+    listOperations() {
+        return this.loadOperations()
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+            .map(operation => this.toPublicOperation(operation));
+    }
+    getOperation(operationId) {
+        const operation = this.loadOperation(operationId);
+        return operation ? this.toPublicOperation(operation) : null;
+    }
+    async apply(operationId, mode) {
+        const operation = this.requireOperation(operationId);
+        if (operation.status !== 'previewed') {
+            throw new Error('Only previewed native migration operations can be applied');
+        }
+        if (operation.entries.some(entry => entry.action === 'reject')) {
+            throw new Error('Native migration preview contains rejected entries');
+        }
+        const applyMode = normalizeApplyMode(mode);
+        const entriesByPath = new Map(operation.entries.map(entry => [entry.archivePath, entry]));
+        const scan = await (0,_safe_zip_js__WEBPACK_IMPORTED_MODULE_6__.scanSafeZip)(operation.sourcePath, { maxCompressedBytes: _constants_js__WEBPACK_IMPORTED_MODULE_3__.NATIVE_MIGRATION_MAX_COMPRESSED_BYTES });
+        const applying = {
+            ...operation,
+            status: 'applying',
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            journal: [],
+        };
+        this.saveOperation(applying);
+        const journal = [];
+        const writesByArchivePath = new Map();
+        const extractDir = this.getOperationExtractDir(operation.id);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(extractDir, { recursive: true, force: true });
+        try {
+            for (const scannedEntry of scan.entries) {
+                const preview = entriesByPath.get(scannedEntry.path);
+                if (!preview) {
+                    throw new Error(`Native migration preview is stale for entry: ${scannedEntry.path}`);
+                }
+                const targetPath = prepareNativeWriteTarget(operation.rootPath, preview.targetPath);
+                const existing = readExistingTargetInfo(targetPath);
+                if (existing.exists && applyMode === 'skip') {
+                    journal.push({
+                        archivePath: preview.archivePath,
+                        targetPath: preview.targetPath,
+                        action: 'skipped',
+                        sizeBytes: preview.sizeBytes,
+                        ...(existing.checksumSha256 ? { previousChecksumSha256: existing.checksumSha256 } : {}),
+                    });
+                    this.saveOperation({ ...applying, updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(), journal });
+                    continue;
+                }
+                const tempPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(extractDir, `${String(writesByArchivePath.size).padStart(8, '0')}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`);
+                writesByArchivePath.set(scannedEntry.path, {
+                    entry: scannedEntry,
+                    preview,
+                    targetPath,
+                    tempPath,
+                    ...(existing.checksumSha256 ? { previousChecksumSha256: existing.checksumSha256 } : {}),
+                });
+            }
+            await (0,_safe_zip_js__WEBPACK_IMPORTED_MODULE_6__.extractSafeZipPlan)(operation.sourcePath, [...writesByArchivePath.values()].map(write => ({
+                entry: write.entry,
+                destinationPath: write.tempPath,
+            })), {
+                maxCompressedBytes: _constants_js__WEBPACK_IMPORTED_MODULE_3__.NATIVE_MIGRATION_MAX_COMPRESSED_BYTES,
+                onExtractedEntry: extractedEntry => {
+                    const write = writesByArchivePath.get(extractedEntry.path);
+                    if (!write) {
+                        throw new Error(`Native migration extracted unplanned entry: ${extractedEntry.path}`);
+                    }
+                    const existing = readExistingTargetInfo(write.targetPath);
+                    if (existing.exists) {
+                        if (!existing.checksumSha256) {
+                            throw new Error(`Native migration existing target checksum is unavailable: ${write.preview.targetPath}`);
+                        }
+                        write.backupPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getOperationBackupsDir(operation.id), `${String(journal.length).padStart(8, '0')}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.bak`);
+                        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.backupPath));
+                        node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(write.targetPath, write.backupPath);
+                        write.previousChecksumSha256 = existing.checksumSha256;
+                        journal.push({
+                            archivePath: write.preview.archivePath,
+                            targetPath: write.preview.targetPath,
+                            action: 'pending_overwrite',
+                            sizeBytes: write.preview.sizeBytes,
+                            previousChecksumSha256: write.previousChecksumSha256,
+                            backupPath: write.backupPath,
+                        });
+                        this.saveOperation({ ...applying, status: 'needs_rollback', updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(), journal });
+                    }
+                    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
+                    node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(write.tempPath, write.targetPath);
+                    const completedEntry = {
+                        archivePath: write.preview.archivePath,
+                        targetPath: write.preview.targetPath,
+                        action: existing.exists ? 'overwritten' : 'created',
+                        sizeBytes: write.preview.sizeBytes,
+                        checksumSha256: extractedEntry.checksumSha256,
+                        ...(write.previousChecksumSha256 ? { previousChecksumSha256: write.previousChecksumSha256 } : {}),
+                        ...(write.backupPath ? { backupPath: write.backupPath } : {}),
+                    };
+                    if (existing.exists) {
+                        journal[journal.length - 1] = completedEntry;
+                    }
+                    else {
+                        journal.push(completedEntry);
+                    }
+                    this.saveOperation({ ...applying, updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(), journal });
+                },
+            });
+            const applied = {
+                ...operation,
+                status: 'applied',
+                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+                skippedCount: journal.filter(entry => entry.action === 'skipped').length,
+                createdCount: journal.filter(entry => entry.action === 'created').length,
+                overwrittenCount: journal.filter(entry => entry.action === 'overwritten').length,
+                journal,
+            };
+            this.saveOperation(applied);
+            return this.toPublicOperation(applied);
+        }
+        catch (error) {
+            const rollbackWarnings = rollbackJournal(operation.rootPath, journal);
+            const failed = {
+                ...operation,
+                status: 'failed',
+                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+                error: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error),
+                warnings: [...operation.warnings, ...rollbackWarnings],
+                journal,
+            };
+            this.saveOperation(failed);
+            throw error;
+        }
+        finally {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(extractDir, { recursive: true, force: true });
+        }
+    }
+    rollback(operationId) {
+        const operation = this.requireOperation(operationId);
+        if (operation.status !== 'applied' && operation.status !== 'needs_rollback') {
+            throw new Error('Only applied native migration operations can be rolled back');
+        }
+        const rollingBack = {
+            ...operation,
+            status: 'rolling_back',
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+        };
+        this.saveOperation(rollingBack);
+        const warnings = rollbackJournal(operation.rootPath, operation.journal);
+        const rolledBack = {
+            ...operation,
+            status: 'rolled_back',
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            warnings: [...operation.warnings, ...warnings],
+        };
+        this.saveOperation(rolledBack);
+        return this.toPublicOperation(rolledBack);
+    }
+    loadOperations() {
+        const dirPath = this.getOperationsDir();
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(dirPath)) {
+            return [];
+        }
+        return node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(dirPath)
+            .filter(entry => entry.endsWith('.json'))
+            .map(entry => (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(dirPath, entry), null))
+            .filter((entry) => Boolean(entry));
+    }
+    loadOperation(operationId) {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(this.getOperationStatePath(operationId), null);
+    }
+    requireOperation(operationId) {
+        const operation = this.loadOperation(operationId);
+        if (!operation) {
+            throw new Error('Native migration operation not found');
+        }
+        return operation;
+    }
+    saveOperation(operation) {
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
+    }
+    toPublicOperation(operation) {
+        const { sourcePath: _sourcePath, rootPath: _rootPath, journal, ...publicOperation } = operation;
+        return {
+            ...publicOperation,
+            journal: journal.map(({ backupPath: _backupPath, ...entry }) => entry),
+        };
+    }
+    getTargetRoot(target) {
+        return target === 'data'
+            ? this.getDataRoot()
+            : (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getSillyTavernRoot(), 'public', 'scripts', 'extensions', 'third-party');
+    }
+    getDataRoot() {
+        if (this.options.dataRoot) {
+            return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveRuntimePath)(this.options.dataRoot);
+        }
+        const globalState = globalThis;
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveRuntimePath)(typeof globalState.DATA_ROOT === 'string' && globalState.DATA_ROOT.trim() ? globalState.DATA_ROOT : 'data');
+    }
+    getSillyTavernRoot() {
+        if (this.options.sillyTavernRoot) {
+            return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveRuntimePath)(this.options.sillyTavernRoot);
+        }
+        const dataRoot = this.getDataRoot();
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(dataRoot) === 'data' ? node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(dataRoot) : process.cwd();
+    }
+    getOperationsDir() {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getMigrationRoot(), 'operations');
+    }
+    getOperationStatePath(operationId) {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getOperationsDir(), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId)}.json`);
+    }
+    getOperationWorkDir(operationId) {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getMigrationRoot(), 'work', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId));
+    }
+    getOperationSourcePath(operationId, sourceFileName) {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getOperationWorkDir(operationId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(sourceFileName)}.zip`);
+    }
+    getOperationBackupsDir(operationId) {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getOperationWorkDir(operationId), 'backups');
+    }
+    getOperationExtractDir(operationId) {
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getOperationWorkDir(operationId), 'extract');
+    }
+    getMigrationRoot() {
+        return this.options.migrationRoot
+            ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveRuntimePath)(this.options.migrationRoot)
+            : node_path__WEBPACK_IMPORTED_MODULE_2___default().join(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getGlobalAuthorityPaths)().controlDbFile), 'native-migrations');
+    }
+}
+function stageSourceArchive(sourcePath, destinationPath, adoptSource) {
+    const resolvedSource = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(sourcePath);
+    const metadata = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(resolvedSource);
+    if (metadata.isSymbolicLink()) {
+        throw new Error('Native migration source archive symlink is not allowed');
+    }
+    if (!metadata.isFile()) {
+        throw new Error('Native migration source archive must be a file');
+    }
+    if (adoptSource) {
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(resolvedSource, destinationPath);
+            return;
+        }
+        catch {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(resolvedSource, destinationPath);
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(resolvedSource, { force: true });
+            return;
+        }
+    }
+    node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(resolvedSource, destinationPath);
+}
+function mapMigrationEntry(target, rootPath, entry) {
+    const targetPath = target === 'data'
+        ? mapDataArchivePath(entry.path)
+        : mapThirdPartyArchivePath(entry.path);
+    if (!targetPath) {
+        return buildRejectedEntry(entry, targetPath, 'Archive entry maps to an empty target path');
+    }
+    const absoluteTarget = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(rootPath, targetPath);
+    const rejectedReason = getPreviewRejectionReason(absoluteTarget);
+    if (rejectedReason) {
+        return buildRejectedEntry(entry, targetPath, rejectedReason);
+    }
+    return {
+        archivePath: entry.path,
+        targetPath,
+        sizeBytes: entry.uncompressedSizeBytes,
+        compressedSizeBytes: entry.compressedSizeBytes,
+        action: node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(absoluteTarget) ? 'overwrite' : 'create',
+    };
+}
+function markDuplicateTargetPaths(entries) {
+    const counts = new Map();
+    for (const entry of entries) {
+        const key = entry.targetPath.normalize('NFC').toLowerCase();
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return entries.map(entry => {
+        const key = entry.targetPath.normalize('NFC').toLowerCase();
+        if ((counts.get(key) ?? 0) <= 1 || entry.action === 'reject') {
+            return entry;
+        }
+        return {
+            ...entry,
+            action: 'reject',
+            reason: 'Multiple archive entries map to the same target path',
+        };
+    });
+}
+function buildRejectedEntry(entry, targetPath, reason) {
+    return {
+        archivePath: entry.path,
+        targetPath,
+        sizeBytes: entry.uncompressedSizeBytes,
+        compressedSizeBytes: entry.compressedSizeBytes,
+        action: 'reject',
+        reason,
+    };
+}
+function getPreviewRejectionReason(targetPath) {
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetPath)) {
+        return null;
+    }
+    const metadata = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(targetPath);
+    if (metadata.isSymbolicLink()) {
+        return 'Target path is a symlink';
+    }
+    if (!metadata.isFile()) {
+        return 'Target path is not a regular file';
+    }
+    return null;
+}
+function mapDataArchivePath(archivePath) {
+    return stripPrefix(archivePath, 'data/') ?? archivePath;
+}
+function mapThirdPartyArchivePath(archivePath) {
+    return stripPrefix(archivePath, 'public/scripts/extensions/third-party/')
+        ?? stripPrefix(archivePath, 'extensions/third-party/')
+        ?? stripPrefix(archivePath, 'third-party/')
+        ?? archivePath;
+}
+function stripPrefix(value, prefix) {
+    return value.startsWith(prefix) ? value.slice(prefix.length) : null;
+}
+function normalizeMigrationTarget(value) {
+    if (value === 'data' || value === 'third-party') {
+        return value;
+    }
+    throw new Error(`Unsupported native migration target: ${String(value)}`);
+}
+function normalizeApplyMode(value) {
+    if (value === 'skip' || value === 'overwrite') {
+        return value;
+    }
+    throw new Error(`Unsupported native migration apply mode: ${String(value)}`);
+}
+function prepareNativeWriteTarget(rootPath, relativePath) {
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
+    const targetPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(rootPath, relativePath);
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+    const realRoot = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
+    const realParent = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+    if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isPathInside)(realRoot, realParent)) {
+        throw new Error(`Native migration target parent escapes target root: ${relativePath}`);
+    }
+    if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetPath)) {
+        const metadata = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(targetPath);
+        if (metadata.isSymbolicLink()) {
+            throw new Error(`Native migration refuses to overwrite symlink target: ${relativePath}`);
+        }
+        if (!metadata.isFile()) {
+            throw new Error(`Native migration target is not a regular file: ${relativePath}`);
+        }
+    }
+    return targetPath;
+}
+function readExistingTargetInfo(targetPath) {
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetPath)) {
+        return { exists: false };
+    }
+    const metadata = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(targetPath);
+    if (metadata.isSymbolicLink()) {
+        throw new Error(`Native migration refuses to write through symlink target: ${targetPath}`);
+    }
+    if (!metadata.isFile()) {
+        throw new Error(`Native migration target is not a regular file: ${targetPath}`);
+    }
+    return {
+        exists: true,
+        checksumSha256: computeFileSha256(targetPath),
+    };
+}
+function rollbackJournal(rootPath, journal) {
+    const warnings = [];
+    for (const entry of [...journal].reverse()) {
+        try {
+            if (entry.action === 'skipped') {
+                continue;
+            }
+            const targetPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(rootPath, entry.targetPath);
+            if (entry.action === 'pending_overwrite') {
+                if (!entry.backupPath || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(entry.backupPath)) {
+                    throw new Error(`Missing backup file: ${entry.targetPath}`);
+                }
+                if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
+                    throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
+                }
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
+                continue;
+            }
+            if (entry.checksumSha256 && node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(targetPath) && computeFileSha256(targetPath) !== entry.checksumSha256) {
+                throw new Error(`Current file differs from migration-written file: ${entry.targetPath}`);
+            }
+            if (entry.action === 'created') {
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(targetPath, { force: true });
+                pruneEmptyDirs(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath), rootPath);
+                continue;
+            }
+            if (entry.action === 'overwritten') {
+                if (!entry.backupPath || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(entry.backupPath)) {
+                    throw new Error(`Missing backup file: ${entry.targetPath}`);
+                }
+                if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
+                    throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
+                }
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
+            }
+        }
+        catch (error) {
+            warnings.push(`Rollback skipped ${entry.targetPath}: ${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error)}`);
+        }
+    }
+    return warnings;
+}
+function computeFileSha256(filePath) {
+    const hash = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256');
+    const handle = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(filePath, 'r');
+    try {
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        let position = 0;
+        while (true) {
+            const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readSync(handle, buffer, 0, buffer.byteLength, position);
+            if (bytesRead === 0) {
+                break;
+            }
+            hash.update(buffer.subarray(0, bytesRead));
+            position += bytesRead;
+        }
+    }
+    finally {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(handle);
+    }
+    return hash.digest('hex');
+}
+function pruneEmptyDirs(startDir, stopDir) {
+    let current = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(startDir);
+    const stop = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(stopDir);
+    while (current !== stop && (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isPathInside)(stop, current)) {
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmdirSync(current);
+        }
+        catch {
+            return;
+        }
+        current = node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(current);
+    }
+}
+
+
+/***/ },
+
 /***/ "./src/services/permission-service.ts"
 /*!********************************************!*\
   !*** ./src/services/permission-service.ts ***!
@@ -7087,6 +7780,414 @@ function emptyUsageSummary() {
         totalSizeBytes: 0,
         latestUpdatedAt: null,
     };
+}
+
+
+/***/ },
+
+/***/ "./src/services/safe-zip.ts"
+/*!**********************************!*\
+  !*** ./src/services/safe-zip.ts ***!
+  \**********************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   extractSafeZipEntries: () => (/* binding */ extractSafeZipEntries),
+/* harmony export */   extractSafeZipPlan: () => (/* binding */ extractSafeZipPlan),
+/* harmony export */   normalizeSafeZipEntryName: () => (/* binding */ normalizeSafeZipEntryName),
+/* harmony export */   scanSafeZip: () => (/* binding */ scanSafeZip)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_stream__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:stream */ "node:stream");
+/* harmony import */ var node_stream__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_stream__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var node_stream_promises__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! node:stream/promises */ "node:stream/promises");
+/* harmony import */ var node_stream_promises__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(node_stream_promises__WEBPACK_IMPORTED_MODULE_4__);
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! node:zlib */ "node:zlib");
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_5___default = /*#__PURE__*/__webpack_require__.n(node_zlib__WEBPACK_IMPORTED_MODULE_5__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+
+
+
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE = 0x07064b50;
+const ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06064b50;
+const ZIP_DATA_DESCRIPTOR_FLAG = 0x0008;
+const ZIP_ENCRYPTED_FLAG = 0x0001;
+const ZIP_STORE_METHOD = 0;
+const ZIP_DEFLATE_METHOD = 8;
+const ZIP_MAX_EOCD_SEARCH = 0xffff + 22;
+const ZIP_DIRECTORY_ATTRIBUTE = 0x10;
+const ZIP_UNIX_FILE_TYPE_MASK = 0o170000;
+const ZIP_UNIX_REGULAR_FILE = 0o100000;
+const ZIP_UNIX_SYMLINK = 0o120000;
+const ZIP64_EXTRA_FIELD_ID = 0x0001;
+const CRC32_TABLE = buildCrc32Table();
+const WINDOWS_RESERVED_SEGMENTS = /^(con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)(\..*)?$/i;
+async function scanSafeZip(filePath, options = {}) {
+    const archivePath = requireRegularArchive(filePath, options.maxCompressedBytes ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_COMPRESSED_BYTES);
+    const entries = parseZipEntries(archivePath, options).map(toSafeEntry);
+    return {
+        archivePath,
+        sizeBytes: node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(archivePath).size,
+        entries,
+    };
+}
+async function extractSafeZipEntries(filePath, targetRoot, shouldExtract = () => true, options = {}) {
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
+    const parsedEntries = parseZipEntries(filePath, options);
+    const extracted = [];
+    for (const parsedEntry of parsedEntries) {
+        if (!shouldExtract(toSafeEntry(parsedEntry))) {
+            continue;
+        }
+        const extractedPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.resolveContainedPath)(targetRoot, parsedEntry.path);
+        extracted.push(await extractParsedEntry(filePath, parsedEntry, extractedPath));
+    }
+    return extracted;
+}
+async function extractSafeZipPlan(filePath, plans, options = {}) {
+    const parsedEntries = parseZipEntries(filePath, options);
+    const parsedByPath = new Map(parsedEntries.map(entry => [entry.path, entry]));
+    const destinationByPath = new Map();
+    for (const plan of plans) {
+        if (!parsedByPath.has(plan.entry.path)) {
+            throw new Error(`Zip extraction plan references missing entry: ${plan.entry.path}`);
+        }
+        destinationByPath.set(plan.entry.path, plan.destinationPath);
+    }
+    const extracted = [];
+    for (const [entryPath, destinationPath] of destinationByPath) {
+        const parsedEntry = parsedByPath.get(entryPath);
+        if (!parsedEntry) {
+            throw new Error(`Zip extraction entry was not found after scan: ${entryPath}`);
+        }
+        const extractedEntry = await extractParsedEntry(filePath, parsedEntry, destinationPath);
+        if (options.onExtractedEntry) {
+            await options.onExtractedEntry(extractedEntry);
+        }
+        extracted.push(extractedEntry);
+    }
+    return extracted;
+}
+function normalizeSafeZipEntryName(value, options = {}) {
+    if (value.includes('\u0000')) {
+        throw new Error('Invalid zip entry path: contains NUL byte');
+    }
+    if (value.includes('\\')) {
+        throw new Error(`Invalid zip entry path: ${value}`);
+    }
+    if (/^[a-zA-Z]:/.test(value) || value.startsWith('/')) {
+        throw new Error(`Invalid zip entry path: ${value}`);
+    }
+    const trimmed = value.trim();
+    if (!trimmed || trimmed !== value || trimmed.endsWith('/')) {
+        throw new Error(`Invalid zip entry path: ${value}`);
+    }
+    const normalized = node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.normalize(trimmed);
+    if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
+        throw new Error(`Invalid zip entry path: ${value}`);
+    }
+    const pathBytes = Buffer.byteLength(normalized, 'utf8');
+    if (pathBytes > (options.maxPathBytes ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_PATH_BYTES)) {
+        throw new Error(`Zip entry path exceeds ${options.maxPathBytes ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_PATH_BYTES} bytes: ${value}`);
+    }
+    const depth = normalized.split('/').length;
+    if (depth > (options.maxPathDepth ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_PATH_DEPTH)) {
+        throw new Error(`Zip entry path exceeds ${options.maxPathDepth ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_PATH_DEPTH} segments: ${value}`);
+    }
+    for (const segment of normalized.split('/')) {
+        if (!segment || segment.endsWith('.') || segment.endsWith(' ') || segment.includes(':') || WINDOWS_RESERVED_SEGMENTS.test(segment)) {
+            throw new Error(`Invalid zip entry path: ${value}`);
+        }
+    }
+    return normalized.normalize('NFC');
+}
+function parseZipEntries(filePath, options) {
+    const archivePath = requireRegularArchive(filePath, options.maxCompressedBytes ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_COMPRESSED_BYTES);
+    const fd = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(archivePath, 'r');
+    try {
+        const sizeBytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(fd).size;
+        const centralDirectory = readCentralDirectory(fd, sizeBytes);
+        const entries = [];
+        const seen = new Set();
+        let offset = centralDirectory.offset;
+        let totalUncompressedBytes = 0;
+        for (let index = 0; index < centralDirectory.entryCount; index += 1) {
+            const fixed = readBuffer(fd, offset, 46);
+            if (fixed.readUInt32LE(0) !== ZIP_CENTRAL_DIRECTORY_SIGNATURE) {
+                throw new Error('Invalid zip central directory');
+            }
+            const flags = fixed.readUInt16LE(8);
+            const compressionMethod = fixed.readUInt16LE(10);
+            const crc32 = fixed.readUInt32LE(16);
+            let compressedSize = fixed.readUInt32LE(20);
+            let uncompressedSize = fixed.readUInt32LE(24);
+            const fileNameLength = fixed.readUInt16LE(28);
+            const extraLength = fixed.readUInt16LE(30);
+            const commentLength = fixed.readUInt16LE(32);
+            const externalFileAttributes = fixed.readUInt32LE(38);
+            let localHeaderOffset = fixed.readUInt32LE(42);
+            const fileName = readBuffer(fd, offset + 46, fileNameLength).toString('utf8');
+            const extra = readBuffer(fd, offset + 46 + fileNameLength, extraLength);
+            offset += 46 + fileNameLength + extraLength + commentLength;
+            if (isDirectoryEntry(fileName, externalFileAttributes)) {
+                continue;
+            }
+            const normalizedPath = normalizeSafeZipEntryName(fileName, options);
+            if ((flags & ZIP_ENCRYPTED_FLAG) !== 0) {
+                throw new Error(`Encrypted zip entries are not supported: ${normalizedPath}`);
+            }
+            if ((flags & ZIP_DATA_DESCRIPTOR_FLAG) !== 0) {
+                throw new Error(`Zip entries with data descriptors are not supported: ${normalizedPath}`);
+            }
+            if (compressionMethod !== ZIP_STORE_METHOD && compressionMethod !== ZIP_DEFLATE_METHOD) {
+                throw new Error(`Zip entry compression method is not supported: ${normalizedPath}`);
+            }
+            assertRegularFileEntry(externalFileAttributes, normalizedPath);
+            const zip64 = readZip64Extra(extra, { compressedSize, uncompressedSize, localHeaderOffset });
+            compressedSize = zip64.compressedSize;
+            uncompressedSize = zip64.uncompressedSize;
+            localHeaderOffset = zip64.localHeaderOffset;
+            const duplicateKey = normalizedPath.normalize('NFC').toLowerCase();
+            if (seen.has(duplicateKey)) {
+                throw new Error(`Duplicate zip entry path: ${normalizedPath}`);
+            }
+            seen.add(duplicateKey);
+            if (entries.length + 1 > (options.maxEntryCount ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_ENTRY_COUNT)) {
+                throw new Error(`Zip archive exceeds ${options.maxEntryCount ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_ENTRY_COUNT} entries`);
+            }
+            totalUncompressedBytes += uncompressedSize;
+            if (totalUncompressedBytes > (options.maxUncompressedBytes ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_UNCOMPRESSED_BYTES)) {
+                throw new Error(`Zip archive exceeds ${options.maxUncompressedBytes ?? _constants_js__WEBPACK_IMPORTED_MODULE_6__.NATIVE_MIGRATION_MAX_UNCOMPRESSED_BYTES} uncompressed bytes`);
+            }
+            const dataStart = readLocalDataStart(fd, localHeaderOffset, normalizedPath);
+            if (dataStart + compressedSize > sizeBytes) {
+                throw new Error(`Zip entry exceeds archive size: ${normalizedPath}`);
+            }
+            entries.push({
+                path: normalizedPath,
+                compressedSizeBytes: compressedSize,
+                uncompressedSizeBytes: uncompressedSize,
+                checksumCrc32: crc32,
+                compressionMethod,
+                localHeaderOffset,
+                dataStart,
+                externalFileAttributes,
+            });
+        }
+        return entries;
+    }
+    finally {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(fd);
+    }
+}
+function requireRegularArchive(filePath, maxBytes) {
+    const archivePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(filePath);
+    const metadata = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(archivePath);
+    if (metadata.isSymbolicLink()) {
+        throw new Error('Zip archive symlink is not allowed');
+    }
+    if (!metadata.isFile()) {
+        throw new Error('Zip archive must be a file');
+    }
+    if (metadata.size > maxBytes) {
+        throw new Error(`Zip archive exceeds ${maxBytes} bytes`);
+    }
+    return archivePath;
+}
+function readCentralDirectory(fd, sizeBytes) {
+    const searchLength = Math.min(sizeBytes, ZIP_MAX_EOCD_SEARCH);
+    const tail = readBuffer(fd, sizeBytes - searchLength, searchLength);
+    for (let index = tail.byteLength - 22; index >= 0; index -= 1) {
+        if (tail.readUInt32LE(index) !== ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+            continue;
+        }
+        let entryCount = tail.readUInt16LE(index + 10);
+        let offset = tail.readUInt32LE(index + 16);
+        if (entryCount === 0xffff || offset === 0xffffffff) {
+            const locatorOffset = sizeBytes - searchLength + index - 20;
+            if (locatorOffset < 0) {
+                throw new Error('Zip64 end of central directory locator not found');
+            }
+            const locator = readBuffer(fd, locatorOffset, 20);
+            if (locator.readUInt32LE(0) !== ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE) {
+                throw new Error('Zip64 end of central directory locator not found');
+            }
+            const zip64EndOffset = Number(locator.readBigUInt64LE(8));
+            const zip64End = readBuffer(fd, zip64EndOffset, 56);
+            if (zip64End.readUInt32LE(0) !== ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+                throw new Error('Zip64 end of central directory not found');
+            }
+            entryCount = Number(zip64End.readBigUInt64LE(32));
+            offset = Number(zip64End.readBigUInt64LE(48));
+        }
+        if (!Number.isSafeInteger(entryCount) || !Number.isSafeInteger(offset)) {
+            throw new Error('Zip central directory values exceed safe integer range');
+        }
+        return { offset, entryCount };
+    }
+    throw new Error('Zip end of central directory not found');
+}
+function readLocalDataStart(fd, localHeaderOffset, entryPath) {
+    const localHeader = readBuffer(fd, localHeaderOffset, 30);
+    if (localHeader.readUInt32LE(0) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+        throw new Error(`Invalid zip local header for entry: ${entryPath}`);
+    }
+    const fileNameLength = localHeader.readUInt16LE(26);
+    const extraLength = localHeader.readUInt16LE(28);
+    return localHeaderOffset + 30 + fileNameLength + extraLength;
+}
+function readZip64Extra(extra, values) {
+    let compressedSize = values.compressedSize;
+    let uncompressedSize = values.uncompressedSize;
+    let localHeaderOffset = values.localHeaderOffset;
+    let offset = 0;
+    while (offset + 4 <= extra.byteLength) {
+        const id = extra.readUInt16LE(offset);
+        const size = extra.readUInt16LE(offset + 2);
+        const dataStart = offset + 4;
+        const dataEnd = dataStart + size;
+        if (dataEnd > extra.byteLength) {
+            throw new Error('Invalid zip extra field');
+        }
+        if (id === ZIP64_EXTRA_FIELD_ID) {
+            let cursor = dataStart;
+            if (uncompressedSize === 0xffffffff) {
+                uncompressedSize = Number(extra.readBigUInt64LE(cursor));
+                cursor += 8;
+            }
+            if (compressedSize === 0xffffffff) {
+                compressedSize = Number(extra.readBigUInt64LE(cursor));
+                cursor += 8;
+            }
+            if (localHeaderOffset === 0xffffffff) {
+                localHeaderOffset = Number(extra.readBigUInt64LE(cursor));
+            }
+            break;
+        }
+        offset = dataEnd;
+    }
+    if (!Number.isSafeInteger(compressedSize) || !Number.isSafeInteger(uncompressedSize) || !Number.isSafeInteger(localHeaderOffset)) {
+        throw new Error('Zip64 entry values exceed safe integer range');
+    }
+    return { compressedSize, uncompressedSize, localHeaderOffset };
+}
+async function extractParsedEntry(filePath, entry, destinationPath) {
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
+    const source = node_fs__WEBPACK_IMPORTED_MODULE_1___default().createReadStream(filePath, {
+        start: entry.dataStart,
+        end: entry.dataStart + entry.compressedSizeBytes - 1,
+    });
+    const payload = entry.compressionMethod === ZIP_STORE_METHOD ? source : source.pipe(node_zlib__WEBPACK_IMPORTED_MODULE_5___default().createInflateRaw());
+    const verifier = new ZipEntryVerifier(entry);
+    try {
+        await (0,node_stream_promises__WEBPACK_IMPORTED_MODULE_4__.pipeline)(payload, verifier, node_fs__WEBPACK_IMPORTED_MODULE_1___default().createWriteStream(destinationPath, { flags: 'wx' }));
+        const result = verifier.result();
+        if (result.sizeBytes !== entry.uncompressedSizeBytes) {
+            throw new Error(`Zip entry size mismatch: ${entry.path}`);
+        }
+        if ((result.crc32 >>> 0) !== ((entry.checksumCrc32 ?? 0) >>> 0)) {
+            throw new Error(`Zip entry checksum mismatch: ${entry.path}`);
+        }
+        return {
+            ...toSafeEntry(entry),
+            extractedPath: destinationPath,
+            checksumSha256: result.checksumSha256,
+        };
+    }
+    catch (error) {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(destinationPath, { force: true });
+        throw error;
+    }
+}
+class ZipEntryVerifier extends node_stream__WEBPACK_IMPORTED_MODULE_3__.Transform {
+    entry;
+    hash = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256');
+    crc = createCrc32State();
+    sizeBytes = 0;
+    constructor(entry) {
+        super();
+        this.entry = entry;
+    }
+    _transform(chunk, _encoding, callback) {
+        this.sizeBytes += chunk.byteLength;
+        if (this.sizeBytes > this.entry.uncompressedSizeBytes) {
+            callback(new Error(`Zip entry exceeds declared size: ${this.entry.path}`));
+            return;
+        }
+        this.hash.update(chunk);
+        updateCrc32State(this.crc, chunk);
+        callback(null, chunk);
+    }
+    result() {
+        return {
+            sizeBytes: this.sizeBytes,
+            checksumSha256: this.hash.digest('hex'),
+            crc32: finishCrc32State(this.crc),
+        };
+    }
+}
+function assertRegularFileEntry(externalFileAttributes, entryPath) {
+    const mode = (externalFileAttributes >>> 16) & 0xffff;
+    const fileType = mode & ZIP_UNIX_FILE_TYPE_MASK;
+    if (fileType === ZIP_UNIX_SYMLINK || (fileType !== 0 && fileType !== ZIP_UNIX_REGULAR_FILE)) {
+        throw new Error(`Zip entry is not a regular file: ${entryPath}`);
+    }
+}
+function isDirectoryEntry(fileName, externalFileAttributes) {
+    return fileName.endsWith('/') || (externalFileAttributes & ZIP_DIRECTORY_ATTRIBUTE) !== 0;
+}
+function toSafeEntry(entry) {
+    return {
+        path: entry.path,
+        compressedSizeBytes: entry.compressedSizeBytes,
+        uncompressedSizeBytes: entry.uncompressedSizeBytes,
+        ...(entry.checksumCrc32 === undefined ? {} : { checksumCrc32: entry.checksumCrc32 }),
+    };
+}
+function readBuffer(fd, offset, length) {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readSync(fd, buffer, 0, length, offset);
+    if (bytesRead !== length) {
+        throw new Error('Unexpected end of zip archive');
+    }
+    return buffer;
+}
+function createCrc32State() {
+    return { value: 0xffffffff };
+}
+function updateCrc32State(state, bytes) {
+    for (const byte of bytes) {
+        state.value = (state.value >>> 8) ^ CRC32_TABLE[(state.value ^ byte) & 0xff];
+    }
+}
+function finishCrc32State(state) {
+    return (state.value ^ 0xffffffff) >>> 0;
+}
+function buildCrc32Table() {
+    const table = new Uint32Array(256);
+    for (let index = 0; index < 256; index += 1) {
+        let value = index;
+        for (let bit = 0; bit < 8; bit += 1) {
+            value = (value & 1) !== 0 ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+        }
+        table[index] = value >>> 0;
+    }
+    return table;
 }
 
 
@@ -10635,6 +11736,26 @@ module.exports = require("node:path");
 (module) {
 
 module.exports = require("node:process");
+
+/***/ },
+
+/***/ "node:stream"
+/*!******************************!*\
+  !*** external "node:stream" ***!
+  \******************************/
+(module) {
+
+module.exports = require("node:stream");
+
+/***/ },
+
+/***/ "node:stream/promises"
+/*!***************************************!*\
+  !*** external "node:stream/promises" ***!
+  \***************************************/
+(module) {
+
+module.exports = require("node:stream/promises");
 
 /***/ },
 

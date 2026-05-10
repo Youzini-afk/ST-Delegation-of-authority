@@ -3,9 +3,9 @@
   "pluginVersion": "1.3.2",
   "sdkExtensionId": "third-party/st-authority-sdk",
   "sdkVersion": "1.3.2",
-  "assetHash": "fe206b74bbd67d6814cc60082d06528934cf0ac0f3ecd88ac75b1644669fd7af",
+  "assetHash": "5c13251cb66ef49569d3dcff2b3cbecde2a8b26298636cbbc8264faf0fbc0c41",
   "coreVersion": "1.3.2",
-  "coreArtifactHash": "227068ca7e15e9af4b4918e12d27256a3a5380a37d8fc13b541be1abc0e5b072",
+  "coreArtifactHash": "ce500fe93d3a9e6100cc6219220ecc8bd4a1ef708df583dc62cdaf1526984b02",
   "coreArtifactPlatform": "linux-x64",
   "coreArtifactPlatforms": [
     "android-arm64",
@@ -33,8 +33,8 @@
       "platform": "linux",
       "arch": "x64",
       "binaryName": "authority-core",
-      "binarySha256": "6585f244c59b067b07a6af41706e1338ea5a9c23a538bc68176d2b49cadbda53",
-      "artifactHash": "06dc0c8f2637da14f4b9c69f970673846c2d13b375f028974828847f07535a9c"
+      "binarySha256": "306b1de696f864907276ccdd926c53eca410cda3628fd2cbc3f347ae5c2c0729",
+      "artifactHash": "83860d3d04940a6f7832914c7f13f3c0617fd3f56a4be9286519d026c01f4a1d"
     },
     "linux-x64-musl": {
       "platform": "linux",
@@ -52,6 +52,6 @@
       "artifactHash": "8f7855983798a4311f2c91566ffe603e273dbc3001d86bf1f25d11946067d4bb"
     }
   },
-  "coreBinarySha256": "6585f244c59b067b07a6af41706e1338ea5a9c23a538bc68176d2b49cadbda53",
-  "buildTime": "2026-05-09T09:08:21.337Z"
+  "coreBinarySha256": "306b1de696f864907276ccdd926c53eca410cda3628fd2cbc3f347ae5c2c0729",
+  "buildTime": "2026-05-10T10:30:20.851Z"
 }
