@@ -9,6 +9,9 @@ import type {
     AuthorityExtensionStorageSummary,
     AuthorityProbeResponse,
     AuthorityInitConfig,
+    NativeMigrationApplyRequest,
+    NativeMigrationOperationListResponse,
+    NativeMigrationPreviewRequest,
     AuthorityPackageImportRequest,
     AuthorityPackageOperationListResponse,
     AuthorityUsageSummaryExtension,
@@ -101,6 +104,8 @@ import {
     MAX_BLOB_BYTES,
     MAX_KV_VALUE_BYTES,
     MAX_SQL_BATCH_STATEMENTS,
+    NATIVE_MIGRATION_MAX_COMPRESSED_BYTES,
+    NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES,
     UNMANAGED_TRANSFER_MAX_BYTES,
     buildAuthorityFeatureFlags,
 } from './constants.js';
@@ -821,6 +826,17 @@ function parseAdminPackageSizeBytes(value: unknown): number {
     }
     if (sizeBytes > ADMIN_PACKAGE_MAX_BYTES) {
         throw new Error(`Admin package upload exceeds ${ADMIN_PACKAGE_MAX_BYTES} bytes`);
+    }
+    return Math.floor(sizeBytes);
+}
+
+function parseNativeMigrationSizeBytes(value: unknown): number {
+    const sizeBytes = Number(value ?? 0);
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+        throw new Error('sizeBytes must be a positive number');
+    }
+    if (sizeBytes > NATIVE_MIGRATION_MAX_COMPRESSED_BYTES) {
+        throw new Error(`Native migration upload exceeds ${NATIVE_MIGRATION_MAX_COMPRESSED_BYTES} bytes`);
     }
     return Math.floor(sizeBytes);
 }
@@ -2944,6 +2960,90 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+
+    router.get('/admin/native-migration/operations', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            ok(res, {
+                operations: runtime.nativeMigrations.listOperations(),
+            } satisfies NativeMigrationOperationListResponse);
+        } catch (error) {
+            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+
+    router.post('/admin/native-migration/upload/init', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const sizeBytes = parseNativeMigrationSizeBytes((req.body as { sizeBytes?: unknown } | undefined)?.sizeBytes);
+            ok(res, await runtime.transfers.init(user, AUTHORITY_SDK_EXTENSION_ID, {
+                resource: 'fs.private',
+                purpose: 'privateFileWrite',
+            }, sizeBytes, NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES));
+        } catch (error) {
+            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+
+    router.post('/admin/native-migration/preview', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {}) as NativeMigrationPreviewRequest;
+            const transfer = runtime.transfers.get(user, AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
+            const previewOptions = typeof payload.fileName === 'string' && payload.fileName.trim()
+                ? { sourceFileName: payload.fileName, adoptSource: true }
+                : { adoptSource: true };
+            const operation = await runtime.nativeMigrations.preview(payload.target, transfer.filePath, previewOptions);
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Native migration preview created', {
+                operationId: operation.id,
+                target: operation.target,
+                entryCount: operation.entryCount,
+                sourceSizeBytes: operation.sourceSizeBytes,
+            });
+            await runtime.transfers.discard(user, AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
+            ok(res, operation);
+        } catch (error) {
+            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+
+    router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {}) as Partial<NativeMigrationApplyRequest>;
+            const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Native migration applied', {
+                operationId: operation.id,
+                target: operation.target,
+                mode: payload.mode ?? 'skip',
+                createdCount: operation.createdCount,
+                overwrittenCount: operation.overwrittenCount,
+                skippedCount: operation.skippedCount,
+            });
+            ok(res, operation);
+        } catch (error) {
+            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+
+    router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            assertAdminUser(user);
+            const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
+                operationId: operation.id,
+                target: operation.target,
+            });
+            ok(res, operation);
+        } catch (error) {
+            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
         }
     });
 

@@ -5,7 +5,7 @@ import process from 'node:process';
 import { describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from './version.js';
 import { registerRoutes } from './routes.js';
-import { MAX_SQL_BATCH_STATEMENTS, UNMANAGED_TRANSFER_MAX_BYTES } from './constants.js';
+import { MAX_SQL_BATCH_STATEMENTS, NATIVE_MIGRATION_MAX_COMPRESSED_BYTES, NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES, UNMANAGED_TRANSFER_MAX_BYTES } from './constants.js';
 import type { AuthorityRuntime } from './runtime.js';
 import { AuthorityServiceError } from './utils.js';
 
@@ -83,6 +83,10 @@ describe('registerRoutes', () => {
             '/admin/import-export/import',
             '/admin/import-export/operations/:id/resume',
             '/admin/import-export/operations/:id/open-download',
+            '/admin/native-migration/upload/init',
+            '/admin/native-migration/preview',
+            '/admin/native-migration/operations/:id/apply',
+            '/admin/native-migration/operations/:id/rollback',
             '/admin/diagnostic-bundle/archive',
             '/admin/update',
         ]));
@@ -592,5 +596,93 @@ describe('registerRoutes', () => {
         );
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ manager_url: 'https://manager.example', control_key: 'stmc_plain_key' }));
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
+
+    it('initializes native migration uploads with 12 GiB ceiling and large chunks', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+        const runtime = {
+            transfers: {
+                init: vi.fn(async () => ({ transferId: 'transfer-001', chunkSize: NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES })),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        registerRoutes(router, runtime);
+        await posts.get('/admin/native-migration/upload/init')?.({
+            user: { profile: { handle: 'alice', admin: true }, directories: { root: 'C:/users/alice' } },
+            headers: {},
+            body: { sizeBytes: NATIVE_MIGRATION_MAX_COMPRESSED_BYTES },
+        }, response);
+
+        expect(runtime.transfers.init).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice', isAdmin: true }),
+            'third-party/st-authority-sdk',
+            { resource: 'fs.private', purpose: 'privateFileWrite' },
+            NATIVE_MIGRATION_MAX_COMPRESSED_BYTES,
+            NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES,
+        );
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ transferId: 'transfer-001' }));
+    });
+
+    it('previews native migration from an uploaded transfer and adopts the staged archive', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+        const runtime = {
+            transfers: {
+                get: vi.fn(() => ({ transferId: 'transfer-001', filePath: '/tmp/upload.zip' })),
+                discard: vi.fn(async () => undefined),
+            },
+            nativeMigrations: {
+                preview: vi.fn(async () => ({ id: 'migration-001', target: 'data', entryCount: 1, sourceSizeBytes: 100 })),
+            },
+            audit: {
+                logUsage: vi.fn().mockResolvedValue(undefined),
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        registerRoutes(router, runtime);
+        await posts.get('/admin/native-migration/preview')?.({
+            user: { profile: { handle: 'alice', admin: true }, directories: { root: 'C:/users/alice' } },
+            headers: {},
+            body: { transferId: 'transfer-001', target: 'data', fileName: 'old-data.zip' },
+        }, response);
+
+        expect(runtime.nativeMigrations.preview).toHaveBeenCalledWith('data', '/tmp/upload.zip', { sourceFileName: 'old-data.zip', adoptSource: true });
+        expect(runtime.transfers.discard).toHaveBeenCalledWith(expect.anything(), 'third-party/st-authority-sdk', 'transfer-001');
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ id: 'migration-001' }));
     });
 });
