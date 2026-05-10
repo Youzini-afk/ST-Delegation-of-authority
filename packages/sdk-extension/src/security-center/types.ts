@@ -5,6 +5,7 @@ import type {
     AuthorityExtensionStorageSummary,
     AuthorityPackageImportMode,
     AuthorityPackageOperation,
+    NativeMigrationOperation,
     AuthorityLimitsPolicyState,
     AuthorityInstallStatusCode,
     AuthorityProbeResponse,
@@ -86,6 +87,7 @@ export type DiagnosticBundleResponse = AuthorityDiagnosticBundleResponse;
 export type ArtifactDownloadResponse = AuthorityArtifactDownloadResponse;
 export type PackageOperation = AuthorityPackageOperation;
 export type PackageImportMode = AuthorityPackageImportMode;
+export type SecurityCenterNativeMigrationOperation = NativeMigrationOperation;
 
 export interface DatabaseGroupSummary {
     extension: ExtensionSummary;
@@ -120,6 +122,8 @@ export interface SecurityCenterState {
     policyEditorExtensionId: string | null;
     packageOperations: PackageOperation[];
     packageActionInProgress: boolean;
+    nativeMigrationOperations: SecurityCenterNativeMigrationOperation[];
+    nativeMigrationActionInProgress: boolean;
     stManagerBridgeConfig: StManagerBridgeConfig | null;
     stManagerBridgeGeneratedKey: string | null;
     stManagerBridgeActionInProgress: boolean;
