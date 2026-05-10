@@ -40,14 +40,16 @@ interface DataTransferRecord {
     direction: 'upload' | 'download';
     ownedFile: boolean;
     checksumSha256: string;
+    chunkSize: number;
 }
 
 const EMPTY_FILE_SHA256 = crypto.createHash('sha256').update('').digest('hex');
 
 export class DataTransferService {
     private readonly transfers = new Map<string, DataTransferRecord>();
+    private readonly uploadHashes = new Map<string, crypto.Hash>();
 
-    async init(user: UserContext, extensionId: string, request: DataTransferInitRequest, maxBytesOverride?: number): Promise<DataTransferInitResponse> {
+    async init(user: UserContext, extensionId: string, request: DataTransferInitRequest, maxBytesOverride?: number, chunkSizeOverride?: number): Promise<DataTransferInitResponse> {
         const resource = normalizeTransferResource(request.resource);
         const purpose = normalizeTransferPurpose(resource, request.purpose);
         const transferId = crypto.randomUUID();
@@ -72,7 +74,9 @@ export class DataTransferService {
             direction: 'upload',
             ownedFile: true,
             checksumSha256: EMPTY_FILE_SHA256,
+            chunkSize: resolveTransferChunkSize(chunkSizeOverride),
         };
+        this.uploadHashes.set(transferId, crypto.createHash('sha256'));
         this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
@@ -92,9 +96,12 @@ export class DataTransferService {
         }
 
         fs.appendFileSync(record.filePath, chunk);
+        const hasher = this.createHashFromRecord(record);
+        hasher.update(chunk);
         record.sizeBytes = nextSize;
         record.updatedAt = new Date().toISOString();
-        record.checksumSha256 = computeFileSha256(record.filePath);
+        this.uploadHashes.set(record.transferId, hasher);
+        record.checksumSha256 = hasher.copy().digest('hex');
         this.storeRecord(user, extensionId, record);
         return {
             transferId: record.transferId,
@@ -130,6 +137,7 @@ export class DataTransferService {
             direction: 'download',
             ownedFile: false,
             checksumSha256: computeFileSha256(filePath),
+            chunkSize: DATA_TRANSFER_CHUNK_BYTES,
         };
         this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
@@ -152,6 +160,7 @@ export class DataTransferService {
         record.direction = 'download';
         record.updatedAt = new Date().toISOString();
         record.checksumSha256 = computeFileSha256(filePath);
+        this.uploadHashes.delete(record.transferId);
         this.storeRecord(user, extensionId, record);
         return toInitResponse(record);
     }
@@ -241,6 +250,7 @@ export class DataTransferService {
     async discard(user: UserContext, extensionId: string, transferId: string): Promise<void> {
         const record = this.get(user, extensionId, transferId);
         this.transfers.delete(transferId);
+        this.uploadHashes.delete(transferId);
         fs.rmSync(this.getTransferRecordPath(user, extensionId, transferId), { force: true });
         if (!record.ownedFile) {
             pruneEmptyTransferDirs(this.getTransferRecordDir(user, extensionId));
@@ -263,9 +273,16 @@ export class DataTransferService {
             return null;
         }
         try {
+            if (!parsed.chunkSize) {
+                parsed.chunkSize = DATA_TRANSFER_CHUNK_BYTES;
+            }
             const readable = validateReadableTransferFile(parsed.filePath);
             parsed.sizeBytes = readable.sizeBytes;
-            if (!parsed.checksumSha256) {
+            if (parsed.direction === 'upload' && parsed.ownedFile) {
+                const hash = computeFileSha256Hash(parsed.filePath);
+                this.uploadHashes.set(parsed.transferId, hash);
+                parsed.checksumSha256 = hash.copy().digest('hex');
+            } else if (!parsed.checksumSha256) {
                 parsed.checksumSha256 = computeFileSha256(parsed.filePath);
             }
         } catch {
@@ -302,6 +319,17 @@ export class DataTransferService {
     private getTransferRecordPath(user: UserContext, extensionId: string, transferId: string): string {
         return resolveContainedPath(this.getTransferRecordDir(user, extensionId), `${transferId}.json`);
     }
+
+    private createHashFromRecord(record: DataTransferRecord): crypto.Hash {
+        const cached = this.uploadHashes.get(record.transferId);
+        if (cached) {
+            return cached;
+        }
+        if (record.sizeBytes === 0) {
+            return crypto.createHash('sha256');
+        }
+        return computeFileSha256Hash(record.filePath);
+    }
 }
 
 function toInitResponse(record: DataTransferRecord): DataTransferInitResponse {
@@ -309,7 +337,7 @@ function toInitResponse(record: DataTransferRecord): DataTransferInitResponse {
         transferId: record.transferId,
         resource: record.resource,
         ...(record.purpose ? { purpose: record.purpose } : {}),
-        chunkSize: DATA_TRANSFER_CHUNK_BYTES,
+        chunkSize: record.chunkSize,
         maxBytes: record.maxBytes,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
@@ -321,7 +349,7 @@ function toInitResponse(record: DataTransferRecord): DataTransferInitResponse {
 }
 
 function toManifestResponse(record: DataTransferRecord): DataTransferManifestResponse {
-    const chunkSize = DATA_TRANSFER_CHUNK_BYTES;
+    const chunkSize = record.chunkSize;
     const chunkCount = Math.ceil(record.sizeBytes / chunkSize);
     return {
         ...toInitResponse(record),
@@ -379,6 +407,16 @@ function resolveTransferMaxBytes(
     return Math.floor(maxBytesOverride);
 }
 
+function resolveTransferChunkSize(chunkSizeOverride?: number): number {
+    if (typeof chunkSizeOverride !== 'number' || !Number.isFinite(chunkSizeOverride)) {
+        return DATA_TRANSFER_CHUNK_BYTES;
+    }
+    if (chunkSizeOverride <= 0) {
+        throw new Error('Transfer chunkSize must be a positive integer');
+    }
+    return Math.floor(chunkSizeOverride);
+}
+
 function decodeTransferChunk(content: string): Buffer {
     try {
         return Buffer.from(content, 'base64');
@@ -411,7 +449,27 @@ function validateReadableTransferFile(sourcePath: string): { filePath: string; s
 }
 
 function computeFileSha256(filePath: string): string {
-    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    return computeFileSha256Hash(filePath).digest('hex');
+}
+
+function computeFileSha256Hash(filePath: string): crypto.Hash {
+    const hash = crypto.createHash('sha256');
+    const handle = fs.openSync(filePath, 'r');
+    try {
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        let position = 0;
+        while (true) {
+            const bytesRead = fs.readSync(handle, buffer, 0, buffer.byteLength, position);
+            if (bytesRead === 0) {
+                break;
+            }
+            hash.update(buffer.subarray(0, bytesRead));
+            position += bytesRead;
+        }
+        return hash;
+    } finally {
+        fs.closeSync(handle);
+    }
 }
 
 function computeFileSliceSha256(filePath: string, offset: number, sizeBytes: number): string {

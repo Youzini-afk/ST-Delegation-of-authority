@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DataTransferService } from './data-transfer-service.js';
 import { UNMANAGED_TRANSFER_MAX_BYTES } from '../constants.js';
 import type { UserContext } from '../types.js';
@@ -93,6 +93,18 @@ describe('DataTransferService', () => {
         })).rejects.toThrow('Transfer exceeds 8 bytes');
     });
 
+    it('uses explicit chunk size overrides without changing the global transfer default', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+
+        const defaultTransfer = await transfers.init(user, 'third-party/ext-a', { resource: 'fs.private' });
+        const largeTransfer = await transfers.init(user, 'third-party/ext-a', { resource: 'fs.private' }, undefined, 4 * 1024 * 1024);
+
+        expect(defaultTransfer.chunkSize).toBe(256 * 1024);
+        expect(largeTransfer.chunkSize).toBe(4 * 1024 * 1024);
+        expect(transfers.manifest(user, 'third-party/ext-a', largeTransfer.transferId).chunkSize).toBe(4 * 1024 * 1024);
+    });
+
     it('enforces effective maxBytes overrides for open-read transfers', async () => {
         const user = createUser(dirs);
         const transfers = new DataTransferService();
@@ -135,6 +147,28 @@ describe('DataTransferService', () => {
 
         const record = reloaded.get(user, 'third-party/ext-a', initialized.transferId, 'storage.blob');
         expect(fs.readFileSync(record.filePath, 'utf8')).toBe('hello authority');
+    });
+
+    it('updates upload checksums incrementally without rereading the staged file on every append', async () => {
+        const user = createUser(dirs);
+        const transfers = new DataTransferService();
+        const readSpy = vi.spyOn(fs, 'readSync');
+
+        const initialized = await transfers.init(user, 'third-party/ext-a', {
+            resource: 'storage.blob',
+            purpose: 'storageBlobWrite',
+        });
+        await transfers.append(user, 'third-party/ext-a', initialized.transferId, {
+            offset: 0,
+            content: Buffer.from('chunk-a', 'utf8').toString('base64'),
+        });
+        await transfers.append(user, 'third-party/ext-a', initialized.transferId, {
+            offset: Buffer.byteLength('chunk-a'),
+            content: Buffer.from('chunk-b', 'utf8').toString('base64'),
+        });
+
+        expect(readSpy).not.toHaveBeenCalled();
+        readSpy.mockRestore();
     });
 
     it('builds a manifest with chunk descriptors and checksums', async () => {
