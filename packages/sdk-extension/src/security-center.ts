@@ -1101,7 +1101,7 @@ class SecurityCenterView {
 
         if (this.state.loading) {
             status.innerHTML = renderAlertStack([
-                { tone: 'info', title: '同步中', message: '正在同步权限中心状态、扩展记录与策略数据。' },
+                { tone: 'info', title: '归档同步中', message: '正在同步权限中心状态、扩展记录与策略数据。' },
             ]);
             return;
         }
@@ -1293,7 +1293,7 @@ class SecurityCenterView {
             'capabilityMatrix',
             'authority-section-block',
             '可管理的功能',
-            '这里列出当前能由权限中心管理的系统功能',
+            '当前可由权限中心管理的系统功能清单',
             renderCapabilityMatrix(RESOURCE_OPTIONS),
         )}
                     ${this.renderOverviewCollapsibleSection(
@@ -1309,7 +1309,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>资源与存储</h3>
-                                <div class="authority-muted">当前用户已占用的数据</div>
+                                <div class="authority-muted">当前会话已归档的数据资产与占用</div>
                             </div>
                         </div>
                         <div class="authority-resource-stack">
@@ -1335,7 +1335,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>后台任务概况</h3>
-                                <div class="authority-muted">排队中与执行中的任务</div>
+                                <div class="authority-muted">任务队列状态与执行中作业</div>
                             </div>
                         </div>
                         ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
@@ -1344,7 +1344,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近权限拒绝</h3>
-                                <div class="authority-muted">被拒绝或封锁的权限请求</div>
+                                <div class="authority-muted">被拒绝或封锁的权限请求记录</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(overview.recentPermissionDenials.slice(0, 5), '暂无权限拒绝记录。')}
@@ -1353,7 +1353,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近失败任务</h3>
-                                <div class="authority-muted">失败或取消的后台任务</div>
+                                <div class="authority-muted">失败或取消的后台任务记录</div>
                             </div>
                         </div>
                         ${renderJobTable(overview.failedJobs.slice(0, 5), '暂无失败任务。')}
@@ -1371,7 +1371,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近错误</h3>
-                                <div class="authority-muted">需要优先排查的异常</div>
+                                <div class="authority-muted">需要优先排查的异常记录</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(overview.recentErrors.slice(0, 5), '暂无错误记录。')}
@@ -1431,7 +1431,7 @@ class SecurityCenterView {
                     <div class="authority-section-heading">
                         <div>
                             <h3>基本情况</h3>
-                            <div class="authority-muted">这个扩展是什么时候接入的、最近有没有活动、占了多少数据</div>
+                            <div class="authority-muted">接入时间、最近活跃、声明权限与数据占用</div>
                         </div>
                         <button type="button" class="authority-action-button authority-action-button--primary" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
                     </div>
@@ -1447,7 +1447,7 @@ class SecurityCenterView {
                     <div class="authority-section-heading">
                         <div>
                             <h3>权限情况</h3>
-                            <div class="authority-muted">这里能看到它申请过什么权限、当前被允许了哪些、又被拦了哪些</div>
+                            <div class="authority-muted">已声明权限、持久化授权记录与策略覆盖</div>
                         </div>
                     </div>
                     ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展还没有声明任何权限。')}
@@ -1458,7 +1458,7 @@ class SecurityCenterView {
                     <div class="authority-section-heading">
                         <div>
                             <h3>数据占用</h3>
-                            <div class="authority-muted">这个扩展创建的 SQL 数据库和 Trivium 记忆库都在这里</div>
+                            <div class="authority-muted">SQL 数据库与 Trivium 记忆库归档</div>
                         </div>
                     </div>
                     ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
@@ -1468,7 +1468,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近权限活动</h3>
-                                <div class="authority-muted">权限请求与决策轨迹</div>
+                                <div class="authority-muted">权限请求与授权决策轨迹</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(permissions, '暂无权限活动。')}
@@ -1477,7 +1477,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近能力调用</h3>
-                                <div class="authority-muted">这个扩展最近都实际用了哪些功能</div>
+                                <div class="authority-muted">实际功能调用与资源访问记录</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(usage, '暂无能力调用记录。')}
@@ -1488,7 +1488,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近后台任务</h3>
-                                <div class="authority-muted">这个扩展最近创建过的后台任务</div>
+                                <div class="authority-muted">已调度后台作业记录</div>
                             </div>
                         </div>
                         ${renderJobTable(jobs, '暂无后台任务。')}
@@ -1497,7 +1497,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近告警</h3>
-                                <div class="authority-muted">例如排队过多、执行变慢、自动重试</div>
+                                <div class="authority-muted">排队压力、执行延迟与自动重试</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(warnings, '暂无运行告警记录。')}
@@ -1506,7 +1506,7 @@ class SecurityCenterView {
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近错误</h3>
-                                <div class="authority-muted">这里显示需要尽快排查的问题</div>
+                                <div class="authority-muted">需要优先排查的异常记录</div>
                             </div>
                         </div>
                         ${renderActivityLogRows(errors, '暂无内部错误记录。')}
@@ -1532,7 +1532,7 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">数据资产</div>
                         <h2>各扩展的数据存储</h2>
-                        <p>按扩展查看当前用户的 SQL 数据库和 Trivium 记忆库。</p>
+                        <p>按扩展查看 SQL 数据库与 Trivium 记忆库归档。</p>
                     </div>
                     <div class="authority-list-card__actions">
                         <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>
@@ -1569,7 +1569,7 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">操作记录</div>
                         <h2>活动记录</h2>
-                        <p>这里会显示权限请求、功能使用和错误记录。</p>
+                        <p>权限请求、功能调用与异常的全局审计日志。</p>
                     </div>
                 </div>
                 <div class="authority-log-layout">
@@ -1630,7 +1630,7 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">管理员策略</div>
                         <h2>管理员统一规则</h2>
-                        <p>这里的规则会覆盖扩展自己的请求和用户之前点过的允许/拒绝，请谨慎修改。</p>
+                        <p>全局策略会覆盖扩展请求与用户授权决策，请谨慎修改。</p>
                     </div>
                     <div class="authority-page-actions">
                         <button type="button" class="authority-action-button" data-action="add-policy-row">新增单独规则</button>
@@ -1731,7 +1731,7 @@ class SecurityCenterView {
                     <div>
                         <div class="authority-eyebrow">维护工具</div>
                         <h2>更新、备份与迁移</h2>
-                        <p>这里可以拉取最新代码、重新部署前端界面、导出或导入数据包，也能下载诊断信息。</p>
+                        <p>拉取最新代码、重新部署前端界面、导出或导入数据包，以及下载诊断信息。</p>
                     </div>
                     <div class="authority-page-actions authority-page-actions--updates">
                         <button type="button" class="authority-action-button authority-action-button--primary authority-action-button--wide" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
@@ -1745,7 +1745,7 @@ class SecurityCenterView {
                     <div class="authority-card__header">
                         <div>
                             <h3>当前安装状态</h3>
-                            <div class="authority-muted">当前插件、前端界面和后台服务的安装情况</div>
+                            <div class="authority-muted">插件、前端界面与后台服务的安装与版本信息</div>
                         </div>
                         <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
                     </div>
@@ -1821,7 +1821,7 @@ class SecurityCenterView {
                     <div class="authority-card__header">
                         <div>
                             <h3>数据占用概览</h3>
-                            <div class="authority-muted">按扩展查看当前占了多少数据，方便决定要不要备份、迁移或清理。</div>
+                            <div class="authority-muted">按扩展查看数据占用，用于备份、迁移或清理决策。</div>
                         </div>
                     </div>
                     ${usageSummary ? `
@@ -1865,7 +1865,7 @@ class SecurityCenterView {
                     <div class="authority-card__header">
                         <div>
                             <h3>数据包导入导出</h3>
-                            <div class="authority-muted">把授权、规则、文件和数据库打成一个备份包，并记录后台处理进度。</div>
+                            <div class="authority-muted">将授权、规则、文件和数据库打包备份，并记录后台处理进度。</div>
                         </div>
                     </div>
                     <div class="authority-stack">
@@ -1929,7 +1929,7 @@ class SecurityCenterView {
                     <div class="authority-card__header">
                         <div>
                             <h3>这些按钮分别做什么</h3>
-                            <div class="authority-muted">如果不确定选哪个，可以先看这里</div>
+                            <div class="authority-muted">维护功能说明与操作指引</div>
                         </div>
                     </div>
                     <div class="authority-stack">
