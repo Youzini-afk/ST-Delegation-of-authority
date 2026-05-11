@@ -1141,6 +1141,36 @@ class SecurityCenterView {
                             ${renderMetricTile('最近错误', String(overview.recentErrors.length), '需要排查的异常', overview.recentErrors.length > 0 ? 'error' : 'neutral')}
                         </div>`)}
                     ${this.renderOverviewCollapsibleSection('capabilityMatrix', 'authority-section-block', '可管理的功能', '当前可由权限中心管理的系统功能清单', renderCapabilityMatrix(RESOURCE_OPTIONS))}
+                    <section class="authority-log-panel">
+                        <div class="authority-section-heading">
+                            <div>
+                                <h3>审计追踪</h3>
+                                <div class="authority-muted">权限拒绝、失败任务、运行告警与错误记录</div>
+                            </div>
+                        </div>
+                        <div class="authority-governance-grid" style="margin-bottom:12px">
+                            ${renderMetricTile('权限拒绝', String(overview.recentPermissionDenials.length), '最近被拒绝的权限请求', overview.recentPermissionDenials.length > 0 ? 'warning' : 'neutral')}
+                            ${renderMetricTile('失败任务', String(overview.failedJobs.length), '失败 / 取消的后台任务', overview.failedJobs.length > 0 ? 'warning' : 'neutral')}
+                            ${renderMetricTile('运行告警', String(overview.recentWarnings.length), '队列压力 / 慢任务 / 重试线索', overview.recentWarnings.length > 0 ? 'warning' : 'neutral')}
+                            ${renderMetricTile('错误记录', String(overview.recentErrors.length), '需要排查的异常', overview.recentErrors.length > 0 ? 'error' : 'neutral')}
+                        </div>
+                        <div class="authority-detail-grid">
+                            <div>
+                                ${renderActivityLogRows(overview.recentPermissionDenials.slice(0, 5), '暂无权限拒绝记录。')}
+                            </div>
+                            <div>
+                                ${renderJobTable(overview.failedJobs.slice(0, 5), '暂无失败任务。')}
+                            </div>
+                        </div>
+                        <div class="authority-detail-grid" style="margin-top:12px">
+                            <div>
+                                ${renderActivityLogRows(overview.recentWarnings.slice(0, 5), '暂无运行告警记录。')}
+                            </div>
+                            <div>
+                                ${renderActivityLogRows(overview.recentErrors.slice(0, 5), '暂无错误记录。')}
+                            </div>
+                        </div>
+                    </section>
                     ${this.renderOverviewCollapsibleSection('recentActivity', 'authority-log-panel', '近期活动', '权限请求、能力调用与异常记录', renderActivityLogRows(overview.recentActivity, '暂无活动记录。'))}
                 </div>
                 <aside class="authority-inspector authority-inspector--overview">
@@ -1179,42 +1209,6 @@ class SecurityCenterView {
                         </div>
                         ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
                     </section>
-                    <section class="authority-card">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近权限拒绝</h3>
-                                <div class="authority-muted">被拒绝或封锁的权限请求记录</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(overview.recentPermissionDenials.slice(0, 5), '暂无权限拒绝记录。')}
-                    </section>
-                    <section class="authority-card">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近失败任务</h3>
-                                <div class="authority-muted">失败或取消的后台任务记录</div>
-                            </div>
-                        </div>
-                        ${renderJobTable(overview.failedJobs.slice(0, 5), '暂无失败任务。')}
-                    </section>
-                    <section class="authority-card">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近告警</h3>
-                                <div class="authority-muted">队列压力、慢任务与重试线索</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(overview.recentWarnings.slice(0, 5), '暂无运行告警记录。')}
-                    </section>
-                    <section class="authority-card">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近错误</h3>
-                                <div class="authority-muted">需要优先排查的异常记录</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(overview.recentErrors.slice(0, 5), '暂无错误记录。')}
-                    </section>
                 </aside>
             </div>
         `;
@@ -1245,7 +1239,7 @@ class SecurityCenterView {
             <div class="authority-page-stack authority-page-stack--detail">
                 <div class="authority-page-header authority-page-header--detail">
                     <div class="authority-dossier-title">
-                        <div class="authority-eyebrow">扩展详情</div>
+                        <div class="authority-eyebrow">Extension Dossier</div>
                         <h2>${escapeHtml(detail.extension.displayName)}</h2>
                         <div class="authority-muted">${escapeHtml(detail.extension.id)}</div>
                     </div>
@@ -1318,7 +1312,7 @@ class SecurityCenterView {
                         ${renderActivityLogRows(usage, '暂无能力调用记录。')}
                     </div>
                 </section>
-                <section class="authority-detail-grid">
+                <div class="authority-detail-grid">
                     <div class="authority-card">
                         <div class="authority-section-heading">
                             <div>
@@ -1346,7 +1340,7 @@ class SecurityCenterView {
                         </div>
                         ${renderActivityLogRows(errors, '暂无内部错误记录。')}
                     </div>
-                </section>
+                </div>
             </div>
         `;
     }
@@ -1362,7 +1356,7 @@ class SecurityCenterView {
             <div class="authority-page-stack">
                 <div class="authority-page-header">
                     <div>
-                        <div class="authority-eyebrow">数据资产</div>
+                        <div class="authority-eyebrow">Data Assets</div>
                         <h2>各扩展的数据存储</h2>
                         <p>按扩展查看 SQL 数据库与 Trivium 记忆库归档。</p>
                     </div>
@@ -1396,7 +1390,7 @@ class SecurityCenterView {
             <div class="authority-page-stack">
                 <div class="authority-page-header">
                     <div>
-                        <div class="authority-eyebrow">操作记录</div>
+                        <div class="authority-eyebrow">Audit Log</div>
                         <h2>活动记录</h2>
                         <p>权限请求、功能调用与异常的全局审计日志。</p>
                     </div>
@@ -1453,7 +1447,7 @@ class SecurityCenterView {
             <div class="authority-page-stack">
                 <div class="authority-page-header">
                     <div>
-                        <div class="authority-eyebrow">管理员策略</div>
+                        <div class="authority-eyebrow">Compliance Rules</div>
                         <h2>管理员统一规则</h2>
                         <p>全局策略会覆盖扩展请求与用户授权决策，请谨慎修改。</p>
                     </div>
@@ -1550,7 +1544,7 @@ class SecurityCenterView {
             <div class="authority-page-stack authority-maintenance-workspace">
                 <div class="authority-page-header authority-page-header--updates">
                     <div>
-                        <div class="authority-eyebrow">维护工具</div>
+                        <div class="authority-eyebrow">Operations Console</div>
                         <h2>更新、备份与迁移</h2>
                         <p>拉取最新代码、重新部署前端界面、导出或导入数据包，以及下载诊断信息。</p>
                     </div>
@@ -1582,23 +1576,6 @@ class SecurityCenterView {
                         <span class="authority-muted">最近操作</span>
                         <strong>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</strong>
                         <div>更新 / 迁移 / 诊断</div>
-                    </div>
-                </section>
-                <section class="authority-card authority-card--flat authority-install-state-card">
-                    <div class="authority-card__header">
-                        <div>
-                            <h3>当前安装状态</h3>
-                            <div class="authority-muted">插件、前端界面与后台服务的安装与版本信息</div>
-                        </div>
-                        <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
-                    </div>
-                    <div class="authority-kv-grid">
-                        <div><strong>服务端插件版本</strong><div>${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)}</div></div>
-                        <div><strong>插件内置前端版本</strong><div>${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)}</div></div>
-                        <div><strong>当前启用的前端版本</strong><div>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</div></div>
-                        <div><strong>后台服务版本</strong><div>${escapeHtml(probe?.core.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</div></div>
-                        <div><strong>插件目录</strong><div>${escapeHtml(installPath)}</div></div>
-                        <div><strong>最近操作</strong><div>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</div></div>
                     </div>
                 </section>
                 <section class="authority-card authority-card--flat authority-native-migration-studio">
@@ -1767,6 +1744,23 @@ class SecurityCenterView {
                                 </table>
                             </div>
                         ` : '<div class="authority-empty">暂时还没有导入或导出任务。</div>'}
+                    </div>
+                </section>
+                <section class="authority-card authority-card--flat authority-install-state-card">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>当前安装状态</h3>
+                            <div class="authority-muted">插件、前端界面与后台服务的安装与版本信息</div>
+                        </div>
+                        <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
+                    </div>
+                    <div class="authority-kv-grid">
+                        <div><strong>服务端插件版本</strong><div>${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>插件内置前端版本</strong><div>${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>当前启用的前端版本</strong><div>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>后台服务版本</strong><div>${escapeHtml(probe?.core.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</div></div>
+                        <div><strong>插件目录</strong><div>${escapeHtml(installPath)}</div></div>
+                        <div><strong>最近操作</strong><div>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</div></div>
                     </div>
                 </section>
                 <section class="authority-card authority-card--flat">
