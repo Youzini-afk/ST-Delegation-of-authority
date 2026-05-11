@@ -1937,6 +1937,10 @@
     grid-template-columns: 1fr;
   }
 
+  .authority-governance-layout .authority-extension-nav {
+    max-height: 280px;
+  }
+
   .authority-ops-ribbon {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2003,6 +2007,35 @@
     grid-template-columns: 1fr;
   }
 
+  .authority-hero-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .authority-page-hero {
+    gap: 14px;
+    justify-content: flex-start;
+    min-height: auto;
+    padding: 18px;
+  }
+
+  .authority-permission-map {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .authority-migration-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .authority-governance-tools .authority-search {
+    min-width: 0;
+  }
+
+  .authority-upload-tile {
+    min-height: 120px;
+    padding: 14px;
+  }
+
   .authority-inspector,
   .authority-detail-grid,
   .authority-log-layout,
@@ -2056,6 +2089,12 @@
 
   .authority-policy-row,
   .authority-policy-default-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .authority-permission-map {
     grid-template-columns: 1fr;
   }
 }
