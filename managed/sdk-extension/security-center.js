@@ -1129,6 +1129,43 @@ class SecurityCenterView {
                             </div>
                         </div>
                     </section>
+                    <div class="authority-card-grid" style="margin-top:10px">
+                        <section class="authority-card">
+                            <div class="authority-section-heading">
+                                <div>
+                                    <h3>资源与存储</h3>
+                                    <div class="authority-muted">当前会话已归档的数据资产与占用</div>
+                                </div>
+                            </div>
+                            <div class="authority-resource-stack">
+                                <div class="authority-resource-row">
+                                    <span>键值数据</span>
+                                    <strong>${this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)}</strong>
+                                </div>
+                                <div class="authority-resource-row">
+                                    <span>存储文件</span>
+                                    <strong>${escapeHtml(formatBytes(overview.totalBlobBytes))}</strong>
+                                </div>
+                                <div class="authority-resource-row">
+                                    <span>数据库</span>
+                                    <strong>${databaseCount} 个 · ${escapeHtml(formatBytes(overview.totalDatabaseSize))}</strong>
+                                </div>
+                                <div class="authority-resource-row">
+                                    <span>私有文件</span>
+                                    <strong>${escapeHtml(formatBytes(overview.totalPrivateFileBytes))}</strong>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="authority-card">
+                            <div class="authority-section-heading">
+                                <div>
+                                    <h3>后台任务概况</h3>
+                                    <div class="authority-muted">任务队列状态与执行中作业</div>
+                                </div>
+                            </div>
+                            ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
+                        </section>
+                    </div>
                     ${this.renderOverviewCollapsibleSection('governance', 'authority-section-block', '权限治理', '授权、拒绝、策略覆盖与后台任务', `<div class="authority-governance-grid">
                             ${renderMetricTile('已接入扩展', String(this.state.extensions.length), '注册到权限中心', 'primary')}
                             ${renderMetricTile('已允许授权', String(grantedCount), '持久授权记录', 'success')}
@@ -1173,43 +1210,6 @@ class SecurityCenterView {
                     </section>
                     ${this.renderOverviewCollapsibleSection('recentActivity', 'authority-log-panel', '近期活动', '权限请求、能力调用与异常记录', renderActivityLogRows(overview.recentActivity, '暂无活动记录。'))}
                 </div>
-                <aside class="authority-inspector authority-inspector--overview">
-                    <section class="authority-card">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>资源与存储</h3>
-                                <div class="authority-muted">当前会话已归档的数据资产与占用</div>
-                            </div>
-                        </div>
-                        <div class="authority-resource-stack">
-                            <div class="authority-resource-row">
-                                <span>键值数据</span>
-                                <strong>${this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)}</strong>
-                            </div>
-                            <div class="authority-resource-row">
-                                <span>存储文件</span>
-                                <strong>${escapeHtml(formatBytes(overview.totalBlobBytes))}</strong>
-                            </div>
-                            <div class="authority-resource-row">
-                                <span>数据库</span>
-                                <strong>${databaseCount} 个 · ${escapeHtml(formatBytes(overview.totalDatabaseSize))}</strong>
-                            </div>
-                            <div class="authority-resource-row">
-                                <span>私有文件</span>
-                                <strong>${escapeHtml(formatBytes(overview.totalPrivateFileBytes))}</strong>
-                            </div>
-                        </div>
-                    </section>
-                    <section class="authority-card">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>后台任务概况</h3>
-                                <div class="authority-muted">任务队列状态与执行中作业</div>
-                            </div>
-                        </div>
-                        ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
-                    </section>
-                </aside>
             </div>
         `;
     }
