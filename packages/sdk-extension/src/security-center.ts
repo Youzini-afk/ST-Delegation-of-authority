@@ -1174,10 +1174,15 @@ class SecurityCenterView {
                 </span>
                 <span class="authority-extension-item__meta">${escapeHtml(extension.id)}</span>
                 <span class="authority-extension-item__stats">
+                    <span class="authority-pill authority-pill--runtime">${escapeHtml(getInstallTypeLabel(extension.installType))}</span>
+                    <span class="authority-pill authority-pill--prompt">v${escapeHtml(extension.version)}</span>
                     <span class="authority-pill authority-pill--granted">允许 ${extension.grantedCount}</span>
                     <span class="authority-pill authority-pill--denied">拒绝 ${extension.deniedCount}</span>
                     <span class="authority-pill authority-pill--prompt">声明 ${declared.length}</span>
                     ${errorCount > 0 ? `<span class="authority-pill authority-pill--error">异常 ${errorCount}</span>` : ''}
+                </span>
+                <span class="authority-permission-map" aria-hidden="true">
+                    ${['SQL', 'Trivium', '私有文件', 'HTTP'].map(label => `<span>${label}</span>`).join('')}
                 </span>
             `;
             item.classList.toggle('authority-extension-item--active', extension.id === this.state.selectedExtensionId);
@@ -1201,6 +1206,17 @@ class SecurityCenterView {
         container.innerHTML = `
             <div class="authority-overview-layout">
                 <div class="authority-overview-main">
+                    <section class="authority-page-hero authority-page-hero--overview">
+                        <div>
+                            <div class="authority-eyebrow">Security Overview</div>
+                            <h2>安全中心总览</h2>
+                            <p>系统状态、扩展风险、策略覆盖与最近审计的统一入口。</p>
+                        </div>
+                        <div class="authority-hero-actions">
+                            <button type="button" class="authority-action-button authority-action-button--primary" data-tab="detail">扩展治理</button>
+                            ${this.state.isAdmin ? '<button type="button" class="authority-action-button" data-tab="updates">迁移维护</button>' : ''}
+                        </div>
+                    </section>
                     <section class="authority-diagnostics-panel">
                         <div class="authority-section-heading">
                             <div>
@@ -1304,7 +1320,7 @@ class SecurityCenterView {
             renderActivityLogRows(overview.recentActivity, '暂无活动记录。'),
         )}
                 </div>
-                <aside class="authority-inspector">
+                <aside class="authority-inspector authority-inspector--overview">
                     <section class="authority-card">
                         <div class="authority-section-heading">
                             <div>
@@ -1726,7 +1742,7 @@ class SecurityCenterView {
         const nativeMigrationButtonLabel = this.state.nativeMigrationActionInProgress ? '处理中…' : '上传并预览';
 
         container.innerHTML = `
-            <div class="authority-page-stack">
+            <div class="authority-page-stack authority-maintenance-workspace">
                 <div class="authority-page-header authority-page-header--updates">
                     <div>
                         <div class="authority-eyebrow">维护工具</div>
@@ -1741,7 +1757,29 @@ class SecurityCenterView {
                         <button type="button" class="authority-action-button authority-action-button--wide" data-action="export-diagnostic-bundle">导出诊断 JSON</button>
                     </div>
                 </div>
-                <section class="authority-card authority-card--flat">
+                <section class="authority-ops-ribbon">
+                    <div class="authority-ops-card authority-ops-card--featured">
+                        <span class="authority-muted">作业队列</span>
+                        <strong>${nativeMigrationOperations.length + packageOperations.length}</strong>
+                        <div>迁移 / 数据包任务</div>
+                    </div>
+                    <div class="authority-ops-card">
+                        <span class="authority-muted">ST-Manager</span>
+                        <strong>${this.state.stManagerBridgeConfig?.enabled ? '已配对' : '未启用'}</strong>
+                        <div>远程备份与桥接</div>
+                    </div>
+                    <div class="authority-ops-card">
+                        <span class="authority-muted">SDK</span>
+                        <strong>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</strong>
+                        <div>当前启用前端</div>
+                    </div>
+                    <div class="authority-ops-card">
+                        <span class="authority-muted">最近操作</span>
+                        <strong>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</strong>
+                        <div>更新 / 迁移 / 诊断</div>
+                    </div>
+                </section>
+                <section class="authority-card authority-card--flat authority-install-state-card">
                     <div class="authority-card__header">
                         <div>
                             <h3>当前安装状态</h3>
@@ -1758,17 +1796,7 @@ class SecurityCenterView {
                         <div><strong>最近操作</strong><div>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</div></div>
                     </div>
                 </section>
-                ${renderStManagerBridgeSection(
-            this.state.stManagerBridgeConfig,
-            this.state.stManagerBridgeGeneratedKey,
-            this.state.stManagerBridgeActionInProgress,
-        )}
-                ${renderStManagerControlSection(
-            this.state.stManagerControlConfig,
-            this.state.stManagerControlBackups,
-            this.state.stManagerControlActionInProgress,
-        )}
-                <section class="authority-card authority-card--flat">
+                <section class="authority-card authority-card--flat authority-native-migration-studio">
                     <div class="authority-card__header">
                         <div>
                             <h3>原生酒馆迁移导入</h3>
@@ -1776,8 +1804,8 @@ class SecurityCenterView {
                         </div>
                         <span class="authority-pill authority-pill--warning">管理员高风险操作</span>
                     </div>
-                    <div class="authority-stack">
-                        <div class="authority-list-card authority-list-card--column">
+                    <div class="authority-migration-grid">
+                        <div class="authority-upload-tile">
                             <strong>导入旧酒馆 data 目录</strong>
                             <div class="authority-muted">支持压缩包内为 <code>data/default-user/...</code> 或直接 <code>default-user/...</code>。默认不会删除目标目录中压缩包缺失的文件。</div>
                             <div class="authority-page-actions">
@@ -1785,13 +1813,21 @@ class SecurityCenterView {
                                 <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="data" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
                             </div>
                         </div>
-                        <div class="authority-list-card authority-list-card--column">
+                        <div class="authority-upload-tile">
                             <strong>导入旧酒馆第三方插件目录</strong>
                             <div class="authority-muted">支持压缩包内为 <code>public/scripts/extensions/third-party/...</code>、<code>extensions/third-party/...</code>、<code>third-party/...</code> 或直接插件文件夹。不会运行 npm install、重启或启用脚本。</div>
                             <div class="authority-page-actions">
                                 <input type="file" data-role="native-migration-file" data-target="third-party" accept=".zip,application/zip" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''} />
                                 <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="third-party" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
                             </div>
+                        </div>
+                    </div>
+                    <div class="authority-stack">
+                        <div class="authority-guardrail-band">
+                            <span>不删除缺失文件</span>
+                            <span>不运行 npm install</span>
+                            <span>不重启</span>
+                            <span>不自动启用脚本</span>
                         </div>
                         <div class="authority-inline-note">
                             这是原生 SillyTavern 文件迁移，不是 Authority portable package，也不是 ST-Manager 远程备份。先预览，再选择跳过已有文件或覆盖已有文件；覆盖模式会创建回滚备份。
@@ -1817,6 +1853,17 @@ class SecurityCenterView {
                         ` : '<div class="authority-empty">暂时还没有原生迁移任务。上传 ZIP 后会先生成预览。</div>'}
                     </div>
                 </section>
+                <div class="authority-maintenance-secondary">
+                ${renderStManagerBridgeSection(
+            this.state.stManagerBridgeConfig,
+            this.state.stManagerBridgeGeneratedKey,
+            this.state.stManagerBridgeActionInProgress,
+        )}
+                ${renderStManagerControlSection(
+            this.state.stManagerControlConfig,
+            this.state.stManagerControlBackups,
+            this.state.stManagerControlActionInProgress,
+        )}
                 <section class="authority-card authority-card--flat">
                     <div class="authority-card__header">
                         <div>
@@ -1947,6 +1994,7 @@ class SecurityCenterView {
                         </div>
                     </div>
                 </section>
+                </div>
                 ${result ? `
                     <section class="authority-card authority-card--flat">
                         <div class="authority-card__header">

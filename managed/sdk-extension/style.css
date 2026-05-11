@@ -827,9 +827,8 @@
 }
 
 .authority-workbench__body {
-  display: grid;
+  display: block;
   flex: 1;
-  grid-template-columns: minmax(210px, 248px) minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -837,15 +836,16 @@
 
 .authority-extension-nav {
   background: var(--authority-surface-low);
-  border-right: 1px solid var(--authority-outline-soft);
-  box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--authority-outline-soft);
+  border-radius: 8px;
+  box-shadow: none;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding: 10px;
+  padding: 12px;
 }
 
 .authority-extension-nav__header {
@@ -876,10 +876,11 @@
   background:
     radial-gradient(ellipse at 50% 0%, rgba(91, 141, 184, 0.025) 0%, transparent 60%),
     var(--authority-bg);
+  height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: auto;
-  padding: 16px 18px;
+  padding: 22px 26px;
 }
 
 .authority-view-canvas .authority-section {
@@ -893,10 +894,264 @@
 
 .authority-overview-layout {
   display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(0, 1fr) minmax(160px, 200px);
+  gap: 22px;
+  grid-template-columns: minmax(0, 1.6fr) minmax(260px, 0.7fr);
   margin: 0 auto;
   max-width: 1180px;
+  min-width: 0;
+}
+
+.authority-page-hero {
+  align-items: flex-end;
+  background:
+    radial-gradient(circle at 86% 16%, rgba(212, 168, 83, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(22, 25, 32, 0.98), rgba(10, 12, 15, 0.98));
+  border: 1px solid rgba(212, 168, 83, 0.22);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 18px 40px rgba(0, 0, 0, 0.28);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  min-height: 128px;
+  overflow: hidden;
+  padding: 24px;
+  position: relative;
+}
+
+.authority-page-hero::after {
+  border: 1px solid rgba(212, 168, 83, 0.16);
+  border-radius: 999px;
+  content: "";
+  height: 180px;
+  position: absolute;
+  right: -54px;
+  top: -70px;
+  width: 180px;
+}
+
+.authority-page-hero > div {
+  position: relative;
+  z-index: 1;
+}
+
+.authority-page-hero h2 {
+  color: var(--authority-text);
+  font-size: clamp(1.55rem, 2.4vw, 2.4rem);
+  letter-spacing: -0.04em;
+  margin: 0;
+}
+
+.authority-page-hero p {
+  color: var(--authority-muted-soft);
+  font-size: var(--authority-fs-base);
+  margin: 8px 0 0;
+  max-width: 620px;
+}
+
+.authority-hero-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.authority-governance-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin: 0 auto;
+  max-width: 1240px;
+  min-height: 100%;
+}
+
+.authority-governance-header {
+  align-items: flex-end;
+  border-bottom: 1px solid var(--authority-outline-soft);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding-bottom: 16px;
+}
+
+.authority-governance-header h2 {
+  color: var(--authority-text);
+  font-size: clamp(1.45rem, 2vw, 2rem);
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+
+.authority-governance-header p {
+  color: var(--authority-muted-soft);
+  margin: 6px 0 0;
+}
+
+.authority-governance-tools {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.authority-governance-tools .authority-search {
+  margin: 0;
+  min-width: min(320px, 42vw);
+}
+
+.authority-governance-layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(320px, 0.78fr) minmax(0, 1.22fr);
+  min-height: 0;
+}
+
+.authority-governance-layout .authority-extension-nav {
+  max-height: none;
+}
+
+.authority-governance-detail {
+  min-width: 0;
+}
+
+.authority-governance-detail > .authority-page-stack--detail {
+  margin: 0;
+}
+
+.authority-permission-map {
+  border-top: 1px solid var(--authority-outline-soft);
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 6px;
+  padding-top: 7px;
+}
+
+.authority-permission-map span {
+  color: var(--authority-muted);
+  font-size: var(--authority-fs-xs);
+  overflow: hidden;
+  position: relative;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.authority-permission-map span::before {
+  background: var(--authority-primary);
+  border-radius: 999px;
+  content: "";
+  display: inline-block;
+  height: 5px;
+  margin-right: 5px;
+  vertical-align: 1px;
+  width: 5px;
+}
+
+.authority-maintenance-workspace {
+  margin: 0 auto;
+  max-width: 1220px;
+}
+
+.authority-ops-ribbon {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.authority-ops-card {
+  background: var(--authority-surface-low);
+  border: 1px solid var(--authority-outline-soft);
+  border-radius: 10px;
+  min-width: 0;
+  padding: 16px;
+}
+
+.authority-ops-card--featured {
+  background: linear-gradient(135deg, rgba(212, 168, 83, 0.13), rgba(22, 25, 32, 0.96));
+  border-color: rgba(212, 168, 83, 0.3);
+}
+
+.authority-ops-card strong {
+  color: var(--authority-text);
+  display: block;
+  font-size: var(--authority-fs-xl);
+  letter-spacing: -0.03em;
+  margin: 6px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.authority-ops-card div {
+  color: var(--authority-muted-soft);
+  font-size: var(--authority-fs-sm);
+}
+
+.authority-install-state-card {
+  order: 1;
+}
+
+.authority-native-migration-studio {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(91, 141, 184, 0.12), transparent 32%),
+    var(--authority-surface-low);
+  border-color: rgba(212, 168, 83, 0.24);
+  order: 0;
+}
+
+.authority-migration-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.authority-upload-tile {
+  background: var(--authority-surface);
+  border: 1px dashed rgba(212, 168, 83, 0.34);
+  border-radius: 12px;
+  min-height: 150px;
+  padding: 18px;
+}
+
+.authority-upload-tile strong {
+  color: var(--authority-text);
+  display: block;
+  font-size: var(--authority-fs-lg);
+  margin-bottom: 8px;
+}
+
+.authority-upload-tile .authority-page-actions {
+  justify-content: flex-start;
+  margin-top: 14px;
+}
+
+.authority-guardrail-band {
+  background: rgba(201, 151, 58, 0.08);
+  border: 1px solid rgba(201, 151, 58, 0.2);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+}
+
+.authority-guardrail-band span {
+  background: rgba(11, 13, 16, 0.42);
+  border: 1px solid rgba(201, 151, 58, 0.18);
+  border-radius: 999px;
+  color: var(--authority-warning);
+  font-size: var(--authority-fs-sm);
+  font-weight: var(--authority-fw-bold);
+  padding: 6px 9px;
+}
+
+.authority-maintenance-secondary {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.authority-maintenance-secondary > .authority-card,
+.authority-maintenance-secondary > .authority-section-block,
+.authority-maintenance-secondary > section {
   min-width: 0;
 }
 
@@ -1676,8 +1931,14 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .authority-panel--drawer .authority-overview-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(160px, 200px);
+  .authority-panel--drawer .authority-overview-layout,
+  .authority-governance-layout,
+  .authority-maintenance-secondary {
+    grid-template-columns: 1fr;
+  }
+
+  .authority-ops-ribbon {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1687,7 +1948,8 @@
     grid-template-columns: 1fr;
   }
 
-  .authority-panel--drawer .authority-overview-layout {
+  .authority-panel--drawer .authority-overview-layout,
+  .authority-migration-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -1713,13 +1975,32 @@
   }
 
   .authority-workbench__body {
-    grid-template-columns: 1fr;
+    display: block;
   }
 
   .authority-extension-nav {
     border-bottom: 1px solid var(--authority-outline-soft);
     border-right: 0;
     max-height: 220px;
+  }
+
+  .authority-view-canvas {
+    padding: 14px;
+  }
+
+  .authority-page-hero,
+  .authority-governance-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .authority-governance-tools,
+  .authority-governance-tools .authority-search {
+    width: 100%;
+  }
+
+  .authority-ops-ribbon {
+    grid-template-columns: 1fr;
   }
 
   .authority-inspector,

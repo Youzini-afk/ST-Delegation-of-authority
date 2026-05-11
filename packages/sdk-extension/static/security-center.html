@@ -7,7 +7,7 @@
       </div>
       <nav class="authority-tabs">
         <button type="button" class="authority-tab" data-tab="overview">总览</button>
-        <button type="button" class="authority-tab" data-tab="detail">扩展详情</button>
+        <button type="button" class="authority-tab" data-tab="detail">扩展治理</button>
         <button type="button" class="authority-tab" data-tab="databases">存储与数据库</button>
         <button type="button" class="authority-tab" data-tab="activity">活动记录</button>
         <button type="button" class="authority-tab" data-tab="policies">管理员策略</button>
@@ -20,23 +20,36 @@
     </header>
     <div class="authority-alert-dock" data-role="status"></div>
     <div class="authority-workbench__body">
-      <aside class="authority-extension-nav">
-        <div class="authority-extension-nav__header">
-          <div>
-            <div class="authority-eyebrow">扩展</div>
-            <h3>已接入扩展</h3>
-          </div>
-          <span class="authority-pill authority-pill--prompt" data-role="extension-count">0</span>
-        </div>
-        <input class="authority-search" type="search" data-role="extension-search" placeholder="搜索扩展" />
-        <div class="authority-extension-nav__list" data-role="extension-list"></div>
-      </aside>
       <main class="authority-view-canvas">
         <section class="authority-section" data-section="overview">
           <div data-role="overview-view"></div>
         </section>
         <section class="authority-section" data-section="detail">
-          <div data-role="detail-view"></div>
+          <div class="authority-governance-shell">
+            <div class="authority-governance-header">
+              <div>
+                <div class="authority-eyebrow">Extension Governance</div>
+                <h2>扩展治理</h2>
+                <p>监管、审计并约束所有接入扩展的访问权限。</p>
+              </div>
+              <div class="authority-governance-tools">
+                <span class="authority-pill authority-pill--prompt" data-role="extension-count">0</span>
+                <input class="authority-search" type="search" data-role="extension-search" placeholder="搜索扩展" />
+              </div>
+            </div>
+            <div class="authority-governance-layout">
+              <aside class="authority-extension-nav">
+                <div class="authority-extension-nav__header">
+                  <div>
+                    <div class="authority-eyebrow">Directory</div>
+                    <h3>扩展目录</h3>
+                  </div>
+                </div>
+                <div class="authority-extension-nav__list" data-role="extension-list"></div>
+              </aside>
+              <div class="authority-governance-detail" data-role="detail-view"></div>
+            </div>
+          </div>
         </section>
         <section class="authority-section" data-section="databases">
           <div data-role="databases-view"></div>
