@@ -15,6 +15,10 @@ const DEFAULT_OVERVIEW_SECTION_STATE = {
     capabilityMatrix: true,
     recentActivity: true,
 };
+const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'policies', 'updates'];
+function isValidCenterTab(value) {
+    return typeof value === 'string' && PRIMARY_TAB_NAMES.includes(value);
+}
 export function bootstrapSecurityCenter() {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
 }
@@ -66,7 +70,7 @@ class SecurityCenterView {
     }
     bindEvents() {
         this.root.addEventListener('click', event => {
-            const target = event.target instanceof HTMLElement ? event.target : null;
+            const target = event.target instanceof Element ? event.target : null;
             if (!target) {
                 return;
             }
@@ -79,12 +83,19 @@ class SecurityCenterView {
                 }
                 return;
             }
-            const tabButton = target.closest('[data-tab]');
-            if (tabButton) {
-                const tab = tabButton.dataset.tab;
-                if ((tab !== 'policies' && tab !== 'updates') || this.state.isAdmin) {
-                    this.state.selectedTab = tab;
-                    void this.render();
+            const primaryTab = target.closest('.authority-tab[data-tab]');
+            if (primaryTab) {
+                const tab = primaryTab.dataset.tab;
+                if (isValidCenterTab(tab)) {
+                    this.switchTab(tab);
+                }
+                return;
+            }
+            const actionTab = target.closest('[data-tab]:not(.authority-tab)');
+            if (actionTab) {
+                const tab = actionTab.dataset.tab;
+                if (isValidCenterTab(tab)) {
+                    this.switchTab(tab);
                 }
                 return;
             }
@@ -238,6 +249,47 @@ class SecurityCenterView {
             if (downloadPackageButton?.dataset.operationId) {
                 void this.downloadPackageOperation(downloadPackageButton.dataset.operationId);
                 return;
+            }
+        });
+        this.root.addEventListener('keydown', event => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'tab') {
+                return;
+            }
+            const tablist = target.closest('[role="tablist"]');
+            if (!tablist) {
+                return;
+            }
+            const tabs = Array.from(tablist.querySelectorAll('[role="tab"]:not([hidden])'));
+            const index = tabs.indexOf(target);
+            if (index === -1) {
+                return;
+            }
+            let nextIndex = -1;
+            switch (event.key) {
+                case 'ArrowLeft':
+                    nextIndex = index > 0 ? index - 1 : tabs.length - 1;
+                    break;
+                case 'ArrowRight':
+                    nextIndex = index < tabs.length - 1 ? index + 1 : 0;
+                    break;
+                case 'Home':
+                    nextIndex = 0;
+                    break;
+                case 'End':
+                    nextIndex = tabs.length - 1;
+                    break;
+                default:
+                    return;
+            }
+            event.preventDefault();
+            const nextTab = tabs[nextIndex];
+            if (nextTab) {
+                nextTab.focus();
+                const tab = nextTab.dataset.tab;
+                if (tab) {
+                    this.switchTab(tab);
+                }
             }
         });
         this.root.addEventListener('input', event => {
@@ -923,6 +975,20 @@ class SecurityCenterView {
         wrapper.innerHTML = this.buildPolicyRowMarkup(entry);
         container.appendChild(wrapper);
     }
+    switchTab(tab) {
+        if (!PRIMARY_TAB_NAMES.includes(tab)) {
+            return;
+        }
+        if ((tab === 'policies' || tab === 'updates') && !this.state.isAdmin) {
+            return;
+        }
+        if (this.state.selectedTab === tab) {
+            return;
+        }
+        this.state.selectedTab = tab;
+        this.renderTabs();
+        this.toggleSections();
+    }
     async render() {
         this.renderHeader();
         this.renderTabs();
@@ -978,10 +1044,20 @@ class SecurityCenterView {
         status.innerHTML = renderAlertStack(alerts);
     }
     renderTabs() {
-        for (const tab of this.root.querySelectorAll('[data-tab]')) {
+        const tablist = this.root.querySelector('[role="tablist"]');
+        if (!tablist) {
+            return;
+        }
+        for (const tab of tablist.querySelectorAll('[role="tab"]')) {
             const tabName = tab.dataset.tab;
-            tab.classList.toggle('authority-tab--active', tabName === this.state.selectedTab);
+            if (!tabName || !PRIMARY_TAB_NAMES.includes(tabName)) {
+                continue;
+            }
+            const isActive = tabName === this.state.selectedTab;
+            tab.classList.toggle('authority-tab--active', isActive);
             tab.hidden = (tabName === 'policies' || tabName === 'updates') && !this.state.isAdmin;
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
         }
     }
     renderExtensionList() {
@@ -2008,7 +2084,13 @@ class SecurityCenterView {
     toggleSections() {
         for (const section of this.root.querySelectorAll('[data-section]')) {
             const name = section.dataset.section;
-            section.hidden = name !== this.state.selectedTab;
+            if (!name || !PRIMARY_TAB_NAMES.includes(name)) {
+                continue;
+            }
+            const isActive = name === this.state.selectedTab;
+            section.hidden = !isActive;
+            section.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+            section.setAttribute('tabindex', isActive ? '0' : '-1');
         }
     }
     loadOverviewSectionState(userHandle) {

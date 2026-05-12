@@ -90,6 +90,11 @@ const DEFAULT_OVERVIEW_SECTION_STATE: OverviewSectionState = {
     capabilityMatrix: true,
     recentActivity: true,
 };
+const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'policies', 'updates'];
+
+function isValidCenterTab(value: string | undefined): value is CenterTab {
+    return typeof value === 'string' && (PRIMARY_TAB_NAMES as readonly string[]).includes(value);
+}
 
 export function bootstrapSecurityCenter(): Promise<void> {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
@@ -147,7 +152,7 @@ class SecurityCenterView {
 
     private bindEvents(): void {
         this.root.addEventListener('click', event => {
-            const target = event.target instanceof HTMLElement ? event.target : null;
+            const target = event.target instanceof Element ? event.target : null;
             if (!target) {
                 return;
             }
@@ -162,12 +167,20 @@ class SecurityCenterView {
                 return;
             }
 
-            const tabButton = target.closest<HTMLElement>('[data-tab]');
-            if (tabButton) {
-                const tab = tabButton.dataset.tab as CenterTab;
-                if ((tab !== 'policies' && tab !== 'updates') || this.state.isAdmin) {
-                    this.state.selectedTab = tab;
-                    void this.render();
+            const primaryTab = target.closest<HTMLElement>('.authority-tab[data-tab]');
+            if (primaryTab) {
+                const tab = primaryTab.dataset.tab;
+                if (isValidCenterTab(tab)) {
+                    this.switchTab(tab);
+                }
+                return;
+            }
+
+            const actionTab = target.closest<HTMLElement>('[data-tab]:not(.authority-tab)');
+            if (actionTab) {
+                const tab = actionTab.dataset.tab;
+                if (isValidCenterTab(tab)) {
+                    this.switchTab(tab);
                 }
                 return;
             }
@@ -350,6 +363,48 @@ class SecurityCenterView {
             if (downloadPackageButton?.dataset.operationId) {
                 void this.downloadPackageOperation(downloadPackageButton.dataset.operationId);
                 return;
+            }
+        });
+
+        this.root.addEventListener('keydown', event => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'tab') {
+                return;
+            }
+            const tablist = target.closest<HTMLElement>('[role="tablist"]');
+            if (!tablist) {
+                return;
+            }
+            const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]:not([hidden])'));
+            const index = tabs.indexOf(target);
+            if (index === -1) {
+                return;
+            }
+            let nextIndex = -1;
+            switch (event.key) {
+                case 'ArrowLeft':
+                    nextIndex = index > 0 ? index - 1 : tabs.length - 1;
+                    break;
+                case 'ArrowRight':
+                    nextIndex = index < tabs.length - 1 ? index + 1 : 0;
+                    break;
+                case 'Home':
+                    nextIndex = 0;
+                    break;
+                case 'End':
+                    nextIndex = tabs.length - 1;
+                    break;
+                default:
+                    return;
+            }
+            event.preventDefault();
+            const nextTab = tabs[nextIndex];
+            if (nextTab) {
+                nextTab.focus();
+                const tab = nextTab.dataset.tab as CenterTab | undefined;
+                if (tab) {
+                    this.switchTab(tab);
+                }
             }
         });
 
@@ -1069,6 +1124,21 @@ class SecurityCenterView {
         container.appendChild(wrapper);
     }
 
+    private switchTab(tab: CenterTab): void {
+        if (!PRIMARY_TAB_NAMES.includes(tab)) {
+            return;
+        }
+        if ((tab === 'policies' || tab === 'updates') && !this.state.isAdmin) {
+            return;
+        }
+        if (this.state.selectedTab === tab) {
+            return;
+        }
+        this.state.selectedTab = tab;
+        this.renderTabs();
+        this.toggleSections();
+    }
+
     private async render(): Promise<void> {
         this.renderHeader();
         this.renderTabs();
@@ -1130,10 +1200,20 @@ class SecurityCenterView {
     }
 
     private renderTabs(): void {
-        for (const tab of this.root.querySelectorAll<HTMLElement>('[data-tab]')) {
-            const tabName = tab.dataset.tab as CenterTab;
-            tab.classList.toggle('authority-tab--active', tabName === this.state.selectedTab);
+        const tablist = this.root.querySelector<HTMLElement>('[role="tablist"]');
+        if (!tablist) {
+            return;
+        }
+        for (const tab of tablist.querySelectorAll<HTMLElement>('[role="tab"]')) {
+            const tabName = tab.dataset.tab as CenterTab | undefined;
+            if (!tabName || !PRIMARY_TAB_NAMES.includes(tabName)) {
+                continue;
+            }
+            const isActive = tabName === this.state.selectedTab;
+            tab.classList.toggle('authority-tab--active', isActive);
             tab.hidden = (tabName === 'policies' || tabName === 'updates') && !this.state.isAdmin;
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
         }
     }
 
@@ -2226,8 +2306,14 @@ class SecurityCenterView {
 
     private toggleSections(): void {
         for (const section of this.root.querySelectorAll<HTMLElement>('[data-section]')) {
-            const name = section.dataset.section as CenterTab;
-            section.hidden = name !== this.state.selectedTab;
+            const name = section.dataset.section as CenterTab | undefined;
+            if (!name || !PRIMARY_TAB_NAMES.includes(name)) {
+                continue;
+            }
+            const isActive = name === this.state.selectedTab;
+            section.hidden = !isActive;
+            section.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+            section.setAttribute('tabindex', isActive ? '0' : '-1');
         }
     }
 

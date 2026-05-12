@@ -304,8 +304,10 @@
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.authority-tab__icon {
+.authority-tab__icon,
+.authority-tab__icon * {
   height: 18px;
+  pointer-events: none;
   width: 18px;
 }
 
