@@ -1254,8 +1254,8 @@ dependencies = [
 
 [[package]]
 name = "triviumdb"
-version = "0.6.0"
-source = "git+https://github.com/YoKONCy/TriviumDB?rev=ec73d994823dcb74af329fda0d3f354a6fd8f3d8#ec73d994823dcb74af329fda0d3f354a6fd8f3d8"
+version = "0.7.1"
+source = "git+https://github.com/YoKONCy/TriviumDB?tag=v0.7.1#2f037d571a560c37b639aa6aed22608066465c90"
 dependencies = [
  "aho-corasick",
  "bincode",

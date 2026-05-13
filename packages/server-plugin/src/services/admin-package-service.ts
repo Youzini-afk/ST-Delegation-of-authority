@@ -406,6 +406,7 @@ export class AdminPackageService {
             const bytes = decodeBase64Checked(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
             const dbPath = this.resolvePrivateTriviumDatabasePath(user, extensionId, database.record.name);
             ensureDir(path.dirname(dbPath));
+            fs.rmSync(`${dbPath}.quiver`, { force: true });
             fs.writeFileSync(dbPath, bytes);
             const mappingPath = this.resolvePrivateTriviumMappingPath(user, extensionId, database.record.name);
             if (database.mappingContentBase64 && database.mappingChecksumSha256) {

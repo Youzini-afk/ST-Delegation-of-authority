@@ -163,6 +163,7 @@ function createPortablePackage(): AuthorityPortablePackage {
         sizeBytes: triviumBytes.byteLength,
         walSizeBytes: 0,
         vecSizeBytes: 0,
+        quiverSizeBytes: 0,
         totalSizeBytes: triviumBytes.byteLength,
         updatedAt: now,
         indexHealth: {

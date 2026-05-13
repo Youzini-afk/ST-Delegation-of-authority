@@ -307,6 +307,7 @@ npm run sync:installable && npm run check:installable
 - 事件流为 SSE，不支持 WebSocket 和跨用户广播
 - SQL 主要覆盖 `sql.private`
 - 不提供 shell 执行、VM 执行、服务端代码托管
+- Trivium 数据库节点数 ≥10000 时，TDB 会自动构建 QuIVer BQ-native Vamana 图索引，存储在 `<name>.tdb.quiver` 文件中。该文件是派生数据：portable package 不会导出它，导入后首次查询会自动重建（耗时数百 ms 至几秒）。如需 100% 精确召回率，可在 `searchAdvanced` 调用中传入 `forceBruteForce: true`
 
 **后续方向：**
 

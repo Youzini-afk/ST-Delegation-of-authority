@@ -1034,6 +1034,7 @@ function createMockCore(): CoreService {
                 sizeBytes: 0,
                 walSizeBytes: 0,
                 vecSizeBytes: 0,
+                quiverSizeBytes: 0,
                 totalSizeBytes: 0,
                 updatedAt: null,
                 indexHealth: null,

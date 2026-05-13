@@ -1547,8 +1547,7 @@ export interface TriviumSearchAdvancedRequest extends TriviumOpenOptions {
     enableRefractoryFatigue?: boolean;
     enableInverseInhibition?: boolean;
     lateralInhibitionThreshold?: number;
-    enableBqCoarseSearch?: boolean;
-    bqCandidateRatio?: number;
+    forceBruteForce?: boolean;
     textBoost?: number;
     enableTextHybridSearch?: boolean;
     bm25K1?: number;
@@ -1796,6 +1795,7 @@ export interface TriviumDatabaseRecord {
     sizeBytes: number;
     walSizeBytes: number;
     vecSizeBytes: number;
+    quiverSizeBytes: number;
     totalSizeBytes: number;
     updatedAt: string | null;
     indexHealth: TriviumIndexHealth | null;

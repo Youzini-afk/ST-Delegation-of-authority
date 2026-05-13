@@ -92,9 +92,11 @@ export function buildTriviumDatabaseRecord(
     const mainStats = fs.statSync(filePath);
     const walPath = `${filePath}.wal`;
     const vecPath = `${filePath}.vec`;
+    const quiverPath = `${filePath}.quiver`;
     const walStats = fs.existsSync(walPath) ? fs.statSync(walPath) : null;
     const vecStats = fs.existsSync(vecPath) ? fs.statSync(vecPath) : null;
-    const timestamps = [mainStats, walStats, vecStats]
+    const quiverStats = fs.existsSync(quiverPath) ? fs.statSync(quiverPath) : null;
+    const timestamps = [mainStats, walStats, vecStats, quiverStats]
         .filter((value): value is fs.Stats => value !== null)
         .map(stats => stats.mtime.toISOString())
         .sort((left, right) => left.localeCompare(right));
@@ -109,7 +111,8 @@ export function buildTriviumDatabaseRecord(
         sizeBytes: mainStats.size,
         walSizeBytes: walStats?.size ?? 0,
         vecSizeBytes: vecStats?.size ?? 0,
-        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
+        quiverSizeBytes: quiverStats?.size ?? 0,
+        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0) + (quiverStats?.size ?? 0),
         updatedAt: timestamps.at(-1) ?? null,
         indexHealth,
     };
