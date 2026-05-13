@@ -3512,6 +3512,7 @@ class AdminPackageService {
             const bytes = decodeBase64Checked(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
             const dbPath = this.resolvePrivateTriviumDatabasePath(user, extensionId, database.record.name);
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(dbPath));
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(`${dbPath}.quiver`, { force: true });
             node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(dbPath, bytes);
             const mappingPath = this.resolvePrivateTriviumMappingPath(user, extensionId, database.record.name);
             if (database.mappingContentBase64 && database.mappingChecksumSha256) {
@@ -4743,8 +4744,7 @@ class CoreService {
             ...(request.enableRefractoryFatigue === undefined ? {} : { enableRefractoryFatigue: request.enableRefractoryFatigue }),
             ...(request.enableInverseInhibition === undefined ? {} : { enableInverseInhibition: request.enableInverseInhibition }),
             ...(request.lateralInhibitionThreshold === undefined ? {} : { lateralInhibitionThreshold: request.lateralInhibitionThreshold }),
-            ...(request.enableBqCoarseSearch === undefined ? {} : { enableBqCoarseSearch: request.enableBqCoarseSearch }),
-            ...(request.bqCandidateRatio === undefined ? {} : { bqCandidateRatio: request.bqCandidateRatio }),
+            ...(request.forceBruteForce === undefined ? {} : { forceBruteForce: request.forceBruteForce }),
             ...(request.textBoost === undefined ? {} : { textBoost: request.textBoost }),
             ...(request.enableTextHybridSearch === undefined ? {} : { enableTextHybridSearch: request.enableTextHybridSearch }),
             ...(request.bm25K1 === undefined ? {} : { bm25K1: request.bm25K1 }),
@@ -9503,9 +9503,11 @@ function buildTriviumDatabaseRecord(filePath, entryName, meta, indexHealth) {
     const mainStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
     const walPath = `${filePath}.wal`;
     const vecPath = `${filePath}.vec`;
+    const quiverPath = `${filePath}.quiver`;
     const walStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(walPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(walPath) : null;
     const vecStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(vecPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(vecPath) : null;
-    const timestamps = [mainStats, walStats, vecStats]
+    const quiverStats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(quiverPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(quiverPath) : null;
+    const timestamps = [mainStats, walStats, vecStats, quiverStats]
         .filter((value) => value !== null)
         .map(stats => stats.mtime.toISOString())
         .sort((left, right) => left.localeCompare(right));
@@ -9519,7 +9521,8 @@ function buildTriviumDatabaseRecord(filePath, entryName, meta, indexHealth) {
         sizeBytes: mainStats.size,
         walSizeBytes: walStats?.size ?? 0,
         vecSizeBytes: vecStats?.size ?? 0,
-        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0),
+        quiverSizeBytes: quiverStats?.size ?? 0,
+        totalSizeBytes: mainStats.size + (walStats?.size ?? 0) + (vecStats?.size ?? 0) + (quiverStats?.size ?? 0),
         updatedAt: timestamps.at(-1) ?? null,
         indexHealth,
     };
