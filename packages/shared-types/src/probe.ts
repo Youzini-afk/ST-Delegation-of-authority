@@ -25,6 +25,12 @@ export interface AuthorityFeatureFlags {
         mappingPages: boolean;
         mappingIntegrity: boolean;
     };
+    bme: {
+        protocolVersion: number;
+        vectorManifest: boolean;
+        vectorApply: boolean;
+        vectorApplyJobs: boolean;
+    };
     transfers: {
         blob: boolean;
         fs: boolean;

@@ -68,6 +68,7 @@ describe('registerRoutes', () => {
             '/trivium/bulk-unlink',
             '/trivium/bulk-delete',
             '/trivium/compact',
+            '/bme/vector-apply',
             '/jobs/list',
             '/jobs/:id/requeue',
             '/http/fetch-open',
@@ -210,6 +211,7 @@ describe('registerRoutes', () => {
             '/trivium/check-mappings-integrity',
             '/trivium/delete-orphan-mappings',
             '/trivium/list-mappings',
+            '/bme/vector-apply',
             '/http/fetch',
             '/http/fetch-open',
             '/jobs/create',
@@ -229,6 +231,88 @@ describe('registerRoutes', () => {
             '/admin/diagnostic-bundle/archive',
             '/admin/update',
         ]);
+    });
+
+    it('applies BME client-generated vectors and returns a graph revision manifest', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+            },
+            permissions: {
+                authorize: vi.fn().mockResolvedValue(true),
+            },
+            trivium: {
+                bulkUpsert: vi.fn().mockResolvedValue({
+                    totalCount: 1,
+                    successCount: 1,
+                    failureCount: 0,
+                    failures: [],
+                    items: [{ index: 0, id: 1, action: 'inserted', externalId: 'node-a', namespace: 'st-bme::chat-a' }],
+                }),
+                bulkLink: vi.fn().mockResolvedValue({
+                    totalCount: 1,
+                    successCount: 1,
+                    failureCount: 0,
+                    failures: [],
+                }),
+            },
+            audit: {
+                logUsage: vi.fn().mockResolvedValue(undefined),
+                logPermission: vi.fn().mockResolvedValue(undefined),
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const handler = posts.get('/bme/vector-apply');
+        expect(handler).toBeTypeOf('function');
+        const response = {
+            json: vi.fn(),
+            status: vi.fn(),
+        };
+        response.status.mockReturnValue(response);
+
+        await handler?.({
+            user: { profile: { handle: 'alice' }, directories: { root: '/tmp/alice' } },
+            headers: {},
+            body: {
+                database: 'bme-vector',
+                namespace: 'st-bme::chat-a',
+                collectionId: 'st-bme::chat-a',
+                chatId: 'chat-a',
+                graphRevision: 7,
+                observedDim: 2,
+                modelScope: 'model-a',
+                items: [{ externalId: 'node-a', namespace: 'st-bme::chat-a', vector: [0.1, 0.2], payload: { title: 'A' } }],
+                links: [{ src: { externalId: 'node-a', namespace: 'st-bme::chat-a' }, dst: { externalId: 'node-b', namespace: 'st-bme::chat-a' }, label: 'supports' }],
+            },
+        }, response);
+
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            ok: true,
+            upserted: 1,
+            linked: 1,
+            manifest: expect.objectContaining({
+                graphRevision: 7,
+                revision: 7,
+                observedDim: 2,
+                backend: 'authority',
+                status: 'clean',
+            }),
+        }));
+        expect(runtime.trivium.bulkUpsert).toHaveBeenCalledWith(expect.anything(), 'third-party/st-bme', expect.objectContaining({
+            database: 'bme-vector',
+            namespace: 'st-bme::chat-a',
+        }));
     });
 
     it('returns structured permission payloads for unauthorized storage routes', async () => {
