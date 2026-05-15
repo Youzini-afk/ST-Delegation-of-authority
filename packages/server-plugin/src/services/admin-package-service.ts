@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -8,7 +7,6 @@ import type {
     AuthorityDiagnosticBundleResponse,
     AuthorityExportPackageRequest,
     AuthorityPackageArtifactSummary,
-    AuthorityPackageImportMode,
     AuthorityPackageImportRequest,
     AuthorityPackageImportSummary,
     AuthorityPackageOperation,
@@ -16,7 +14,6 @@ import type {
     AuthorityPortableExtensionPackage,
     AuthorityPortablePackage,
     AuthorityPortablePackageArchiveExtension,
-    AuthorityPortablePackageArchiveFileEntry,
     AuthorityPortablePackageArchiveManifest,
     AuthorityPortablePrivateFileArchiveEntry,
     AuthorityPortableSqlDatabaseArchiveEntry,
@@ -39,6 +36,20 @@ import { PrivateFsService } from './private-fs-service.js';
 import { StorageService } from './storage-service.js';
 import { TriviumService } from './trivium-service.js';
 import { createZipArchive, isZipArchive, readZipArchive } from './zip-archive.js';
+import {
+    buildArchiveFileEntry,
+    buildArtifactSummary,
+    buildIndexedArchivePath,
+    decodeBase64Checked,
+    hashBytes,
+    hashText,
+    newestTimestamp,
+    normalizeExportRequest,
+    sanitizeArtifactFileName,
+    sanitizeTimestamp,
+    tryGunzip,
+    type ArchiveBuildFile,
+} from './admin-package-helpers.js';
 
 interface StoredPackageOperation extends AuthorityPackageOperation {
     artifactPath?: string | undefined;
@@ -53,12 +64,6 @@ interface OperationArtifactLocation {
 interface PortablePackageReadResult {
     portablePackage: AuthorityPortablePackage;
     warnings: string[];
-}
-
-interface ArchiveBuildFile {
-    path: string;
-    mediaType: string;
-    bytes: Buffer;
 }
 
 const PORTABLE_PACKAGE_FORMAT = 'authority-portable-package-v1';
@@ -1151,22 +1156,6 @@ export class AdminPackageService {
         this.saveOperation(user, failed);
     }
 
-    private writeOperationArtifact(
-        user: UserContext,
-        operationId: string,
-        fileName: string,
-        payload: unknown,
-    ): OperationArtifactLocation {
-        const filePath = path.join(this.getOperationWorkDir(user, operationId), sanitizeArtifactFileName(fileName));
-        ensureDir(path.dirname(filePath));
-        const bytes = zlib.gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
-        fs.writeFileSync(filePath, bytes);
-        return {
-            artifact: buildArtifactSummary(path.basename(filePath), bytes, 'application/gzip'),
-            filePath,
-        };
-    }
-
     private writeStandaloneArtifact(
         user: UserContext,
         prefix: string,
@@ -1259,81 +1248,4 @@ export class AdminPackageService {
     private resolvePrivateTriviumMappingPath(user: UserContext, extensionId: string, databaseName: string): string {
         return resolveContainedPath(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${sanitizeFileSegment(databaseName)}.sqlite`);
     }
-}
-
-function normalizeExportRequest(request: AuthorityExportPackageRequest | undefined): AuthorityExportPackageRequest {
-    return {
-        ...(request?.extensionIds?.length ? { extensionIds: [...new Set(request.extensionIds.map(value => value.trim()).filter(Boolean))] } : {}),
-        includePolicies: request?.includePolicies !== false,
-        includeUsageSummary: request?.includeUsageSummary !== false,
-    };
-}
-
-function sanitizeArtifactFileName(value: string): string {
-    const trimmed = value.trim();
-    return trimmed ? sanitizeFileSegment(trimmed) : `artifact-${crypto.randomUUID()}.json.gz`;
-}
-
-function sanitizeTimestamp(value: string): string {
-    return value.replace(/[:.]/g, '-');
-}
-
-function buildArtifactSummary(fileName: string, bytes: Buffer, mediaType: string): AuthorityPackageArtifactSummary {
-    return {
-        fileName,
-        mediaType,
-        sizeBytes: bytes.byteLength,
-        checksumSha256: hashBytes(bytes),
-    };
-}
-
-function buildArchiveFileEntry(file: ArchiveBuildFile): AuthorityPortablePackageArchiveFileEntry {
-    return {
-        path: file.path,
-        mediaType: file.mediaType,
-        sizeBytes: file.bytes.byteLength,
-        checksumSha256: hashBytes(file.bytes),
-    };
-}
-
-function buildIndexedArchivePath(directory: string, index: number, sourceName: string): string {
-    const normalizedSource = sourceName.replace(/\\/g, '/');
-    const baseName = path.posix.basename(normalizedSource) || 'entry.bin';
-    const safeBaseName = sanitizeFileSegment(baseName) || 'entry.bin';
-    return `${directory}/${String(index).padStart(4, '0')}-${safeBaseName}`;
-}
-
-function hashBytes(value: Uint8Array): string {
-    return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-function hashText(value: string): string {
-    return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-function tryGunzip(value: Buffer): Buffer {
-    try {
-        return zlib.gunzipSync(value);
-    } catch {
-        return value;
-    }
-}
-
-function decodeBase64Checked(contentBase64: string, checksumSha256: string, label: string): Buffer {
-    const bytes = Buffer.from(contentBase64, 'base64');
-    const actual = hashBytes(bytes);
-    if (actual !== checksumSha256) {
-        throw new Error(`${label} checksum mismatch: expected ${checksumSha256}, received ${actual}`);
-    }
-    return bytes;
-}
-
-function newestTimestamp(left: string | null, right: string | null): string | null {
-    if (!left) {
-        return right;
-    }
-    if (!right) {
-        return left;
-    }
-    return left.localeCompare(right) >= 0 ? left : right;
 }

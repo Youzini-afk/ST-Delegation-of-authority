@@ -1,6 +1,5 @@
 import type {
     AuthorityGrant,
-    AuthorityFeatureFlags,
     AuthorityInitConfig,
     AuthorityPolicyEntry,
     AuthorityProbeResponse,
@@ -23,7 +22,6 @@ import type {
     JobRecord,
     JobListRequest,
     JobListResponse,
-    PermissionDecision,
     PermissionEvaluateBatchResponse,
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
@@ -111,13 +109,25 @@ import type {
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt, type PermissionPromptContext } from './permission-prompt.js';
 import { openSecurityCenter } from './security-center.js';
+import { splitAuthorityItemsIntoChunks } from './client/chunking.js';
+import type { AuthorityChunkSplitOptions } from './client/chunking.js';
+import { base64ToBytes, bytesToContent, bytesToHttpContent, bytesToBase64, contentToBytes } from './client/encoding.js';
+import { getFeatureAvailability, type AuthorityFeaturePath } from './client/feature-flags.js';
+import {
+    getAuthorityPermissionErrorCode,
+    getPermissionEvaluationMessage,
+    getPermissionFailureMessage,
+    type AuthorityPermissionErrorCode,
+    type AuthorityPermissionErrorDecision,
+} from './client/permission-messages.js';
+export { splitAuthorityItemsIntoChunks } from './client/chunking.js';
+export type { AuthorityChunk, AuthorityChunkSplitOptions } from './client/chunking.js';
+export type { AuthorityFeaturePath } from './client/feature-flags.js';
+export type { AuthorityPermissionErrorCode, AuthorityPermissionErrorDecision } from './client/permission-messages.js';
 
 export interface AuthorityPermissionRequest extends PermissionEvaluateRequest {
     promptTitle?: string;
 }
-
-export type AuthorityPermissionErrorDecision = Exclude<PermissionEvaluateResponse['decision'], 'granted'>;
-export type AuthorityPermissionErrorCode = 'permission_not_granted' | 'permission_denied' | 'permission_blocked';
 
 export interface AuthorityPermissionErrorDetails {
     code: AuthorityPermissionErrorCode;
@@ -329,46 +339,6 @@ export interface AuthorityCapabilities {
     probe: AuthorityProbeResponse | null;
 }
 
-export type AuthorityFeaturePath =
-    | 'securityCenter'
-    | 'admin'
-    | 'sql.queryPage'
-    | 'sql.stat'
-    | 'sql.migrations'
-    | 'sql.schemaManifest'
-    | 'trivium.resolveId'
-    | 'trivium.resolveMany'
-    | 'trivium.upsert'
-    | 'trivium.bulkMutations'
-    | 'trivium.tql'
-    | 'trivium.tqlMut'
-    | 'trivium.propertyIndex'
-    | 'trivium.searchContext'
-    | 'trivium.mappingPages'
-    | 'trivium.mappingIntegrity'
-    | 'transfers.blob'
-    | 'transfers.fs'
-    | 'transfers.httpFetch'
-    | 'jobs.background'
-    | 'jobs.safeRequeue'
-    | 'diagnostics.warnings'
-    | 'diagnostics.activityPages'
-    | 'diagnostics.jobsPage'
-    | 'diagnostics.benchmarkCore';
-
-export interface AuthorityChunkSplitOptions {
-    maxItemsPerChunk?: number;
-    maxBytesPerChunk?: number;
-}
-
-export interface AuthorityChunk<T> {
-    chunkIndex: number;
-    itemOffset: number;
-    itemCount: number;
-    estimatedBytes: number;
-    items: T[];
-}
-
 export interface AuthorityChunkedMutationChunkResult<Response extends TriviumBulkMutationResponse = TriviumBulkMutationResponse> {
     chunkIndex: number;
     itemOffset: number;
@@ -436,9 +406,6 @@ type InlineThresholdKey =
     | 'httpFetchResponse';
 
 const SDK_TRANSFER_INLINE_THRESHOLD_BYTES = 256 * 1024;
-const DEFAULT_TRIVIUM_CHUNK_ITEMS = 128;
-const DEFAULT_TRIVIUM_CHUNK_BYTES = 256 * 1024;
-const UTF8_ENCODER = new TextEncoder();
 
 export class AuthorityClient {
     readonly storage: {
@@ -2517,55 +2484,6 @@ function cloneAuthorityProbe(probe: AuthorityProbeResponse): AuthorityProbeRespo
     return JSON.parse(JSON.stringify(probe)) as AuthorityProbeResponse;
 }
 
-export function splitAuthorityItemsIntoChunks<T>(items: T[], options: AuthorityChunkSplitOptions = {}): AuthorityChunk<T>[] {
-    const maxItemsPerChunk = normalizePositiveInteger(options.maxItemsPerChunk, DEFAULT_TRIVIUM_CHUNK_ITEMS, 'maxItemsPerChunk');
-    const maxBytesPerChunk = normalizePositiveInteger(options.maxBytesPerChunk, DEFAULT_TRIVIUM_CHUNK_BYTES, 'maxBytesPerChunk');
-    if (items.length === 0) {
-        return [];
-    }
-
-    const chunks: AuthorityChunk<T>[] = [];
-    let current: T[] = [];
-    let currentBytes = 2;
-    let itemOffset = 0;
-
-    for (const item of items) {
-        const itemBytes = estimateJsonBytes(item);
-        if (itemBytes + 2 > maxBytesPerChunk) {
-            throw new Error(`Chunk item exceeds maxBytesPerChunk (${itemBytes} > ${maxBytesPerChunk})`);
-        }
-
-        const nextBytes = current.length === 0 ? currentBytes + itemBytes : currentBytes + itemBytes + 1;
-        if (current.length > 0 && (current.length >= maxItemsPerChunk || nextBytes > maxBytesPerChunk)) {
-            chunks.push({
-                chunkIndex: chunks.length,
-                itemOffset,
-                itemCount: current.length,
-                estimatedBytes: currentBytes,
-                items: current,
-            });
-            itemOffset += current.length;
-            current = [];
-            currentBytes = 2;
-        }
-
-        current.push(item);
-        currentBytes = current.length === 1 ? 2 + itemBytes : currentBytes + itemBytes + 1;
-    }
-
-    if (current.length > 0) {
-        chunks.push({
-            chunkIndex: chunks.length,
-            itemOffset,
-            itemCount: current.length,
-            estimatedBytes: currentBytes,
-            items: current,
-        });
-    }
-
-    return chunks;
-}
-
 function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items: T[]): Record<PermissionResource, T[]> {
     const result = {
         'storage.kv': [],
@@ -2585,149 +2503,11 @@ function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items:
     return result;
 }
 
-function getFeatureAvailability(features: AuthorityFeatureFlags, feature: AuthorityFeaturePath): boolean {
-    switch (feature) {
-        case 'securityCenter':
-            return features.securityCenter;
-        case 'admin':
-            return features.admin;
-        case 'sql.queryPage':
-            return features.sql.queryPage;
-        case 'sql.stat':
-            return features.sql.stat;
-        case 'sql.migrations':
-            return features.sql.migrations;
-        case 'sql.schemaManifest':
-            return features.sql.schemaManifest;
-        case 'trivium.resolveId':
-            return features.trivium.resolveId;
-        case 'trivium.resolveMany':
-            return features.trivium.resolveMany;
-        case 'trivium.upsert':
-            return features.trivium.upsert;
-        case 'trivium.bulkMutations':
-            return features.trivium.bulkMutations;
-        case 'trivium.tql':
-            return features.trivium.tql;
-        case 'trivium.tqlMut':
-            return features.trivium.tqlMut;
-        case 'trivium.propertyIndex':
-            return features.trivium.propertyIndex;
-        case 'trivium.searchContext':
-            return features.trivium.searchContext;
-        case 'trivium.mappingPages':
-            return features.trivium.mappingPages;
-        case 'trivium.mappingIntegrity':
-            return features.trivium.mappingIntegrity;
-        case 'transfers.blob':
-            return features.transfers.blob;
-        case 'transfers.fs':
-            return features.transfers.fs;
-        case 'transfers.httpFetch':
-            return features.transfers.httpFetch;
-        case 'jobs.background':
-            return features.jobs.background;
-        case 'jobs.safeRequeue':
-            return features.jobs.safeRequeue;
-        case 'diagnostics.warnings':
-            return features.diagnostics.warnings;
-        case 'diagnostics.activityPages':
-            return features.diagnostics.activityPages;
-        case 'diagnostics.jobsPage':
-            return features.diagnostics.jobsPage;
-        case 'diagnostics.benchmarkCore':
-            return features.diagnostics.benchmarkCore;
-    }
-}
-
-function normalizePositiveInteger(value: number | undefined, fallback: number, label: string): number {
-    if (value === undefined) {
-        return fallback;
-    }
-    if (!Number.isInteger(value) || value <= 0) {
-        throw new Error(`${label} must be a positive integer`);
-    }
-    return value;
-}
-
-function estimateJsonBytes(value: unknown): number {
-    return UTF8_ENCODER.encode(JSON.stringify(value)).length;
-}
-
 function safeParse(value: string): unknown {
     try {
         return JSON.parse(value);
     } catch {
         return value;
-    }
-}
-
-function getPermissionFailureMessage(
-    displayName: string,
-    resource: PermissionResource,
-    target: string,
-    decision: PermissionEvaluateResponse['decision'],
-): string {
-    const resourceName = getPermissionResourceLabel(resource);
-    const resourceLabel = target && target !== '*' ? `${resourceName} (${target})` : resourceName;
-    if (decision === 'denied') {
-        return `${displayName} 对 ${resourceLabel} 的请求已被拒绝，请在安全中心手动重置。`;
-    }
-
-    if (decision === 'blocked') {
-        return `${displayName} 对 ${resourceLabel} 的请求被平台安全规则或管理员策略封锁。`;
-    }
-
-    return `${displayName} 没有获得 ${resourceLabel} 的访问授权。`;
-}
-
-function getPermissionEvaluationMessage(
-    displayName: string,
-    resource: PermissionResource,
-    target: string,
-    decision: PermissionEvaluateResponse['decision'],
-): string {
-    if (decision === 'granted') {
-        const resourceName = getPermissionResourceLabel(resource);
-        const resourceLabel = target && target !== '*' ? `${resourceName} (${target})` : resourceName;
-        return `${displayName} 当前已获得 ${resourceLabel} 的访问授权。`;
-    }
-
-    return getPermissionFailureMessage(displayName, resource, target, decision);
-}
-
-function getAuthorityPermissionErrorCode(decision: AuthorityPermissionErrorDecision): AuthorityPermissionErrorCode {
-    if (decision === 'denied') {
-        return 'permission_denied';
-    }
-
-    if (decision === 'blocked') {
-        return 'permission_blocked';
-    }
-
-    return 'permission_not_granted';
-}
-
-function getPermissionResourceLabel(resource: PermissionResource): string {
-    switch (resource) {
-        case 'storage.kv':
-            return 'KV 存储';
-        case 'storage.blob':
-            return 'Blob 存储';
-        case 'fs.private':
-            return '私有文件夹';
-        case 'sql.private':
-            return '私有 SQL 数据库';
-        case 'trivium.private':
-            return '私有记忆数据库';
-        case 'http.fetch':
-            return 'HTTP 访问';
-        case 'jobs.background':
-            return '后台任务';
-        case 'events.stream':
-            return '事件流';
-        default:
-            return resource;
     }
 }
 
@@ -2737,56 +2517,4 @@ function getSqlDatabaseName(value: unknown): string {
 
 function getTriviumDatabaseName(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
-}
-
-function contentToBytes(content: string, encoding: 'utf8' | 'base64'): Uint8Array {
-    if (encoding === 'base64') {
-        return base64ToBytes(content);
-    }
-    return new TextEncoder().encode(content);
-}
-
-function base64ToBytes(content: string): Uint8Array {
-    const binary = globalThis.atob(content);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-    const segments: string[] = [];
-    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-        const chunk = bytes.subarray(offset, offset + 0x8000);
-        let binary = '';
-        for (let index = 0; index < chunk.length; index += 1) {
-            binary += String.fromCharCode(chunk[index] ?? 0);
-        }
-        segments.push(binary);
-    }
-    return globalThis.btoa(segments.join(''));
-}
-
-function bytesToContent(bytes: Uint8Array, encoding: 'utf8' | 'base64'): string {
-    if (encoding === 'base64') {
-        return bytesToBase64(bytes);
-    }
-    return bytesToUtf8(bytes);
-}
-
-function bytesToHttpContent(bytes: Uint8Array, encoding: HttpBodyEncoding): string {
-    if (encoding === 'base64') {
-        return bytesToBase64(bytes);
-    }
-    return new TextDecoder('utf-8').decode(bytes);
-}
-
-function bytesToUtf8(bytes: Uint8Array): string {
-    try {
-        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`invalid_utf8_private_file: ${message}`);
-    }
 }

@@ -1,0 +1,83 @@
+import type { AuthorityFeatureFlags } from '@stdo/shared-types';
+
+export type AuthorityFeaturePath =
+    | 'securityCenter'
+    | 'admin'
+    | 'sql.queryPage'
+    | 'sql.stat'
+    | 'sql.migrations'
+    | 'sql.schemaManifest'
+    | 'trivium.resolveId'
+    | 'trivium.resolveMany'
+    | 'trivium.upsert'
+    | 'trivium.bulkMutations'
+    | 'trivium.tql'
+    | 'trivium.tqlMut'
+    | 'trivium.propertyIndex'
+    | 'trivium.searchContext'
+    | 'trivium.mappingPages'
+    | 'trivium.mappingIntegrity'
+    | 'transfers.blob'
+    | 'transfers.fs'
+    | 'transfers.httpFetch'
+    | 'jobs.background'
+    | 'jobs.safeRequeue'
+    | 'diagnostics.warnings'
+    | 'diagnostics.activityPages'
+    | 'diagnostics.jobsPage'
+    | 'diagnostics.benchmarkCore';
+
+export function getFeatureAvailability(features: AuthorityFeatureFlags, feature: AuthorityFeaturePath): boolean {
+    switch (feature) {
+        case 'securityCenter':
+            return features.securityCenter;
+        case 'admin':
+            return features.admin;
+        case 'sql.queryPage':
+            return features.sql.queryPage;
+        case 'sql.stat':
+            return features.sql.stat;
+        case 'sql.migrations':
+            return features.sql.migrations;
+        case 'sql.schemaManifest':
+            return features.sql.schemaManifest;
+        case 'trivium.resolveId':
+            return features.trivium.resolveId;
+        case 'trivium.resolveMany':
+            return features.trivium.resolveMany;
+        case 'trivium.upsert':
+            return features.trivium.upsert;
+        case 'trivium.bulkMutations':
+            return features.trivium.bulkMutations;
+        case 'trivium.tql':
+            return features.trivium.tql;
+        case 'trivium.tqlMut':
+            return features.trivium.tqlMut;
+        case 'trivium.propertyIndex':
+            return features.trivium.propertyIndex;
+        case 'trivium.searchContext':
+            return features.trivium.searchContext;
+        case 'trivium.mappingPages':
+            return features.trivium.mappingPages;
+        case 'trivium.mappingIntegrity':
+            return features.trivium.mappingIntegrity;
+        case 'transfers.blob':
+            return features.transfers.blob;
+        case 'transfers.fs':
+            return features.transfers.fs;
+        case 'transfers.httpFetch':
+            return features.transfers.httpFetch;
+        case 'jobs.background':
+            return features.jobs.background;
+        case 'jobs.safeRequeue':
+            return features.jobs.safeRequeue;
+        case 'diagnostics.warnings':
+            return features.diagnostics.warnings;
+        case 'diagnostics.activityPages':
+            return features.diagnostics.activityPages;
+        case 'diagnostics.jobsPage':
+            return features.diagnostics.jobsPage;
+        case 'diagnostics.benchmarkCore':
+            return features.diagnostics.benchmarkCore;
+    }
+}
