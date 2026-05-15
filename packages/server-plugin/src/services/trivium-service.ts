@@ -68,7 +68,7 @@ import type {
     TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
 import type { UserContext } from '../types.js';
-import { asErrorMessage } from '../utils.js';
+import { asErrorMessage, AuthorityServiceError } from '../utils.js';
 import { CoreService } from './core-service.js';
 import {
     DEFAULT_INTEGRITY_SAMPLE_LIMIT,
@@ -94,6 +94,68 @@ import { TriviumRepository } from './trivium-repository.js';
 
 const MAX_TRIVIUM_BULK_ITEMS = 2000;
 type ResolvedTriviumOpenOptions = { dim: number; dtype?: TriviumDType };
+
+export function validateBmeVectorApplyDimensions(request: BmeVectorApplyRequest): { observedDim: number | null; vectorSpaceId: string } {
+    const observedDim = Number(request.observedDim ?? 0);
+    const expectedDim = Number.isFinite(observedDim) && observedDim > 0
+        ? Math.floor(observedDim)
+        : null;
+    const vectorSpaceId = typeof request.vectorSpaceId === 'string'
+        ? request.vectorSpaceId.trim()
+        : '';
+    let inferredDim: number | null = null;
+    for (let index = 0; index < request.items.length; index += 1) {
+        const item = request.items[index];
+        const vector = Array.isArray(item?.vector) ? item.vector : [];
+        const dim = vector.length;
+        if (dim <= 0 || vector.some(value => !Number.isFinite(Number(value)))) {
+            throw new AuthorityServiceError(
+                `BME vector apply item ${index} has an invalid vector`,
+                400,
+                'validation_error',
+                'validation',
+                { category: 'vector-dimension-mismatch', index, vectorSpaceId },
+            );
+        }
+        if (inferredDim == null) inferredDim = dim;
+        if (dim !== inferredDim || (expectedDim != null && dim !== expectedDim)) {
+            throw new AuthorityServiceError(
+                `BME vector apply dimension mismatch at item ${index}: expected ${expectedDim ?? inferredDim}, got ${dim}`,
+                400,
+                'validation_error',
+                'validation',
+                {
+                    category: 'vector-dimension-mismatch',
+                    index,
+                    expectedDim: expectedDim ?? inferredDim,
+                    actualDim: dim,
+                    vectorSpaceId,
+                },
+            );
+        }
+        const payload = item?.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+            ? item.payload as Record<string, unknown>
+            : null;
+        const itemVectorSpaceId = typeof payload?.vectorSpaceId === 'string'
+            ? payload.vectorSpaceId.trim()
+            : '';
+        if (vectorSpaceId && itemVectorSpaceId && itemVectorSpaceId !== vectorSpaceId) {
+            throw new AuthorityServiceError(
+                `BME vector apply vectorSpaceId mismatch at item ${index}`,
+                400,
+                'validation_error',
+                'validation',
+                {
+                    category: 'vector-space-mismatch',
+                    index,
+                    expectedVectorSpaceId: vectorSpaceId,
+                    actualVectorSpaceId: itemVectorSpaceId,
+                },
+            );
+        }
+    }
+    return { observedDim: expectedDim ?? inferredDim, vectorSpaceId };
+}
 
 export class TriviumService {
     private readonly repository: TriviumRepository;
@@ -828,6 +890,7 @@ export class TriviumService {
         if (links.length > MAX_TRIVIUM_BULK_ITEMS) {
             throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} links per request`);
         }
+        const validation = validateBmeVectorApplyDimensions(request);
         const upsert = await this.bulkUpsert(user, extensionId, {
             ...request,
             database,
@@ -846,6 +909,8 @@ export class TriviumService {
                 failures: [],
             };
         const manifest = await this.getBmeVectorManifest(user, extensionId, { database });
+        if (validation.vectorSpaceId) manifest.vectorSpaceId = validation.vectorSpaceId;
+        if (validation.observedDim != null) manifest.observedDim = validation.observedDim;
         return {
             ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
             appliedAt: new Date().toISOString(),

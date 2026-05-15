@@ -226,12 +226,16 @@ export interface BmeVectorManifestResponse {
     nodeCount: number | null;
     lastFlushAt: string | null;
     updatedAt: string | null;
+    vectorSpaceId?: string;
+    observedDim?: number | null;
 }
 
 export interface BmeVectorApplyRequest extends TriviumOpenOptions {
     items: TriviumBulkUpsertItem[];
     links?: TriviumBulkLinkItem[];
     idempotencyKey?: string;
+    vectorSpaceId?: string;
+    observedDim?: number;
 }
 
 export interface BmeVectorApplyResponse {

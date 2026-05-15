@@ -7,8 +7,32 @@ import { AUTHORITY_VERSION } from './version.js';
 import { registerRoutes } from './routes.js';
 import type { AuthorityRuntime } from './runtime.js';
 import { AuthorityServiceError } from './utils.js';
+import { validateBmeVectorApplyDimensions } from './services/trivium-service.js';
 
 describe('registerRoutes', () => {
+    it('rejects BME vector apply batches with mixed dimensions', () => {
+        expect(() => validateBmeVectorApplyDimensions({
+            database: 'bme',
+            vectorSpaceId: 'vs_abc',
+            observedDim: 3,
+            items: [
+                { externalId: 'a', vector: [1, 2, 3], payload: { vectorSpaceId: 'vs_abc' } },
+                { externalId: 'b', vector: [1, 2], payload: { vectorSpaceId: 'vs_abc' } },
+            ],
+        })).toThrow(AuthorityServiceError);
+    });
+
+    it('rejects BME vector apply batches with mismatched vector spaces', () => {
+        expect(() => validateBmeVectorApplyDimensions({
+            database: 'bme',
+            vectorSpaceId: 'vs_abc',
+            observedDim: 3,
+            items: [
+                { externalId: 'a', vector: [1, 2, 3], payload: { vectorSpaceId: 'vs_other' } },
+            ],
+        })).toThrow(AuthorityServiceError);
+    });
+
     it('registers fs.private routes', () => {
         const posts: string[] = [];
         const gets: string[] = [];
