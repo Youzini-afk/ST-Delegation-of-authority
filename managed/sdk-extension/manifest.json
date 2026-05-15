@@ -6,6 +6,6 @@
   "js": "index.js",
   "css": "style.css",
   "author": "OpenAI Codex",
-  "version": "1.4.1",
+  "version": "1.4.5",
   "homePage": "https://github.com/openai"
 }

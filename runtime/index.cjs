@@ -203,6 +203,14 @@ function buildAuthorityFeatureFlags(isAdmin) {
             jobsPage: true,
             benchmarkCore: true,
         },
+        bme: {
+            vectorManifest: true,
+            vectorApply: true,
+            vectorApplyJobs: false,
+            serverEmbeddingProbe: false,
+            candidateSearch: false,
+            protocolVersion: 1,
+        },
     };
 }
 
@@ -301,14 +309,16 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
-/* harmony import */ var _routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./routes/st-manager-routes.js */ "./src/routes/st-manager-routes.ts");
-/* harmony import */ var _routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./routes/storage-routes.js */ "./src/routes/storage-routes.ts");
-/* harmony import */ var _routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./routes/jobs-events-routes.js */ "./src/routes/jobs-events-routes.ts");
-/* harmony import */ var _routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./routes/trivium-routes.js */ "./src/routes/trivium-routes.ts");
-/* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
-/* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+/* harmony import */ var _routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./routes/bme-routes.js */ "./src/routes/bme-routes.ts");
+/* harmony import */ var _routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./routes/st-manager-routes.js */ "./src/routes/st-manager-routes.ts");
+/* harmony import */ var _routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./routes/storage-routes.js */ "./src/routes/storage-routes.ts");
+/* harmony import */ var _routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./routes/jobs-events-routes.js */ "./src/routes/jobs-events-routes.ts");
+/* harmony import */ var _routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/trivium-routes.js */ "./src/routes/trivium-routes.ts");
+/* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
+/* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+
 
 
 
@@ -327,7 +337,7 @@ function ok(res, data) {
 function fail(runtime, req, res, extensionId, error) {
     const normalized = normalizeAuthorityError(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
         if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
                 ...normalized.payload.details,
@@ -352,7 +362,7 @@ function buildPermissionErrorPayload(message) {
         return null;
     }
     const target = match[2]?.trim();
-    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.buildPermissionDescriptor)(resource, target);
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.buildPermissionDescriptor)(resource, target);
     return {
         error: message,
         code: 'permission_not_granted',
@@ -384,13 +394,13 @@ function isPermissionErrorDetails(value) {
         && 'riskLevel' in value;
 }
 function normalizeAuthorityError(error) {
-    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.isAuthorityServiceError)(error)) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.isAuthorityServiceError)(error)) {
         return {
             status: error.status,
             payload: error.toPayload(),
         };
     }
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error);
     const permissionErrorPayload = buildPermissionErrorPayload(message);
     if (permissionErrorPayload) {
         return {
@@ -514,8 +524,8 @@ async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatab
         runtime.storage.listBlobs(user, extensionId),
         runtime.files.getUsageSummary(user, extensionId),
     ]);
-    const resolvedSqlDatabases = sqlDatabases ?? (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
-    const resolvedTriviumDatabases = triviumDatabases ?? (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
+    const resolvedSqlDatabases = sqlDatabases ?? (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+    const resolvedTriviumDatabases = triviumDatabases ?? (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
     const blobSummary = summarizeBlobRecords(blobs);
     const sqlDatabaseSummary = summarizeDatabases(resolvedSqlDatabases);
     const triviumDatabaseSummary = summarizeTriviumDatabases(resolvedTriviumDatabases);
@@ -638,8 +648,8 @@ function pickLatestIsoTimestamp(left, right) {
 async function buildUsageSummary(runtime, user) {
     const extensions = await runtime.extensions.listExtensions(user);
     const summaries = await Promise.all(extensions.map(async (extension) => {
-        const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
-        const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
+        const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
+        const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
         return await buildUsageSummaryExtension(runtime, user, extension, sqlDatabases, triviumDatabases);
     }));
     return {
@@ -653,8 +663,8 @@ async function buildExtensionDiagnosticSnapshot(runtime, user, extensionId, exte
     if (!resolvedExtension) {
         throw new Error('Extension not found');
     }
-    const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
-    const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
+    const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+    const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
     const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
     const jobsPage = await runtime.jobs.listPage(user, extensionId);
     return {
@@ -760,15 +770,16 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_9__.createAuthorityRuntime)()) {
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_10__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
     });
-    (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
+    (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_4__.registerStManagerRoutes)(router, runtime, fail);
+    (0,_routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerBmeRoutes)(router, runtime, fail);
     router.post('/session/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const config = (req.body ?? {});
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
@@ -783,8 +794,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/session/current', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits));
         }
@@ -794,8 +805,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const evaluation = await runtime.permissions.evaluate(user, session, req.body);
             if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
                 await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
@@ -813,11 +824,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate-batch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_10__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_11__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
             }
             const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
             const response = { results };
@@ -829,8 +840,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/resolve', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
             await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
@@ -847,11 +858,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
-                const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
-                const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
+                const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
+                const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
@@ -867,14 +878,14 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
                 throw new Error('Extension not found');
             }
-            const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
-            const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
+            const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+            const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
             const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
             const jobsPage = await runtime.jobs.listPage(user, extensionId);
             ok(res, {
@@ -895,7 +906,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/extensions/:id/grants/reset', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
             await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
@@ -912,14 +923,14 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
         }
     });
-    (0,_routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__.registerStorageRoutes)(router, runtime, fail);
-    (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerSqlRoutes)(router, runtime, fail);
-    (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerTriviumRoutes)(router, runtime, fail);
-    (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
-    (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
+    (0,_routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerStorageRoutes)(router, runtime, fail);
+    (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerSqlRoutes)(router, runtime, fail);
+    (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerTriviumRoutes)(router, runtime, fail);
+    (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerHttpRoutes)(router, runtime, fail);
+    (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerJobsAndEventsRoutes)(router, runtime, fail);
     router.get('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -931,7 +942,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
@@ -942,7 +953,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/usage-summary', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
         }
@@ -952,7 +963,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/import-export/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.adminPackages.listOperations(user),
@@ -964,7 +975,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/export', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
@@ -979,7 +990,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import-transfer/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
                 resource: 'fs.private',
@@ -992,7 +1003,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1011,7 +1022,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
@@ -1026,7 +1037,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
@@ -1041,7 +1052,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/native-migration/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.nativeMigrations.listOperations(),
@@ -1053,7 +1064,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/upload/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
@@ -1067,7 +1078,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/preview', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1090,7 +1101,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
@@ -1110,7 +1121,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
@@ -1125,7 +1136,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
         }
@@ -1135,7 +1146,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
@@ -1150,7 +1161,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/update', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1203,9 +1214,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                         : `更新失败后后台服务状态为 ${recovery.state}。`;
                 }
                 catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.asErrorMessage)(recoveryError)}`;
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(recoveryError)}`;
                 }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
             }
         }
         catch (error) {
@@ -1213,6 +1224,60 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         }
     });
     return runtime;
+}
+
+
+/***/ },
+
+/***/ "./src/routes/bme-routes.ts"
+/*!**********************************!*\
+  !*** ./src/routes/bme-routes.ts ***!
+  \**********************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerBmeRoutes: () => (/* binding */ registerBmeRoutes)
+/* harmony export */ });
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+function ok(res, data) {
+    res.json(data);
+}
+function getTriviumDatabaseName(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+function registerBmeRoutes(router, runtime, fail) {
+    router.post('/bme/vector-manifest', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            ok(res, await runtime.trivium.getBmeVectorManifest(user, session.extension.id, payload));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'bme.vector', error);
+        }
+    });
+    router.post('/bme/vector-apply', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getTriviumDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            ok(res, await runtime.trivium.applyBmeVectorManifest(user, session.extension.id, payload));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'bme.vector', error);
+        }
+    });
 }
 
 
@@ -10587,7 +10652,8 @@ class TriviumRepository {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   TriviumService: () => (/* binding */ TriviumService)
+/* harmony export */   TriviumService: () => (/* binding */ TriviumService),
+/* harmony export */   validateBmeVectorApplyDimensions: () => (/* binding */ validateBmeVectorApplyDimensions)
 /* harmony export */ });
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
@@ -10601,6 +10667,51 @@ __webpack_require__.r(__webpack_exports__);
 
 
 const MAX_TRIVIUM_BULK_ITEMS = 2000;
+const BME_VECTOR_MANIFEST_META_KEY = 'bme.vector.manifest';
+function validateBmeVectorApplyDimensions(request) {
+    const observedDim = Number(request.observedDim ?? 0);
+    const expectedDim = Number.isFinite(observedDim) && observedDim > 0
+        ? Math.floor(observedDim)
+        : null;
+    const vectorSpaceId = typeof request.vectorSpaceId === 'string'
+        ? request.vectorSpaceId.trim()
+        : '';
+    let inferredDim = null;
+    for (let index = 0; index < request.items.length; index += 1) {
+        const item = request.items[index];
+        const vector = Array.isArray(item?.vector) ? item.vector : [];
+        const dim = vector.length;
+        if (dim <= 0 || vector.some(value => !Number.isFinite(Number(value)))) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply item ${index} has an invalid vector`, 400, 'validation_error', 'validation', { category: 'vector-dimension-mismatch', index, vectorSpaceId });
+        }
+        if (inferredDim == null)
+            inferredDim = dim;
+        if (dim !== inferredDim || (expectedDim != null && dim !== expectedDim)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply dimension mismatch at item ${index}: expected ${expectedDim ?? inferredDim}, got ${dim}`, 400, 'validation_error', 'validation', {
+                category: 'vector-dimension-mismatch',
+                index,
+                expectedDim: expectedDim ?? inferredDim,
+                actualDim: dim,
+                vectorSpaceId,
+            });
+        }
+        const payload = item?.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+            ? item.payload
+            : null;
+        const itemVectorSpaceId = typeof payload?.vectorSpaceId === 'string'
+            ? payload.vectorSpaceId.trim()
+            : '';
+        if (vectorSpaceId && itemVectorSpaceId && itemVectorSpaceId !== vectorSpaceId) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply vectorSpaceId mismatch at item ${index}`, 400, 'validation_error', 'validation', {
+                category: 'vector-space-mismatch',
+                index,
+                expectedVectorSpaceId: vectorSpaceId,
+                actualVectorSpaceId: itemVectorSpaceId,
+            });
+        }
+    }
+    return { observedDim: expectedDim ?? inferredDim, vectorSpaceId };
+}
 class TriviumService {
     repository;
     mappingStore;
@@ -11212,6 +11323,100 @@ class TriviumService {
         const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
         return await this.mappingStore.listMappingsPage(mappingDbPath, request);
     }
+    async getBmeVectorManifest(user, extensionId, request = {}) {
+        const database = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.getTriviumDatabaseName)(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const exists = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath);
+        const meta = await this.readDatabaseConfigMeta(mappingDbPath);
+        const fileDim = exists ? (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.readTriviumDimension)(dbPath) : null;
+        const [mappingCount, lastFlushAt] = await Promise.all([
+            this.countMappings(mappingDbPath),
+            this.readMetaValue(mappingDbPath, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.LAST_FLUSH_META_KEY),
+        ]);
+        const bmeManifest = await this.readBmeVectorManifestMeta(mappingDbPath);
+        let nodeCount = null;
+        let updatedAt = null;
+        if (exists) {
+            const stat = await this.stat(user, extensionId, { database });
+            nodeCount = Number.isFinite(Number(stat.nodeCount)) ? Number(stat.nodeCount) : null;
+            updatedAt = stat.updatedAt ?? null;
+        }
+        return {
+            database,
+            exists,
+            status: exists ? (bmeManifest.vectorSpaceId ? 'clean' : 'unknown') : 'missing',
+            embeddingMode: 'client',
+            serverEmbeddingSupported: false,
+            vectorApplySupported: true,
+            vectorManifestSupported: true,
+            vectorDim: fileDim ?? meta.dim,
+            dtype: meta.dtype,
+            storageMode: meta.storageMode,
+            syncMode: meta.syncMode,
+            mappingCount,
+            nodeCount,
+            lastFlushAt,
+            updatedAt,
+            ...(bmeManifest.vectorSpaceId ? { vectorSpaceId: bmeManifest.vectorSpaceId } : {}),
+            ...(bmeManifest.observedDim != null ? { observedDim: bmeManifest.observedDim } : {}),
+        };
+    }
+    async applyBmeVectorManifest(user, extensionId, request) {
+        const database = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.getTriviumDatabaseName)(request.database);
+        if (!request || typeof request !== 'object' || !Array.isArray(request.items)) {
+            throw new Error('BME vector apply requires an items array');
+        }
+        if (request.items.length > MAX_TRIVIUM_BULK_ITEMS) {
+            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} items per request`);
+        }
+        const links = Array.isArray(request.links) ? request.links : [];
+        if (request.links !== undefined && !Array.isArray(request.links)) {
+            throw new Error('BME vector apply links must be an array when provided');
+        }
+        if (links.length > MAX_TRIVIUM_BULK_ITEMS) {
+            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} links per request`);
+        }
+        const validation = validateBmeVectorApplyDimensions(request);
+        const upsert = await this.bulkUpsert(user, extensionId, {
+            ...request,
+            database,
+            items: request.items,
+        });
+        const linkResult = links.length > 0
+            ? await this.bulkLink(user, extensionId, {
+                ...request,
+                database,
+                items: links,
+            })
+            : {
+                totalCount: 0,
+                successCount: 0,
+                failureCount: 0,
+                failures: [],
+            };
+        const manifest = await this.getBmeVectorManifest(user, extensionId, { database });
+        if (validation.vectorSpaceId)
+            manifest.vectorSpaceId = validation.vectorSpaceId;
+        if (validation.observedDim != null)
+            manifest.observedDim = validation.observedDim;
+        if (upsert.failureCount === 0 && linkResult.failureCount === 0) {
+            const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+            await this.writeBmeVectorManifestMeta(mappingDbPath, {
+                vectorSpaceId: validation.vectorSpaceId,
+                observedDim: validation.observedDim,
+                updatedAt: new Date().toISOString(),
+            });
+        }
+        return {
+            ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
+            appliedAt: new Date().toISOString(),
+            database,
+            manifest,
+            upsert,
+            links: linkResult,
+            skippedLinkCount: 0,
+        };
+    }
     async ensureSchema(mappingDbPath) {
         await this.mappingStore.ensureSchema(mappingDbPath);
     }
@@ -11280,6 +11485,31 @@ class TriviumService {
     }
     async writeMetaValue(mappingDbPath, key, value) {
         await this.mappingStore.writeMetaValue(mappingDbPath, key, value);
+    }
+    async readBmeVectorManifestMeta(mappingDbPath) {
+        const raw = await this.readMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY);
+        if (!raw)
+            return {};
+        try {
+            const parsed = JSON.parse(raw);
+            const vectorSpaceId = typeof parsed.vectorSpaceId === 'string' ? parsed.vectorSpaceId.trim() : '';
+            const observedDim = Number(parsed.observedDim ?? 0);
+            return {
+                ...(vectorSpaceId ? { vectorSpaceId } : {}),
+                ...(Number.isFinite(observedDim) && observedDim > 0 ? { observedDim: Math.floor(observedDim) } : {}),
+                ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
+            };
+        }
+        catch {
+            return {};
+        }
+    }
+    async writeBmeVectorManifestMeta(mappingDbPath, meta) {
+        await this.writeMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY, JSON.stringify({
+            vectorSpaceId: meta.vectorSpaceId || '',
+            observedDim: meta.observedDim ?? null,
+            updatedAt: meta.updatedAt || new Date().toISOString(),
+        }));
     }
     async rememberDatabaseConfig(mappingDbPath, request) {
         await this.mappingStore.rememberDatabaseConfig(mappingDbPath, request);

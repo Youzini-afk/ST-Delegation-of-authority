@@ -156,12 +156,6 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
             mappingPages: true,
             mappingIntegrity: true,
         },
-        bme: {
-            protocolVersion: 1,
-            vectorManifest: true,
-            vectorApply: true,
-            vectorApplyJobs: false,
-        },
         transfers: {
             blob: true,
             fs: true,
@@ -177,6 +171,14 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
             activityPages: true,
             jobsPage: true,
             benchmarkCore: true,
+        },
+        bme: {
+            vectorManifest: true,
+            vectorApply: true,
+            vectorApplyJobs: false,
+            serverEmbeddingProbe: false,
+            candidateSearch: false,
+            protocolVersion: 1,
         },
     };
 }

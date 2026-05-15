@@ -11,6 +11,10 @@ import type {
     TriviumBulkUnlinkRequest,
     TriviumBulkUpsertRequest,
     TriviumBulkUpsertResponse,
+    BmeVectorManifestRequest,
+    BmeVectorManifestResponse,
+    BmeVectorApplyRequest,
+    BmeVectorApplyResponse,
     TriviumBuildTextIndexRequest,
     TriviumCheckMappingsIntegrityRequest,
     TriviumCheckMappingsIntegrityResponse,
@@ -64,7 +68,7 @@ import type {
     TriviumUpdateVectorRequest,
 } from '@stdo/shared-types';
 import type { UserContext } from '../types.js';
-import { asErrorMessage } from '../utils.js';
+import { asErrorMessage, AuthorityServiceError } from '../utils.js';
 import { CoreService } from './core-service.js';
 import {
     DEFAULT_INTEGRITY_SAMPLE_LIMIT,
@@ -89,7 +93,70 @@ import { TriviumMappingMetaStore } from './trivium-mapping-meta-store.js';
 import { TriviumRepository } from './trivium-repository.js';
 
 const MAX_TRIVIUM_BULK_ITEMS = 2000;
+const BME_VECTOR_MANIFEST_META_KEY = 'bme.vector.manifest';
 type ResolvedTriviumOpenOptions = { dim: number; dtype?: TriviumDType };
+
+export function validateBmeVectorApplyDimensions(request: BmeVectorApplyRequest): { observedDim: number | null; vectorSpaceId: string } {
+    const observedDim = Number(request.observedDim ?? 0);
+    const expectedDim = Number.isFinite(observedDim) && observedDim > 0
+        ? Math.floor(observedDim)
+        : null;
+    const vectorSpaceId = typeof request.vectorSpaceId === 'string'
+        ? request.vectorSpaceId.trim()
+        : '';
+    let inferredDim: number | null = null;
+    for (let index = 0; index < request.items.length; index += 1) {
+        const item = request.items[index];
+        const vector = Array.isArray(item?.vector) ? item.vector : [];
+        const dim = vector.length;
+        if (dim <= 0 || vector.some(value => !Number.isFinite(Number(value)))) {
+            throw new AuthorityServiceError(
+                `BME vector apply item ${index} has an invalid vector`,
+                400,
+                'validation_error',
+                'validation',
+                { category: 'vector-dimension-mismatch', index, vectorSpaceId },
+            );
+        }
+        if (inferredDim == null) inferredDim = dim;
+        if (dim !== inferredDim || (expectedDim != null && dim !== expectedDim)) {
+            throw new AuthorityServiceError(
+                `BME vector apply dimension mismatch at item ${index}: expected ${expectedDim ?? inferredDim}, got ${dim}`,
+                400,
+                'validation_error',
+                'validation',
+                {
+                    category: 'vector-dimension-mismatch',
+                    index,
+                    expectedDim: expectedDim ?? inferredDim,
+                    actualDim: dim,
+                    vectorSpaceId,
+                },
+            );
+        }
+        const payload = item?.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+            ? item.payload as Record<string, unknown>
+            : null;
+        const itemVectorSpaceId = typeof payload?.vectorSpaceId === 'string'
+            ? payload.vectorSpaceId.trim()
+            : '';
+        if (vectorSpaceId && itemVectorSpaceId && itemVectorSpaceId !== vectorSpaceId) {
+            throw new AuthorityServiceError(
+                `BME vector apply vectorSpaceId mismatch at item ${index}`,
+                400,
+                'validation_error',
+                'validation',
+                {
+                    category: 'vector-space-mismatch',
+                    index,
+                    expectedVectorSpaceId: vectorSpaceId,
+                    actualVectorSpaceId: itemVectorSpaceId,
+                },
+            );
+        }
+    }
+    return { observedDim: expectedDim ?? inferredDim, vectorSpaceId };
+}
 
 export class TriviumService {
     private readonly repository: TriviumRepository;
@@ -765,6 +832,127 @@ export class TriviumService {
         return await this.mappingStore.listMappingsPage(mappingDbPath, request);
     }
 
+    async getBmeVectorManifest(
+        user: UserContext,
+        extensionId: string,
+        request: BmeVectorManifestRequest = {},
+    ): Promise<BmeVectorManifestResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const exists = fs.existsSync(dbPath);
+        const meta = await this.readDatabaseConfigMeta(mappingDbPath);
+        const fileDim = exists ? readTriviumDimension(dbPath) : null;
+        const [mappingCount, lastFlushAt] = await Promise.all([
+            this.countMappings(mappingDbPath),
+            this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY),
+        ]);
+        const bmeManifest = await this.readBmeVectorManifestMeta(mappingDbPath);
+        let nodeCount: number | null = null;
+        let updatedAt: string | null = null;
+        if (exists) {
+            const stat = await this.stat(user, extensionId, { database });
+            nodeCount = Number.isFinite(Number(stat.nodeCount)) ? Number(stat.nodeCount) : null;
+            updatedAt = stat.updatedAt ?? null;
+        }
+        return {
+            database,
+            exists,
+            status: exists ? (bmeManifest.vectorSpaceId ? 'clean' : 'unknown') : 'missing',
+            backend: 'authority',
+            embeddingMode: 'client',
+            serverEmbeddingSupported: false,
+            vectorApplySupported: true,
+            vectorManifestSupported: true,
+            vectorDim: fileDim ?? meta.dim,
+            dtype: meta.dtype,
+            storageMode: meta.storageMode,
+            syncMode: meta.syncMode,
+            mappingCount,
+            nodeCount,
+            lastFlushAt,
+            updatedAt,
+            ...(bmeManifest.graphRevision != null ? { graphRevision: bmeManifest.graphRevision, revision: bmeManifest.graphRevision } : {}),
+            ...(bmeManifest.collectionId ? { collectionId: bmeManifest.collectionId } : {}),
+            ...(bmeManifest.chatId ? { chatId: bmeManifest.chatId } : {}),
+            ...(bmeManifest.modelScope ? { modelScope: bmeManifest.modelScope } : {}),
+            ...(bmeManifest.vectorSpaceId ? { vectorSpaceId: bmeManifest.vectorSpaceId } : {}),
+            ...(bmeManifest.observedDim != null ? { observedDim: bmeManifest.observedDim } : {}),
+        };
+    }
+
+    async applyBmeVectorManifest(
+        user: UserContext,
+        extensionId: string,
+        request: BmeVectorApplyRequest,
+    ): Promise<BmeVectorApplyResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        if (!request || typeof request !== 'object' || !Array.isArray(request.items)) {
+            throw new Error('BME vector apply requires an items array');
+        }
+        if (request.items.length > MAX_TRIVIUM_BULK_ITEMS) {
+            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} items per request`);
+        }
+        const links = Array.isArray(request.links) ? request.links : [];
+        if (request.links !== undefined && !Array.isArray(request.links)) {
+            throw new Error('BME vector apply links must be an array when provided');
+        }
+        if (links.length > MAX_TRIVIUM_BULK_ITEMS) {
+            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} links per request`);
+        }
+        const validation = validateBmeVectorApplyDimensions(request);
+        const upsert = await this.bulkUpsert(user, extensionId, {
+            ...request,
+            database,
+            items: request.items,
+        });
+        const linkResult = links.length > 0
+            ? await this.bulkLink(user, extensionId, {
+                ...request,
+                database,
+                items: links,
+            })
+            : {
+                totalCount: 0,
+                successCount: 0,
+                failureCount: 0,
+                failures: [],
+            };
+        const manifest = await this.getBmeVectorManifest(user, extensionId, { database });
+        if (validation.vectorSpaceId) manifest.vectorSpaceId = validation.vectorSpaceId;
+        if (validation.observedDim != null) manifest.observedDim = validation.observedDim;
+        if (upsert.failureCount === 0 && linkResult.failureCount === 0) {
+            manifest.exists = true;
+            manifest.status = 'clean';
+            const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+            await this.writeBmeVectorManifestMeta(mappingDbPath, {
+                vectorSpaceId: validation.vectorSpaceId,
+                observedDim: validation.observedDim,
+                graphRevision: Math.max(0, Math.floor(Number(request.graphRevision) || 0)),
+                collectionId: typeof request.collectionId === 'string' ? request.collectionId.trim() : '',
+                chatId: typeof request.chatId === 'string' ? request.chatId.trim() : '',
+                modelScope: typeof request.modelScope === 'string' ? request.modelScope.trim() : '',
+                updatedAt: new Date().toISOString(),
+            });
+        }
+        const graphRevision = Math.max(0, Math.floor(Number(request.graphRevision) || 0));
+        if (graphRevision > 0) {
+            manifest.graphRevision = graphRevision;
+            manifest.revision = graphRevision;
+        }
+        if (typeof request.collectionId === 'string' && request.collectionId.trim()) manifest.collectionId = request.collectionId.trim();
+        if (typeof request.chatId === 'string' && request.chatId.trim()) manifest.chatId = request.chatId.trim();
+        if (typeof request.modelScope === 'string' && request.modelScope.trim()) manifest.modelScope = request.modelScope.trim();
+        return {
+            ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
+            appliedAt: new Date().toISOString(),
+            database,
+            manifest,
+            upsert,
+            links: linkResult,
+            skippedLinkCount: 0,
+        };
+    }
+
     private async ensureSchema(mappingDbPath: string): Promise<void> {
         await this.mappingStore.ensureSchema(mappingDbPath);
     }
@@ -859,6 +1047,59 @@ export class TriviumService {
 
     private async writeMetaValue(mappingDbPath: string, key: string, value: string): Promise<void> {
         await this.mappingStore.writeMetaValue(mappingDbPath, key, value);
+    }
+
+    private async readBmeVectorManifestMeta(mappingDbPath: string): Promise<{
+        vectorSpaceId?: string;
+        observedDim?: number | null;
+        graphRevision?: number;
+        collectionId?: string;
+        chatId?: string;
+        modelScope?: string;
+        updatedAt?: string;
+    }> {
+        const raw = await this.readMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY);
+        if (!raw) return {};
+        try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const vectorSpaceId = typeof parsed.vectorSpaceId === 'string' ? parsed.vectorSpaceId.trim() : '';
+            const observedDim = Number(parsed.observedDim ?? 0);
+            const graphRevision = Number(parsed.graphRevision ?? 0);
+            return {
+                ...(vectorSpaceId ? { vectorSpaceId } : {}),
+                ...(Number.isFinite(observedDim) && observedDim > 0 ? { observedDim: Math.floor(observedDim) } : {}),
+                ...(Number.isFinite(graphRevision) && graphRevision > 0 ? { graphRevision: Math.floor(graphRevision) } : {}),
+                ...(typeof parsed.collectionId === 'string' && parsed.collectionId.trim() ? { collectionId: parsed.collectionId.trim() } : {}),
+                ...(typeof parsed.chatId === 'string' && parsed.chatId.trim() ? { chatId: parsed.chatId.trim() } : {}),
+                ...(typeof parsed.modelScope === 'string' && parsed.modelScope.trim() ? { modelScope: parsed.modelScope.trim() } : {}),
+                ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
+            };
+        } catch {
+            return {};
+        }
+    }
+
+    private async writeBmeVectorManifestMeta(
+        mappingDbPath: string,
+        meta: {
+            vectorSpaceId?: string;
+            observedDim?: number | null;
+            graphRevision?: number;
+            collectionId?: string;
+            chatId?: string;
+            modelScope?: string;
+            updatedAt?: string;
+        },
+    ): Promise<void> {
+        await this.writeMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY, JSON.stringify({
+            vectorSpaceId: meta.vectorSpaceId || '',
+            observedDim: meta.observedDim ?? null,
+            graphRevision: Number.isFinite(Number(meta.graphRevision)) ? Math.max(0, Math.floor(Number(meta.graphRevision))) : 0,
+            collectionId: meta.collectionId || '',
+            chatId: meta.chatId || '',
+            modelScope: meta.modelScope || '',
+            updatedAt: meta.updatedAt || new Date().toISOString(),
+        }));
     }
 
     private async rememberDatabaseConfig(

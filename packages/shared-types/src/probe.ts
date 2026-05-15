@@ -25,12 +25,6 @@ export interface AuthorityFeatureFlags {
         mappingPages: boolean;
         mappingIntegrity: boolean;
     };
-    bme: {
-        protocolVersion: number;
-        vectorManifest: boolean;
-        vectorApply: boolean;
-        vectorApplyJobs: boolean;
-    };
     transfers: {
         blob: boolean;
         fs: boolean;
@@ -46,6 +40,14 @@ export interface AuthorityFeatureFlags {
         activityPages: boolean;
         jobsPage: boolean;
         benchmarkCore: boolean;
+    };
+    bme: {
+        vectorManifest: boolean;
+        vectorApply: boolean;
+        vectorApplyJobs: boolean;
+        serverEmbeddingProbe: boolean;
+        candidateSearch: boolean;
+        protocolVersion: number;
     };
 }
 

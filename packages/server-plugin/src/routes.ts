@@ -590,7 +590,6 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     });
 
     registerStManagerRoutes(router, runtime, fail);
-
     router.post('/session/init', async (req, res) => {
         try {
             const user = getUserContext(req);

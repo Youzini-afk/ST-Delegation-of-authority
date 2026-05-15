@@ -469,3 +469,58 @@ export interface TriviumStatResponse extends TriviumDatabaseRecord {
     vecSize: number;
     estimatedMemoryBytes: number;
 }
+
+export interface BmeVectorManifestRequest {
+    database?: string;
+}
+
+export type BmeVectorManifestStatus = 'missing' | 'clean' | 'dirty' | 'failed' | 'stale' | 'unknown';
+
+export interface BmeVectorManifestResponse {
+    database: string;
+    exists: boolean;
+    status: BmeVectorManifestStatus;
+    embeddingMode: 'client' | 'server' | 'unknown';
+    serverEmbeddingSupported: boolean;
+    vectorApplySupported: boolean;
+    vectorManifestSupported: boolean;
+    vectorDim: number | null;
+    dtype: TriviumDType | null;
+    storageMode: TriviumStorageMode | null;
+    syncMode: TriviumSyncMode | null;
+    mappingCount: number;
+    nodeCount: number | null;
+    lastFlushAt: string | null;
+    updatedAt: string | null;
+    vectorSpaceId?: string;
+    observedDim?: number | null;
+    graphRevision?: number;
+    revision?: number;
+    backend?: 'authority';
+    collectionId?: string;
+    chatId?: string;
+    modelScope?: string;
+}
+
+export interface BmeVectorApplyRequest extends TriviumOpenOptions {
+    collectionId?: string;
+    chatId?: string;
+    namespace?: string;
+    graphRevision?: number;
+    modelScope?: string;
+    items: TriviumBulkUpsertItem[];
+    links?: TriviumBulkLinkItem[];
+    idempotencyKey?: string;
+    vectorSpaceId?: string;
+    observedDim?: number;
+}
+
+export interface BmeVectorApplyResponse {
+    ok: boolean;
+    appliedAt: string;
+    database: string;
+    manifest: BmeVectorManifestResponse;
+    upsert: TriviumBulkUpsertResponse;
+    links: TriviumBulkMutationResponse;
+    skippedLinkCount: number;
+}
