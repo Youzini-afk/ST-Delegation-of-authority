@@ -167,7 +167,7 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
         },
         bme: {
             vectorManifest: true,
-            vectorApply: false,
+            vectorApply: true,
             vectorApplyJobs: false,
             serverEmbeddingProbe: false,
             candidateSearch: false,

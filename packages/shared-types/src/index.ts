@@ -228,6 +228,22 @@ export interface BmeVectorManifestResponse {
     updatedAt: string | null;
 }
 
+export interface BmeVectorApplyRequest extends TriviumOpenOptions {
+    items: TriviumBulkUpsertItem[];
+    links?: TriviumBulkLinkItem[];
+    idempotencyKey?: string;
+}
+
+export interface BmeVectorApplyResponse {
+    ok: boolean;
+    appliedAt: string;
+    database: string;
+    manifest: BmeVectorManifestResponse;
+    upsert: TriviumBulkUpsertResponse;
+    links: TriviumBulkMutationResponse;
+    skippedLinkCount: number;
+}
+
 export interface AuthorityJobRegistrySummary {
     registered: number;
     jobTypes: string[];

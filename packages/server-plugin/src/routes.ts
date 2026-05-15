@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type {
     AuthorityArtifactDownloadResponse,
+    BmeVectorApplyRequest,
     BmeVectorManifestRequest,
     AuthorityErrorPayload,
     AuthorityDiagnosticBundleResponse,
@@ -884,6 +885,21 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
             ok(res, await runtime.trivium.getBmeVectorManifest(user, session.extension.id, payload));
+        } catch (error) {
+            fail(runtime, req, res, 'bme.vector', error);
+        }
+    });
+
+    router.post('/bme/vector-apply', async (req, res) => {
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            const payload = (req.body ?? {}) as BmeVectorApplyRequest;
+            const database = typeof payload.database === 'string' && payload.database.trim() ? payload.database.trim() : 'default';
+            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
+                throw new Error(`Permission not granted: trivium.private for ${database}`);
+            }
+            ok(res, await runtime.trivium.applyBmeVectorManifest(user, session.extension.id, payload));
         } catch (error) {
             fail(runtime, req, res, 'bme.vector', error);
         }
