@@ -56,5 +56,8 @@ describe('SessionService', () => {
         expect(response.features.jobs.safeRequeue).toBe(true);
         expect(response.features.jobs.builtinTypes).toEqual(['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl']);
         expect(response.features.diagnostics.jobsPage).toBe(true);
+        expect(response.features.bme.vectorManifest).toBe(true);
+        expect(response.features.bme.vectorApply).toBe(false);
+        expect(response.features.bme.serverEmbeddingProbe).toBe(false);
     });
 });

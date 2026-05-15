@@ -165,5 +165,13 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
             jobsPage: true,
             benchmarkCore: true,
         },
+        bme: {
+            vectorManifest: true,
+            vectorApply: false,
+            vectorApplyJobs: false,
+            serverEmbeddingProbe: false,
+            candidateSearch: false,
+            protocolVersion: 1,
+        },
     };
 }

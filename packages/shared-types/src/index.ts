@@ -194,6 +194,38 @@ export interface AuthorityFeatureFlags {
         jobsPage: boolean;
         benchmarkCore: boolean;
     };
+    bme: {
+        vectorManifest: boolean;
+        vectorApply: boolean;
+        vectorApplyJobs: boolean;
+        serverEmbeddingProbe: boolean;
+        candidateSearch: boolean;
+        protocolVersion: number;
+    };
+}
+
+export interface BmeVectorManifestRequest {
+    database?: string;
+}
+
+export type BmeVectorManifestStatus = 'missing' | 'clean' | 'dirty' | 'failed' | 'unknown';
+
+export interface BmeVectorManifestResponse {
+    database: string;
+    exists: boolean;
+    status: BmeVectorManifestStatus;
+    embeddingMode: 'client' | 'server' | 'unknown';
+    serverEmbeddingSupported: boolean;
+    vectorApplySupported: boolean;
+    vectorManifestSupported: boolean;
+    vectorDim: number | null;
+    dtype: TriviumDType | null;
+    storageMode: TriviumStorageMode | null;
+    syncMode: TriviumSyncMode | null;
+    mappingCount: number;
+    nodeCount: number | null;
+    lastFlushAt: string | null;
+    updatedAt: string | null;
 }
 
 export interface AuthorityJobRegistrySummary {

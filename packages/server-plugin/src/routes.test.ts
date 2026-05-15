@@ -41,6 +41,7 @@ describe('registerRoutes', () => {
         ]));
         expect(posts).toEqual(expect.arrayContaining([
             '/permissions/evaluate-batch',
+            '/bme/vector-manifest',
             '/transfers/init',
             '/transfers/:id/append',
             '/transfers/:id/read',
@@ -289,6 +290,14 @@ describe('registerRoutes', () => {
         }, response);
 
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            features: expect.objectContaining({
+                bme: expect.objectContaining({
+                    protocolVersion: 1,
+                    vectorManifest: true,
+                    vectorApply: false,
+                    serverEmbeddingProbe: false,
+                }),
+            }),
             limits: expect.objectContaining({
                 effectiveInlineThresholdBytes: expect.objectContaining({
                     storageBlobWrite: { bytes: 256 * 1024, source: 'runtime' },
@@ -302,6 +311,91 @@ describe('registerRoutes', () => {
                     httpFetchResponse: { bytes: Number.MAX_SAFE_INTEGER, source: 'runtime' },
                 }),
             }),
+        }));
+    });
+
+    it('returns a BME vector manifest through the session-gated route', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({
+                    extension: { id: 'third-party/st-bme' },
+                }),
+            },
+            permissions: {
+                authorize: vi.fn().mockResolvedValue(true),
+            },
+            trivium: {
+                getBmeVectorManifest: vi.fn().mockResolvedValue({
+                    database: 'st_bme_vectors',
+                    exists: false,
+                    status: 'missing',
+                    embeddingMode: 'client',
+                    serverEmbeddingSupported: false,
+                    vectorApplySupported: false,
+                    vectorManifestSupported: true,
+                    vectorDim: null,
+                    dtype: null,
+                    storageMode: null,
+                    syncMode: null,
+                    mappingCount: 0,
+                    nodeCount: null,
+                    lastFlushAt: null,
+                    updatedAt: null,
+                }),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+                logPermission: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await posts.get('/bme/vector-manifest')?.({
+            user: {
+                profile: {
+                    handle: 'alice',
+                    admin: false,
+                },
+                directories: {
+                    root: 'C:/users/alice',
+                },
+            },
+            body: { database: 'st_bme_vectors' },
+            headers: {},
+        }, response);
+
+        expect(runtime.permissions.authorize).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            expect.objectContaining({ extension: { id: 'third-party/st-bme' } }),
+            { resource: 'trivium.private', target: 'st_bme_vectors' },
+        );
+        expect(runtime.trivium.getBmeVectorManifest).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            'third-party/st-bme',
+            { database: 'st_bme_vectors' },
+        );
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            database: 'st_bme_vectors',
+            embeddingMode: 'client',
+            vectorManifestSupported: true,
         }));
     });
 

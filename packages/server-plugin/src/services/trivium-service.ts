@@ -11,6 +11,8 @@ import type {
     TriviumBulkUnlinkRequest,
     TriviumBulkUpsertRequest,
     TriviumBulkUpsertResponse,
+    BmeVectorManifestRequest,
+    BmeVectorManifestResponse,
     TriviumBuildTextIndexRequest,
     TriviumCheckMappingsIntegrityRequest,
     TriviumCheckMappingsIntegrityResponse,
@@ -763,6 +765,46 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
         return await this.mappingStore.listMappingsPage(mappingDbPath, request);
+    }
+
+    async getBmeVectorManifest(
+        user: UserContext,
+        extensionId: string,
+        request: BmeVectorManifestRequest = {},
+    ): Promise<BmeVectorManifestResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const exists = fs.existsSync(dbPath);
+        const meta = await this.readDatabaseConfigMeta(mappingDbPath);
+        const fileDim = exists ? readTriviumDimension(dbPath) : null;
+        const [mappingCount, lastFlushAt] = await Promise.all([
+            this.countMappings(mappingDbPath),
+            this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY),
+        ]);
+        let nodeCount: number | null = null;
+        let updatedAt: string | null = null;
+        if (exists) {
+            const stat = await this.stat(user, extensionId, { database });
+            nodeCount = Number.isFinite(Number(stat.nodeCount)) ? Number(stat.nodeCount) : null;
+            updatedAt = stat.updatedAt ?? null;
+        }
+        return {
+            database,
+            exists,
+            status: exists ? 'unknown' : 'missing',
+            embeddingMode: 'client',
+            serverEmbeddingSupported: false,
+            vectorApplySupported: false,
+            vectorManifestSupported: true,
+            vectorDim: fileDim ?? meta.dim,
+            dtype: meta.dtype,
+            storageMode: meta.storageMode,
+            syncMode: meta.syncMode,
+            mappingCount,
+            nodeCount,
+            lastFlushAt,
+            updatedAt,
+        };
     }
 
     private async ensureSchema(mappingDbPath: string): Promise<void> {
