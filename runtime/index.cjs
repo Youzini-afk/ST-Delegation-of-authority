@@ -4555,6 +4555,238 @@ class AuditService {
 
 /***/ },
 
+/***/ "./src/services/core-artifact.ts"
+/*!***************************************!*\
+  !*** ./src/services/core-artifact.ts ***!
+  \***************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   describeMissingManagedCore: () => (/* binding */ describeMissingManagedCore),
+/* harmony export */   ensureExecutable: () => (/* binding */ ensureExecutable),
+/* harmony export */   getCorePlatformLibc: () => (/* binding */ getCorePlatformLibc),
+/* harmony export */   getCurrentCorePlatform: () => (/* binding */ getCurrentCorePlatform),
+/* harmony export */   getCurrentLinuxLibc: () => (/* binding */ getCurrentLinuxLibc),
+/* harmony export */   listManagedCorePlatforms: () => (/* binding */ listManagedCorePlatforms),
+/* harmony export */   readArtifact: () => (/* binding */ readArtifact),
+/* harmony export */   resolveCoreDataRoot: () => (/* binding */ resolveCoreDataRoot)
+/* harmony export */ });
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:process */ "node:process");
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_process__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+
+function readArtifact(root, env) {
+    const platformId = getCurrentCorePlatform(env);
+    const expectedLibc = getCorePlatformLibc(platformId);
+    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(root, platformId);
+    const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, 'authority-core.json');
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(metadataPath)) {
+        return null;
+    }
+    let metadata;
+    try {
+        metadata = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(metadataPath, 'utf8'));
+    }
+    catch {
+        return null;
+    }
+    if (metadata.managedBy !== 'authority' || metadata.platform !== (node_process__WEBPACK_IMPORTED_MODULE_3___default().platform) || metadata.arch !== (node_process__WEBPACK_IMPORTED_MODULE_3___default().arch) || (metadata.libc ?? null) !== expectedLibc) {
+        return null;
+    }
+    const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(platformDir, metadata.binaryName);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(binaryPath)) {
+        return null;
+    }
+    if ((node_process__WEBPACK_IMPORTED_MODULE_3___default().platform) !== 'win32') {
+        ensureExecutable(binaryPath);
+    }
+    const binarySha256 = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(binaryPath)).digest('hex');
+    if (metadata.binarySha256 !== binarySha256) {
+        return null;
+    }
+    return {
+        binaryPath,
+        metadata,
+    };
+}
+function ensureExecutable(filePath) {
+    try {
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
+        if ((stat.mode & 0o111) === 0) {
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().chmodSync(filePath, stat.mode | 0o755);
+        }
+    }
+    catch {
+    }
+}
+function describeMissingManagedCore(roots, env) {
+    const expectedPlatform = getCurrentCorePlatform(env);
+    const discoveredPlatforms = Array.from(new Set(roots.flatMap(root => listManagedCorePlatforms(root)))).sort();
+    const platformHint = discoveredPlatforms.length > 0
+        ? `Found managed platforms: ${discoveredPlatforms.join(', ')}.`
+        : 'No managed core platform directories were found.';
+    const libcHint = expectedPlatform.endsWith('-musl')
+        ? ' Detected Linux musl runtime; glibc Linux binaries are not compatible.'
+        : '';
+    return `Authority core binary for ${expectedPlatform} was not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_CORE_DIR}. ${platformHint}${libcHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
+}
+function getCurrentCorePlatform(env) {
+    const basePlatform = `${(node_process__WEBPACK_IMPORTED_MODULE_3___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_3___default().arch)}`;
+    return getCurrentLinuxLibc(env) === 'musl'
+        ? `${basePlatform}-musl`
+        : basePlatform;
+}
+function getCurrentLinuxLibc(env) {
+    if ((node_process__WEBPACK_IMPORTED_MODULE_3___default().platform) !== 'linux') {
+        return null;
+    }
+    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+    const report = node_process__WEBPACK_IMPORTED_MODULE_3___default().report?.getReport?.();
+    const header = report?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
+}
+function getCorePlatformLibc(platformId) {
+    return platformId.endsWith('-musl') ? 'musl' : null;
+}
+function listManagedCorePlatforms(root) {
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(root)) {
+        return [];
+    }
+    try {
+        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(root, { withFileTypes: true })
+            .filter(entry => entry.isDirectory())
+            .map(entry => entry.name);
+    }
+    catch {
+        return [];
+    }
+}
+function resolveCoreDataRoot(value, cwd) {
+    const configuredRoot = typeof value === 'string' && value.trim()
+        ? value
+        : 'data';
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveRuntimePath)(configuredRoot, cwd);
+}
+
+
+/***/ },
+
+/***/ "./src/services/core-errors.ts"
+/*!*************************************!*\
+  !*** ./src/services/core-errors.ts ***!
+  \*************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   buildCoreRequestError: () => (/* binding */ buildCoreRequestError),
+/* harmony export */   extractCoreErrorCode: () => (/* binding */ extractCoreErrorCode),
+/* harmony export */   extractCoreErrorMessage: () => (/* binding */ extractCoreErrorMessage),
+/* harmony export */   mapCoreBackpressureError: () => (/* binding */ mapCoreBackpressureError)
+/* harmony export */ });
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+function extractCoreErrorMessage(payload, statusCode) {
+    if (payload && typeof payload === 'object' && 'error' in payload) {
+        return String(payload.error);
+    }
+    if (typeof payload === 'string' && payload.trim()) {
+        return payload.trim();
+    }
+    return `authority-core request failed with ${statusCode}`;
+}
+function buildCoreRequestError(requestPath, payload, statusCode) {
+    const message = extractCoreErrorMessage(payload, statusCode);
+    const coreCode = extractCoreErrorCode(payload, message);
+    const backpressure = mapCoreBackpressureError(coreCode, statusCode);
+    if (backpressure) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(message, backpressure.status, backpressure.code, backpressure.category, {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+    if (statusCode === 408 || statusCode === 504 || /timed?\s*out|timeout/i.test(message)) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(message, statusCode, 'timeout', 'timeout', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+    if (statusCode === 413 || statusCode === 429 || /exceeds|too large|max/i.test(message)) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(message, statusCode, 'limit_exceeded', 'limit', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+    if (statusCode >= 400 && statusCode < 500) {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(message, statusCode, 'validation_error', 'validation', {
+            requestPath,
+            source: 'core',
+            statusCode,
+        });
+    }
+    return new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(message, statusCode >= 500 ? statusCode : 500, 'core_request_failed', 'core', {
+        requestPath,
+        source: 'core',
+        statusCode,
+    });
+}
+function extractCoreErrorCode(payload, message) {
+    if (payload && typeof payload === 'object') {
+        for (const key of ['code', 'errorCode', 'kind']) {
+            if (key in payload) {
+                const value = payload[key];
+                if (typeof value === 'string' && value.trim()) {
+                    return value.trim();
+                }
+            }
+        }
+    }
+    if (/\bjob_queue_full\b|\bqueue_full\b/i.test(message)) {
+        return 'job_queue_full';
+    }
+    if (/\bconcurrency_limit_exceeded\b/i.test(message)) {
+        return 'concurrency_limit_exceeded';
+    }
+    return null;
+}
+function mapCoreBackpressureError(code, statusCode) {
+    if (statusCode !== 503) {
+        return null;
+    }
+    if (code === 'job_queue_full' || code === 'queue_full') {
+        return { status: 503, code: 'job_queue_full', category: 'backpressure' };
+    }
+    if (code === 'concurrency_limit_exceeded') {
+        return { status: 503, code: 'concurrency_limit_exceeded', category: 'backpressure' };
+    }
+    return null;
+}
+
+
+/***/ },
+
 /***/ "./src/services/core-service.ts"
 /*!**************************************!*\
   !*** ./src/services/core-service.ts ***!
@@ -4565,20 +4797,19 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   CoreService: () => (/* binding */ CoreService)
 /* harmony export */ });
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:crypto */ "node:crypto");
-/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:net */ "node:net");
-/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_net__WEBPACK_IMPORTED_MODULE_2__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
-/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! node:process */ "node:process");
-/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(node_process__WEBPACK_IMPORTED_MODULE_4__);
-/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! node:child_process */ "node:child_process");
-/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_5___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_5__);
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:process */ "node:process");
+/* harmony import */ var node_process__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_process__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _core_errors_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./core-errors.js */ "./src/services/core-errors.ts");
+/* harmony import */ var _core_artifact_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./core-artifact.js */ "./src/services/core-artifact.ts");
+/* harmony import */ var _core_transport_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./core-transport.js */ "./src/services/core-transport.ts");
+/* harmony import */ var _core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./core-trivium-payload.js */ "./src/services/core-trivium-payload.ts");
+
 
 
 
@@ -4600,15 +4831,15 @@ class CoreService {
     stopping = false;
     status;
     constructor(options = {}) {
-        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.runtimeDir ?? __dirname);
-        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.cwd ?? node_process__WEBPACK_IMPORTED_MODULE_4___default().cwd());
-        this.env = options.env ?? (node_process__WEBPACK_IMPORTED_MODULE_4___default().env);
+        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(options.runtimeDir ?? __dirname);
+        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(options.cwd ?? node_process__WEBPACK_IMPORTED_MODULE_1___default().cwd());
+        this.env = options.env ?? (node_process__WEBPACK_IMPORTED_MODULE_1___default().env);
         this.logger = options.logger ?? console;
         this.status = {
             enabled: true,
             state: 'stopped',
-            platform: (node_process__WEBPACK_IMPORTED_MODULE_4___default().platform),
-            arch: (node_process__WEBPACK_IMPORTED_MODULE_4___default().arch),
+            platform: (node_process__WEBPACK_IMPORTED_MODULE_1___default().platform),
+            arch: (node_process__WEBPACK_IMPORTED_MODULE_1___default().arch),
             binaryPath: null,
             port: null,
             pid: null,
@@ -4641,7 +4872,7 @@ class CoreService {
             this.setStatus('missing', {
                 binaryPath: null,
                 version: null,
-                lastError: describeMissingManagedCore(managedCoreRoots, this.env),
+                lastError: (0,_core_artifact_js__WEBPACK_IMPORTED_MODULE_6__.describeMissingManagedCore)(managedCoreRoots, this.env),
                 port: null,
                 pid: null,
                 startedAt: null,
@@ -4649,9 +4880,9 @@ class CoreService {
             });
             return this.getStatus();
         }
-        const port = await getAvailablePort();
-        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.randomToken)();
-        const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_5__.spawn)(artifact.binaryPath, [], {
+        const port = await (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.getAvailablePort)();
+        const token = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.randomToken)();
+        const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_2__.spawn)(artifact.binaryPath, [], {
             cwd: this.cwd,
             env: {
                 ...this.env,
@@ -4660,7 +4891,7 @@ class CoreService {
                 AUTHORITY_CORE_TOKEN: token,
                 AUTHORITY_CORE_VERSION: artifact.metadata.version,
                 AUTHORITY_CORE_API_VERSION: CORE_API_VERSION,
-                AUTHORITY_CORE_DATA_ROOT: resolveCoreDataRoot(this.env.AUTHORITY_CORE_DATA_ROOT, this.cwd),
+                AUTHORITY_CORE_DATA_ROOT: (0,_core_artifact_js__WEBPACK_IMPORTED_MODULE_6__.resolveCoreDataRoot)(this.env.AUTHORITY_CORE_DATA_ROOT, this.cwd),
             },
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
@@ -4692,7 +4923,7 @@ class CoreService {
             return this.getStatus();
         }
         catch (error) {
-            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.asErrorMessage)(error);
+            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error);
             this.logger.error(`[authority] Failed to start authority-core: ${message}`);
             await this.stop();
             this.setStatus('error', {
@@ -4722,17 +4953,17 @@ class CoreService {
             return;
         }
         this.stopping = true;
-        const closePromise = onceChildExit(child);
+        const closePromise = (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.onceChildExit)(child);
         child.kill();
         await Promise.race([
             closePromise,
-            delay(1000),
+            (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.delay)(1000),
         ]);
         if (child.exitCode === null && !child.killed) {
             child.kill('SIGKILL');
             await Promise.race([
                 closePromise,
-                delay(1000),
+                (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.delay)(1000),
             ]);
         }
         this.child = null;
@@ -4749,7 +4980,7 @@ class CoreService {
             return null;
         }
         try {
-            const health = await fetchHealth(this.status.port, this.token);
+            const health = await (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.fetchHealth)(this.status.port, this.token);
             this.status = {
                 ...this.status,
                 state: 'running',
@@ -4760,7 +4991,7 @@ class CoreService {
             return health;
         }
         catch (error) {
-            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.asErrorMessage)(error);
+            const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error);
             this.status = {
                 ...this.status,
                 state: 'error',
@@ -4811,14 +5042,14 @@ class CoreService {
     }
     async insertTrivium(dbPath, request) {
         return await this.request('/v1/trivium/insert', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             vector: request.vector,
             payload: request.payload,
         });
     }
     async insertTriviumWithId(dbPath, request) {
         await this.request('/v1/trivium/insert-with-id', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
             vector: request.vector,
             payload: request.payload,
@@ -4826,40 +5057,40 @@ class CoreService {
     }
     async bulkUpsertTrivium(dbPath, request) {
         return await this.request('/v1/trivium/bulk-upsert', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             items: request.items,
         });
     }
     async getTrivium(dbPath, request) {
         const response = await this.request('/v1/trivium/get', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
         });
         return response.node;
     }
     async updateTriviumPayload(dbPath, request) {
         await this.request('/v1/trivium/update-payload', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
             payload: request.payload,
         });
     }
     async updateTriviumVector(dbPath, request) {
         await this.request('/v1/trivium/update-vector', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
             vector: request.vector,
         });
     }
     async deleteTrivium(dbPath, request) {
         await this.request('/v1/trivium/delete', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
         });
     }
     async linkTrivium(dbPath, request) {
         await this.request('/v1/trivium/link', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             src: request.src,
             dst: request.dst,
             label: request.label,
@@ -4868,39 +5099,39 @@ class CoreService {
     }
     async bulkLinkTrivium(dbPath, request) {
         return await this.request('/v1/trivium/bulk-link', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             items: request.items,
         });
     }
     async unlinkTrivium(dbPath, request) {
         await this.request('/v1/trivium/unlink', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             src: request.src,
             dst: request.dst,
         });
     }
     async bulkUnlinkTrivium(dbPath, request) {
         return await this.request('/v1/trivium/bulk-unlink', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             items: request.items,
         });
     }
     async bulkDeleteTrivium(dbPath, request) {
         return await this.request('/v1/trivium/bulk-delete', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             items: request.items,
         });
     }
     async neighborsTrivium(dbPath, request) {
         return await this.request('/v1/trivium/neighbors', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
             depth: request.depth,
         });
     }
     async searchTrivium(dbPath, request) {
         const response = await this.request('/v1/trivium/search', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             vector: request.vector,
             topK: request.topK,
             expandDepth: request.expandDepth,
@@ -4910,7 +5141,7 @@ class CoreService {
     }
     async searchAdvancedTrivium(dbPath, request) {
         const response = await this.request('/v1/trivium/search-advanced', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             vector: request.vector,
             ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
             ...(request.topK === undefined ? {} : { topK: request.topK }),
@@ -4937,7 +5168,7 @@ class CoreService {
     }
     async searchHybridTrivium(dbPath, request) {
         const response = await this.request('/v1/trivium/search-hybrid', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             vector: request.vector,
             queryText: request.queryText,
             ...(request.topK === undefined ? {} : { topK: request.topK }),
@@ -4950,7 +5181,7 @@ class CoreService {
     }
     async searchHybridWithContextTrivium(dbPath, request) {
         return await this.request('/v1/trivium/search-hybrid-context', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             vector: request.vector,
             queryText: request.queryText,
             ...(request.topK === undefined ? {} : { topK: request.topK }),
@@ -4966,54 +5197,54 @@ class CoreService {
     }
     async tqlTriviumPage(dbPath, request) {
         return await this.request('/v1/trivium/tql', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             query: request.query,
             ...(request.page === undefined ? {} : { page: request.page }),
         });
     }
     async tqlMutTrivium(dbPath, request) {
         return await this.request('/v1/trivium/tql-mut', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             query: request.query,
         });
     }
     async createIndexTrivium(dbPath, request) {
         await this.request('/v1/trivium/create-index', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             field: request.field,
         });
     }
     async dropIndexTrivium(dbPath, request) {
         await this.request('/v1/trivium/drop-index', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             field: request.field,
         });
     }
     async indexTextTrivium(dbPath, request) {
         await this.request('/v1/trivium/index-text', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
             text: request.text,
         });
     }
     async indexKeywordTrivium(dbPath, request) {
         await this.request('/v1/trivium/index-keyword', {
-            ...buildTriviumOpenPayload(dbPath, request),
+            ...(0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request),
             id: request.id,
             keyword: request.keyword,
         });
     }
     async buildTextIndexTrivium(dbPath, request = {}) {
-        await this.request('/v1/trivium/build-text-index', buildTriviumOpenPayload(dbPath, request));
+        await this.request('/v1/trivium/build-text-index', (0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request));
     }
     async compactTrivium(dbPath, request = {}) {
-        await this.request('/v1/trivium/compact', buildTriviumOpenPayload(dbPath, request));
+        await this.request('/v1/trivium/compact', (0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request));
     }
     async flushTrivium(dbPath, request = {}) {
-        await this.request('/v1/trivium/flush', buildTriviumOpenPayload(dbPath, request));
+        await this.request('/v1/trivium/flush', (0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request));
     }
     async statTrivium(dbPath, request = {}) {
-        return await this.request('/v1/trivium/stat', buildTriviumOpenPayload(dbPath, request));
+        return await this.request('/v1/trivium/stat', (0,_core_trivium_payload_js__WEBPACK_IMPORTED_MODULE_8__.buildTriviumOpenPayload)(dbPath, request));
     }
     async initializeControlSession(dbPath, sessionToken, timestamp, user, config) {
         return await this.request('/v1/control/session/init', {
@@ -5297,7 +5528,7 @@ class CoreService {
             if (this.status.state !== 'starting') {
                 return this.getStatus();
             }
-            await delay(HEALTH_POLL_INTERVAL_MS);
+            await (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.delay)(HEALTH_POLL_INTERVAL_MS);
         }
         return this.getStatus();
     }
@@ -5312,17 +5543,17 @@ class CoreService {
                 throw new Error(`authority-core exited before becoming healthy with code ${child.exitCode}`);
             }
             try {
-                return await fetchHealth(port, token);
+                return await (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.fetchHealth)(port, token);
             }
             catch {
-                await delay(HEALTH_POLL_INTERVAL_MS);
+                await (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.delay)(HEALTH_POLL_INTERVAL_MS);
             }
         }
         throw new Error(`authority-core did not become healthy within ${HEALTH_TIMEOUT_MS}ms`);
     }
     resolveArtifact(roots = this.resolveManagedCoreRoots()) {
         for (const root of roots) {
-            const artifact = readArtifact(root, this.env);
+            const artifact = (0,_core_artifact_js__WEBPACK_IMPORTED_MODULE_6__.readArtifact)(root, this.env);
             if (artifact) {
                 return artifact;
             }
@@ -5333,13 +5564,13 @@ class CoreService {
         const explicitRoot = this.env.AUTHORITY_CORE_ROOT?.trim();
         const candidates = new Set();
         if (explicitRoot) {
-            candidates.add(node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(explicitRoot));
+            candidates.add(node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(explicitRoot));
         }
         for (const origin of [this.runtimeDir, this.cwd]) {
-            let current = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(origin);
+            let current = node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(origin);
             while (true) {
-                candidates.add(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR));
-                const parent = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(current);
+                candidates.add(node_path__WEBPACK_IMPORTED_MODULE_0___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_3__.AUTHORITY_MANAGED_CORE_DIR));
+                const parent = node_path__WEBPACK_IMPORTED_MODULE_0___default().dirname(current);
                 if (parent === current) {
                     break;
                 }
@@ -5361,7 +5592,7 @@ class CoreService {
             status = await this.start();
         }
         if (status.state !== 'running' || !this.token || !status.port) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(status.lastError ?? 'Authority core is not available', 503, 'core_unavailable', 'core', {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(status.lastError ?? 'Authority core is not available', 503, 'core_unavailable', 'core', {
                 state: status.state,
                 lastError: status.lastError,
             });
@@ -5378,125 +5609,39 @@ class CoreService {
             });
         }
         catch (error) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError((0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.asErrorMessage)(error), 503, 'core_unavailable', 'core', {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error), 503, 'core_unavailable', 'core', {
                 requestPath,
                 state: status.state,
             });
         }
-        const payload = await readCorePayload(response);
+        const payload = await (0,_core_transport_js__WEBPACK_IMPORTED_MODULE_7__.readCorePayload)(response);
         if (!response.ok) {
-            throw buildCoreRequestError(requestPath, payload, response.status);
+            throw (0,_core_errors_js__WEBPACK_IMPORTED_MODULE_5__.buildCoreRequestError)(requestPath, payload, response.status);
         }
         return payload;
     }
 }
-function readArtifact(root, env) {
-    const platformId = getCurrentCorePlatform(env);
-    const expectedLibc = getCorePlatformLibc(platformId);
-    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(root, platformId);
-    const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, 'authority-core.json');
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(metadataPath)) {
-        return null;
-    }
-    let metadata;
-    try {
-        metadata = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(metadataPath, 'utf8'));
-    }
-    catch {
-        return null;
-    }
-    if (metadata.managedBy !== 'authority' || metadata.platform !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) || metadata.arch !== (node_process__WEBPACK_IMPORTED_MODULE_4___default().arch) || (metadata.libc ?? null) !== expectedLibc) {
-        return null;
-    }
-    const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(platformDir, metadata.binaryName);
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(binaryPath)) {
-        return null;
-    }
-    if ((node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) !== 'win32') {
-        ensureExecutable(binaryPath);
-    }
-    const binarySha256 = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(binaryPath)).digest('hex');
-    if (metadata.binarySha256 !== binarySha256) {
-        return null;
-    }
-    return {
-        binaryPath,
-        metadata,
-    };
-}
-function ensureExecutable(filePath) {
-    try {
-        const stat = node_fs__WEBPACK_IMPORTED_MODULE_0___default().statSync(filePath);
-        if ((stat.mode & 0o111) === 0) {
-            node_fs__WEBPACK_IMPORTED_MODULE_0___default().chmodSync(filePath, stat.mode | 0o755);
-        }
-    }
-    catch {
-    }
-}
-function describeMissingManagedCore(roots, env) {
-    const expectedPlatform = getCurrentCorePlatform(env);
-    const discoveredPlatforms = Array.from(new Set(roots.flatMap(root => listManagedCorePlatforms(root)))).sort();
-    const platformHint = discoveredPlatforms.length > 0
-        ? `Found managed platforms: ${discoveredPlatforms.join(', ')}.`
-        : 'No managed core platform directories were found.';
-    const libcHint = expectedPlatform.endsWith('-musl')
-        ? ' Detected Linux musl runtime; glibc Linux binaries are not compatible.'
-        : '';
-    return `Authority core binary for ${expectedPlatform} was not found under ${_constants_js__WEBPACK_IMPORTED_MODULE_6__.AUTHORITY_MANAGED_CORE_DIR}. ${platformHint}${libcHint} Install the multi-platform package, or run npm run build:core in a full source checkout for this platform.`;
-}
-function getCurrentCorePlatform(env) {
-    const basePlatform = `${(node_process__WEBPACK_IMPORTED_MODULE_4___default().platform)}-${(node_process__WEBPACK_IMPORTED_MODULE_4___default().arch)}`;
-    return getCurrentLinuxLibc(env) === 'musl'
-        ? `${basePlatform}-musl`
-        : basePlatform;
-}
-function getCurrentLinuxLibc(env) {
-    if ((node_process__WEBPACK_IMPORTED_MODULE_4___default().platform) !== 'linux') {
-        return null;
-    }
-    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
-    if (override === 'musl') {
-        return 'musl';
-    }
-    if (override === 'gnu' || override === 'glibc') {
-        return 'gnu';
-    }
-    const report = node_process__WEBPACK_IMPORTED_MODULE_4___default().report?.getReport?.();
-    const header = report?.header;
-    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
-}
-function getCorePlatformLibc(platformId) {
-    return platformId.endsWith('-musl') ? 'musl' : null;
-}
-function listManagedCorePlatforms(root) {
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(root)) {
-        return [];
-    }
-    try {
-        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(root, { withFileTypes: true })
-            .filter(entry => entry.isDirectory())
-            .map(entry => entry.name);
-    }
-    catch {
-        return [];
-    }
-}
-function resolveCoreDataRoot(value, cwd) {
-    const configuredRoot = typeof value === 'string' && value.trim()
-        ? value
-        : 'data';
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.resolveRuntimePath)(configuredRoot, cwd);
-}
-function buildTriviumOpenPayload(dbPath, request) {
-    return {
-        dbPath,
-        ...(request.dim === undefined ? {} : { dim: request.dim }),
-        ...(request.dtype === undefined ? {} : { dtype: request.dtype }),
-        ...(request.syncMode === undefined ? {} : { syncMode: request.syncMode }),
-        ...(request.storageMode === undefined ? {} : { storageMode: request.storageMode }),
-    };
-}
+
+
+/***/ },
+
+/***/ "./src/services/core-transport.ts"
+/*!****************************************!*\
+  !*** ./src/services/core-transport.ts ***!
+  \****************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   delay: () => (/* binding */ delay),
+/* harmony export */   fetchHealth: () => (/* binding */ fetchHealth),
+/* harmony export */   getAvailablePort: () => (/* binding */ getAvailablePort),
+/* harmony export */   onceChildExit: () => (/* binding */ onceChildExit),
+/* harmony export */   readCorePayload: () => (/* binding */ readCorePayload)
+/* harmony export */ });
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:net */ "node:net");
+/* harmony import */ var node_net__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_net__WEBPACK_IMPORTED_MODULE_0__);
+
 async function fetchHealth(port, token) {
     const response = await fetch(`http://127.0.0.1:${port}/health`, {
         headers: {
@@ -5510,7 +5655,7 @@ async function fetchHealth(port, token) {
 }
 async function getAvailablePort() {
     return await new Promise((resolve, reject) => {
-        const server = node_net__WEBPACK_IMPORTED_MODULE_2___default().createServer();
+        const server = node_net__WEBPACK_IMPORTED_MODULE_0___default().createServer();
         server.unref();
         server.on('error', reject);
         server.listen(0, '127.0.0.1', () => {
@@ -5543,86 +5688,31 @@ async function readCorePayload(response) {
     const text = await response.text();
     return text || undefined;
 }
-function extractCoreErrorMessage(payload, statusCode) {
-    if (payload && typeof payload === 'object' && 'error' in payload) {
-        return String(payload.error);
-    }
-    if (typeof payload === 'string' && payload.trim()) {
-        return payload.trim();
-    }
-    return `authority-core request failed with ${statusCode}`;
-}
-function buildCoreRequestError(requestPath, payload, statusCode) {
-    const message = extractCoreErrorMessage(payload, statusCode);
-    const coreCode = extractCoreErrorCode(payload, message);
-    const backpressure = mapCoreBackpressureError(coreCode, statusCode);
-    if (backpressure) {
-        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, backpressure.status, backpressure.code, backpressure.category, {
-            requestPath,
-            source: 'core',
-            statusCode,
-        });
-    }
-    if (statusCode === 408 || statusCode === 504 || /timed?\s*out|timeout/i.test(message)) {
-        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'timeout', 'timeout', {
-            requestPath,
-            source: 'core',
-            statusCode,
-        });
-    }
-    if (statusCode === 413 || statusCode === 429 || /exceeds|too large|max/i.test(message)) {
-        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'limit_exceeded', 'limit', {
-            requestPath,
-            source: 'core',
-            statusCode,
-        });
-    }
-    if (statusCode >= 400 && statusCode < 500) {
-        return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode, 'validation_error', 'validation', {
-            requestPath,
-            source: 'core',
-            statusCode,
-        });
-    }
-    return new _utils_js__WEBPACK_IMPORTED_MODULE_7__.AuthorityServiceError(message, statusCode >= 500 ? statusCode : 500, 'core_request_failed', 'core', {
-        requestPath,
-        source: 'core',
-        statusCode,
-    });
-}
-function extractCoreErrorCode(payload, message) {
-    if (payload && typeof payload === 'object') {
-        for (const key of ['code', 'errorCode', 'kind']) {
-            if (key in payload) {
-                const value = payload[key];
-                if (typeof value === 'string' && value.trim()) {
-                    return value.trim();
-                }
-            }
-        }
-    }
-    if (/\bjob_queue_full\b|\bqueue_full\b/i.test(message)) {
-        return 'job_queue_full';
-    }
-    if (/\bconcurrency_limit_exceeded\b/i.test(message)) {
-        return 'concurrency_limit_exceeded';
-    }
-    return null;
-}
-function mapCoreBackpressureError(code, statusCode) {
-    if (statusCode !== 503) {
-        return null;
-    }
-    if (code === 'job_queue_full' || code === 'queue_full') {
-        return { status: 503, code: 'job_queue_full', category: 'backpressure' };
-    }
-    if (code === 'concurrency_limit_exceeded') {
-        return { status: 503, code: 'concurrency_limit_exceeded', category: 'backpressure' };
-    }
-    return null;
-}
 function delay(durationMs) {
     return new Promise(resolve => setTimeout(resolve, durationMs));
+}
+
+
+/***/ },
+
+/***/ "./src/services/core-trivium-payload.ts"
+/*!**********************************************!*\
+  !*** ./src/services/core-trivium-payload.ts ***!
+  \**********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   buildTriviumOpenPayload: () => (/* binding */ buildTriviumOpenPayload)
+/* harmony export */ });
+function buildTriviumOpenPayload(dbPath, request) {
+    return {
+        dbPath,
+        ...(request.dim === undefined ? {} : { dim: request.dim }),
+        ...(request.dtype === undefined ? {} : { dtype: request.dtype }),
+        ...(request.syncMode === undefined ? {} : { syncMode: request.syncMode }),
+        ...(request.storageMode === undefined ? {} : { storageMode: request.storageMode }),
+    };
 }
 
 
