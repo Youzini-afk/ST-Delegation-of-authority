@@ -474,7 +474,7 @@ export interface BmeVectorManifestRequest {
     database?: string;
 }
 
-export type BmeVectorManifestStatus = 'missing' | 'clean' | 'dirty' | 'failed' | 'unknown';
+export type BmeVectorManifestStatus = 'missing' | 'clean' | 'dirty' | 'failed' | 'stale' | 'unknown';
 
 export interface BmeVectorManifestResponse {
     database: string;
@@ -492,12 +492,16 @@ export interface BmeVectorManifestResponse {
     nodeCount: number | null;
     lastFlushAt: string | null;
     updatedAt: string | null;
+    vectorSpaceId?: string;
+    observedDim?: number | null;
 }
 
 export interface BmeVectorApplyRequest extends TriviumOpenOptions {
     items: TriviumBulkUpsertItem[];
     links?: TriviumBulkLinkItem[];
     idempotencyKey?: string;
+    vectorSpaceId?: string;
+    observedDim?: number;
 }
 
 export interface BmeVectorApplyResponse {
