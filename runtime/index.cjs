@@ -309,13 +309,13 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
-/* harmony import */ var _routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./routes/bme-routes.js */ "./src/routes/bme-routes.ts");
-/* harmony import */ var _routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./routes/st-manager-routes.js */ "./src/routes/st-manager-routes.ts");
-/* harmony import */ var _routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./routes/storage-routes.js */ "./src/routes/storage-routes.ts");
-/* harmony import */ var _routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./routes/jobs-events-routes.js */ "./src/routes/jobs-events-routes.ts");
-/* harmony import */ var _routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/trivium-routes.js */ "./src/routes/trivium-routes.ts");
-/* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
-/* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
+/* harmony import */ var _routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./routes/st-manager-routes.js */ "./src/routes/st-manager-routes.ts");
+/* harmony import */ var _routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./routes/storage-routes.js */ "./src/routes/storage-routes.ts");
+/* harmony import */ var _routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./routes/jobs-events-routes.js */ "./src/routes/jobs-events-routes.ts");
+/* harmony import */ var _routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./routes/trivium-routes.js */ "./src/routes/trivium-routes.ts");
+/* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
+/* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
+/* harmony import */ var _routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/bme-routes.js */ "./src/routes/bme-routes.ts");
 /* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
 
@@ -524,8 +524,8 @@ async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatab
         runtime.storage.listBlobs(user, extensionId),
         runtime.files.getUsageSummary(user, extensionId),
     ]);
-    const resolvedSqlDatabases = sqlDatabases ?? (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
-    const resolvedTriviumDatabases = triviumDatabases ?? (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
+    const resolvedSqlDatabases = sqlDatabases ?? (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+    const resolvedTriviumDatabases = triviumDatabases ?? (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
     const blobSummary = summarizeBlobRecords(blobs);
     const sqlDatabaseSummary = summarizeDatabases(resolvedSqlDatabases);
     const triviumDatabaseSummary = summarizeTriviumDatabases(resolvedTriviumDatabases);
@@ -648,8 +648,8 @@ function pickLatestIsoTimestamp(left, right) {
 async function buildUsageSummary(runtime, user) {
     const extensions = await runtime.extensions.listExtensions(user);
     const summaries = await Promise.all(extensions.map(async (extension) => {
-        const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
-        const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
+        const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
+        const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
         return await buildUsageSummaryExtension(runtime, user, extension, sqlDatabases, triviumDatabases);
     }));
     return {
@@ -663,8 +663,8 @@ async function buildExtensionDiagnosticSnapshot(runtime, user, extensionId, exte
     if (!resolvedExtension) {
         throw new Error('Extension not found');
     }
-    const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
-    const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
+    const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+    const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
     const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
     const jobsPage = await runtime.jobs.listPage(user, extensionId);
     return {
@@ -775,8 +775,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
     });
-    (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_4__.registerStManagerRoutes)(router, runtime, fail);
-    (0,_routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerBmeRoutes)(router, runtime, fail);
+    (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
     router.post('/session/init', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
@@ -861,8 +860,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
-                const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
-                const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
+                const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
+                const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
                 return {
                     ...extension,
                     grantedCount: grants.filter(grant => grant.status === 'granted').length,
@@ -884,8 +883,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             if (!extension) {
                 throw new Error('Extension not found');
             }
-            const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
-            const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
+            const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+            const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
             const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
             const jobsPage = await runtime.jobs.listPage(user, extensionId);
             ok(res, {
@@ -923,11 +922,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
         }
     });
-    (0,_routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerStorageRoutes)(router, runtime, fail);
-    (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerSqlRoutes)(router, runtime, fail);
-    (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerTriviumRoutes)(router, runtime, fail);
-    (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerHttpRoutes)(router, runtime, fail);
-    (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerJobsAndEventsRoutes)(router, runtime, fail);
+    (0,_routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__.registerStorageRoutes)(router, runtime, fail);
+    (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerSqlRoutes)(router, runtime, fail);
+    (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerTriviumRoutes)(router, runtime, fail);
+    (0,_routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerBmeRoutes)(router, runtime, fail);
+    (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
+    (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
     router.get('/admin/policies', async (req, res) => {
         try {
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
@@ -11345,6 +11345,7 @@ class TriviumService {
             database,
             exists,
             status: exists ? (bmeManifest.vectorSpaceId ? 'clean' : 'unknown') : 'missing',
+            backend: 'authority',
             embeddingMode: 'client',
             serverEmbeddingSupported: false,
             vectorApplySupported: true,
@@ -11357,6 +11358,10 @@ class TriviumService {
             nodeCount,
             lastFlushAt,
             updatedAt,
+            ...(bmeManifest.graphRevision != null ? { graphRevision: bmeManifest.graphRevision, revision: bmeManifest.graphRevision } : {}),
+            ...(bmeManifest.collectionId ? { collectionId: bmeManifest.collectionId } : {}),
+            ...(bmeManifest.chatId ? { chatId: bmeManifest.chatId } : {}),
+            ...(bmeManifest.modelScope ? { modelScope: bmeManifest.modelScope } : {}),
             ...(bmeManifest.vectorSpaceId ? { vectorSpaceId: bmeManifest.vectorSpaceId } : {}),
             ...(bmeManifest.observedDim != null ? { observedDim: bmeManifest.observedDim } : {}),
         };
@@ -11400,13 +11405,30 @@ class TriviumService {
         if (validation.observedDim != null)
             manifest.observedDim = validation.observedDim;
         if (upsert.failureCount === 0 && linkResult.failureCount === 0) {
+            manifest.exists = true;
+            manifest.status = 'clean';
             const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
             await this.writeBmeVectorManifestMeta(mappingDbPath, {
                 vectorSpaceId: validation.vectorSpaceId,
                 observedDim: validation.observedDim,
+                graphRevision: Math.max(0, Math.floor(Number(request.graphRevision) || 0)),
+                collectionId: typeof request.collectionId === 'string' ? request.collectionId.trim() : '',
+                chatId: typeof request.chatId === 'string' ? request.chatId.trim() : '',
+                modelScope: typeof request.modelScope === 'string' ? request.modelScope.trim() : '',
                 updatedAt: new Date().toISOString(),
             });
         }
+        const graphRevision = Math.max(0, Math.floor(Number(request.graphRevision) || 0));
+        if (graphRevision > 0) {
+            manifest.graphRevision = graphRevision;
+            manifest.revision = graphRevision;
+        }
+        if (typeof request.collectionId === 'string' && request.collectionId.trim())
+            manifest.collectionId = request.collectionId.trim();
+        if (typeof request.chatId === 'string' && request.chatId.trim())
+            manifest.chatId = request.chatId.trim();
+        if (typeof request.modelScope === 'string' && request.modelScope.trim())
+            manifest.modelScope = request.modelScope.trim();
         return {
             ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
             appliedAt: new Date().toISOString(),
@@ -11494,9 +11516,14 @@ class TriviumService {
             const parsed = JSON.parse(raw);
             const vectorSpaceId = typeof parsed.vectorSpaceId === 'string' ? parsed.vectorSpaceId.trim() : '';
             const observedDim = Number(parsed.observedDim ?? 0);
+            const graphRevision = Number(parsed.graphRevision ?? 0);
             return {
                 ...(vectorSpaceId ? { vectorSpaceId } : {}),
                 ...(Number.isFinite(observedDim) && observedDim > 0 ? { observedDim: Math.floor(observedDim) } : {}),
+                ...(Number.isFinite(graphRevision) && graphRevision > 0 ? { graphRevision: Math.floor(graphRevision) } : {}),
+                ...(typeof parsed.collectionId === 'string' && parsed.collectionId.trim() ? { collectionId: parsed.collectionId.trim() } : {}),
+                ...(typeof parsed.chatId === 'string' && parsed.chatId.trim() ? { chatId: parsed.chatId.trim() } : {}),
+                ...(typeof parsed.modelScope === 'string' && parsed.modelScope.trim() ? { modelScope: parsed.modelScope.trim() } : {}),
                 ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
             };
         }
@@ -11508,6 +11535,10 @@ class TriviumService {
         await this.writeMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY, JSON.stringify({
             vectorSpaceId: meta.vectorSpaceId || '',
             observedDim: meta.observedDim ?? null,
+            graphRevision: Number.isFinite(Number(meta.graphRevision)) ? Math.max(0, Math.floor(Number(meta.graphRevision))) : 0,
+            collectionId: meta.collectionId || '',
+            chatId: meta.chatId || '',
+            modelScope: meta.modelScope || '',
             updatedAt: meta.updatedAt || new Date().toISOString(),
         }));
     }
