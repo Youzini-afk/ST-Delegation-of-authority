@@ -301,9 +301,19 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+/* harmony import */ var _routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./routes/st-manager-routes.js */ "./src/routes/st-manager-routes.ts");
+/* harmony import */ var _routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./routes/storage-routes.js */ "./src/routes/storage-routes.ts");
+/* harmony import */ var _routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./routes/jobs-events-routes.js */ "./src/routes/jobs-events-routes.ts");
+/* harmony import */ var _routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./routes/trivium-routes.js */ "./src/routes/trivium-routes.ts");
+/* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
+/* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+
+
+
+
+
 
 
 
@@ -317,7 +327,7 @@ function ok(res, data) {
 function fail(runtime, req, res, extensionId, error) {
     const normalized = normalizeAuthorityError(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
         if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
                 ...normalized.payload.details,
@@ -342,7 +352,7 @@ function buildPermissionErrorPayload(message) {
         return null;
     }
     const target = match[2]?.trim();
-    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.buildPermissionDescriptor)(resource, target);
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.buildPermissionDescriptor)(resource, target);
     return {
         error: message,
         code: 'permission_not_granted',
@@ -374,13 +384,13 @@ function isPermissionErrorDetails(value) {
         && 'riskLevel' in value;
 }
 function normalizeAuthorityError(error) {
-    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isAuthorityServiceError)(error)) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.isAuthorityServiceError)(error)) {
         return {
             status: error.status,
             payload: error.toPayload(),
         };
     }
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.asErrorMessage)(error);
     const permissionErrorPayload = buildPermissionErrorPayload(message);
     if (permissionErrorPayload) {
         return {
@@ -480,184 +490,6 @@ function buildEffectiveTransferMaxBytes() {
 function parseAdminUpdateAction(value) {
     return value === 'redeploy-sdk' ? 'redeploy-sdk' : 'git-pull';
 }
-function getSqlDatabaseName(value) {
-    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
-}
-function getSqlMigrationTableName(value) {
-    const candidate = typeof value === 'string' && value.trim() ? value.trim() : '_authority_migrations';
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate)) {
-        throw new Error('SQL migration tableName must be a valid identifier');
-    }
-    return candidate;
-}
-function buildEmptySqlCursorPage(page) {
-    const limit = Number.isInteger(page.limit) && Number(page.limit) > 0
-        ? Math.min(Number(page.limit), 1000)
-        : 100;
-    const cursor = page.cursor?.trim();
-    if (cursor) {
-        const offset = Number(cursor);
-        if (!Number.isSafeInteger(offset) || offset < 0) {
-            throw new Error('invalid_page_cursor');
-        }
-    }
-    return {
-        nextCursor: null,
-        limit,
-        hasMore: false,
-        totalCount: 0,
-    };
-}
-function readSqlMigrationRecord(row) {
-    if (typeof row.id !== 'string' || !row.id.trim()) {
-        throw new Error('SQL migration row is missing id');
-    }
-    return {
-        id: row.id,
-        appliedAt: typeof row.appliedAt === 'string' ? row.appliedAt : '',
-    };
-}
-function getSqlSchemaObjectType(value) {
-    if (value == null || value === '') {
-        return null;
-    }
-    if (value === 'table' || value === 'index' || value === 'view' || value === 'trigger') {
-        return value;
-    }
-    throw new Error('SQL schema type must be table, index, view, or trigger');
-}
-function readSqlSchemaObjectRecord(row) {
-    const type = getSqlSchemaObjectType(row.type);
-    if (!type) {
-        throw new Error('SQL schema row is missing type');
-    }
-    if (typeof row.name !== 'string' || !row.name.trim()) {
-        throw new Error('SQL schema row is missing name');
-    }
-    return {
-        type,
-        name: row.name,
-        tableName: typeof row.tableName === 'string' && row.tableName.trim() ? row.tableName : null,
-        sql: typeof row.sql === 'string' ? row.sql : null,
-    };
-}
-function resolvePrivateSqlDatabaseDir(user, extensionId) {
-    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
-}
-function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
-}
-async function sqlMigrationTableExists(runtime, dbPath, tableName) {
-    const result = await runtime.core.querySql(dbPath, {
-        statement: 'SELECT name FROM sqlite_master WHERE type = ?1 AND name = ?2 LIMIT 1',
-        params: ['table', tableName],
-    });
-    return result.rows.length > 0;
-}
-async function listSqlMigrationsPage(runtime, user, extensionId, request) {
-    const database = getSqlDatabaseName(request.database);
-    const tableName = getSqlMigrationTableName(request.tableName);
-    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath) || !await sqlMigrationTableExists(runtime, dbPath, tableName)) {
-        return {
-            tableName,
-            migrations: [],
-            ...(request.page ? { page: buildEmptySqlCursorPage(request.page) } : {}),
-        };
-    }
-    const result = await runtime.core.querySql(dbPath, {
-        statement: `SELECT id, applied_at AS appliedAt FROM ${tableName} ORDER BY applied_at ASC, id ASC`,
-        ...(request.page ? { page: request.page } : {}),
-    });
-    return {
-        tableName,
-        migrations: result.rows.map(row => readSqlMigrationRecord(row)),
-        ...(result.page ? { page: result.page } : {}),
-    };
-}
-async function listSqlSchemaPage(runtime, user, extensionId, request) {
-    const database = getSqlDatabaseName(request.database);
-    const type = getSqlSchemaObjectType(request.type);
-    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath)) {
-        return {
-            objects: [],
-            ...(request.page ? { page: buildEmptySqlCursorPage(request.page) } : {}),
-        };
-    }
-    const params = type ? [type] : [];
-    const result = await runtime.core.querySql(dbPath, {
-        statement: `SELECT type, name, tbl_name AS tableName, sql
-            FROM sqlite_master
-            WHERE type IN ('table', 'index', 'view', 'trigger')
-                AND name NOT LIKE 'sqlite_%'${type ? ' AND type = ?1' : ''}
-            ORDER BY type ASC, name ASC`,
-        ...(params.length > 0 ? { params } : {}),
-        ...(request.page ? { page: request.page } : {}),
-    });
-    return {
-        objects: result.rows.map(row => readSqlSchemaObjectRecord(row)),
-        ...(result.page ? { page: result.page } : {}),
-    };
-}
-function getTriviumDatabaseName(value) {
-    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
-}
-function decodeHttpResponseBody(bytes, encoding) {
-    if (encoding === 'base64') {
-        return bytes.toString('base64');
-    }
-    return bytes.toString('utf8');
-}
-function resolvePrivateTriviumDatabaseDir(user, extensionId) {
-    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
-}
-function resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
-}
-async function listPrivateTriviumDatabases(runtime, user, extensionId) {
-    return await runtime.trivium.listDatabases(user, extensionId);
-}
-async function statPrivateSqlDatabase(runtime, user, extensionId, databaseName) {
-    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, databaseName);
-    return await runtime.core.statSql(dbPath, { database: databaseName });
-}
-async function listPrivateSqlDatabases(runtime, user, extensionId) {
-    const databaseDir = resolvePrivateSqlDatabaseDir(user, extensionId);
-    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(databaseDir)) {
-        return { databases: [] };
-    }
-    const databases = (await Promise.all(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(databaseDir, { withFileTypes: true })
-        .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
-        .map(async (entry) => {
-        const databaseName = entry.name.slice(0, -'.sqlite'.length);
-        const stat = await statPrivateSqlDatabase(runtime, user, extensionId, databaseName);
-        return {
-            name: stat.name,
-            fileName: stat.fileName,
-            sizeBytes: stat.sizeBytes,
-            updatedAt: stat.updatedAt,
-            runtimeConfig: stat.runtimeConfig,
-            slowQuery: stat.slowQuery,
-        };
-    })))
-        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
-    return { databases };
-}
-function previewSqlStatement(statement) {
-    const normalized = statement.replace(/\s+/g, ' ').trim();
-    return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
-}
-function assertSqlStatementCount(statements, label) {
-    if (!Array.isArray(statements)) {
-        return;
-    }
-    if (statements.length > _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_SQL_BATCH_STATEMENTS) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError(`${label} exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_SQL_BATCH_STATEMENTS} statements`, 400, 'validation_error', 'validation', { statementCount: statements.length, maxStatements: _constants_js__WEBPACK_IMPORTED_MODULE_2__.MAX_SQL_BATCH_STATEMENTS });
-    }
-}
 function summarizeBlobRecords(records) {
     return {
         count: records.length,
@@ -682,8 +514,8 @@ async function buildExtensionStorageSummary(runtime, user, extensionId, sqlDatab
         runtime.storage.listBlobs(user, extensionId),
         runtime.files.getUsageSummary(user, extensionId),
     ]);
-    const resolvedSqlDatabases = sqlDatabases ?? (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
-    const resolvedTriviumDatabases = triviumDatabases ?? (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
+    const resolvedSqlDatabases = sqlDatabases ?? (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+    const resolvedTriviumDatabases = triviumDatabases ?? (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
     const blobSummary = summarizeBlobRecords(blobs);
     const sqlDatabaseSummary = summarizeDatabases(resolvedSqlDatabases);
     const triviumDatabaseSummary = summarizeTriviumDatabases(resolvedTriviumDatabases);
@@ -806,8 +638,8 @@ function pickLatestIsoTimestamp(left, right) {
 async function buildUsageSummary(runtime, user) {
     const extensions = await runtime.extensions.listExtensions(user);
     const summaries = await Promise.all(extensions.map(async (extension) => {
-        const sqlDatabases = (await listPrivateSqlDatabases(runtime, user, extension.id)).databases;
-        const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extension.id)).databases;
+        const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
+        const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
         return await buildUsageSummaryExtension(runtime, user, extension, sqlDatabases, triviumDatabases);
     }));
     return {
@@ -821,8 +653,8 @@ async function buildExtensionDiagnosticSnapshot(runtime, user, extensionId, exte
     if (!resolvedExtension) {
         throw new Error('Extension not found');
     }
-    const databases = (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
-    const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
+    const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+    const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
     const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
     const jobsPage = await runtime.jobs.listPage(user, extensionId);
     return {
@@ -928,24 +760,1160 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_9__.createAuthorityRuntime)()) {
+    router.post('/probe', async (req, res) => {
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+        ok(res, await buildProbeResponse(runtime, user));
+    });
+    (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
+    router.post('/session/init', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const config = (req.body ?? {});
+            const session = await runtime.sessions.createSession(user, config);
+            const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
+            const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
+            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
+            await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
+            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/session/current', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
+            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/permissions/evaluate', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const evaluation = await runtime.permissions.evaluate(user, session, req.body);
+            if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
+                await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
+                    key: evaluation.key,
+                    resource: evaluation.resource,
+                    target: evaluation.target,
+                    decision: evaluation.decision,
+                });
+            }
+            ok(res, evaluation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/permissions/evaluate-batch', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_10__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+            }
+            const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
+            const response = { results };
+            ok(res, response);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/permissions/resolve', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getSessionToken)(req), user);
+            const payload = req.body;
+            const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
+            await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
+                key: grant.key,
+                status: grant.status,
+                scope: grant.scope,
+                choice: payload.choice,
+            });
+            ok(res, grant);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/extensions', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
+                const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
+                const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
+                const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extension.id)).databases;
+                return {
+                    ...extension,
+                    grantedCount: grants.filter(grant => grant.status === 'granted').length,
+                    deniedCount: grants.filter(grant => grant.status === 'denied').length,
+                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, sqlDatabases, triviumDatabases),
+                };
+            }));
+            ok(res, list);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/extensions/:id', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const extensionId = decodeURIComponent(req.params?.id ?? '');
+            const extension = await runtime.extensions.getExtension(user, extensionId);
+            if (!extension) {
+                throw new Error('Extension not found');
+            }
+            const databases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extensionId)).databases;
+            const triviumDatabases = (await (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.listPrivateTriviumDatabases)(runtime, user, extensionId)).databases;
+            const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
+            const jobsPage = await runtime.jobs.listPage(user, extensionId);
+            ok(res, {
+                extension,
+                grants: await runtime.permissions.listPersistentGrants(user, extensionId),
+                policies: await runtime.permissions.getPolicyEntries(user, extensionId),
+                activity,
+                jobs: jobsPage.jobs,
+                jobsPage: jobsPage.page,
+                databases,
+                triviumDatabases,
+                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
+        }
+    });
+    router.post('/extensions/:id/grants/reset', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const extensionId = decodeURIComponent(req.params?.id ?? '');
+            await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
+            await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
+                keys: req.body?.keys ?? null,
+            });
+            if (typeof res.sendStatus === 'function') {
+                res.sendStatus(204);
+            }
+            else {
+                res.status(204).send();
+            }
+        }
+        catch (error) {
+            fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
+        }
+    });
+    (0,_routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__.registerStorageRoutes)(router, runtime, fail);
+    (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerSqlRoutes)(router, runtime, fail);
+    (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerTriviumRoutes)(router, runtime, fail);
+    (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
+    (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
+    router.get('/admin/policies', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            ok(res, await runtime.policies.getPolicies(user));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/policies', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
+            await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/admin/usage-summary', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, await buildUsageSummary(runtime, user));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/admin/import-export/operations', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, {
+                operations: runtime.adminPackages.listOperations(user),
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/export', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
+                operationId: operation.id,
+                kind: operation.kind,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/import-transfer/init', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
+                resource: 'fs.private',
+                purpose: 'privateFileWrite',
+            }, parseAdminPackageSizeBytes(req.body?.sizeBytes)));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/import', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {});
+            const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
+            const operation = runtime.adminPackages.startImport(user, payload, transfer.filePath);
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import package started', {
+                operationId: operation.id,
+                transferId: transfer.transferId,
+                mode: operation.importMode,
+            });
+            await runtime.transfers.discard(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
+                operationId: operation.id,
+                kind: operation.kind,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
+                fileName: artifact.artifact.fileName,
+                sizeBytes: artifact.artifact.sizeBytes,
+            });
+            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.get('/admin/native-migration/operations', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, {
+                operations: runtime.nativeMigrations.listOperations(),
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/upload/init', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
+            ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
+                resource: 'fs.private',
+                purpose: 'privateFileWrite',
+            }, sizeBytes, _constants_js__WEBPACK_IMPORTED_MODULE_2__.NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/preview', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {});
+            const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
+            const previewOptions = typeof payload.fileName === 'string' && payload.fileName.trim()
+                ? { sourceFileName: payload.fileName, adoptSource: true }
+                : { adoptSource: true };
+            const operation = await runtime.nativeMigrations.preview(payload.target, transfer.filePath, previewOptions);
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration preview created', {
+                operationId: operation.id,
+                target: operation.target,
+                entryCount: operation.entryCount,
+                sourceSizeBytes: operation.sourceSizeBytes,
+            });
+            await runtime.transfers.discard(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const payload = (req.body ?? {});
+            const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration applied', {
+                operationId: operation.id,
+                target: operation.target,
+                mode: payload.mode ?? 'skip',
+                createdCount: operation.createdCount,
+                overwrittenCount: operation.overwrittenCount,
+                skippedCount: operation.skippedCount,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
+                operationId: operation.id,
+                target: operation.target,
+            });
+            ok(res, operation);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/diagnostic-bundle', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            ok(res, await buildDiagnosticBundle(runtime, user));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            assertAdminUser(user);
+            const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
+            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
+                fileName: artifact.artifact.fileName,
+                sizeBytes: artifact.artifact.sizeBytes,
+            });
+            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    router.post('/admin/update', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.getUserContext)(req);
+            if (!user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            const action = parseAdminUpdateAction(req.body?.action);
+            const before = runtime.install.getStatus();
+            const coreBefore = runtime.core.getStatus();
+            const shouldStopCore = action === 'git-pull' && (coreBefore.state === 'running' || coreBefore.state === 'starting' || coreBefore.state === 'error');
+            let git = null;
+            if (shouldStopCore) {
+                await runtime.core.stop();
+            }
+            try {
+                if (action === 'git-pull') {
+                    git = runtime.install.pullLatestFromGit();
+                }
+                const after = await runtime.install.redeployBundledSdk();
+                const core = await runtime.core.start();
+                const coreRestarted = shouldStopCore && core.state === 'running';
+                const requiresRestart = action === 'git-pull' && Boolean(git?.changed);
+                const message = action === 'git-pull'
+                    ? requiresRestart
+                        ? '服务端插件已拉取最新提交，并已重新部署携带的前端插件。要应用新的 Node 服务端代码，请重启 SillyTavern 并刷新页面。'
+                        : '服务端插件已经是最新版本，已重新校验并部署携带的前端插件。'
+                    : '已重新部署携带的前端插件，并重新校验 Authority 后台服务状态。';
+                const response = {
+                    action,
+                    message,
+                    requiresRestart,
+                    before,
+                    after,
+                    git,
+                    core,
+                    coreRestarted,
+                    coreRestartMessage: coreRestarted
+                        ? null
+                        : core.state === 'running'
+                            ? 'Authority 后台服务已保持运行。'
+                            : `Authority 后台服务当前状态：${core.state}`,
+                    updatedAt: new Date().toISOString(),
+                };
+                await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', action === 'git-pull' ? 'Authority plugin updated' : 'Authority SDK redeployed');
+                ok(res, response);
+            }
+            catch (error) {
+                let recoveryMessage = '';
+                try {
+                    const recovery = await runtime.core.start();
+                    recoveryMessage = recovery.state === 'running'
+                        ? '更新失败后后台服务已恢复。'
+                        : `更新失败后后台服务状态为 ${recovery.state}。`;
+                }
+                catch (recoveryError) {
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.asErrorMessage)(recoveryError)}`;
+                }
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_10__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+            }
+        }
+        catch (error) {
+            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
+        }
+    });
+    return runtime;
+}
+
+
+/***/ },
+
+/***/ "./src/routes/http-routes.ts"
+/*!***********************************!*\
+  !*** ./src/routes/http-routes.ts ***!
+  \***********************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerHttpRoutes: () => (/* binding */ registerHttpRoutes)
+/* harmony export */ });
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+function ok(res, data) {
+    res.json(data);
+}
+function decodeHttpResponseBody(bytes, encoding) {
+    if (encoding === 'base64') {
+        return bytes.toString('base64');
+    }
+    return bytes.toString('utf8');
+}
+function registerHttpRoutes(router, runtime, fail) {
+    router.post('/http/fetch', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.normalizeHostname)(String(req.body?.url ?? ''));
+            if (!await runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
+                throw new Error(`Permission not granted: http.fetch for ${hostname}`);
+            }
+            const result = await runtime.http.fetch(user, req.body);
+            await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', { hostname });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'http.fetch', error);
+        }
+    });
+    router.post('/http/fetch-open', async (req, res) => {
+        const payload = (req.body ?? {});
+        let user;
+        let session;
+        let bodyTransferIdToDiscard;
+        let responseTransferIdToDiscard;
+        try {
+            user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.normalizeHostname)(String(payload.url ?? ''));
+            if (!await runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
+                throw new Error(`Permission not granted: http.fetch for ${hostname}`);
+            }
+            if (payload.body !== undefined && payload.bodyTransferId) {
+                throw new Error('HTTP fetch body and bodyTransferId cannot both be provided');
+            }
+            const bodyTransfer = payload.bodyTransferId
+                ? runtime.transfers.get(user, session.extension.id, payload.bodyTransferId, 'http.fetch')
+                : undefined;
+            bodyTransferIdToDiscard = payload.bodyTransferId;
+            const responseTransfer = await runtime.transfers.init(user, session.extension.id, {
+                resource: 'http.fetch',
+                purpose: 'httpFetchResponse',
+            });
+            responseTransferIdToDiscard = responseTransfer.transferId;
+            const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
+            const result = await runtime.http.openFetch(user, {
+                url: payload.url,
+                ...(payload.method === undefined ? {} : { method: payload.method }),
+                ...(payload.headers === undefined ? {} : { headers: payload.headers }),
+                ...(bodyTransfer
+                    ? { bodySourcePath: bodyTransfer.filePath }
+                    : payload.body === undefined
+                        ? {}
+                        : {
+                            body: payload.body,
+                            ...(payload.bodyEncoding === undefined ? {} : { bodyEncoding: payload.bodyEncoding }),
+                        }),
+                responsePath: responseTransferRecord.filePath,
+            });
+            const finalizedTransfer = await runtime.transfers.promoteToDownload(user, session.extension.id, responseTransfer.transferId);
+            const responseInlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'httpFetchResponse');
+            await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', {
+                hostname,
+                ...(bodyTransfer ? { requestVia: 'transfer' } : {}),
+                ...(finalizedTransfer.sizeBytes > responseInlineThreshold ? { responseVia: 'transfer' } : {}),
+            });
+            if (finalizedTransfer.sizeBytes <= responseInlineThreshold) {
+                const bytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(responseTransferRecord.filePath);
+                await runtime.transfers.discard(user, session.extension.id, responseTransfer.transferId).catch(() => undefined);
+                responseTransferIdToDiscard = undefined;
+                ok(res, {
+                    mode: 'inline',
+                    url: result.url,
+                    hostname: result.hostname,
+                    status: result.status,
+                    ok: result.ok,
+                    headers: result.headers,
+                    body: decodeHttpResponseBody(bytes, result.bodyEncoding),
+                    bodyEncoding: result.bodyEncoding,
+                    contentType: result.contentType,
+                });
+                return;
+            }
+            responseTransferIdToDiscard = undefined;
+            ok(res, {
+                mode: 'transfer',
+                url: result.url,
+                hostname: result.hostname,
+                status: result.status,
+                ok: result.ok,
+                headers: result.headers,
+                bodyEncoding: result.bodyEncoding,
+                contentType: result.contentType,
+                transfer: finalizedTransfer,
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, 'http.fetch', error);
+        }
+        finally {
+            if (user && session && bodyTransferIdToDiscard) {
+                await runtime.transfers.discard(user, session.extension.id, bodyTransferIdToDiscard).catch(() => undefined);
+            }
+            if (user && session && responseTransferIdToDiscard) {
+                await runtime.transfers.discard(user, session.extension.id, responseTransferIdToDiscard).catch(() => undefined);
+            }
+        }
+    });
+}
+
+
+/***/ },
+
+/***/ "./src/routes/jobs-events-routes.ts"
+/*!******************************************!*\
+  !*** ./src/routes/jobs-events-routes.ts ***!
+  \******************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerJobsAndEventsRoutes: () => (/* binding */ registerJobsAndEventsRoutes)
+/* harmony export */ });
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+function ok(res, data) {
+    res.json(data);
+}
+function registerJobsAndEventsRoutes(router, runtime, fail) {
+    router.post('/jobs/create', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const jobType = String(req.body?.type ?? '');
+            if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: jobType })) {
+                throw new Error(`Permission not granted: jobs.background for ${jobType}`);
+            }
+            const jobOptions = {};
+            if (typeof req.body?.timeoutMs === 'number')
+                jobOptions.timeoutMs = req.body.timeoutMs;
+            if (typeof req.body?.idempotencyKey === 'string')
+                jobOptions.idempotencyKey = req.body.idempotencyKey;
+            if (typeof req.body?.maxAttempts === 'number')
+                jobOptions.maxAttempts = req.body.maxAttempts;
+            const job = await runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {}, jobOptions);
+            await runtime.audit.logUsage(user, session.extension.id, 'Job created', { jobId: job.id, jobType });
+            ok(res, job);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+    router.get('/jobs', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            ok(res, await runtime.jobs.list(user, session.extension.id));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+    router.post('/jobs/list', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            ok(res, await runtime.jobs.listPage(user, session.extension.id, payload));
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+    router.get('/jobs/:id', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const job = await runtime.jobs.get(user, String(req.params?.id ?? ''));
+            if (!job || job.extensionId !== session.extension.id) {
+                throw new Error('Job not found');
+            }
+            ok(res, job);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+    router.post('/jobs/:id/cancel', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const job = await runtime.jobs.cancel(user, session.extension.id, String(req.params?.id ?? ''));
+            await runtime.audit.logUsage(user, session.extension.id, 'Job cancelled', { jobId: job.id });
+            ok(res, job);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+    router.post('/jobs/:id/requeue', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const jobId = String(req.params?.id ?? '');
+            const existing = await runtime.jobs.get(user, jobId);
+            if (!existing || existing.extensionId !== session.extension.id) {
+                throw new Error('Job not found');
+            }
+            if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: existing.type })) {
+                throw new Error(`Permission not granted: jobs.background for ${existing.type}`);
+            }
+            const job = await runtime.jobs.requeue(user, session.extension.id, jobId);
+            await runtime.audit.logUsage(user, session.extension.id, 'Job requeued', {
+                previousJobId: jobId,
+                jobId: job.id,
+                jobType: job.type,
+            });
+            ok(res, job);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'jobs.background', error);
+        }
+    });
+    router.get('/events/stream', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const channel = String(req.query?.channel ?? `extension:${session.extension.id}`);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'events.stream', target: channel })) {
+                throw new Error(`Permission not granted: events.stream for ${channel}`);
+            }
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.write(': connected\n\n');
+            const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
+            const cleanup = runtime.events.register(paths.controlDbFile, user.handle, channel, res);
+            req.on?.('close', cleanup);
+            req.on?.('end', cleanup);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'events.stream', error);
+        }
+    });
+}
+
+
+/***/ },
+
+/***/ "./src/routes/sql-routes.ts"
+/*!**********************************!*\
+  !*** ./src/routes/sql-routes.ts ***!
+  \**********************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   listPrivateSqlDatabases: () => (/* binding */ listPrivateSqlDatabases),
+/* harmony export */   registerSqlRoutes: () => (/* binding */ registerSqlRoutes)
+/* harmony export */ });
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+function ok(res, data) {
+    res.json(data);
+}
+function getSqlDatabaseName(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+function getSqlMigrationTableName(value) {
+    const candidate = typeof value === 'string' && value.trim() ? value.trim() : '_authority_migrations';
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate)) {
+        throw new Error('SQL migration tableName must be a valid identifier');
+    }
+    return candidate;
+}
+function buildEmptySqlCursorPage(page) {
+    const limit = Number.isInteger(page.limit) && Number(page.limit) > 0
+        ? Math.min(Number(page.limit), 1000)
+        : 100;
+    const cursor = page.cursor?.trim();
+    if (cursor) {
+        const offset = Number(cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            throw new Error('invalid_page_cursor');
+        }
+    }
+    return {
+        nextCursor: null,
+        limit,
+        hasMore: false,
+        totalCount: 0,
+    };
+}
+function readSqlMigrationRecord(row) {
+    if (typeof row.id !== 'string' || !row.id.trim()) {
+        throw new Error('SQL migration row is missing id');
+    }
+    return {
+        id: row.id,
+        appliedAt: typeof row.appliedAt === 'string' ? row.appliedAt : '',
+    };
+}
+function getSqlSchemaObjectType(value) {
+    if (value == null || value === '') {
+        return null;
+    }
+    if (value === 'table' || value === 'index' || value === 'view' || value === 'trigger') {
+        return value;
+    }
+    throw new Error('SQL schema type must be table, index, view, or trigger');
+}
+function readSqlSchemaObjectRecord(row) {
+    const type = getSqlSchemaObjectType(row.type);
+    if (!type) {
+        throw new Error('SQL schema row is missing type');
+    }
+    if (typeof row.name !== 'string' || !row.name.trim()) {
+        throw new Error('SQL schema row is missing name');
+    }
+    return {
+        type,
+        name: row.name,
+        tableName: typeof row.tableName === 'string' && row.tableName.trim() ? row.tableName : null,
+        sql: typeof row.sql === 'string' ? row.sql : null,
+    };
+}
+function resolvePrivateSqlDatabaseDir(user, extensionId) {
+    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.getUserAuthorityPaths)(user);
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.resolveContainedPath)(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
+}
+function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.resolveContainedPath)(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(databaseName)}.sqlite`);
+}
+async function sqlMigrationTableExists(runtime, dbPath, tableName) {
+    const result = await runtime.core.querySql(dbPath, {
+        statement: 'SELECT name FROM sqlite_master WHERE type = ?1 AND name = ?2 LIMIT 1',
+        params: ['table', tableName],
+    });
+    return result.rows.length > 0;
+}
+async function listSqlMigrationsPage(runtime, user, extensionId, request) {
+    const database = getSqlDatabaseName(request.database);
+    const tableName = getSqlMigrationTableName(request.tableName);
+    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath) || !await sqlMigrationTableExists(runtime, dbPath, tableName)) {
+        return {
+            tableName,
+            migrations: [],
+            ...(request.page ? { page: buildEmptySqlCursorPage(request.page) } : {}),
+        };
+    }
+    const result = await runtime.core.querySql(dbPath, {
+        statement: `SELECT id, applied_at AS appliedAt FROM ${tableName} ORDER BY applied_at ASC, id ASC`,
+        ...(request.page ? { page: request.page } : {}),
+    });
+    return {
+        tableName,
+        migrations: result.rows.map(row => readSqlMigrationRecord(row)),
+        ...(result.page ? { page: result.page } : {}),
+    };
+}
+async function listSqlSchemaPage(runtime, user, extensionId, request) {
+    const database = getSqlDatabaseName(request.database);
+    const type = getSqlSchemaObjectType(request.type);
+    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath)) {
+        return {
+            objects: [],
+            ...(request.page ? { page: buildEmptySqlCursorPage(request.page) } : {}),
+        };
+    }
+    const params = type ? [type] : [];
+    const result = await runtime.core.querySql(dbPath, {
+        statement: `SELECT type, name, tbl_name AS tableName, sql
+            FROM sqlite_master
+            WHERE type IN ('table', 'index', 'view', 'trigger')
+                AND name NOT LIKE 'sqlite_%'${type ? ' AND type = ?1' : ''}
+            ORDER BY type ASC, name ASC`,
+        ...(params.length > 0 ? { params } : {}),
+        ...(request.page ? { page: request.page } : {}),
+    });
+    return {
+        objects: result.rows.map(row => readSqlSchemaObjectRecord(row)),
+        ...(result.page ? { page: result.page } : {}),
+    };
+}
+async function statPrivateSqlDatabase(runtime, user, extensionId, databaseName) {
+    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, databaseName);
+    return await runtime.core.statSql(dbPath, { database: databaseName });
+}
+async function listPrivateSqlDatabases(runtime, user, extensionId) {
+    const databaseDir = resolvePrivateSqlDatabaseDir(user, extensionId);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(databaseDir)) {
+        return { databases: [] };
+    }
+    const databases = (await Promise.all(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(databaseDir, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
+        .map(async (entry) => {
+        const databaseName = entry.name.slice(0, -'.sqlite'.length);
+        const stat = await statPrivateSqlDatabase(runtime, user, extensionId, databaseName);
+        return {
+            name: stat.name,
+            fileName: stat.fileName,
+            sizeBytes: stat.sizeBytes,
+            updatedAt: stat.updatedAt,
+            runtimeConfig: stat.runtimeConfig,
+            slowQuery: stat.slowQuery,
+        };
+    })))
+        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
+    return { databases };
+}
+function previewSqlStatement(statement) {
+    const normalized = statement.replace(/\s+/g, ' ').trim();
+    return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+function assertSqlStatementCount(statements, label) {
+    if (!Array.isArray(statements)) {
+        return;
+    }
+    if (statements.length > _constants_js__WEBPACK_IMPORTED_MODULE_1__.MAX_SQL_BATCH_STATEMENTS) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`${label} exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_1__.MAX_SQL_BATCH_STATEMENTS} statements`, 400, 'validation_error', 'validation', { statementCount: statements.length, maxStatements: _constants_js__WEBPACK_IMPORTED_MODULE_1__.MAX_SQL_BATCH_STATEMENTS });
+    }
+}
+function registerSqlRoutes(router, runtime, fail) {
+    router.post('/sql/query', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.querySql(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL query', {
+                database,
+                statement: previewSqlStatement(payload.statement ?? ''),
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/exec', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.execSql(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL exec', {
+                database,
+                statement: previewSqlStatement(payload.statement ?? ''),
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/batch', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            assertSqlStatementCount(payload.statements, 'SQL batch');
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.batchSql(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL batch', {
+                database,
+                statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/transaction', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            assertSqlStatementCount(payload.statements, 'SQL transaction');
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.transactionSql(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL transaction', {
+                database,
+                statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/migrate', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const result = await runtime.core.migrateSql(dbPath, {
+                ...payload,
+                database,
+            });
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL migrate', {
+                database,
+                migrations: Array.isArray(payload.migrations) ? payload.migrations.length : 0,
+                tableName: payload.tableName ?? '_authority_migrations',
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/list-migrations', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const result = await listSqlMigrationsPage(runtime, user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL list migrations', {
+                database,
+                tableName: result.tableName,
+                count: result.migrations.length,
+                limit: result.page?.limit ?? null,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/list-schema', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const result = await listSqlSchemaPage(runtime, user, session.extension.id, payload);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL list schema', {
+                database,
+                type: payload.type ?? null,
+                count: result.objects.length,
+                limit: result.page?.limit ?? null,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.get('/sql/databases', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private' }, false)) {
+                throw new Error('Permission not granted: sql.private');
+            }
+            const result = await listPrivateSqlDatabases(runtime, user, session.extension.id);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL list databases', {
+                count: result.databases.length,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+    router.post('/sql/stat', async (req, res) => {
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.getSessionToken)(req), user);
+            const payload = (req.body ?? {});
+            const database = getSqlDatabaseName(payload.database);
+            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
+                throw new Error(`Permission not granted: sql.private for ${database}`);
+            }
+            const result = await statPrivateSqlDatabase(runtime, user, session.extension.id, database);
+            await runtime.audit.logUsage(user, session.extension.id, 'SQL stat', {
+                database,
+                exists: result.exists,
+                sizeBytes: result.sizeBytes,
+                slowQueryCount: result.slowQuery.count,
+            });
+            ok(res, result);
+        }
+        catch (error) {
+            fail(runtime, req, res, 'sql.private', error);
+        }
+    });
+}
+
+
+/***/ },
+
+/***/ "./src/routes/st-manager-routes.ts"
+/*!*****************************************!*\
+  !*** ./src/routes/st-manager-routes.ts ***!
+  \*****************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerStManagerRoutes: () => (/* binding */ registerStManagerRoutes)
+/* harmony export */ });
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+function ok(res, data) {
+    res.json(data);
+}
 function getOptionalUserContext(req) {
-    return req.user ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req) : undefined;
+    return req.user ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req) : undefined;
 }
 function getStManagerBridgeUser(runtime, req) {
     return runtime.stManagerBridge.resolveAuthorizedUser(getOptionalUserContext(req), req.headers);
 }
 function getAdminUser(req) {
-    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
     if (!user.isAdmin) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
     }
     return user;
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_3__.createAuthorityRuntime)()) {
-    router.post('/probe', async (req, res) => {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-        ok(res, await buildProbeResponse(runtime, user));
-    });
+function registerStManagerRoutes(router, runtime, fail) {
     router.get('/st-manager/bridge/probe', async (req, res) => {
         try {
             const user = getStManagerBridgeUser(runtime, req);
@@ -957,9 +1925,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/st-manager/bridge/admin/config', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
             if (!user.isAdmin) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError('Forbidden', 403, 'unauthorized', 'auth');
             }
             ok(res, runtime.stManagerBridge.getAdminConfig(user));
         }
@@ -969,7 +1937,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/st-manager/bridge/admin/config', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
             ok(res, runtime.stManagerBridge.updateAdminConfig(user, req.body ?? {}));
         }
         catch (error) {
@@ -1102,156 +2070,31 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'third-party/st-manager-control', error);
         }
     });
-    router.post('/session/init', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const config = (req.body ?? {});
-            const session = await runtime.sessions.createSession(user, config);
-            const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
-            const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
-            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
-            await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
-            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.get('/session/current', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
-            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/permissions/evaluate', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const evaluation = await runtime.permissions.evaluate(user, session, req.body);
-            if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
-                await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
-                    key: evaluation.key,
-                    resource: evaluation.resource,
-                    target: evaluation.target,
-                    decision: evaluation.decision,
-                });
-            }
-            ok(res, evaluation);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/permissions/evaluate-batch', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_5__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
-            }
-            const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
-            const response = { results };
-            ok(res, response);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/permissions/resolve', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = req.body;
-            const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
-            await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
-                key: grant.key,
-                status: grant.status,
-                scope: grant.scope,
-                choice: payload.choice,
-            });
-            ok(res, grant);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.get('/extensions', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
-                const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
-                const sqlDatabases = (await listPrivateSqlDatabases(runtime, user, extension.id)).databases;
-                const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extension.id)).databases;
-                return {
-                    ...extension,
-                    grantedCount: grants.filter(grant => grant.status === 'granted').length,
-                    deniedCount: grants.filter(grant => grant.status === 'denied').length,
-                    storage: await buildExtensionStorageSummary(runtime, user, extension.id, sqlDatabases, triviumDatabases),
-                };
-            }));
-            ok(res, list);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.get('/extensions/:id', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const extensionId = decodeURIComponent(req.params?.id ?? '');
-            const extension = await runtime.extensions.getExtension(user, extensionId);
-            if (!extension) {
-                throw new Error('Extension not found');
-            }
-            const databases = (await listPrivateSqlDatabases(runtime, user, extensionId)).databases;
-            const triviumDatabases = (await listPrivateTriviumDatabases(runtime, user, extensionId)).databases;
-            const activity = await runtime.audit.getRecentActivityPage(user, extensionId);
-            const jobsPage = await runtime.jobs.listPage(user, extensionId);
-            ok(res, {
-                extension,
-                grants: await runtime.permissions.listPersistentGrants(user, extensionId),
-                policies: await runtime.permissions.getPolicyEntries(user, extensionId),
-                activity,
-                jobs: jobsPage.jobs,
-                jobsPage: jobsPage.page,
-                databases,
-                triviumDatabases,
-                storage: await buildExtensionStorageSummary(runtime, user, extensionId, databases, triviumDatabases),
-            });
-        }
-        catch (error) {
-            fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
-        }
-    });
-    router.post('/extensions/:id/grants/reset', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const extensionId = decodeURIComponent(req.params?.id ?? '');
-            await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
-            await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
-                keys: req.body?.keys ?? null,
-            });
-            if (typeof res.sendStatus === 'function') {
-                res.sendStatus(204);
-            }
-            else {
-                res.status(204).send();
-            }
-        }
-        catch (error) {
-            fail(runtime, req, res, decodeURIComponent(req.params?.id ?? 'unknown'), error);
-        }
-    });
+}
+
+
+/***/ },
+
+/***/ "./src/routes/storage-routes.ts"
+/*!**************************************!*\
+  !*** ./src/routes/storage-routes.ts ***!
+  \**************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerStorageRoutes: () => (/* binding */ registerStorageRoutes)
+/* harmony export */ });
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+function ok(res, data) {
+    res.json(data);
+}
+function registerStorageRoutes(router, runtime, fail) {
     router.post('/storage/kv/get', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -1263,8 +2106,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/kv/set', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -1278,8 +2121,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/kv/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -1292,8 +2135,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/kv/list', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.kv' })) {
                 throw new Error('Permission not granted: storage.kv');
             }
@@ -1305,8 +2148,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.resource !== 'storage.blob' && payload.resource !== 'fs.private' && payload.resource !== 'http.fetch') {
                 throw new Error(`Unsupported transfer resource: ${String(payload.resource)}`);
@@ -1322,8 +2165,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/:id/append', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             ok(res, await runtime.transfers.append(user, session.extension.id, String(req.params?.id ?? ''), payload));
         }
@@ -1333,8 +2176,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/:id/read', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             ok(res, await runtime.transfers.read(user, session.extension.id, String(req.params?.id ?? ''), payload));
         }
@@ -1344,8 +2187,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/:id/status', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             ok(res, runtime.transfers.status(user, session.extension.id, String(req.params?.id ?? '')));
         }
         catch (error) {
@@ -1354,8 +2197,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/:id/manifest', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const manifest = runtime.transfers.manifest(user, session.extension.id, String(req.params?.id ?? ''));
             ok(res, manifest);
         }
@@ -1365,8 +2208,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/transfers/:id/discard', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             await runtime.transfers.discard(user, session.extension.id, String(req.params?.id ?? ''));
             ok(res, { ok: true });
         }
@@ -1376,8 +2219,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/put', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -1391,8 +2234,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/commit-transfer', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
@@ -1412,8 +2255,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/get', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -1425,8 +2268,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/open-read', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -1457,8 +2300,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -1471,8 +2314,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/storage/blob/list', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'storage.blob' })) {
                 throw new Error('Permission not granted: storage.blob');
             }
@@ -1484,8 +2327,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/mkdir', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1500,8 +2343,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/read-dir', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1516,8 +2359,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/write-file', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1532,8 +2375,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/write-file-transfer', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1557,8 +2400,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/read-file', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1573,8 +2416,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/open-read', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1609,8 +2452,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1625,8 +2468,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/fs/private/stat', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (!await runtime.permissions.authorize(user, session, { resource: 'fs.private' })) {
                 throw new Error('Permission not granted: fs.private');
@@ -1639,216 +2482,47 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'fs.private', error);
         }
     });
-    router.post('/sql/query', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.querySql(dbPath, {
-                ...payload,
-                database,
-            });
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL query', {
-                database,
-                statement: previewSqlStatement(payload.statement ?? ''),
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.post('/sql/exec', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.execSql(dbPath, {
-                ...payload,
-                database,
-            });
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL exec', {
-                database,
-                statement: previewSqlStatement(payload.statement ?? ''),
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.post('/sql/batch', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            assertSqlStatementCount(payload.statements, 'SQL batch');
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.batchSql(dbPath, {
-                ...payload,
-                database,
-            });
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL batch', {
-                database,
-                statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.post('/sql/transaction', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            assertSqlStatementCount(payload.statements, 'SQL transaction');
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.transactionSql(dbPath, {
-                ...payload,
-                database,
-            });
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL transaction', {
-                database,
-                statements: Array.isArray(payload.statements) ? payload.statements.length : 0,
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.post('/sql/migrate', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
-            const result = await runtime.core.migrateSql(dbPath, {
-                ...payload,
-                database,
-            });
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL migrate', {
-                database,
-                migrations: Array.isArray(payload.migrations) ? payload.migrations.length : 0,
-                tableName: payload.tableName ?? '_authority_migrations',
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.post('/sql/list-migrations', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            const result = await listSqlMigrationsPage(runtime, user, session.extension.id, payload);
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL list migrations', {
-                database,
-                tableName: result.tableName,
-                count: result.migrations.length,
-                limit: result.page?.limit ?? null,
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.post('/sql/list-schema', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            const result = await listSqlSchemaPage(runtime, user, session.extension.id, payload);
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL list schema', {
-                database,
-                type: payload.type ?? null,
-                count: result.objects.length,
-                limit: result.page?.limit ?? null,
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.get('/sql/databases', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private' }, false)) {
-                throw new Error('Permission not granted: sql.private');
-            }
-            const result = await listPrivateSqlDatabases(runtime, user, session.extension.id);
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL list databases', {
-                count: result.databases.length,
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
-    router.post('/sql/stat', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            const database = getSqlDatabaseName(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
-                throw new Error(`Permission not granted: sql.private for ${database}`);
-            }
-            const result = await statPrivateSqlDatabase(runtime, user, session.extension.id, database);
-            await runtime.audit.logUsage(user, session.extension.id, 'SQL stat', {
-                database,
-                exists: result.exists,
-                sizeBytes: result.sizeBytes,
-                slowQueryCount: result.slowQuery.count,
-            });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'sql.private', error);
-        }
-    });
+}
+
+
+/***/ },
+
+/***/ "./src/routes/trivium-routes.ts"
+/*!**************************************!*\
+  !*** ./src/routes/trivium-routes.ts ***!
+  \**************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   listPrivateTriviumDatabases: () => (/* binding */ listPrivateTriviumDatabases),
+/* harmony export */   registerTriviumRoutes: () => (/* binding */ registerTriviumRoutes)
+/* harmony export */ });
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+function ok(res, data) {
+    res.json(data);
+}
+function getTriviumDatabaseName(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+function resolvePrivateTriviumDatabaseDir(user, extensionId) {
+    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.resolveContainedPath)(paths.triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.sanitizeFileSegment)(extensionId));
+}
+function resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.resolveContainedPath)(resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.sanitizeFileSegment)(databaseName)}.tdb`);
+}
+async function listPrivateTriviumDatabases(runtime, user, extensionId) {
+    return await runtime.trivium.listDatabases(user, extensionId);
+}
+function registerTriviumRoutes(router, runtime, fail) {
     router.post('/trivium/insert', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1867,8 +2541,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/insert-with-id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1887,8 +2561,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/resolve-id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1909,8 +2583,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/resolve-many', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1929,8 +2603,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/upsert', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1952,8 +2626,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/bulk-upsert', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1974,8 +2648,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/get', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -1994,8 +2668,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/update-payload', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2014,8 +2688,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/update-vector', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2034,8 +2708,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2054,8 +2728,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/bulk-delete', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2076,8 +2750,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/link', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2101,8 +2775,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/bulk-link', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2123,8 +2797,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/unlink', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2148,8 +2822,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/bulk-unlink', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2170,8 +2844,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/neighbors', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2191,8 +2865,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/search', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2212,8 +2886,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/search-advanced', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2233,8 +2907,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/search-hybrid', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2254,8 +2928,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/search-hybrid-context', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2274,8 +2948,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/tql', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2294,8 +2968,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/tql-mut', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2315,8 +2989,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/create-index', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2335,8 +3009,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/drop-index', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2355,8 +3029,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/index-text', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2375,8 +3049,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/index-keyword', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2395,8 +3069,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/build-text-index', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2414,8 +3088,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/compact', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2433,8 +3107,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/flush', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2452,8 +3126,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/stat', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2479,8 +3153,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/check-mappings-integrity', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2507,8 +3181,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/delete-orphan-mappings', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2536,8 +3210,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/trivium/list-mappings', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             const database = getTriviumDatabaseName(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
@@ -2558,8 +3232,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/trivium/databases', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private' }, false)) {
                 throw new Error('Permission not granted: trivium.private');
             }
@@ -2573,522 +3247,6 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             fail(runtime, req, res, 'trivium.private', error);
         }
     });
-    router.post('/http/fetch', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.normalizeHostname)(String(req.body?.url ?? ''));
-            if (!await runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
-                throw new Error(`Permission not granted: http.fetch for ${hostname}`);
-            }
-            const result = await runtime.http.fetch(user, req.body);
-            await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', { hostname });
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'http.fetch', error);
-        }
-    });
-    router.post('/http/fetch-open', async (req, res) => {
-        const payload = (req.body ?? {});
-        let user;
-        let session;
-        let bodyTransferIdToDiscard;
-        let responseTransferIdToDiscard;
-        try {
-            user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const hostname = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.normalizeHostname)(String(payload.url ?? ''));
-            if (!await runtime.permissions.authorize(user, session, { resource: 'http.fetch', target: hostname })) {
-                throw new Error(`Permission not granted: http.fetch for ${hostname}`);
-            }
-            if (payload.body !== undefined && payload.bodyTransferId) {
-                throw new Error('HTTP fetch body and bodyTransferId cannot both be provided');
-            }
-            const bodyTransfer = payload.bodyTransferId
-                ? runtime.transfers.get(user, session.extension.id, payload.bodyTransferId, 'http.fetch')
-                : undefined;
-            bodyTransferIdToDiscard = payload.bodyTransferId;
-            const responseTransfer = await runtime.transfers.init(user, session.extension.id, {
-                resource: 'http.fetch',
-                purpose: 'httpFetchResponse',
-            });
-            responseTransferIdToDiscard = responseTransfer.transferId;
-            const responseTransferRecord = runtime.transfers.get(user, session.extension.id, responseTransfer.transferId, 'http.fetch');
-            const result = await runtime.http.openFetch(user, {
-                url: payload.url,
-                ...(payload.method === undefined ? {} : { method: payload.method }),
-                ...(payload.headers === undefined ? {} : { headers: payload.headers }),
-                ...(bodyTransfer
-                    ? { bodySourcePath: bodyTransfer.filePath }
-                    : payload.body === undefined
-                        ? {}
-                        : {
-                            body: payload.body,
-                            ...(payload.bodyEncoding === undefined ? {} : { bodyEncoding: payload.bodyEncoding }),
-                        }),
-                responsePath: responseTransferRecord.filePath,
-            });
-            const finalizedTransfer = await runtime.transfers.promoteToDownload(user, session.extension.id, responseTransfer.transferId);
-            const responseInlineThreshold = await runtime.permissions.getEffectiveInlineThresholdBytes(user, session.extension.id, 'httpFetchResponse');
-            await runtime.audit.logUsage(user, session.extension.id, 'HTTP fetch', {
-                hostname,
-                ...(bodyTransfer ? { requestVia: 'transfer' } : {}),
-                ...(finalizedTransfer.sizeBytes > responseInlineThreshold ? { responseVia: 'transfer' } : {}),
-            });
-            if (finalizedTransfer.sizeBytes <= responseInlineThreshold) {
-                const bytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(responseTransferRecord.filePath);
-                await runtime.transfers.discard(user, session.extension.id, responseTransfer.transferId).catch(() => undefined);
-                responseTransferIdToDiscard = undefined;
-                ok(res, {
-                    mode: 'inline',
-                    url: result.url,
-                    hostname: result.hostname,
-                    status: result.status,
-                    ok: result.ok,
-                    headers: result.headers,
-                    body: decodeHttpResponseBody(bytes, result.bodyEncoding),
-                    bodyEncoding: result.bodyEncoding,
-                    contentType: result.contentType,
-                });
-                return;
-            }
-            responseTransferIdToDiscard = undefined;
-            ok(res, {
-                mode: 'transfer',
-                url: result.url,
-                hostname: result.hostname,
-                status: result.status,
-                ok: result.ok,
-                headers: result.headers,
-                bodyEncoding: result.bodyEncoding,
-                contentType: result.contentType,
-                transfer: finalizedTransfer,
-            });
-        }
-        catch (error) {
-            fail(runtime, req, res, 'http.fetch', error);
-        }
-        finally {
-            if (user && session && bodyTransferIdToDiscard) {
-                await runtime.transfers.discard(user, session.extension.id, bodyTransferIdToDiscard).catch(() => undefined);
-            }
-            if (user && session && responseTransferIdToDiscard) {
-                await runtime.transfers.discard(user, session.extension.id, responseTransferIdToDiscard).catch(() => undefined);
-            }
-        }
-    });
-    router.post('/jobs/create', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const jobType = String(req.body?.type ?? '');
-            if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: jobType })) {
-                throw new Error(`Permission not granted: jobs.background for ${jobType}`);
-            }
-            const jobOptions = {};
-            if (typeof req.body?.timeoutMs === 'number')
-                jobOptions.timeoutMs = req.body.timeoutMs;
-            if (typeof req.body?.idempotencyKey === 'string')
-                jobOptions.idempotencyKey = req.body.idempotencyKey;
-            if (typeof req.body?.maxAttempts === 'number')
-                jobOptions.maxAttempts = req.body.maxAttempts;
-            const job = await runtime.jobs.create(user, session.extension.id, jobType, req.body?.payload ?? {}, jobOptions);
-            await runtime.audit.logUsage(user, session.extension.id, 'Job created', { jobId: job.id, jobType });
-            ok(res, job);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'jobs.background', error);
-        }
-    });
-    router.get('/jobs', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            ok(res, await runtime.jobs.list(user, session.extension.id));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'jobs.background', error);
-        }
-    });
-    router.post('/jobs/list', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const payload = (req.body ?? {});
-            ok(res, await runtime.jobs.listPage(user, session.extension.id, payload));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'jobs.background', error);
-        }
-    });
-    router.get('/jobs/:id', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const job = await runtime.jobs.get(user, String(req.params?.id ?? ''));
-            if (!job || job.extensionId !== session.extension.id) {
-                throw new Error('Job not found');
-            }
-            ok(res, job);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'jobs.background', error);
-        }
-    });
-    router.post('/jobs/:id/cancel', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const job = await runtime.jobs.cancel(user, session.extension.id, String(req.params?.id ?? ''));
-            await runtime.audit.logUsage(user, session.extension.id, 'Job cancelled', { jobId: job.id });
-            ok(res, job);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'jobs.background', error);
-        }
-    });
-    router.post('/jobs/:id/requeue', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const jobId = String(req.params?.id ?? '');
-            const existing = await runtime.jobs.get(user, jobId);
-            if (!existing || existing.extensionId !== session.extension.id) {
-                throw new Error('Job not found');
-            }
-            if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: existing.type })) {
-                throw new Error(`Permission not granted: jobs.background for ${existing.type}`);
-            }
-            const job = await runtime.jobs.requeue(user, session.extension.id, jobId);
-            await runtime.audit.logUsage(user, session.extension.id, 'Job requeued', {
-                previousJobId: jobId,
-                jobId: job.id,
-                jobType: job.type,
-            });
-            ok(res, job);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'jobs.background', error);
-        }
-    });
-    router.get('/events/stream', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getSessionToken)(req), user);
-            const channel = String(req.query?.channel ?? `extension:${session.extension.id}`);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'events.stream', target: channel })) {
-                throw new Error(`Permission not granted: events.stream for ${channel}`);
-            }
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            res.write(': connected\n\n');
-            const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
-            const cleanup = runtime.events.register(paths.controlDbFile, user.handle, channel, res);
-            req.on?.('close', cleanup);
-            req.on?.('end', cleanup);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'events.stream', error);
-        }
-    });
-    router.get('/admin/policies', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            if (!user.isAdmin) {
-                throw new Error('Forbidden');
-            }
-            ok(res, await runtime.policies.getPolicies(user));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/policies', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
-            await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
-            ok(res, result);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.get('/admin/usage-summary', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            ok(res, await buildUsageSummary(runtime, user));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.get('/admin/import-export/operations', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            ok(res, {
-                operations: runtime.adminPackages.listOperations(user),
-            });
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/import-export/export', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
-                operationId: operation.id,
-                kind: operation.kind,
-            });
-            ok(res, operation);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/import-export/import-transfer/init', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
-                resource: 'fs.private',
-                purpose: 'privateFileWrite',
-            }, parseAdminPackageSizeBytes(req.body?.sizeBytes)));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/import-export/import', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const payload = (req.body ?? {});
-            const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
-            const operation = runtime.adminPackages.startImport(user, payload, transfer.filePath);
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import package started', {
-                operationId: operation.id,
-                transferId: transfer.transferId,
-                mode: operation.importMode,
-            });
-            await runtime.transfers.discard(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
-            ok(res, operation);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
-                operationId: operation.id,
-                kind: operation.kind,
-            });
-            ok(res, operation);
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
-                fileName: artifact.artifact.fileName,
-                sizeBytes: artifact.artifact.sizeBytes,
-            });
-            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.get('/admin/native-migration/operations', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            ok(res, {
-                operations: runtime.nativeMigrations.listOperations(),
-            });
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/native-migration/upload/init', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
-            ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
-                resource: 'fs.private',
-                purpose: 'privateFileWrite',
-            }, sizeBytes, _constants_js__WEBPACK_IMPORTED_MODULE_2__.NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES));
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/native-migration/preview', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const payload = (req.body ?? {});
-            const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
-            const previewOptions = typeof payload.fileName === 'string' && payload.fileName.trim()
-                ? { sourceFileName: payload.fileName, adoptSource: true }
-                : { adoptSource: true };
-            const operation = await runtime.nativeMigrations.preview(payload.target, transfer.filePath, previewOptions);
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration preview created', {
-                operationId: operation.id,
-                target: operation.target,
-                entryCount: operation.entryCount,
-                sourceSizeBytes: operation.sourceSizeBytes,
-            });
-            await runtime.transfers.discard(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, transfer.transferId).catch(() => undefined);
-            ok(res, operation);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const payload = (req.body ?? {});
-            const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration applied', {
-                operationId: operation.id,
-                target: operation.target,
-                mode: payload.mode ?? 'skip',
-                createdCount: operation.createdCount,
-                overwrittenCount: operation.overwrittenCount,
-                skippedCount: operation.skippedCount,
-            });
-            ok(res, operation);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
-                operationId: operation.id,
-                target: operation.target,
-            });
-            ok(res, operation);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/diagnostic-bundle', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            ok(res, await buildDiagnosticBundle(runtime, user));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            assertAdminUser(user);
-            const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
-            await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
-                fileName: artifact.artifact.fileName,
-                sizeBytes: artifact.artifact.sizeBytes,
-            });
-            ok(res, await openAdminArtifactDownload(runtime, user, artifact.filePath, artifact.artifact.sizeBytes, artifact.artifact));
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    router.post('/admin/update', async (req, res) => {
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.getUserContext)(req);
-            if (!user.isAdmin) {
-                throw new Error('Forbidden');
-            }
-            const action = parseAdminUpdateAction(req.body?.action);
-            const before = runtime.install.getStatus();
-            const coreBefore = runtime.core.getStatus();
-            const shouldStopCore = action === 'git-pull' && (coreBefore.state === 'running' || coreBefore.state === 'starting' || coreBefore.state === 'error');
-            let git = null;
-            if (shouldStopCore) {
-                await runtime.core.stop();
-            }
-            try {
-                if (action === 'git-pull') {
-                    git = runtime.install.pullLatestFromGit();
-                }
-                const after = await runtime.install.redeployBundledSdk();
-                const core = await runtime.core.start();
-                const coreRestarted = shouldStopCore && core.state === 'running';
-                const requiresRestart = action === 'git-pull' && Boolean(git?.changed);
-                const message = action === 'git-pull'
-                    ? requiresRestart
-                        ? '服务端插件已拉取最新提交，并已重新部署携带的前端插件。要应用新的 Node 服务端代码，请重启 SillyTavern 并刷新页面。'
-                        : '服务端插件已经是最新版本，已重新校验并部署携带的前端插件。'
-                    : '已重新部署携带的前端插件，并重新校验 Authority 后台服务状态。';
-                const response = {
-                    action,
-                    message,
-                    requiresRestart,
-                    before,
-                    after,
-                    git,
-                    core,
-                    coreRestarted,
-                    coreRestartMessage: coreRestarted
-                        ? null
-                        : core.state === 'running'
-                            ? 'Authority 后台服务已保持运行。'
-                            : `Authority 后台服务当前状态：${core.state}`,
-                    updatedAt: new Date().toISOString(),
-                };
-                await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', action === 'git-pull' ? 'Authority plugin updated' : 'Authority SDK redeployed');
-                ok(res, response);
-            }
-            catch (error) {
-                let recoveryMessage = '';
-                try {
-                    const recovery = await runtime.core.start();
-                    recoveryMessage = recovery.state === 'running'
-                        ? '更新失败后后台服务已恢复。'
-                        : `更新失败后后台服务状态为 ${recovery.state}。`;
-                }
-                catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(recoveryError)}`;
-                }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
-            }
-        }
-        catch (error) {
-            fail(runtime, req, res, 'third-party/st-authority-sdk', error);
-        }
-    });
-    return runtime;
 }
 
 
@@ -3184,6 +3342,108 @@ function createAuthorityRuntime() {
 
 /***/ },
 
+/***/ "./src/services/admin-package-helpers.ts"
+/*!***********************************************!*\
+  !*** ./src/services/admin-package-helpers.ts ***!
+  \***********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   buildArchiveFileEntry: () => (/* binding */ buildArchiveFileEntry),
+/* harmony export */   buildArtifactSummary: () => (/* binding */ buildArtifactSummary),
+/* harmony export */   buildIndexedArchivePath: () => (/* binding */ buildIndexedArchivePath),
+/* harmony export */   decodeBase64Checked: () => (/* binding */ decodeBase64Checked),
+/* harmony export */   hashBytes: () => (/* binding */ hashBytes),
+/* harmony export */   hashText: () => (/* binding */ hashText),
+/* harmony export */   newestTimestamp: () => (/* binding */ newestTimestamp),
+/* harmony export */   normalizeExportRequest: () => (/* binding */ normalizeExportRequest),
+/* harmony export */   sanitizeArtifactFileName: () => (/* binding */ sanitizeArtifactFileName),
+/* harmony export */   sanitizeTimestamp: () => (/* binding */ sanitizeTimestamp),
+/* harmony export */   tryGunzip: () => (/* binding */ tryGunzip)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:zlib */ "node:zlib");
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_zlib__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+function normalizeExportRequest(request) {
+    return {
+        ...(request?.extensionIds?.length ? { extensionIds: [...new Set(request.extensionIds.map(value => value.trim()).filter(Boolean))] } : {}),
+        includePolicies: request?.includePolicies !== false,
+        includeUsageSummary: request?.includeUsageSummary !== false,
+    };
+}
+function sanitizeArtifactFileName(value) {
+    const trimmed = value.trim();
+    return trimmed ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(trimmed) : `artifact-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.json.gz`;
+}
+function sanitizeTimestamp(value) {
+    return value.replace(/[:.]/g, '-');
+}
+function buildArtifactSummary(fileName, bytes, mediaType) {
+    return {
+        fileName,
+        mediaType,
+        sizeBytes: bytes.byteLength,
+        checksumSha256: hashBytes(bytes),
+    };
+}
+function buildArchiveFileEntry(file) {
+    return {
+        path: file.path,
+        mediaType: file.mediaType,
+        sizeBytes: file.bytes.byteLength,
+        checksumSha256: hashBytes(file.bytes),
+    };
+}
+function buildIndexedArchivePath(directory, index, sourceName) {
+    const normalizedSource = sourceName.replace(/\\/g, '/');
+    const baseName = node_path__WEBPACK_IMPORTED_MODULE_1___default().posix.basename(normalizedSource) || 'entry.bin';
+    const safeBaseName = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(baseName) || 'entry.bin';
+    return `${directory}/${String(index).padStart(4, '0')}-${safeBaseName}`;
+}
+function hashBytes(value) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value).digest('hex');
+}
+function hashText(value) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value, 'utf8').digest('hex');
+}
+function tryGunzip(value) {
+    try {
+        return node_zlib__WEBPACK_IMPORTED_MODULE_2___default().gunzipSync(value);
+    }
+    catch {
+        return value;
+    }
+}
+function decodeBase64Checked(contentBase64, checksumSha256, label) {
+    const bytes = Buffer.from(contentBase64, 'base64');
+    const actual = hashBytes(bytes);
+    if (actual !== checksumSha256) {
+        throw new Error(`${label} checksum mismatch: expected ${checksumSha256}, received ${actual}`);
+    }
+    return bytes;
+}
+function newestTimestamp(left, right) {
+    if (!left) {
+        return right;
+    }
+    if (!right) {
+        return left;
+    }
+    return left.localeCompare(right) >= 0 ? left : right;
+}
+
+
+/***/ },
+
 /***/ "./src/services/admin-package-service.ts"
 /*!***********************************************!*\
   !*** ./src/services/admin-package-service.ts ***!
@@ -3194,17 +3454,16 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   AdminPackageService: () => (/* binding */ AdminPackageService)
 /* harmony export */ });
-/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
-/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
-/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:zlib */ "node:zlib");
-/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_zlib__WEBPACK_IMPORTED_MODULE_3__);
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-/* harmony import */ var _zip_archive_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./zip-archive.js */ "./src/services/zip-archive.ts");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:zlib */ "node:zlib");
+/* harmony import */ var node_zlib__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_zlib__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _zip_archive_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./zip-archive.js */ "./src/services/zip-archive.ts");
+/* harmony import */ var _admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./admin-package-helpers.js */ "./src/services/admin-package-helpers.ts");
 
 
 
@@ -3248,15 +3507,15 @@ class AdminPackageService {
     }
     startExport(user, request = {}) {
         this.recoverUserOperations(user);
-        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)();
         const operation = {
-            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            id: crypto.randomUUID(),
             kind: 'export',
             status: 'queued',
             progress: 0,
             createdAt: timestamp,
             updatedAt: timestamp,
-            exportRequest: normalizeExportRequest(request),
+            exportRequest: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.normalizeExportRequest)(request),
             warnings: [],
         };
         this.saveOperation(user, operation);
@@ -3265,13 +3524,13 @@ class AdminPackageService {
     }
     startImport(user, request, sourcePath) {
         this.recoverUserOperations(user);
-        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
-        const operationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const timestamp = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)();
+        const operationId = crypto.randomUUID();
         const workDir = this.getOperationWorkDir(user, operationId);
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(workDir);
-        const sourceFileName = sanitizeArtifactFileName((request.fileName ?? node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(sourcePath)) || 'authority-package.authoritypkg.zip');
-        const storedSourcePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(workDir, sourceFileName);
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(sourcePath, storedSourcePath);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(workDir);
+        const sourceFileName = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.sanitizeArtifactFileName)((request.fileName ?? node_path__WEBPACK_IMPORTED_MODULE_1___default().basename(sourcePath)) || 'authority-package.authoritypkg.zip');
+        const storedSourcePath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(workDir, sourceFileName);
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().copyFileSync(sourcePath, storedSourcePath);
         const operation = {
             id: operationId,
             kind: 'import',
@@ -3298,7 +3557,7 @@ class AdminPackageService {
             ...operation,
             status: 'queued',
             progress: 0,
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
             warnings: [],
         };
         delete resetOperation.summary;
@@ -3312,7 +3571,7 @@ class AdminPackageService {
             delete resetOperation.sourceFileName;
         }
         if (operation.artifactPath) {
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(operation.artifactPath, { force: true });
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(operation.artifactPath, { force: true });
         }
         this.saveOperation(user, resetOperation);
         this.runOperation(user, operationId);
@@ -3321,7 +3580,7 @@ class AdminPackageService {
     getArtifact(user, operationId) {
         this.recoverUserOperations(user);
         const operation = this.requireOperation(user, operationId);
-        if (!operation.artifact || !operation.artifactPath || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(operation.artifactPath)) {
+        if (!operation.artifact || !operation.artifactPath || !node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(operation.artifactPath)) {
             throw new Error('Operation artifact is not available');
         }
         return {
@@ -3331,13 +3590,13 @@ class AdminPackageService {
     }
     createDiagnosticArchive(user, bundle) {
         this.recoverUserOperations(user);
-        const generatedAt = bundle.generatedAt || (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        const generatedAt = bundle.generatedAt || (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)();
         const archive = {
             format: DIAGNOSTIC_ARCHIVE_FORMAT,
             generatedAt,
             files: this.buildDiagnosticArchiveFiles(bundle),
         };
-        const fileName = `authority-diagnostic-bundle-${sanitizeTimestamp(generatedAt)}.json.gz`;
+        const fileName = `authority-diagnostic-bundle-${(0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.sanitizeTimestamp)(generatedAt)}.json.gz`;
         return this.writeStandaloneArtifact(user, 'diagnostic', fileName, archive);
     }
     runOperation(user, operationId) {
@@ -3353,7 +3612,7 @@ class AdminPackageService {
     async executeExport(user, operation) {
         let current = this.markRunning(user, operation);
         try {
-            const request = normalizeExportRequest(current.exportRequest);
+            const request = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.normalizeExportRequest)(current.exportRequest);
             const extensions = await this.resolveExportExtensions(user, request.extensionIds);
             const totalSteps = Math.max(3, extensions.length * 6 + 2);
             let completedSteps = 0;
@@ -3361,7 +3620,7 @@ class AdminPackageService {
             const nextPackage = {
                 manifest: {
                     format: PORTABLE_PACKAGE_FORMAT,
-                    generatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+                    generatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
                     extensionIds: extensions.map(extension => extension.id),
                     includesPolicies: request.includePolicies !== false,
                     includesUsageSummary: request.includeUsageSummary !== false,
@@ -3400,7 +3659,7 @@ class AdminPackageService {
     async executeImport(user, operation) {
         let current = this.markRunning(user, operation);
         try {
-            if (!current.sourcePath || !node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(current.sourcePath)) {
+            if (!current.sourcePath || !node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(current.sourcePath)) {
                 throw new Error('Import source package is not available');
             }
             const readResult = this.readPortablePackage(current.sourcePath);
@@ -3473,7 +3732,7 @@ class AdminPackageService {
     }
     async importExtensionPackage(user, extensionPackage, summary, warnings) {
         const extensionId = extensionPackage.extension.id;
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
         for (const grant of extensionPackage.grants) {
             await this.core.upsertControlGrant(paths.controlDbFile, {
                 userHandle: user.handle,
@@ -3487,12 +3746,12 @@ class AdminPackageService {
         }
         summary.kvEntryCount += Object.keys(extensionPackage.kvEntries).length;
         for (const blob of extensionPackage.blobs) {
-            const payload = decodeBase64Checked(blob.contentBase64, blob.checksumSha256, `blob ${blob.record.name}`);
+            const payload = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(blob.contentBase64, blob.checksumSha256, `blob ${blob.record.name}`);
             await this.storage.putBlob(user, extensionId, blob.record.name, payload.toString('base64'), 'base64', blob.record.contentType);
         }
         summary.blobCount += extensionPackage.blobs.length;
         for (const file of extensionPackage.files) {
-            decodeBase64Checked(file.contentBase64, file.checksumSha256, `private file ${file.path}`);
+            (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(file.contentBase64, file.checksumSha256, `private file ${file.path}`);
             await this.files.writeFile(user, extensionId, {
                 path: file.path,
                 content: file.contentBase64,
@@ -3502,26 +3761,26 @@ class AdminPackageService {
         }
         summary.fileCount += extensionPackage.files.length;
         for (const database of extensionPackage.sqlDatabases) {
-            const bytes = decodeBase64Checked(database.contentBase64, database.checksumSha256, `sql database ${database.record.name}`);
+            const bytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(database.contentBase64, database.checksumSha256, `sql database ${database.record.name}`);
             const dbPath = this.resolvePrivateSqlDatabasePath(user, extensionId, database.record.name);
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(dbPath));
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(dbPath, bytes);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_1___default().dirname(dbPath));
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().writeFileSync(dbPath, bytes);
         }
         summary.sqlDatabaseCount += extensionPackage.sqlDatabases.length;
         for (const database of extensionPackage.triviumDatabases) {
-            const bytes = decodeBase64Checked(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
+            const bytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
             const dbPath = this.resolvePrivateTriviumDatabasePath(user, extensionId, database.record.name);
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(dbPath));
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(`${dbPath}.quiver`, { force: true });
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(dbPath, bytes);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_1___default().dirname(dbPath));
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(`${dbPath}.quiver`, { force: true });
+            node_fs__WEBPACK_IMPORTED_MODULE_0___default().writeFileSync(dbPath, bytes);
             const mappingPath = this.resolvePrivateTriviumMappingPath(user, extensionId, database.record.name);
             if (database.mappingContentBase64 && database.mappingChecksumSha256) {
-                const mappingBytes = decodeBase64Checked(database.mappingContentBase64, database.mappingChecksumSha256, `trivium mapping ${database.record.name}`);
-                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(mappingPath));
-                node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(mappingPath, mappingBytes);
+                const mappingBytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(database.mappingContentBase64, database.mappingChecksumSha256, `trivium mapping ${database.record.name}`);
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_1___default().dirname(mappingPath));
+                node_fs__WEBPACK_IMPORTED_MODULE_0___default().writeFileSync(mappingPath, mappingBytes);
             }
             else {
-                node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(mappingPath, { force: true });
+                node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(mappingPath, { force: true });
             }
         }
         summary.triviumDatabaseCount += extensionPackage.triviumDatabases.length;
@@ -3530,7 +3789,7 @@ class AdminPackageService {
         }
     }
     async buildUsageSummary(user, extensions) {
-        const generatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        const generatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)();
         const entries = await Promise.all(extensions.map(async (extension) => {
             const grants = await this.permissions.listPersistentGrants(user, extension.id);
             const sqlDatabases = await this.listPrivateSqlDatabases(user, extension.id);
@@ -3558,7 +3817,7 @@ class AdminPackageService {
                 fileCount: aggregate.files.fileCount + entry.storage.files.fileCount,
                 directoryCount: aggregate.files.directoryCount + entry.storage.files.directoryCount,
                 totalSizeBytes: aggregate.files.totalSizeBytes + entry.storage.files.totalSizeBytes,
-                latestUpdatedAt: newestTimestamp(aggregate.files.latestUpdatedAt, entry.storage.files.latestUpdatedAt),
+                latestUpdatedAt: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.newestTimestamp)(aggregate.files.latestUpdatedAt, entry.storage.files.latestUpdatedAt),
             },
         }), {
             extensionCount: 0,
@@ -3607,24 +3866,24 @@ class AdminPackageService {
     async exportBlobs(user, extensionId, records) {
         return await Promise.all(records.map(async (record) => {
             const opened = await this.storage.openBlobRead(user, extensionId, record.id);
-            const bytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(opened.sourcePath);
+            const bytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(opened.sourcePath);
             return {
                 record,
                 contentBase64: bytes.toString('base64'),
-                checksumSha256: hashBytes(bytes),
+                checksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes),
             };
         }));
     }
     exportPrivateFiles(user, extensionId) {
         const rootDir = this.resolvePrivateFilesRoot(user, extensionId);
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(rootDir)) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(rootDir)) {
             return [];
         }
         const entries = [];
         const walk = (currentDir, virtualPrefix) => {
-            for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(currentDir, { withFileTypes: true })) {
-                const fullPath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(currentDir, entry.name);
-                const stats = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(fullPath);
+            for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(currentDir, { withFileTypes: true })) {
+                const fullPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(currentDir, entry.name);
+                const stats = node_fs__WEBPACK_IMPORTED_MODULE_0___default().lstatSync(fullPath);
                 if (stats.isSymbolicLink()) {
                     continue;
                 }
@@ -3636,13 +3895,13 @@ class AdminPackageService {
                 if (!entry.isFile()) {
                     continue;
                 }
-                const bytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(fullPath);
+                const bytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(fullPath);
                 entries.push({
                     path: virtualPath,
                     sizeBytes: bytes.byteLength,
                     updatedAt: new Date(stats.mtimeMs).toISOString(),
                     contentBase64: bytes.toString('base64'),
-                    checksumSha256: hashBytes(bytes),
+                    checksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes),
                 });
             }
         };
@@ -3653,11 +3912,11 @@ class AdminPackageService {
     async exportSqlDatabases(user, extensionId, records) {
         return await Promise.all(records.map(async (record) => {
             const filePath = this.resolvePrivateSqlDatabasePath(user, extensionId, record.name);
-            const bytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath) : Buffer.alloc(0);
+            const bytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(filePath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(filePath) : Buffer.alloc(0);
             return {
                 record,
                 contentBase64: bytes.toString('base64'),
-                checksumSha256: hashBytes(bytes),
+                checksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes),
             };
         }));
     }
@@ -3665,16 +3924,16 @@ class AdminPackageService {
         return await Promise.all(records.map(async (record) => {
             const dbPath = this.resolvePrivateTriviumDatabasePath(user, extensionId, record.name);
             const mappingPath = this.resolvePrivateTriviumMappingPath(user, extensionId, record.name);
-            const databaseBytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(dbPath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(dbPath) : Buffer.alloc(0);
-            const mappingBytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(mappingPath) ? node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(mappingPath) : null;
+            const databaseBytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(dbPath) : Buffer.alloc(0);
+            const mappingBytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(mappingPath) ? node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(mappingPath) : null;
             return {
                 record,
                 databaseContentBase64: databaseBytes.toString('base64'),
-                databaseChecksumSha256: hashBytes(databaseBytes),
+                databaseChecksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(databaseBytes),
                 ...(mappingBytes
                     ? {
                         mappingContentBase64: mappingBytes.toString('base64'),
-                        mappingChecksumSha256: hashBytes(mappingBytes),
+                        mappingChecksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(mappingBytes),
                     }
                     : {}),
             };
@@ -3682,10 +3941,10 @@ class AdminPackageService {
     }
     async listPrivateSqlDatabases(user, extensionId) {
         const databaseDir = this.resolvePrivateSqlDatabaseDir(user, extensionId);
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(databaseDir)) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(databaseDir)) {
             return [];
         }
-        const databases = await Promise.all(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(databaseDir, { withFileTypes: true })
+        const databases = await Promise.all(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(databaseDir, { withFileTypes: true })
             .filter(entry => entry.isFile() && entry.name.endsWith('.sqlite'))
             .map(async (entry) => {
             const databaseName = entry.name.slice(0, -'.sqlite'.length);
@@ -3705,16 +3964,16 @@ class AdminPackageService {
         return databases;
     }
     async clearExtensionState(user, extensionId) {
-        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user);
+        const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user);
         await this.permissions.resetPersistentGrants(user, extensionId);
         const blobs = await this.storage.listBlobs(user, extensionId);
         for (const blob of blobs) {
             await this.storage.deleteBlob(user, extensionId, blob.id);
         }
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateFilesRoot(user, extensionId), { recursive: true, force: true });
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync((0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(paths.kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId)}.sqlite`), { force: true });
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateSqlDatabaseDir(user, extensionId), { recursive: true, force: true });
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.resolvePrivateTriviumDatabaseDir(user, extensionId), { recursive: true, force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(this.resolvePrivateFilesRoot(user, extensionId), { recursive: true, force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync((0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)(paths.kvDir, `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId)}.sqlite`), { force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(this.resolvePrivateSqlDatabaseDir(user, extensionId), { recursive: true, force: true });
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().rmSync(this.resolvePrivateTriviumDatabaseDir(user, extensionId), { recursive: true, force: true });
     }
     async mergePolicies(user, document) {
         await this.policies.saveGlobalPolicies(user, {
@@ -3724,18 +3983,18 @@ class AdminPackageService {
         });
     }
     async replacePolicies(user, document) {
-        await this.core.getControlPolicies((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getGlobalAuthorityPaths)().controlDbFile, { userHandle: user.handle });
-        await this.core.execSql((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getGlobalAuthorityPaths)().controlDbFile, {
+        await this.core.getControlPolicies((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getGlobalAuthorityPaths)().controlDbFile, { userHandle: user.handle });
+        await this.core.execSql((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getGlobalAuthorityPaths)().controlDbFile, {
             statement: `DELETE FROM authority_policy_documents WHERE name = 'global'`,
         });
         await this.mergePolicies(user, document);
     }
     readPortablePackage(filePath) {
-        const rawBytes = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath);
-        if ((0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_6__.isZipArchive)(rawBytes)) {
+        const rawBytes = node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(filePath);
+        if ((0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_5__.isZipArchive)(rawBytes)) {
             return this.readPortablePackageArchive(rawBytes);
         }
-        const text = tryGunzip(rawBytes).toString('utf8');
+        const text = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.tryGunzip)(rawBytes).toString('utf8');
         const payload = JSON.parse(text);
         if (payload?.manifest?.format !== PORTABLE_PACKAGE_FORMAT) {
             throw new Error(`Unsupported package format: ${String(payload?.manifest?.format ?? 'unknown')}`);
@@ -3746,7 +4005,7 @@ class AdminPackageService {
         };
     }
     readPortablePackageArchive(rawBytes) {
-        const archiveFiles = (0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_6__.readZipArchive)(rawBytes);
+        const archiveFiles = (0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_5__.readZipArchive)(rawBytes);
         const manifest = this.parseArchiveJson(archiveFiles, PORTABLE_PACKAGE_ARCHIVE_MANIFEST_PATH, 'portable package archive manifest');
         if (manifest?.format !== PORTABLE_PACKAGE_ARCHIVE_FORMAT) {
             throw new Error(`Unsupported package archive format: ${String(manifest?.format ?? 'unknown')}`);
@@ -3841,7 +4100,7 @@ class AdminPackageService {
             if (bytes.byteLength !== entry.sizeBytes) {
                 throw new Error(`Portable package archive file size mismatch: ${entry.path}`);
             }
-            const checksum = hashBytes(bytes);
+            const checksum = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes);
             if (checksum !== entry.checksumSha256) {
                 throw new Error(`Portable package archive file checksum mismatch: ${entry.path}`);
             }
@@ -3891,17 +4150,17 @@ class AdminPackageService {
         if (!bytes) {
             throw new Error(`${label} is missing from the portable package archive`);
         }
-        const checksum = hashBytes(bytes);
+        const checksum = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes);
         if (checksum !== checksumSha256) {
             throw new Error(`${label} checksum mismatch: expected ${checksumSha256}, received ${checksum}`);
         }
         return bytes;
     }
     writePortablePackageArtifact(user, operationId, portablePackage) {
-        const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getOperationWorkDir(user, operationId), sanitizeArtifactFileName(`authority-export-package-${sanitizeTimestamp(portablePackage.manifest.generatedAt)}.authoritypkg.zip`));
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+        const filePath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(this.getOperationWorkDir(user, operationId), (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.sanitizeArtifactFileName)(`authority-export-package-${(0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.sanitizeTimestamp)(portablePackage.manifest.generatedAt)}.authoritypkg.zip`));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_1___default().dirname(filePath));
         const { manifest, files } = this.buildPortablePackageArchive(portablePackage);
-        const archiveBytes = (0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_6__.createZipArchive)([
+        const archiveBytes = (0,_zip_archive_js__WEBPACK_IMPORTED_MODULE_5__.createZipArchive)([
             {
                 path: PORTABLE_PACKAGE_ARCHIVE_MANIFEST_PATH,
                 bytes: Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
@@ -3913,9 +4172,9 @@ class AdminPackageService {
                 compression: file.mediaType === 'application/json' ? 'deflate' : 'auto',
             })),
         ]);
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, archiveBytes);
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().writeFileSync(filePath, archiveBytes);
         return {
-            artifact: buildArtifactSummary(node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(filePath), archiveBytes, 'application/zip'),
+            artifact: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildArtifactSummary)(node_path__WEBPACK_IMPORTED_MODULE_1___default().basename(filePath), archiveBytes, 'application/zip'),
             filePath,
         };
     }
@@ -3940,55 +4199,55 @@ class AdminPackageService {
         const policiesPath = portablePackage.policies ? pushJsonFile('policies.json', portablePackage.policies) : undefined;
         const usageSummaryPath = portablePackage.usageSummary ? pushJsonFile('usage-summary.json', portablePackage.usageSummary) : undefined;
         const extensions = portablePackage.extensions.map((extensionPackage, extensionIndex) => {
-            const extensionDir = `extensions/${String(extensionIndex).padStart(3, '0')}-${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionPackage.extension.id)}`;
+            const extensionDir = `extensions/${String(extensionIndex).padStart(3, '0')}-${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionPackage.extension.id)}`;
             const extensionPath = pushJsonFile(`${extensionDir}/extension.json`, extensionPackage.extension);
             const grantsPath = pushJsonFile(`${extensionDir}/grants.json`, extensionPackage.grants);
             const kvEntriesPath = pushJsonFile(`${extensionDir}/kv.json`, extensionPackage.kvEntries);
             const blobs = extensionPackage.blobs.map((blob, blobIndex) => {
-                const bytes = decodeBase64Checked(blob.contentBase64, blob.checksumSha256, `blob ${blob.record.name}`);
-                const archivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/blobs`, blobIndex, blob.record.name || blob.record.id || 'blob.bin'), bytes, blob.record.contentType || 'application/octet-stream');
+                const bytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(blob.contentBase64, blob.checksumSha256, `blob ${blob.record.name}`);
+                const archivePath = pushBinaryFile((0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildIndexedArchivePath)(`${extensionDir}/blobs`, blobIndex, blob.record.name || blob.record.id || 'blob.bin'), bytes, blob.record.contentType || 'application/octet-stream');
                 return {
                     record: blob.record,
                     archivePath,
                     sizeBytes: bytes.byteLength,
-                    checksumSha256: hashBytes(bytes),
+                    checksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes),
                 };
             });
             const privateFiles = extensionPackage.files.map((file, fileIndex) => {
-                const bytes = decodeBase64Checked(file.contentBase64, file.checksumSha256, `private file ${file.path}`);
-                const archivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/files`, fileIndex, file.path || 'file.bin'), bytes);
+                const bytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(file.contentBase64, file.checksumSha256, `private file ${file.path}`);
+                const archivePath = pushBinaryFile((0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildIndexedArchivePath)(`${extensionDir}/files`, fileIndex, file.path || 'file.bin'), bytes);
                 return {
                     path: file.path,
                     archivePath,
                     sizeBytes: bytes.byteLength,
                     updatedAt: file.updatedAt,
-                    checksumSha256: hashBytes(bytes),
+                    checksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes),
                 };
             });
             const sqlDatabases = extensionPackage.sqlDatabases.map((database, databaseIndex) => {
-                const bytes = decodeBase64Checked(database.contentBase64, database.checksumSha256, `sql database ${database.record.name}`);
-                const archivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/sql`, databaseIndex, database.record.fileName || `${database.record.name}.sqlite`), bytes);
+                const bytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(database.contentBase64, database.checksumSha256, `sql database ${database.record.name}`);
+                const archivePath = pushBinaryFile((0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildIndexedArchivePath)(`${extensionDir}/sql`, databaseIndex, database.record.fileName || `${database.record.name}.sqlite`), bytes);
                 return {
                     record: database.record,
                     archivePath,
                     sizeBytes: bytes.byteLength,
-                    checksumSha256: hashBytes(bytes),
+                    checksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(bytes),
                 };
             });
             const triviumDatabases = extensionPackage.triviumDatabases.map((database, databaseIndex) => {
-                const databaseBytes = decodeBase64Checked(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
-                const databaseArchivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/trivium`, databaseIndex, database.record.fileName || `${database.record.name}.tdb`), databaseBytes);
+                const databaseBytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(database.databaseContentBase64, database.databaseChecksumSha256, `trivium database ${database.record.name}`);
+                const databaseArchivePath = pushBinaryFile((0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildIndexedArchivePath)(`${extensionDir}/trivium`, databaseIndex, database.record.fileName || `${database.record.name}.tdb`), databaseBytes);
                 const nextDatabase = {
                     record: database.record,
                     databaseArchivePath,
                     databaseSizeBytes: databaseBytes.byteLength,
-                    databaseChecksumSha256: hashBytes(databaseBytes),
+                    databaseChecksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(databaseBytes),
                 };
                 if (database.mappingContentBase64 && database.mappingChecksumSha256) {
-                    const mappingBytes = decodeBase64Checked(database.mappingContentBase64, database.mappingChecksumSha256, `trivium mapping ${database.record.name}`);
-                    nextDatabase.mappingArchivePath = pushBinaryFile(buildIndexedArchivePath(`${extensionDir}/trivium`, databaseIndex, `${database.record.name}.mapping.sqlite`), mappingBytes);
+                    const mappingBytes = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.decodeBase64Checked)(database.mappingContentBase64, database.mappingChecksumSha256, `trivium mapping ${database.record.name}`);
+                    nextDatabase.mappingArchivePath = pushBinaryFile((0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildIndexedArchivePath)(`${extensionDir}/trivium`, databaseIndex, `${database.record.name}.mapping.sqlite`), mappingBytes);
                     nextDatabase.mappingSizeBytes = mappingBytes.byteLength;
-                    nextDatabase.mappingChecksumSha256 = hashBytes(mappingBytes);
+                    nextDatabase.mappingChecksumSha256 = (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashBytes)(mappingBytes);
                 }
                 return nextDatabase;
             });
@@ -4007,7 +4266,7 @@ class AdminPackageService {
             format: PORTABLE_PACKAGE_ARCHIVE_FORMAT,
             generatedAt: portablePackage.manifest.generatedAt,
             packageManifest: portablePackage.manifest,
-            entries: files.map(file => buildArchiveFileEntry(file)),
+            entries: files.map(file => (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildArchiveFileEntry)(file)),
             ...(policiesPath ? { policiesPath } : {}),
             ...(usageSummaryPath ? { usageSummaryPath } : {}),
             extensions,
@@ -4031,7 +4290,7 @@ class AdminPackageService {
             jobs: extension.jobsPage,
         }))));
         for (const extension of bundle.extensions) {
-            files.push(this.buildUtf8ArchiveFile(`extensions/${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extension.extension.id)}.json`, extension));
+            files.push(this.buildUtf8ArchiveFile(`extensions/${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extension.extension.id)}.json`, extension));
         }
         if (bundle.releaseMetadata) {
             files.push(this.buildUtf8ArchiveFile('release-metadata.json', bundle.releaseMetadata));
@@ -4046,7 +4305,7 @@ class AdminPackageService {
             encoding: 'utf8',
             content,
             sizeBytes: Buffer.byteLength(content),
-            checksumSha256: hashText(content),
+            checksumSha256: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.hashText)(content),
         };
     }
     resolveExportExtensions(user, extensionIds) {
@@ -4075,8 +4334,8 @@ class AdminPackageService {
                 progress: 0,
                 summary: '运行中的导入导出任务在服务重启后需要手动恢复',
                 error: OPERATION_RECOVERY_ERROR,
-                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
-                finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+                updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
+                finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
             };
             this.saveOperation(user, recovered);
         }
@@ -4088,8 +4347,8 @@ class AdminPackageService {
             status: 'running',
             progress: 1,
             summary: operation.kind === 'export' ? '正在构建高层导出包' : '正在回放高层导入包',
-            startedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            startedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
             warnings: [],
         };
         delete running.error;
@@ -4103,7 +4362,7 @@ class AdminPackageService {
             ...operation,
             progress: Math.max(1, Math.min(99, Math.round((completedSteps / Math.max(1, totalSteps)) * 100))),
             summary,
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
         };
         this.saveOperation(user, next);
         return next;
@@ -4115,8 +4374,8 @@ class AdminPackageService {
             ...patch,
             status: 'completed',
             progress: 100,
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
-            finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
+            finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
         };
         delete completed.error;
         this.saveOperation(user, completed);
@@ -4127,46 +4386,36 @@ class AdminPackageService {
         const failed = {
             ...operation,
             status: 'failed',
-            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
-            finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
-            error: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.asErrorMessage)(error),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
+            finishedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.nowIso)(),
+            error: (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.asErrorMessage)(error),
             summary: operation.kind === 'export' ? '高层导出包生成失败' : '高层导入包回放失败',
         };
         this.saveOperation(user, failed);
     }
-    writeOperationArtifact(user, operationId, fileName, payload) {
-        const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getOperationWorkDir(user, operationId), sanitizeArtifactFileName(fileName));
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
-        const bytes = node_zlib__WEBPACK_IMPORTED_MODULE_3___default().gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, bytes);
-        return {
-            artifact: buildArtifactSummary(node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(filePath), bytes, 'application/gzip'),
-            filePath,
-        };
-    }
     writeStandaloneArtifact(user, prefix, fileName, payload) {
-        const artifactId = `${prefix}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`;
-        const filePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getStandaloneArtifactsDir(user), artifactId, sanitizeArtifactFileName(fileName));
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
-        const bytes = node_zlib__WEBPACK_IMPORTED_MODULE_3___default().gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(filePath, bytes);
+        const artifactId = `${prefix}-${crypto.randomUUID()}`;
+        const filePath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(this.getStandaloneArtifactsDir(user), artifactId, (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.sanitizeArtifactFileName)(fileName));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_1___default().dirname(filePath));
+        const bytes = node_zlib__WEBPACK_IMPORTED_MODULE_2___default().gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().writeFileSync(filePath, bytes);
         return {
-            artifact: buildArtifactSummary(node_path__WEBPACK_IMPORTED_MODULE_2___default().basename(filePath), bytes, 'application/gzip'),
+            artifact: (0,_admin_package_helpers_js__WEBPACK_IMPORTED_MODULE_6__.buildArtifactSummary)(node_path__WEBPACK_IMPORTED_MODULE_1___default().basename(filePath), bytes, 'application/gzip'),
             filePath,
         };
     }
     loadOperations(user) {
         const dirPath = this.getOperationsDir(user);
-        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(dirPath)) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dirPath)) {
             return [];
         }
-        return node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(dirPath)
+        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(dirPath)
             .filter(entry => entry.endsWith('.json'))
-            .map(entry => (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(dirPath, entry), null))
+            .map(entry => (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(dirPath, entry), null))
             .filter((entry) => Boolean(entry));
     }
     loadOperation(user, operationId) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(this.getOperationStatePath(user, operationId), null);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.getOperationStatePath(user, operationId), null);
     }
     requireOperation(user, operationId) {
         const operation = this.loadOperation(user, operationId);
@@ -4176,112 +4425,45 @@ class AdminPackageService {
         return operation;
     }
     saveOperation(user, operation) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
     }
     toPublicOperation(operation) {
         const { artifactPath: _artifactPath, sourcePath: _sourcePath, ...publicOperation } = operation;
         return publicOperation;
     }
     getOperationsDir(user) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getPackagesRoot(user), 'operations');
+        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(this.getPackagesRoot(user), 'operations');
     }
     getStandaloneArtifactsDir(user) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.getPackagesRoot(user), 'standalone');
+        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(this.getPackagesRoot(user), 'standalone');
     }
     getOperationStatePath(user, operationId) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getOperationsDir(user), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId)}.json`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)(this.getOperationsDir(user), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(operationId)}.json`);
     }
     getOperationWorkDir(user, operationId) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.getPackagesRoot(user), 'work', (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(operationId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)(this.getPackagesRoot(user), 'work', (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(operationId));
     }
     getPackagesRoot(user) {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).controlDbFile), 'admin-packages');
+        return node_path__WEBPACK_IMPORTED_MODULE_1___default().join(node_path__WEBPACK_IMPORTED_MODULE_1___default().dirname((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user).controlDbFile), 'admin-packages');
     }
     resolvePrivateFilesRoot(user, extensionId) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user).filesDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId));
     }
     resolvePrivateSqlDatabaseDir(user, extensionId) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user).sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId));
     }
     resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)(this.resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.sqlite`);
     }
     resolvePrivateTriviumDatabaseDir(user, extensionId) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_4__.getUserAuthorityPaths)(user).triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(extensionId));
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_3__.getUserAuthorityPaths)(user).triviumPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(extensionId));
     }
     resolvePrivateTriviumDatabasePath(user, extensionId, databaseName) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.tdb`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)(this.resolvePrivateTriviumDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.tdb`);
     }
     resolvePrivateTriviumMappingPath(user, extensionId, databaseName) {
-        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(databaseName)}.sqlite`);
+        return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.sqlite`);
     }
-}
-function normalizeExportRequest(request) {
-    return {
-        ...(request?.extensionIds?.length ? { extensionIds: [...new Set(request.extensionIds.map(value => value.trim()).filter(Boolean))] } : {}),
-        includePolicies: request?.includePolicies !== false,
-        includeUsageSummary: request?.includeUsageSummary !== false,
-    };
-}
-function sanitizeArtifactFileName(value) {
-    const trimmed = value.trim();
-    return trimmed ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(trimmed) : `artifact-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.json.gz`;
-}
-function sanitizeTimestamp(value) {
-    return value.replace(/[:.]/g, '-');
-}
-function buildArtifactSummary(fileName, bytes, mediaType) {
-    return {
-        fileName,
-        mediaType,
-        sizeBytes: bytes.byteLength,
-        checksumSha256: hashBytes(bytes),
-    };
-}
-function buildArchiveFileEntry(file) {
-    return {
-        path: file.path,
-        mediaType: file.mediaType,
-        sizeBytes: file.bytes.byteLength,
-        checksumSha256: hashBytes(file.bytes),
-    };
-}
-function buildIndexedArchivePath(directory, index, sourceName) {
-    const normalizedSource = sourceName.replace(/\\/g, '/');
-    const baseName = node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.basename(normalizedSource) || 'entry.bin';
-    const safeBaseName = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.sanitizeFileSegment)(baseName) || 'entry.bin';
-    return `${directory}/${String(index).padStart(4, '0')}-${safeBaseName}`;
-}
-function hashBytes(value) {
-    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value).digest('hex');
-}
-function hashText(value) {
-    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value, 'utf8').digest('hex');
-}
-function tryGunzip(value) {
-    try {
-        return node_zlib__WEBPACK_IMPORTED_MODULE_3___default().gunzipSync(value);
-    }
-    catch {
-        return value;
-    }
-}
-function decodeBase64Checked(contentBase64, checksumSha256, label) {
-    const bytes = Buffer.from(contentBase64, 'base64');
-    const actual = hashBytes(bytes);
-    if (actual !== checksumSha256) {
-        throw new Error(`${label} checksum mismatch: expected ${checksumSha256}, received ${actual}`);
-    }
-    return bytes;
-}
-function newestTimestamp(left, right) {
-    if (!left) {
-        return right;
-    }
-    if (!right) {
-        return left;
-    }
-    return left.localeCompare(right) >= 0 ? left : right;
 }
 
 
