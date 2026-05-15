@@ -93,6 +93,7 @@ import { TriviumMappingMetaStore } from './trivium-mapping-meta-store.js';
 import { TriviumRepository } from './trivium-repository.js';
 
 const MAX_TRIVIUM_BULK_ITEMS = 2000;
+const BME_VECTOR_MANIFEST_META_KEY = 'bme.vector.manifest';
 type ResolvedTriviumOpenOptions = { dim: number; dtype?: TriviumDType };
 
 export function validateBmeVectorApplyDimensions(request: BmeVectorApplyRequest): { observedDim: number | null; vectorSpaceId: string } {
@@ -845,6 +846,7 @@ export class TriviumService {
             this.countMappings(mappingDbPath),
             this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY),
         ]);
+        const bmeManifest = await this.readBmeVectorManifestMeta(mappingDbPath);
         let nodeCount: number | null = null;
         let updatedAt: string | null = null;
         if (exists) {
@@ -855,7 +857,7 @@ export class TriviumService {
         return {
             database,
             exists,
-            status: exists ? 'unknown' : 'missing',
+            status: exists ? (bmeManifest.vectorSpaceId ? 'clean' : 'unknown') : 'missing',
             embeddingMode: 'client',
             serverEmbeddingSupported: false,
             vectorApplySupported: true,
@@ -868,6 +870,8 @@ export class TriviumService {
             nodeCount,
             lastFlushAt,
             updatedAt,
+            ...(bmeManifest.vectorSpaceId ? { vectorSpaceId: bmeManifest.vectorSpaceId } : {}),
+            ...(bmeManifest.observedDim != null ? { observedDim: bmeManifest.observedDim } : {}),
         };
     }
 
@@ -911,6 +915,14 @@ export class TriviumService {
         const manifest = await this.getBmeVectorManifest(user, extensionId, { database });
         if (validation.vectorSpaceId) manifest.vectorSpaceId = validation.vectorSpaceId;
         if (validation.observedDim != null) manifest.observedDim = validation.observedDim;
+        if (upsert.failureCount === 0 && linkResult.failureCount === 0) {
+            const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+            await this.writeBmeVectorManifestMeta(mappingDbPath, {
+                vectorSpaceId: validation.vectorSpaceId,
+                observedDim: validation.observedDim,
+                updatedAt: new Date().toISOString(),
+            });
+        }
         return {
             ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
             appliedAt: new Date().toISOString(),
@@ -1016,6 +1028,34 @@ export class TriviumService {
 
     private async writeMetaValue(mappingDbPath: string, key: string, value: string): Promise<void> {
         await this.mappingStore.writeMetaValue(mappingDbPath, key, value);
+    }
+
+    private async readBmeVectorManifestMeta(mappingDbPath: string): Promise<{ vectorSpaceId?: string; observedDim?: number | null; updatedAt?: string }> {
+        const raw = await this.readMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY);
+        if (!raw) return {};
+        try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const vectorSpaceId = typeof parsed.vectorSpaceId === 'string' ? parsed.vectorSpaceId.trim() : '';
+            const observedDim = Number(parsed.observedDim ?? 0);
+            return {
+                ...(vectorSpaceId ? { vectorSpaceId } : {}),
+                ...(Number.isFinite(observedDim) && observedDim > 0 ? { observedDim: Math.floor(observedDim) } : {}),
+                ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
+            };
+        } catch {
+            return {};
+        }
+    }
+
+    private async writeBmeVectorManifestMeta(
+        mappingDbPath: string,
+        meta: { vectorSpaceId?: string; observedDim?: number | null; updatedAt?: string },
+    ): Promise<void> {
+        await this.writeMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY, JSON.stringify({
+            vectorSpaceId: meta.vectorSpaceId || '',
+            observedDim: meta.observedDim ?? null,
+            updatedAt: meta.updatedAt || new Date().toISOString(),
+        }));
     }
 
     private async rememberDatabaseConfig(

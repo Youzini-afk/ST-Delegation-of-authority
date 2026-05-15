@@ -208,7 +208,7 @@ export interface BmeVectorManifestRequest {
     database?: string;
 }
 
-export type BmeVectorManifestStatus = 'missing' | 'clean' | 'dirty' | 'failed' | 'unknown';
+export type BmeVectorManifestStatus = 'missing' | 'clean' | 'dirty' | 'failed' | 'stale' | 'unknown';
 
 export interface BmeVectorManifestResponse {
     database: string;
