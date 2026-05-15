@@ -45,6 +45,7 @@ import {
     UNMANAGED_TRANSFER_MAX_BYTES,
     buildAuthorityFeatureFlags,
 } from './constants.js';
+import { registerBmeRoutes } from './routes/bme-routes.js';
 import { registerStManagerRoutes } from './routes/st-manager-routes.js';
 import { registerStorageRoutes } from './routes/storage-routes.js';
 import { registerJobsAndEventsRoutes } from './routes/jobs-events-routes.js';
@@ -589,6 +590,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     });
 
     registerStManagerRoutes(router, runtime, fail);
+    registerBmeRoutes(router, runtime, fail);
 
     router.post('/session/init', async (req, res) => {
         try {

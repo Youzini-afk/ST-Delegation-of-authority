@@ -469,3 +469,43 @@ export interface TriviumStatResponse extends TriviumDatabaseRecord {
     vecSize: number;
     estimatedMemoryBytes: number;
 }
+
+export interface BmeVectorManifestRequest {
+    database?: string;
+}
+
+export type BmeVectorManifestStatus = 'missing' | 'clean' | 'dirty' | 'failed' | 'unknown';
+
+export interface BmeVectorManifestResponse {
+    database: string;
+    exists: boolean;
+    status: BmeVectorManifestStatus;
+    embeddingMode: 'client' | 'server' | 'unknown';
+    serverEmbeddingSupported: boolean;
+    vectorApplySupported: boolean;
+    vectorManifestSupported: boolean;
+    vectorDim: number | null;
+    dtype: TriviumDType | null;
+    storageMode: TriviumStorageMode | null;
+    syncMode: TriviumSyncMode | null;
+    mappingCount: number;
+    nodeCount: number | null;
+    lastFlushAt: string | null;
+    updatedAt: string | null;
+}
+
+export interface BmeVectorApplyRequest extends TriviumOpenOptions {
+    items: TriviumBulkUpsertItem[];
+    links?: TriviumBulkLinkItem[];
+    idempotencyKey?: string;
+}
+
+export interface BmeVectorApplyResponse {
+    ok: boolean;
+    appliedAt: string;
+    database: string;
+    manifest: BmeVectorManifestResponse;
+    upsert: TriviumBulkUpsertResponse;
+    links: TriviumBulkMutationResponse;
+    skippedLinkCount: number;
+}

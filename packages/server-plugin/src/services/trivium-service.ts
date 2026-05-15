@@ -11,6 +11,10 @@ import type {
     TriviumBulkUnlinkRequest,
     TriviumBulkUpsertRequest,
     TriviumBulkUpsertResponse,
+    BmeVectorManifestRequest,
+    BmeVectorManifestResponse,
+    BmeVectorApplyRequest,
+    BmeVectorApplyResponse,
     TriviumBuildTextIndexRequest,
     TriviumCheckMappingsIntegrityRequest,
     TriviumCheckMappingsIntegrityResponse,
@@ -763,6 +767,94 @@ export class TriviumService {
         const database = getTriviumDatabaseName(request.database);
         const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
         return await this.mappingStore.listMappingsPage(mappingDbPath, request);
+    }
+
+    async getBmeVectorManifest(
+        user: UserContext,
+        extensionId: string,
+        request: BmeVectorManifestRequest = {},
+    ): Promise<BmeVectorManifestResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
+        const exists = fs.existsSync(dbPath);
+        const meta = await this.readDatabaseConfigMeta(mappingDbPath);
+        const fileDim = exists ? readTriviumDimension(dbPath) : null;
+        const [mappingCount, lastFlushAt] = await Promise.all([
+            this.countMappings(mappingDbPath),
+            this.readMetaValue(mappingDbPath, LAST_FLUSH_META_KEY),
+        ]);
+        let nodeCount: number | null = null;
+        let updatedAt: string | null = null;
+        if (exists) {
+            const stat = await this.stat(user, extensionId, { database });
+            nodeCount = Number.isFinite(Number(stat.nodeCount)) ? Number(stat.nodeCount) : null;
+            updatedAt = stat.updatedAt ?? null;
+        }
+        return {
+            database,
+            exists,
+            status: exists ? 'unknown' : 'missing',
+            embeddingMode: 'client',
+            serverEmbeddingSupported: false,
+            vectorApplySupported: true,
+            vectorManifestSupported: true,
+            vectorDim: fileDim ?? meta.dim,
+            dtype: meta.dtype,
+            storageMode: meta.storageMode,
+            syncMode: meta.syncMode,
+            mappingCount,
+            nodeCount,
+            lastFlushAt,
+            updatedAt,
+        };
+    }
+
+    async applyBmeVectorManifest(
+        user: UserContext,
+        extensionId: string,
+        request: BmeVectorApplyRequest,
+    ): Promise<BmeVectorApplyResponse> {
+        const database = getTriviumDatabaseName(request.database);
+        if (!request || typeof request !== 'object' || !Array.isArray(request.items)) {
+            throw new Error('BME vector apply requires an items array');
+        }
+        if (request.items.length > MAX_TRIVIUM_BULK_ITEMS) {
+            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} items per request`);
+        }
+        const links = Array.isArray(request.links) ? request.links : [];
+        if (request.links !== undefined && !Array.isArray(request.links)) {
+            throw new Error('BME vector apply links must be an array when provided');
+        }
+        if (links.length > MAX_TRIVIUM_BULK_ITEMS) {
+            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} links per request`);
+        }
+        const upsert = await this.bulkUpsert(user, extensionId, {
+            ...request,
+            database,
+            items: request.items,
+        });
+        const linkResult = links.length > 0
+            ? await this.bulkLink(user, extensionId, {
+                ...request,
+                database,
+                items: links,
+            })
+            : {
+                totalCount: 0,
+                successCount: 0,
+                failureCount: 0,
+                failures: [],
+            };
+        const manifest = await this.getBmeVectorManifest(user, extensionId, { database });
+        return {
+            ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
+            appliedAt: new Date().toISOString(),
+            database,
+            manifest,
+            upsert,
+            links: linkResult,
+            skippedLinkCount: 0,
+        };
     }
 
     private async ensureSchema(mappingDbPath: string): Promise<void> {

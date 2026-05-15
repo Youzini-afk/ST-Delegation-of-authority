@@ -41,6 +41,14 @@ export interface AuthorityFeatureFlags {
         jobsPage: boolean;
         benchmarkCore: boolean;
     };
+    bme: {
+        vectorManifest: boolean;
+        vectorApply: boolean;
+        vectorApplyJobs: boolean;
+        serverEmbeddingProbe: boolean;
+        candidateSearch: boolean;
+        protocolVersion: number;
+    };
 }
 
 export interface AuthorityJobRegistrySummary {
