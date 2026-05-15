@@ -10652,7 +10652,8 @@ class TriviumRepository {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   TriviumService: () => (/* binding */ TriviumService)
+/* harmony export */   TriviumService: () => (/* binding */ TriviumService),
+/* harmony export */   validateBmeVectorApplyDimensions: () => (/* binding */ validateBmeVectorApplyDimensions)
 /* harmony export */ });
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
@@ -10666,6 +10667,51 @@ __webpack_require__.r(__webpack_exports__);
 
 
 const MAX_TRIVIUM_BULK_ITEMS = 2000;
+const BME_VECTOR_MANIFEST_META_KEY = 'bme.vector.manifest';
+function validateBmeVectorApplyDimensions(request) {
+    const observedDim = Number(request.observedDim ?? 0);
+    const expectedDim = Number.isFinite(observedDim) && observedDim > 0
+        ? Math.floor(observedDim)
+        : null;
+    const vectorSpaceId = typeof request.vectorSpaceId === 'string'
+        ? request.vectorSpaceId.trim()
+        : '';
+    let inferredDim = null;
+    for (let index = 0; index < request.items.length; index += 1) {
+        const item = request.items[index];
+        const vector = Array.isArray(item?.vector) ? item.vector : [];
+        const dim = vector.length;
+        if (dim <= 0 || vector.some(value => !Number.isFinite(Number(value)))) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply item ${index} has an invalid vector`, 400, 'validation_error', 'validation', { category: 'vector-dimension-mismatch', index, vectorSpaceId });
+        }
+        if (inferredDim == null)
+            inferredDim = dim;
+        if (dim !== inferredDim || (expectedDim != null && dim !== expectedDim)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply dimension mismatch at item ${index}: expected ${expectedDim ?? inferredDim}, got ${dim}`, 400, 'validation_error', 'validation', {
+                category: 'vector-dimension-mismatch',
+                index,
+                expectedDim: expectedDim ?? inferredDim,
+                actualDim: dim,
+                vectorSpaceId,
+            });
+        }
+        const payload = item?.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+            ? item.payload
+            : null;
+        const itemVectorSpaceId = typeof payload?.vectorSpaceId === 'string'
+            ? payload.vectorSpaceId.trim()
+            : '';
+        if (vectorSpaceId && itemVectorSpaceId && itemVectorSpaceId !== vectorSpaceId) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply vectorSpaceId mismatch at item ${index}`, 400, 'validation_error', 'validation', {
+                category: 'vector-space-mismatch',
+                index,
+                expectedVectorSpaceId: vectorSpaceId,
+                actualVectorSpaceId: itemVectorSpaceId,
+            });
+        }
+    }
+    return { observedDim: expectedDim ?? inferredDim, vectorSpaceId };
+}
 class TriviumService {
     repository;
     mappingStore;
@@ -11287,6 +11333,7 @@ class TriviumService {
             this.countMappings(mappingDbPath),
             this.readMetaValue(mappingDbPath, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.LAST_FLUSH_META_KEY),
         ]);
+        const bmeManifest = await this.readBmeVectorManifestMeta(mappingDbPath);
         let nodeCount = null;
         let updatedAt = null;
         if (exists) {
@@ -11297,7 +11344,7 @@ class TriviumService {
         return {
             database,
             exists,
-            status: exists ? 'unknown' : 'missing',
+            status: exists ? (bmeManifest.vectorSpaceId ? 'clean' : 'unknown') : 'missing',
             embeddingMode: 'client',
             serverEmbeddingSupported: false,
             vectorApplySupported: true,
@@ -11310,6 +11357,8 @@ class TriviumService {
             nodeCount,
             lastFlushAt,
             updatedAt,
+            ...(bmeManifest.vectorSpaceId ? { vectorSpaceId: bmeManifest.vectorSpaceId } : {}),
+            ...(bmeManifest.observedDim != null ? { observedDim: bmeManifest.observedDim } : {}),
         };
     }
     async applyBmeVectorManifest(user, extensionId, request) {
@@ -11327,6 +11376,7 @@ class TriviumService {
         if (links.length > MAX_TRIVIUM_BULK_ITEMS) {
             throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} links per request`);
         }
+        const validation = validateBmeVectorApplyDimensions(request);
         const upsert = await this.bulkUpsert(user, extensionId, {
             ...request,
             database,
@@ -11345,6 +11395,18 @@ class TriviumService {
                 failures: [],
             };
         const manifest = await this.getBmeVectorManifest(user, extensionId, { database });
+        if (validation.vectorSpaceId)
+            manifest.vectorSpaceId = validation.vectorSpaceId;
+        if (validation.observedDim != null)
+            manifest.observedDim = validation.observedDim;
+        if (upsert.failureCount === 0 && linkResult.failureCount === 0) {
+            const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
+            await this.writeBmeVectorManifestMeta(mappingDbPath, {
+                vectorSpaceId: validation.vectorSpaceId,
+                observedDim: validation.observedDim,
+                updatedAt: new Date().toISOString(),
+            });
+        }
         return {
             ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
             appliedAt: new Date().toISOString(),
@@ -11423,6 +11485,31 @@ class TriviumService {
     }
     async writeMetaValue(mappingDbPath, key, value) {
         await this.mappingStore.writeMetaValue(mappingDbPath, key, value);
+    }
+    async readBmeVectorManifestMeta(mappingDbPath) {
+        const raw = await this.readMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY);
+        if (!raw)
+            return {};
+        try {
+            const parsed = JSON.parse(raw);
+            const vectorSpaceId = typeof parsed.vectorSpaceId === 'string' ? parsed.vectorSpaceId.trim() : '';
+            const observedDim = Number(parsed.observedDim ?? 0);
+            return {
+                ...(vectorSpaceId ? { vectorSpaceId } : {}),
+                ...(Number.isFinite(observedDim) && observedDim > 0 ? { observedDim: Math.floor(observedDim) } : {}),
+                ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
+            };
+        }
+        catch {
+            return {};
+        }
+    }
+    async writeBmeVectorManifestMeta(mappingDbPath, meta) {
+        await this.writeMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY, JSON.stringify({
+            vectorSpaceId: meta.vectorSpaceId || '',
+            observedDim: meta.observedDim ?? null,
+            updatedAt: meta.updatedAt || new Date().toISOString(),
+        }));
     }
     async rememberDatabaseConfig(mappingDbPath, request) {
         await this.mappingStore.rememberDatabaseConfig(mappingDbPath, request);
