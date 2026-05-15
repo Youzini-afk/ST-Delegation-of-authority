@@ -1,10 +1,10 @@
 {
   "name": "@stdo/example-extension",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@stdo/shared-types": "1.4.1"
+    "@stdo/shared-types": "1.4.2"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node ../../scripts/copy-static.mjs . static dist/extension"
