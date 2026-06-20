@@ -12281,24 +12281,6 @@ function resolveUserDirectories(directories) {
 
 /***/ },
 
-<<<<<<< HEAD
-/***/ "./src/version.ts"
-/*!************************!*\
-  !*** ./src/version.ts ***!
-  \************************/
-(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
-
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   AUTHORITY_VERSION: () => (/* binding */ AUTHORITY_VERSION)
-/* harmony export */ });
-const AUTHORITY_VERSION = '1.4.9';
-
-
-/***/ },
-
-=======
->>>>>>> 86e65d4 (fix(modules): remove bme-specific tails)
 /***/ "node:child_process"
 /*!*************************************!*\
   !*** external "node:child_process" ***!
