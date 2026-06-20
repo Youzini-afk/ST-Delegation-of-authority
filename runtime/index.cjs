@@ -14,6 +14,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   AUTHORITY_MANAGED_CORE_DIR: () => (/* binding */ AUTHORITY_MANAGED_CORE_DIR),
 /* harmony export */   AUTHORITY_MANAGED_FILE: () => (/* binding */ AUTHORITY_MANAGED_FILE),
 /* harmony export */   AUTHORITY_MANAGED_SDK_DIR: () => (/* binding */ AUTHORITY_MANAGED_SDK_DIR),
+/* harmony export */   AUTHORITY_MODULE_PROTOCOL_VERSION: () => (/* binding */ AUTHORITY_MODULE_PROTOCOL_VERSION),
 /* harmony export */   AUTHORITY_PLUGIN_ID: () => (/* binding */ AUTHORITY_PLUGIN_ID),
 /* harmony export */   AUTHORITY_RELEASE_FILE: () => (/* binding */ AUTHORITY_RELEASE_FILE),
 /* harmony export */   AUTHORITY_SDK_EXTENSION_ID: () => (/* binding */ AUTHORITY_SDK_EXTENSION_ID),
@@ -70,6 +71,7 @@ const SUPPORTED_RESOURCES = [
     'http.fetch',
     'jobs.background',
     'events.stream',
+    'module.execute',
 ];
 const RESOURCE_RISK = {
     'storage.kv': 'low',
@@ -80,6 +82,7 @@ const RESOURCE_RISK = {
     'http.fetch': 'medium',
     'jobs.background': 'medium',
     'events.stream': 'low',
+    'module.execute': 'medium',
 };
 const DEFAULT_POLICY_STATUS = {
     'storage.kv': 'granted',
@@ -90,7 +93,10 @@ const DEFAULT_POLICY_STATUS = {
     'http.fetch': 'granted',
     'jobs.background': 'granted',
     'events.stream': 'granted',
+    'module.execute': 'granted',
 };
+/** Authority module host protocol version. Bump when manifest/handler contract changes. */
+const AUTHORITY_MODULE_PROTOCOL_VERSION = 1;
 const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'];
 const BUILTIN_JOB_REGISTRY_SUMMARY = {
     registered: BUILTIN_JOB_TYPES.length,
@@ -165,7 +171,7 @@ const BUILTIN_JOB_REGISTRY_SUMMARY = {
         },
     ],
 };
-function buildAuthorityFeatureFlags(isAdmin) {
+function buildAuthorityFeatureFlags(isAdmin, moduleCount = 0) {
     return {
         securityCenter: true,
         admin: isAdmin,
@@ -210,6 +216,11 @@ function buildAuthorityFeatureFlags(isAdmin) {
             serverEmbeddingProbe: false,
             candidateSearch: false,
             protocolVersion: 1,
+        },
+        modules: {
+            enabled: true,
+            registryVersion: AUTHORITY_MODULE_PROTOCOL_VERSION,
+            count: moduleCount,
         },
     };
 }
@@ -316,8 +327,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
 /* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
 /* harmony import */ var _routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/bme-routes.js */ "./src/routes/bme-routes.ts");
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+/* harmony import */ var _routes_module_routes_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./routes/module-routes.js */ "./src/routes/module-routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+
 
 
 
@@ -337,7 +350,7 @@ function ok(res, data) {
 function fail(runtime, req, res, extensionId, error) {
     const normalized = normalizeAuthorityError(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
         if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
                 ...normalized.payload.details,
@@ -362,7 +375,7 @@ function buildPermissionErrorPayload(message) {
         return null;
     }
     const target = match[2]?.trim();
-    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.buildPermissionDescriptor)(resource, target);
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.buildPermissionDescriptor)(resource, target);
     return {
         error: message,
         code: 'permission_not_granted',
@@ -383,7 +396,8 @@ function isPermissionResource(value) {
         || value === 'trivium.private'
         || value === 'http.fetch'
         || value === 'jobs.background'
-        || value === 'events.stream';
+        || value === 'events.stream'
+        || value === 'module.execute';
 }
 function isPermissionErrorDetails(value) {
     return typeof value === 'object'
@@ -394,13 +408,13 @@ function isPermissionErrorDetails(value) {
         && 'riskLevel' in value;
 }
 function normalizeAuthorityError(error) {
-    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.isAuthorityServiceError)(error)) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.isAuthorityServiceError)(error)) {
         return {
             status: error.status,
             payload: error.toPayload(),
         };
     }
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error);
     const permissionErrorPayload = buildPermissionErrorPayload(message);
     if (permissionErrorPayload) {
         return {
@@ -546,7 +560,7 @@ async function buildProbeResponse(runtime, user) {
     await runtime.core.refreshHealth();
     const install = runtime.install.getStatus();
     const core = runtime.core.getStatus();
-    const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin);
+    const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin, runtime.modules.count());
     const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
     const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
     return {
@@ -770,22 +784,22 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_10__.createAuthorityRuntime)()) {
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_11__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
     });
     (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
     router.post('/session/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const config = (req.body ?? {});
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
-            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits));
+            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits, runtime.modules.count()));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -793,10 +807,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/session/current', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
-            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits));
+            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits, runtime.modules.count()));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -804,8 +818,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const evaluation = await runtime.permissions.evaluate(user, session, req.body);
             if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
                 await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
@@ -823,11 +837,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate-batch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_11__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_12__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
             }
             const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
             const response = { results };
@@ -839,8 +853,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/resolve', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
             await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
@@ -857,7 +871,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
@@ -877,7 +891,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
@@ -905,7 +919,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/extensions/:id/grants/reset', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
             await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
@@ -926,11 +940,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerSqlRoutes)(router, runtime, fail);
     (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerTriviumRoutes)(router, runtime, fail);
     (0,_routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerBmeRoutes)(router, runtime, fail);
+    (0,_routes_module_routes_js__WEBPACK_IMPORTED_MODULE_10__.registerModuleRoutes)(router, runtime, fail);
     (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
     (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
     router.get('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -942,7 +957,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
@@ -953,7 +968,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/usage-summary', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
         }
@@ -963,7 +978,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/import-export/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.adminPackages.listOperations(user),
@@ -975,7 +990,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/export', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
@@ -990,7 +1005,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import-transfer/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
                 resource: 'fs.private',
@@ -1003,7 +1018,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1022,7 +1037,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
@@ -1037,7 +1052,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
@@ -1052,7 +1067,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/native-migration/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.nativeMigrations.listOperations(),
@@ -1064,7 +1079,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/upload/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
@@ -1078,7 +1093,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/preview', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1101,7 +1116,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
@@ -1121,7 +1136,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
@@ -1136,7 +1151,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
         }
@@ -1146,7 +1161,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
@@ -1161,7 +1176,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/update', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1214,9 +1229,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                         : `更新失败后后台服务状态为 ${recovery.state}。`;
                 }
                 catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(recoveryError)}`;
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(recoveryError)}`;
                 }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
             }
         }
         catch (error) {
@@ -1549,6 +1564,94 @@ function registerJobsAndEventsRoutes(router, runtime, fail) {
         }
         catch (error) {
             fail(runtime, req, res, 'events.stream', error);
+        }
+    });
+}
+
+
+/***/ },
+
+/***/ "./src/routes/module-routes.ts"
+/*!*************************************!*\
+  !*** ./src/routes/module-routes.ts ***!
+  \*************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerModuleRoutes: () => (/* binding */ registerModuleRoutes)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+function ok(res, data) {
+    res.json(data);
+}
+function decodeParam(value) {
+    return typeof value === 'string' ? decodeURIComponent(value) : '';
+}
+/**
+ * Resolves the extension id used for audit on failure. Prefers the active
+ * session's extension id; falls back to the bundled SDK extension id when no
+ * session is available (e.g. invalid token, user mismatch).
+ */
+async function resolveAuditExtensionId(runtime, req) {
+    try {
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+        const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+        return session.extension.id;
+    }
+    catch {
+        return _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+    }
+}
+function registerModuleRoutes(router, runtime, fail) {
+    router.get('/modules', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            ok(res, runtime.modules.listManifests());
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/modules/:moduleId', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const moduleId = decodeParam(req.params?.moduleId);
+            ok(res, runtime.modules.getManifest(moduleId));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/modules/:moduleId/transactions/:transactionName', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const moduleId = decodeParam(req.params?.moduleId);
+            const transactionName = decodeParam(req.params?.transactionName);
+            const payload = (req.body ?? {});
+            const response = await runtime.modules.execute(user, session, moduleId, transactionName, payload);
+            // Success audit lives in ModuleHostService.execute so it can include
+            // the resolved transaction version and idempotency key without being
+            // duplicated at the route layer.
+            ok(res, response);
+        }
+        catch (error) {
+            // Fall back to session-resolved extension id when possible so audit
+            // attributes the failure to the calling extension rather than the SDK.
+            extensionId = await resolveAuditExtensionId(runtime, req);
+            fail(runtime, req, res, extensionId, error);
         }
     });
 }
@@ -3336,15 +3439,17 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
 /* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
 /* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -3370,18 +3475,19 @@ function createAuthorityRuntime() {
     const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__.DataTransferService();
     const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__.ExtensionService(core);
     const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_11__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_10__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_13__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_14__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_15__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_16__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_12__.PrivateFsService(core);
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
     const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_17__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_9__.NativeMigrationService();
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     return {
         adminPackages,
         events,
@@ -3401,6 +3507,7 @@ function createAuthorityRuntime() {
         jobs,
         trivium,
         nativeMigrations,
+        modules,
     };
 }
 
@@ -7029,6 +7136,232 @@ class JobService {
 
 /***/ },
 
+/***/ "./src/services/module-host-service.ts"
+/*!*********************************************!*\
+  !*** ./src/services/module-host-service.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   ModuleHostService: () => (/* binding */ ModuleHostService)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const TRANSACTION_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+function validateModuleId(moduleId) {
+    if (!MODULE_ID_PATTERN.test(moduleId)) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Invalid module id: ${moduleId}`, 400, 'validation_error', 'validation');
+    }
+}
+function validateTransactionName(transactionName) {
+    if (transactionName.includes(':')) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
+    }
+    if (!TRANSACTION_NAME_PATTERN.test(transactionName)) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
+    }
+}
+function assertTransactionManifest(module, transactionName) {
+    const transaction = module.manifest.transactions[transactionName];
+    if (!transaction) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Transaction not found: ${module.manifest.id}/${transactionName}`, 404, 'validation_error', 'validation');
+    }
+    return transaction;
+}
+/**
+ * Authority module host.
+ *
+ * Phase 1 keeps this restricted to built-in compiled modules registered through
+ * {@link register}. Modules expose typed named transactions; the host performs
+ * manifest lookup, idempotency-key validation, dry-run rejection, permission
+ * authorization for `module.execute` and any declared
+ * {@link ModuleTransactionManifest.requiredResources} (optionally resolved
+ * dynamically via {@link ModuleHostRegistrationOptions.requiredResourceResolvers}),
+ * then dispatches to the handler with a scoped {@link ModuleTransactionContext}.
+ *
+ * Public manifests returned from {@link listManifests}/{@link getManifest} are
+ * JSON-serializable: they contain no functions.
+ */
+class ModuleHostService {
+    permissions;
+    audit;
+    trivium;
+    storage;
+    files;
+    jobs;
+    events;
+    modules = new Map();
+    constructor(permissions, audit, trivium, storage, files, jobs, events) {
+        this.permissions = permissions;
+        this.audit = audit;
+        this.trivium = trivium;
+        this.storage = storage;
+        this.files = files;
+        this.jobs = jobs;
+        this.events = events;
+    }
+    register(manifest, handlers, options = {}) {
+        validateModuleId(manifest.id);
+        if (manifest.protocolVersion !== _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_MODULE_PROTOCOL_VERSION) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Unsupported module protocol version: ${manifest.protocolVersion}`, 400, 'validation_error', 'validation');
+        }
+        if (this.modules.has(manifest.id)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module already registered: ${manifest.id}`, 409, 'validation_error', 'validation');
+        }
+        const handlerMap = new Map();
+        for (const name of Object.keys(manifest.transactions)) {
+            validateTransactionName(name);
+            const transaction = manifest.transactions[name];
+            if (!transaction) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Transaction entry missing for: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
+            }
+            if (transaction.name !== name) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Transaction name mismatch for ${manifest.id}/${name}: declared name '${transaction.name}'`, 400, 'validation_error', 'validation');
+            }
+            const handler = handlers[name];
+            if (!handler) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Missing handler for transaction: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
+            }
+            handlerMap.set(name, handler);
+        }
+        this.modules.set(manifest.id, {
+            manifest,
+            handlers: handlerMap,
+            resolvers: options.requiredResourceResolvers ?? {},
+        });
+    }
+    listManifests() {
+        const modules = [...this.modules.values()].map(entry => entry.manifest);
+        return {
+            modules,
+            count: modules.length,
+        };
+    }
+    getManifest(moduleId) {
+        validateModuleId(moduleId);
+        const module = this.modules.get(moduleId);
+        if (!module) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
+        }
+        return { module: module.manifest };
+    }
+    count() {
+        return this.modules.size;
+    }
+    async execute(user, session, moduleId, transactionName, request) {
+        validateModuleId(moduleId);
+        validateTransactionName(transactionName);
+        if (request.options?.dryRun === true) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Dry-run execution is not supported: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation');
+        }
+        const module = this.modules.get(moduleId);
+        if (!module) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
+        }
+        const transaction = assertTransactionManifest(module, transactionName);
+        if (transaction.idempotency === 'required') {
+            const key = typeof request.idempotencyKey === 'string' ? request.idempotencyKey.trim() : '';
+            if (!key) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Idempotency key required for transaction: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation');
+            }
+        }
+        const permissionTarget = this.resolvePermissionTarget(transaction, moduleId, transactionName);
+        const authorize = this.buildAuthorize(user, session);
+        const authorized = await authorize({
+            resource: 'module.execute',
+            target: permissionTarget,
+        });
+        if (!authorized) {
+            throw new Error(`Permission not granted: module.execute for ${permissionTarget}`);
+        }
+        const requiredResources = await this.resolveRequiredResources(module, transaction, request.input);
+        for (const required of requiredResources) {
+            const requiredAuthorized = await authorize({
+                resource: required.resource,
+                ...(required.target === undefined ? {} : { target: required.target }),
+                ...(required.reason === undefined ? {} : { reason: required.reason }),
+            });
+            if (!requiredAuthorized) {
+                const target = required.target ?? '';
+                throw new Error(target
+                    ? `Permission not granted: ${required.resource} for ${target}`
+                    : `Permission not granted: ${required.resource}`);
+            }
+        }
+        const ctx = {
+            user,
+            session,
+            callerExtensionId: session.extension.id,
+            moduleId,
+            transactionName,
+            authorize,
+            audit: this.audit,
+            trivium: this.trivium,
+            storage: this.storage,
+            files: this.files,
+            jobs: this.jobs,
+            events: this.events,
+        };
+        const handler = module.handlers.get(transactionName);
+        if (!handler) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Handler missing for transaction: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core');
+        }
+        const input = request.input ?? undefined;
+        const handlerResult = await handler(ctx, input, request);
+        const idempotencyKey = typeof request.idempotencyKey === 'string' && request.idempotencyKey.trim()
+            ? request.idempotencyKey.trim()
+            : undefined;
+        const response = {
+            ok: true,
+            moduleId,
+            transaction: transactionName,
+            transactionVersion: transaction.version,
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+            ...(handlerResult.result === undefined ? {} : { result: handlerResult.result }),
+            ...(handlerResult.diagnostics === undefined ? {} : { diagnostics: handlerResult.diagnostics }),
+        };
+        await this.audit.logUsage(user, session.extension.id, `Module transaction executed: ${moduleId}/${transactionName}`, {
+            moduleId,
+            transaction: transactionName,
+            transactionVersion: transaction.version,
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+        }).catch(() => undefined);
+        return response;
+    }
+    buildAuthorize(user, session) {
+        return async (request) => {
+            const grant = await this.permissions.authorize(user, session, request);
+            return grant !== null;
+        };
+    }
+    resolvePermissionTarget(transaction, moduleId, transactionName) {
+        switch (transaction.permissionTarget.kind) {
+            case 'module':
+                return moduleId;
+            case 'transaction':
+                return `${moduleId}:${transactionName}`;
+            case 'custom':
+                return transaction.permissionTarget.target || `${moduleId}:${transactionName}`;
+            default:
+                return `${moduleId}:${transactionName}`;
+        }
+    }
+    async resolveRequiredResources(module, transaction, input) {
+        const resolver = module.resolvers[transaction.name];
+        if (resolver) {
+            return await resolver(input);
+        }
+        return transaction.requiredResources;
+    }
+}
+
+
+/***/ },
+
 /***/ "./src/services/native-migration-service.ts"
 /*!**************************************************!*\
   !*** ./src/services/native-migration-service.ts ***!
@@ -7822,7 +8155,8 @@ class PermissionService {
             || declaredPermissions.trivium?.private
             || declaredPermissions.http?.allow?.length
             || declaredPermissions.jobs?.background
-            || declaredPermissions.events?.channels);
+            || declaredPermissions.events?.channels
+            || declaredPermissions.modules?.execute);
     }
     isDeclaredPermissionAllowed(declaredPermissions, resource, target) {
         switch (resource) {
@@ -7842,6 +8176,8 @@ class PermissionService {
                 return this.matchesDeclaredTarget(declaredPermissions.jobs?.background, resource, target);
             case 'events.stream':
                 return this.matchesDeclaredTarget(declaredPermissions.events?.channels, resource, target);
+            case 'module.execute':
+                return this.matchesDeclaredTarget(declaredPermissions.modules?.execute, resource, target);
             default:
                 return false;
         }
@@ -8587,7 +8923,7 @@ class SessionService {
         }
         return session;
     }
-    buildSessionResponse(session, grants, policies, limits) {
+    buildSessionResponse(session, grants, policies, limits, moduleCount = 0) {
         return {
             sessionToken: session.token,
             user: {
@@ -8598,7 +8934,7 @@ class SessionService {
             grants,
             policies,
             limits,
-            features: (0,_constants_js__WEBPACK_IMPORTED_MODULE_0__.buildAuthorityFeatureFlags)(session.isAdmin),
+            features: (0,_constants_js__WEBPACK_IMPORTED_MODULE_0__.buildAuthorityFeatureFlags)(session.isAdmin, moduleCount),
         };
     }
     sessionFromSnapshot(snapshot) {
@@ -12102,6 +12438,7 @@ function normalizePermissionTarget(resource, target) {
             return normalizeHttpFetchTarget(trimmedTarget);
         case 'jobs.background':
         case 'events.stream':
+        case 'module.execute':
             return trimmedTarget || '*';
         default:
             return trimmedTarget || '*';

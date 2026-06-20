@@ -1942,6 +1942,7 @@ function groupByResource(items) {
         'http.fetch': [],
         'jobs.background': [],
         'events.stream': [],
+        'module.execute': [],
     };
     for (const item of items) {
         result[item.resource].push(item);
