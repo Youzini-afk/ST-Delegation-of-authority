@@ -12756,7 +12756,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   AUTHORITY_VERSION: () => (/* binding */ AUTHORITY_VERSION)
 /* harmony export */ });
-const AUTHORITY_VERSION = '1.4.8';
+const AUTHORITY_VERSION = '1.4.9';
 
 
 /***/ },

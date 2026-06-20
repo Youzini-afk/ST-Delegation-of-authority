@@ -50,6 +50,8 @@ export function getFeatureAvailability(features, feature) {
             return features.diagnostics.jobsPage;
         case 'diagnostics.benchmarkCore':
             return features.diagnostics.benchmarkCore;
+        case 'modules.enabled':
+            return Boolean(features.modules?.enabled);
     }
 }
 //# sourceMappingURL=feature-flags.js.map
