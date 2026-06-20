@@ -209,14 +209,6 @@ function buildAuthorityFeatureFlags(isAdmin, moduleCount = 0) {
             jobsPage: true,
             benchmarkCore: true,
         },
-        bme: {
-            vectorManifest: true,
-            vectorApply: true,
-            vectorApplyJobs: false,
-            serverEmbeddingProbe: false,
-            candidateSearch: false,
-            protocolVersion: 1,
-        },
         modules: {
             enabled: true,
             registryVersion: AUTHORITY_MODULE_PROTOCOL_VERSION,
@@ -305,177 +297,6 @@ class SseBroker {
 
 /***/ },
 
-/***/ "./src/modules/builtin/st-bme-module.ts"
-/*!**********************************************!*\
-  !*** ./src/modules/builtin/st-bme-module.ts ***!
-  \**********************************************/
-(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
-
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   ST_BME_MODULE_ID: () => (/* binding */ ST_BME_MODULE_ID),
-/* harmony export */   ST_BME_MODULE_VERSION: () => (/* binding */ ST_BME_MODULE_VERSION),
-/* harmony export */   ST_BME_TRANSACTION_APPLY: () => (/* binding */ ST_BME_TRANSACTION_APPLY),
-/* harmony export */   ST_BME_TRANSACTION_MANIFEST: () => (/* binding */ ST_BME_TRANSACTION_MANIFEST),
-/* harmony export */   buildBmeApplyPayload: () => (/* binding */ buildBmeApplyPayload),
-/* harmony export */   buildBmeManifestPayload: () => (/* binding */ buildBmeManifestPayload),
-/* harmony export */   buildStBmeModuleManifest: () => (/* binding */ buildStBmeModuleManifest),
-/* harmony export */   executeBmeVectorApply: () => (/* binding */ executeBmeVectorApply),
-/* harmony export */   executeBmeVectorManifest: () => (/* binding */ executeBmeVectorManifest),
-/* harmony export */   normalizeBmeDatabase: () => (/* binding */ normalizeBmeDatabase),
-/* harmony export */   registerStBmeModule: () => (/* binding */ registerStBmeModule),
-/* harmony export */   resolveBmeApplyRequiredResources: () => (/* binding */ resolveBmeApplyRequiredResources),
-/* harmony export */   resolveBmeManifestRequiredResources: () => (/* binding */ resolveBmeManifestRequiredResources),
-/* harmony export */   stBmeModuleHandlers: () => (/* binding */ stBmeModuleHandlers),
-/* harmony export */   stBmeModuleRequiredResourceResolvers: () => (/* binding */ stBmeModuleRequiredResourceResolvers)
-/* harmony export */ });
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../../constants.js */ "./src/constants.ts");
-/* harmony import */ var _version_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../../version.js */ "./src/version.ts");
-
-
-/**
- * Built-in `st-bme` module.
- *
- * Phase 2 wires the existing BME vector manifest/apply operations into the
- * authority module host without expanding {@link AuthorityFeatureFlags.bme}.
- * The legacy `/bme/vector-*` HTTP routes continue to require only
- * `trivium.private` for backwards compatibility with existing ST-BME clients
- * that may not yet declare `modules.execute`; they reuse the same normalized
- * payload helpers and trivium calls as the module handlers so the two paths
- * cannot drift.
- */
-const ST_BME_MODULE_ID = 'st-bme';
-const ST_BME_MODULE_VERSION = _version_js__WEBPACK_IMPORTED_MODULE_1__.AUTHORITY_VERSION;
-const ST_BME_TRANSACTION_MANIFEST = 'vector.manifest';
-const ST_BME_TRANSACTION_APPLY = 'vector.apply';
-const MANIFEST_REASON = 'BME vector manifest target database';
-const APPLY_REASON = 'BME vector apply target database';
-/**
- * Normalize a BME database name the same way the trivium service does so the
- * module host, dynamic required-resource resolvers, and legacy HTTP routes all
- * agree on the permission target before invoking the trivium handler.
- */
-function normalizeBmeDatabase(value) {
-    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
-}
-/**
- * Clone the manifest request payload with a normalized `database`. The trivium
- * service re-normalizes internally, but we patch the payload so authorization
- * target resolution and the trivium call see the same value.
- */
-function buildBmeManifestPayload(input) {
-    const raw = (input ?? {});
-    return { database: normalizeBmeDatabase(raw.database) };
-}
-/**
- * Clone the apply request payload with a normalized `database`. Preserves all
- * caller-provided fields (items, links, vectorSpaceId, etc.) so the only
- * difference from the input is the patched `database` value.
- */
-function buildBmeApplyPayload(input) {
-    const raw = (input ?? {});
-    return { ...raw, database: normalizeBmeDatabase(raw.database) };
-}
-/**
- * Shared trivium call used by both the module transaction handler and the
- * legacy `/bme/vector-manifest` HTTP route so the two paths cannot diverge.
- */
-async function executeBmeVectorManifest(trivium, user, callerExtensionId, input) {
-    return await trivium.getBmeVectorManifest(user, callerExtensionId, buildBmeManifestPayload(input));
-}
-/**
- * Shared trivium call used by both the module transaction handler and the
- * legacy `/bme/vector-apply` HTTP route so the two paths cannot diverge.
- */
-async function executeBmeVectorApply(trivium, user, callerExtensionId, input) {
-    return await trivium.applyBmeVectorManifest(user, callerExtensionId, buildBmeApplyPayload(input));
-}
-/**
- * Dynamic required-resource resolver for `vector.manifest`. Resolves to a
- * single `trivium.private` target derived from the (normalized) input
- * `database`, defaulting to `default`.
- */
-const resolveBmeManifestRequiredResources = (input) => {
-    const target = normalizeBmeDatabase(input?.database);
-    return [{ resource: 'trivium.private', target, reason: MANIFEST_REASON }];
-};
-/**
- * Dynamic required-resource resolver for `vector.apply`. Resolves to a single
- * `trivium.private` target derived from the (normalized) input `database`,
- * defaulting to `default`.
- */
-const resolveBmeApplyRequiredResources = (input) => {
-    const target = normalizeBmeDatabase(input?.database);
-    return [{ resource: 'trivium.private', target, reason: APPLY_REASON }];
-};
-const manifestTransaction = {
-    name: ST_BME_TRANSACTION_MANIFEST,
-    version: '1.0.0',
-    title: 'BME vector manifest',
-    description: 'Reads the BME vector manifest for a private trivium database.',
-    riskLevel: 'low',
-    permissionTarget: { kind: 'transaction' },
-    requiredResources: [],
-    idempotency: 'none',
-};
-const applyTransaction = {
-    name: ST_BME_TRANSACTION_APPLY,
-    version: '1.0.0',
-    title: 'BME vector apply',
-    description: 'Applies a BME vector manifest batch to a private trivium database.',
-    riskLevel: 'high',
-    permissionTarget: { kind: 'transaction' },
-    requiredResources: [],
-    idempotency: 'optional',
-};
-/**
- * Build the public manifest for the built-in `st-bme` module. The manifest is
- * JSON-serializable so it can be returned verbatim from `listManifests()` and
- * `getManifest()`; dynamic resolvers stay server-side only.
- */
-function buildStBmeModuleManifest() {
-    return {
-        id: ST_BME_MODULE_ID,
-        displayName: 'ST-BME',
-        version: ST_BME_MODULE_VERSION,
-        description: 'Built-in authority module exposing BME vector manifest and apply transactions.',
-        protocolVersion: _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_MODULE_PROTOCOL_VERSION,
-        transactions: {
-            [ST_BME_TRANSACTION_MANIFEST]: manifestTransaction,
-            [ST_BME_TRANSACTION_APPLY]: applyTransaction,
-        },
-    };
-}
-const bmeVectorManifestHandler = async (ctx, input) => {
-    const result = await executeBmeVectorManifest(ctx.trivium, ctx.user, ctx.callerExtensionId, input);
-    return { result };
-};
-const bmeVectorApplyHandler = async (ctx, input) => {
-    const result = await executeBmeVectorApply(ctx.trivium, ctx.user, ctx.callerExtensionId, input);
-    return { result };
-};
-/** Handlers for the built-in `st-bme` module, keyed by transaction name. */
-const stBmeModuleHandlers = {
-    [ST_BME_TRANSACTION_MANIFEST]: bmeVectorManifestHandler,
-    [ST_BME_TRANSACTION_APPLY]: bmeVectorApplyHandler,
-};
-/** Dynamic required-resource resolvers for the built-in `st-bme` module. */
-const stBmeModuleRequiredResourceResolvers = {
-    [ST_BME_TRANSACTION_MANIFEST]: resolveBmeManifestRequiredResources,
-    [ST_BME_TRANSACTION_APPLY]: resolveBmeApplyRequiredResources,
-};
-/**
- * Register the built-in `st-bme` module with the authority module host. Called
- * once during {@link createAuthorityRuntime} after the host has been
- * constructed.
- */
-function registerStBmeModule(modules) {
-    modules.register(buildStBmeModuleManifest(), stBmeModuleHandlers, { requiredResourceResolvers: stBmeModuleRequiredResourceResolvers });
-}
-
-
-/***/ },
-
 /***/ "./src/routes.ts"
 /*!***********************!*\
   !*** ./src/routes.ts ***!
@@ -497,11 +318,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./routes/trivium-routes.js */ "./src/routes/trivium-routes.ts");
 /* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
 /* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
-/* harmony import */ var _routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/bme-routes.js */ "./src/routes/bme-routes.ts");
-/* harmony import */ var _routes_module_routes_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./routes/module-routes.js */ "./src/routes/module-routes.ts");
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
-
+/* harmony import */ var _routes_module_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/module-routes.js */ "./src/routes/module-routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
 
 
 
@@ -521,7 +340,7 @@ function ok(res, data) {
 function fail(runtime, req, res, extensionId, error) {
     const normalized = normalizeAuthorityError(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
         if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
                 ...normalized.payload.details,
@@ -546,7 +365,7 @@ function buildPermissionErrorPayload(message) {
         return null;
     }
     const target = match[2]?.trim();
-    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.buildPermissionDescriptor)(resource, target);
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.buildPermissionDescriptor)(resource, target);
     return {
         error: message,
         code: 'permission_not_granted',
@@ -579,13 +398,13 @@ function isPermissionErrorDetails(value) {
         && 'riskLevel' in value;
 }
 function normalizeAuthorityError(error) {
-    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.isAuthorityServiceError)(error)) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.isAuthorityServiceError)(error)) {
         return {
             status: error.status,
             payload: error.toPayload(),
         };
     }
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error);
     const permissionErrorPayload = buildPermissionErrorPayload(message);
     if (permissionErrorPayload) {
         return {
@@ -955,15 +774,15 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_11__.createAuthorityRuntime)()) {
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_10__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
     });
     (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
     router.post('/session/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const config = (req.body ?? {});
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
@@ -978,8 +797,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/session/current', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits, runtime.modules.count()));
         }
@@ -989,8 +808,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const evaluation = await runtime.permissions.evaluate(user, session, req.body);
             if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
                 await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
@@ -1008,11 +827,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate-batch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_12__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_11__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
             }
             const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
             const response = { results };
@@ -1024,8 +843,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/resolve', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
             await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
@@ -1042,7 +861,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
@@ -1062,7 +881,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
@@ -1090,7 +909,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/extensions/:id/grants/reset', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
             await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
@@ -1110,13 +929,12 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     (0,_routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__.registerStorageRoutes)(router, runtime, fail);
     (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerSqlRoutes)(router, runtime, fail);
     (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerTriviumRoutes)(router, runtime, fail);
-    (0,_routes_bme_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerBmeRoutes)(router, runtime, fail);
-    (0,_routes_module_routes_js__WEBPACK_IMPORTED_MODULE_10__.registerModuleRoutes)(router, runtime, fail);
+    (0,_routes_module_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerModuleRoutes)(router, runtime, fail);
     (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
     (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
     router.get('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1128,7 +946,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
@@ -1139,7 +957,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/usage-summary', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
         }
@@ -1149,7 +967,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/import-export/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.adminPackages.listOperations(user),
@@ -1161,7 +979,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/export', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
@@ -1176,7 +994,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import-transfer/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
                 resource: 'fs.private',
@@ -1189,7 +1007,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1208,7 +1026,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
@@ -1223,7 +1041,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
@@ -1238,7 +1056,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/native-migration/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.nativeMigrations.listOperations(),
@@ -1250,7 +1068,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/upload/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
@@ -1264,7 +1082,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/preview', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1287,7 +1105,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
@@ -1307,7 +1125,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
@@ -1322,7 +1140,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
         }
@@ -1332,7 +1150,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
@@ -1347,7 +1165,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/update', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1400,9 +1218,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                         : `更新失败后后台服务状态为 ${recovery.state}。`;
                 }
                 catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(recoveryError)}`;
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(recoveryError)}`;
                 }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
             }
         }
         catch (error) {
@@ -1410,90 +1228,6 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         }
     });
     return runtime;
-}
-
-
-/***/ },
-
-/***/ "./src/routes/bme-routes.ts"
-/*!**********************************!*\
-  !*** ./src/routes/bme-routes.ts ***!
-  \**********************************/
-(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
-
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   registerBmeRoutes: () => (/* binding */ registerBmeRoutes)
-/* harmony export */ });
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../modules/builtin/st-bme-module.js */ "./src/modules/builtin/st-bme-module.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
-
-
-function ok(res, data) {
-    res.json(data);
-}
-/**
- * Resolves the extension id used for failure audit. Prefers the active
- * session's extension id (so failures attribute to the calling extension);
- * falls back to the bundled SDK extension id when no session is available.
- */
-async function resolveAuditExtensionId(runtime, req) {
-    try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
-        const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
-        return session.extension.id;
-    }
-    catch {
-        return _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
-    }
-}
-function registerBmeRoutes(router, runtime, fail) {
-    router.post('/bme/vector-manifest', async (req, res) => {
-        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
-            extensionId = session.extension.id;
-            const payload = (req.body ?? {});
-            const database = (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBmeDatabase)(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
-                throw new Error(`Permission not granted: trivium.private for ${database}`);
-            }
-            // Legacy routes return the BME vector response shape directly, not
-            // the module envelope, and require only trivium.private (no
-            // module.execute) for backwards compatibility with existing ST-BME
-            // clients. The shared helper reuses the same normalized payload
-            // and trivium call as the built-in st-bme module handler.
-            ok(res, await (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.executeBmeVectorManifest)(runtime.trivium, user, session.extension.id, payload));
-        }
-        catch (error) {
-            // Fall back to session-resolved extension id when possible so
-            // audit attributes the failure to the calling extension rather
-            // than the SDK fallback id.
-            extensionId = await resolveAuditExtensionId(runtime, req);
-            fail(runtime, req, res, extensionId, error);
-        }
-    });
-    router.post('/bme/vector-apply', async (req, res) => {
-        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
-        try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
-            extensionId = session.extension.id;
-            const payload = (req.body ?? {});
-            const database = (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBmeDatabase)(payload.database);
-            if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
-                throw new Error(`Permission not granted: trivium.private for ${database}`);
-            }
-            ok(res, await (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.executeBmeVectorApply)(runtime.trivium, user, session.extension.id, payload));
-        }
-        catch (error) {
-            extensionId = await resolveAuditExtensionId(runtime, req);
-            fail(runtime, req, res, extensionId, error);
-        }
-    });
 }
 
 
@@ -3632,26 +3366,24 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   createAuthorityRuntime: () => (/* binding */ createAuthorityRuntime)
 /* harmony export */ });
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
-/* harmony import */ var _modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./modules/builtin/st-bme-module.js */ "./src/modules/builtin/st-bme-module.ts");
-/* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
-/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
-/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
-/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
-
+/* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
+/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
+/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
+/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
 
 
 
@@ -3672,26 +3404,25 @@ __webpack_require__.r(__webpack_exports__);
 
 
 function createAuthorityRuntime() {
-    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__.CoreService();
+    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__.CoreService();
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
-    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_3__.AuditService(core);
-    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__.DataTransferService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__.PrivateFsService(core);
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__.NativeMigrationService();
-    const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_2__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
-    (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.registerStBmeModule)(modules);
+    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__.AuditService(core);
+    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__.DataTransferService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__.ExtensionService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__.PrivateFsService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__.NativeMigrationService();
+    const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     return {
         adminPackages,
         events,
@@ -11192,8 +10923,7 @@ class TriviumRepository {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   TriviumService: () => (/* binding */ TriviumService),
-/* harmony export */   validateBmeVectorApplyDimensions: () => (/* binding */ validateBmeVectorApplyDimensions)
+/* harmony export */   TriviumService: () => (/* binding */ TriviumService)
 /* harmony export */ });
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
@@ -11207,51 +10937,6 @@ __webpack_require__.r(__webpack_exports__);
 
 
 const MAX_TRIVIUM_BULK_ITEMS = 2000;
-const BME_VECTOR_MANIFEST_META_KEY = 'bme.vector.manifest';
-function validateBmeVectorApplyDimensions(request) {
-    const observedDim = Number(request.observedDim ?? 0);
-    const expectedDim = Number.isFinite(observedDim) && observedDim > 0
-        ? Math.floor(observedDim)
-        : null;
-    const vectorSpaceId = typeof request.vectorSpaceId === 'string'
-        ? request.vectorSpaceId.trim()
-        : '';
-    let inferredDim = null;
-    for (let index = 0; index < request.items.length; index += 1) {
-        const item = request.items[index];
-        const vector = Array.isArray(item?.vector) ? item.vector : [];
-        const dim = vector.length;
-        if (dim <= 0 || vector.some(value => !Number.isFinite(Number(value)))) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply item ${index} has an invalid vector`, 400, 'validation_error', 'validation', { category: 'vector-dimension-mismatch', index, vectorSpaceId });
-        }
-        if (inferredDim == null)
-            inferredDim = dim;
-        if (dim !== inferredDim || (expectedDim != null && dim !== expectedDim)) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply dimension mismatch at item ${index}: expected ${expectedDim ?? inferredDim}, got ${dim}`, 400, 'validation_error', 'validation', {
-                category: 'vector-dimension-mismatch',
-                index,
-                expectedDim: expectedDim ?? inferredDim,
-                actualDim: dim,
-                vectorSpaceId,
-            });
-        }
-        const payload = item?.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
-            ? item.payload
-            : null;
-        const itemVectorSpaceId = typeof payload?.vectorSpaceId === 'string'
-            ? payload.vectorSpaceId.trim()
-            : '';
-        if (vectorSpaceId && itemVectorSpaceId && itemVectorSpaceId !== vectorSpaceId) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`BME vector apply vectorSpaceId mismatch at item ${index}`, 400, 'validation_error', 'validation', {
-                category: 'vector-space-mismatch',
-                index,
-                expectedVectorSpaceId: vectorSpaceId,
-                actualVectorSpaceId: itemVectorSpaceId,
-            });
-        }
-    }
-    return { observedDim: expectedDim ?? inferredDim, vectorSpaceId };
-}
 class TriviumService {
     repository;
     mappingStore;
@@ -11863,122 +11548,6 @@ class TriviumService {
         const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
         return await this.mappingStore.listMappingsPage(mappingDbPath, request);
     }
-    async getBmeVectorManifest(user, extensionId, request = {}) {
-        const database = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.getTriviumDatabaseName)(request.database);
-        const { dbPath, mappingDbPath } = this.resolvePaths(user, extensionId, database);
-        const exists = node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath);
-        const meta = await this.readDatabaseConfigMeta(mappingDbPath);
-        const fileDim = exists ? (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.readTriviumDimension)(dbPath) : null;
-        const [mappingCount, lastFlushAt] = await Promise.all([
-            this.countMappings(mappingDbPath),
-            this.readMetaValue(mappingDbPath, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.LAST_FLUSH_META_KEY),
-        ]);
-        const bmeManifest = await this.readBmeVectorManifestMeta(mappingDbPath);
-        let nodeCount = null;
-        let updatedAt = null;
-        if (exists) {
-            const stat = await this.stat(user, extensionId, { database });
-            nodeCount = Number.isFinite(Number(stat.nodeCount)) ? Number(stat.nodeCount) : null;
-            updatedAt = stat.updatedAt ?? null;
-        }
-        return {
-            database,
-            exists,
-            status: exists ? (bmeManifest.vectorSpaceId ? 'clean' : 'unknown') : 'missing',
-            backend: 'authority',
-            embeddingMode: 'client',
-            serverEmbeddingSupported: false,
-            vectorApplySupported: true,
-            vectorManifestSupported: true,
-            vectorDim: fileDim ?? meta.dim,
-            dtype: meta.dtype,
-            storageMode: meta.storageMode,
-            syncMode: meta.syncMode,
-            mappingCount,
-            nodeCount,
-            lastFlushAt,
-            updatedAt,
-            ...(bmeManifest.graphRevision != null ? { graphRevision: bmeManifest.graphRevision, revision: bmeManifest.graphRevision } : {}),
-            ...(bmeManifest.collectionId ? { collectionId: bmeManifest.collectionId } : {}),
-            ...(bmeManifest.chatId ? { chatId: bmeManifest.chatId } : {}),
-            ...(bmeManifest.modelScope ? { modelScope: bmeManifest.modelScope } : {}),
-            ...(bmeManifest.vectorSpaceId ? { vectorSpaceId: bmeManifest.vectorSpaceId } : {}),
-            ...(bmeManifest.observedDim != null ? { observedDim: bmeManifest.observedDim } : {}),
-        };
-    }
-    async applyBmeVectorManifest(user, extensionId, request) {
-        const database = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_2__.getTriviumDatabaseName)(request.database);
-        if (!request || typeof request !== 'object' || !Array.isArray(request.items)) {
-            throw new Error('BME vector apply requires an items array');
-        }
-        if (request.items.length > MAX_TRIVIUM_BULK_ITEMS) {
-            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} items per request`);
-        }
-        const links = Array.isArray(request.links) ? request.links : [];
-        if (request.links !== undefined && !Array.isArray(request.links)) {
-            throw new Error('BME vector apply links must be an array when provided');
-        }
-        if (links.length > MAX_TRIVIUM_BULK_ITEMS) {
-            throw new Error(`BME vector apply supports at most ${MAX_TRIVIUM_BULK_ITEMS} links per request`);
-        }
-        const validation = validateBmeVectorApplyDimensions(request);
-        const upsert = await this.bulkUpsert(user, extensionId, {
-            ...request,
-            database,
-            items: request.items,
-        });
-        const linkResult = links.length > 0
-            ? await this.bulkLink(user, extensionId, {
-                ...request,
-                database,
-                items: links,
-            })
-            : {
-                totalCount: 0,
-                successCount: 0,
-                failureCount: 0,
-                failures: [],
-            };
-        const manifest = await this.getBmeVectorManifest(user, extensionId, { database });
-        if (validation.vectorSpaceId)
-            manifest.vectorSpaceId = validation.vectorSpaceId;
-        if (validation.observedDim != null)
-            manifest.observedDim = validation.observedDim;
-        if (upsert.failureCount === 0 && linkResult.failureCount === 0) {
-            manifest.exists = true;
-            manifest.status = 'clean';
-            const mappingDbPath = this.getMappingDbPath(user, extensionId, database);
-            await this.writeBmeVectorManifestMeta(mappingDbPath, {
-                vectorSpaceId: validation.vectorSpaceId,
-                observedDim: validation.observedDim,
-                graphRevision: Math.max(0, Math.floor(Number(request.graphRevision) || 0)),
-                collectionId: typeof request.collectionId === 'string' ? request.collectionId.trim() : '',
-                chatId: typeof request.chatId === 'string' ? request.chatId.trim() : '',
-                modelScope: typeof request.modelScope === 'string' ? request.modelScope.trim() : '',
-                updatedAt: new Date().toISOString(),
-            });
-        }
-        const graphRevision = Math.max(0, Math.floor(Number(request.graphRevision) || 0));
-        if (graphRevision > 0) {
-            manifest.graphRevision = graphRevision;
-            manifest.revision = graphRevision;
-        }
-        if (typeof request.collectionId === 'string' && request.collectionId.trim())
-            manifest.collectionId = request.collectionId.trim();
-        if (typeof request.chatId === 'string' && request.chatId.trim())
-            manifest.chatId = request.chatId.trim();
-        if (typeof request.modelScope === 'string' && request.modelScope.trim())
-            manifest.modelScope = request.modelScope.trim();
-        return {
-            ok: upsert.failureCount === 0 && linkResult.failureCount === 0,
-            appliedAt: new Date().toISOString(),
-            database,
-            manifest,
-            upsert,
-            links: linkResult,
-            skippedLinkCount: 0,
-        };
-    }
     async ensureSchema(mappingDbPath) {
         await this.mappingStore.ensureSchema(mappingDbPath);
     }
@@ -12047,40 +11616,6 @@ class TriviumService {
     }
     async writeMetaValue(mappingDbPath, key, value) {
         await this.mappingStore.writeMetaValue(mappingDbPath, key, value);
-    }
-    async readBmeVectorManifestMeta(mappingDbPath) {
-        const raw = await this.readMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY);
-        if (!raw)
-            return {};
-        try {
-            const parsed = JSON.parse(raw);
-            const vectorSpaceId = typeof parsed.vectorSpaceId === 'string' ? parsed.vectorSpaceId.trim() : '';
-            const observedDim = Number(parsed.observedDim ?? 0);
-            const graphRevision = Number(parsed.graphRevision ?? 0);
-            return {
-                ...(vectorSpaceId ? { vectorSpaceId } : {}),
-                ...(Number.isFinite(observedDim) && observedDim > 0 ? { observedDim: Math.floor(observedDim) } : {}),
-                ...(Number.isFinite(graphRevision) && graphRevision > 0 ? { graphRevision: Math.floor(graphRevision) } : {}),
-                ...(typeof parsed.collectionId === 'string' && parsed.collectionId.trim() ? { collectionId: parsed.collectionId.trim() } : {}),
-                ...(typeof parsed.chatId === 'string' && parsed.chatId.trim() ? { chatId: parsed.chatId.trim() } : {}),
-                ...(typeof parsed.modelScope === 'string' && parsed.modelScope.trim() ? { modelScope: parsed.modelScope.trim() } : {}),
-                ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
-            };
-        }
-        catch {
-            return {};
-        }
-    }
-    async writeBmeVectorManifestMeta(mappingDbPath, meta) {
-        await this.writeMetaValue(mappingDbPath, BME_VECTOR_MANIFEST_META_KEY, JSON.stringify({
-            vectorSpaceId: meta.vectorSpaceId || '',
-            observedDim: meta.observedDim ?? null,
-            graphRevision: Number.isFinite(Number(meta.graphRevision)) ? Math.max(0, Math.floor(Number(meta.graphRevision))) : 0,
-            collectionId: meta.collectionId || '',
-            chatId: meta.chatId || '',
-            modelScope: meta.modelScope || '',
-            updatedAt: meta.updatedAt || new Date().toISOString(),
-        }));
     }
     async rememberDatabaseConfig(mappingDbPath, request) {
         await this.mappingStore.rememberDatabaseConfig(mappingDbPath, request);
@@ -12746,6 +12281,7 @@ function resolveUserDirectories(directories) {
 
 /***/ },
 
+<<<<<<< HEAD
 /***/ "./src/version.ts"
 /*!************************!*\
   !*** ./src/version.ts ***!
@@ -12761,6 +12297,8 @@ const AUTHORITY_VERSION = '1.4.9';
 
 /***/ },
 
+=======
+>>>>>>> 86e65d4 (fix(modules): remove bme-specific tails)
 /***/ "node:child_process"
 /*!*************************************!*\
   !*** external "node:child_process" ***!

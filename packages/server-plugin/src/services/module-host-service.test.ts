@@ -139,9 +139,9 @@ function createPermissions(core: CoreService) {
 
 function buildTransaction(overrides: Partial<ModuleTransactionManifest> = {}): ModuleTransactionManifest {
     return {
-        name: 'vector.apply',
+        name: 'task.run',
         version: '1.0.0',
-        title: 'Apply vectors',
+        title: 'Run task',
         riskLevel: 'medium',
         permissionTarget: { kind: 'transaction' },
         requiredResources: [],
@@ -152,12 +152,12 @@ function buildTransaction(overrides: Partial<ModuleTransactionManifest> = {}): M
 
 function buildManifest(overrides: Partial<AuthorityModuleManifest> = {}): AuthorityModuleManifest {
     return {
-        id: 'st-bme',
-        displayName: 'ST-BME',
+        id: 'sample-module',
+        displayName: 'Sample Module',
         version: '0.1.0',
         protocolVersion: AUTHORITY_MODULE_PROTOCOL_VERSION,
         transactions: {
-            'vector.apply': buildTransaction(),
+            'task.run': buildTransaction(),
         },
         ...overrides,
     };
@@ -175,8 +175,8 @@ describe('ModuleHostService', () => {
 
     it('rejects module ids that do not match the lowercase pattern', () => {
         const service = createService();
-        expect(() => service.register(buildManifest({ id: 'ST-BME' }), {})).toThrow(/Invalid module id/);
-        expect(() => service.register(buildManifest({ id: 'st bme' }), {})).toThrow(/Invalid module id/);
+        expect(() => service.register(buildManifest({ id: 'Sample-Module' }), {})).toThrow(/Invalid module id/);
+        expect(() => service.register(buildManifest({ id: 'sample module' }), {})).toThrow(/Invalid module id/);
         expect(() => service.register(buildManifest({ id: '' }), {})).toThrow(/Invalid module id/);
     });
 
@@ -184,7 +184,7 @@ describe('ModuleHostService', () => {
         const service = createService();
         const manifest = buildManifest({
             transactions: {
-                'vector:apply': buildTransaction({ name: 'vector:apply' }),
+                'task:run': buildTransaction({ name: 'task:run' }),
             },
         });
         expect(() => service.register(manifest, {})).toThrow(/Invalid transaction name/);
@@ -203,23 +203,23 @@ describe('ModuleHostService', () => {
     it('rejects duplicate registration of the same module id', () => {
         const service = createService();
         const handler = vi.fn().mockResolvedValue({ result: { ok: true } });
-        service.register(buildManifest(), { 'vector.apply': handler });
-        expect(() => service.register(buildManifest(), { 'vector.apply': handler })).toThrow(/already registered/);
+        service.register(buildManifest(), { 'task.run': handler });
+        expect(() => service.register(buildManifest(), { 'task.run': handler })).toThrow(/already registered/);
     });
 
     it('lists manifests and counts registered modules', () => {
         const service = createService();
-        service.register(buildManifest(), { 'vector.apply': vi.fn().mockResolvedValue({}) });
+        service.register(buildManifest(), { 'task.run': vi.fn().mockResolvedValue({}) });
         const list = service.listManifests();
         expect(list.count).toBe(1);
-        expect(list.modules[0]?.id).toBe('st-bme');
+        expect(list.modules[0]?.id).toBe('sample-module');
         expect(service.count()).toBe(1);
     });
 
     it('returns a single module manifest via getManifest', () => {
         const service = createService();
-        service.register(buildManifest(), { 'vector.apply': vi.fn().mockResolvedValue({}) });
-        expect(service.getManifest('st-bme').module.id).toBe('st-bme');
+        service.register(buildManifest(), { 'task.run': vi.fn().mockResolvedValue({}) });
+        expect(service.getManifest('sample-module').module.id).toBe('sample-module');
         expect(() => service.getManifest('missing')).toThrow(/Module not found/);
     });
 
@@ -241,7 +241,7 @@ describe('ModuleHostService', () => {
         const user = createUser(false);
         const session = createSession(user);
 
-        await expect(service.execute(user, session, 'st-bme', 'graph.commit', {})).rejects.toThrow(/Idempotency key required/);
+        await expect(service.execute(user, session, 'sample-module', 'graph.commit', {})).rejects.toThrow(/Idempotency key required/);
         expect(handler).not.toHaveBeenCalled();
     });
 
@@ -250,28 +250,28 @@ describe('ModuleHostService', () => {
         const handler = vi.fn().mockImplementation(async (ctx: unknown, input: unknown) => ({
             result: { input, callerExtensionId: (ctx as { callerExtensionId: string }).callerExtensionId },
         }));
-        service.register(buildManifest(), { 'vector.apply': handler });
+        service.register(buildManifest(), { 'task.run': handler });
 
         const user = createUser(false);
         const session = createSession(user);
 
-        const response = await service.execute(user, session, 'st-bme', 'vector.apply', {
+        const response = await service.execute(user, session, 'sample-module', 'task.run', {
             input: { items: [] },
             idempotencyKey: 'idem-1',
         });
 
         expect(response).toMatchObject({
             ok: true,
-            moduleId: 'st-bme',
-            transaction: 'vector.apply',
+            moduleId: 'sample-module',
+            transaction: 'task.run',
             transactionVersion: '1.0.0',
             idempotencyKey: 'idem-1',
         });
         expect(handler).toHaveBeenCalledTimes(1);
         const ctxArg = handler.mock.calls[0]?.[0] as { callerExtensionId: string; moduleId: string; transactionName: string };
         expect(ctxArg.callerExtensionId).toBe('third-party/test-extension');
-        expect(ctxArg.moduleId).toBe('st-bme');
-        expect(ctxArg.transactionName).toBe('vector.apply');
+        expect(ctxArg.moduleId).toBe('sample-module');
+        expect(ctxArg.transactionName).toBe('task.run');
     });
 
     it('blocks execution when module.execute is denied via persistent grant', async () => {
@@ -288,15 +288,15 @@ describe('ModuleHostService', () => {
         );
 
         const handler = vi.fn().mockResolvedValue({ result: { ok: true } });
-        service.register(buildManifest(), { 'vector.apply': handler });
+        service.register(buildManifest(), { 'task.run': handler });
 
         const user = createUser(false);
         const session = createSession(user);
 
         // Persist a deny grant for module.execute on this extension.
-        await permissions.resolve(user, session, { resource: 'module.execute', target: 'st-bme:vector.apply' }, 'deny');
+        await permissions.resolve(user, session, { resource: 'module.execute', target: 'sample-module:task.run' }, 'deny');
 
-        await expect(service.execute(user, session, 'st-bme', 'vector.apply', {})).rejects.toThrow(/Permission not granted: module.execute/);
+        await expect(service.execute(user, session, 'sample-module', 'task.run', {})).rejects.toThrow(/Permission not granted: module.execute/);
         expect(handler).not.toHaveBeenCalled();
     });
 
@@ -318,18 +318,18 @@ describe('ModuleHostService', () => {
         service.register(
             buildManifest({
                 transactions: {
-                    'vector.apply': buildTransaction({
-                        name: 'vector.apply',
+                    'task.run': buildTransaction({
+                        name: 'task.run',
                         requiredResources: [],
                     }),
                 },
             }),
-            { 'vector.apply': handler },
+            { 'task.run': handler },
             {
                 requiredResourceResolvers: {
-                    'vector.apply': (input: unknown) => {
+                    'task.run': (input: unknown) => {
                         const target = (input as { database?: string } | null)?.database ?? 'default';
-                        return [{ resource: 'trivium.private' as const, target, reason: 'vector apply target' }];
+                        return [{ resource: 'trivium.private' as const, target, reason: 'task run target' }];
                     },
                 },
             },
@@ -339,8 +339,8 @@ describe('ModuleHostService', () => {
         const session = createSession(user);
 
         // Default policy grants trivium.private, so the call should succeed.
-        const response = await service.execute(user, session, 'st-bme', 'vector.apply', {
-            input: { database: 'bme' },
+        const response = await service.execute(user, session, 'sample-module', 'task.run', {
+            input: { database: 'sample' },
         });
         expect(response.ok).toBe(true);
         expect(handler).toHaveBeenCalledTimes(1);
@@ -348,12 +348,12 @@ describe('ModuleHostService', () => {
 
     it('returns 404-style validation error for unknown transaction', async () => {
         const service = createService();
-        service.register(buildManifest(), { 'vector.apply': vi.fn().mockResolvedValue({}) });
+        service.register(buildManifest(), { 'task.run': vi.fn().mockResolvedValue({}) });
 
         const user = createUser(false);
         const session = createSession(user);
 
-        await expect(service.execute(user, session, 'st-bme', 'missing.tx', {})).rejects.toThrow(/Transaction not found/);
+        await expect(service.execute(user, session, 'sample-module', 'missing.tx', {})).rejects.toThrow(/Transaction not found/);
     });
 
     it('respects custom permission target overrides', async () => {
@@ -376,7 +376,7 @@ describe('ModuleHostService', () => {
                 transactions: {
                     'graph.commit': buildTransaction({
                         name: 'graph.commit',
-                        permissionTarget: { kind: 'custom', target: 'st-bme:graph' },
+                        permissionTarget: { kind: 'custom', target: 'sample-module:graph' },
                     }),
                 },
             }),
@@ -386,24 +386,24 @@ describe('ModuleHostService', () => {
         const user = createUser(false);
         const session = createSession(user);
 
-        await permissions.resolve(user, session, { resource: 'module.execute', target: 'st-bme:graph' }, 'deny');
-        await expect(service.execute(user, session, 'st-bme', 'graph.commit', {})).rejects.toThrow(/Permission not granted: module.execute for st-bme:graph/);
+        await permissions.resolve(user, session, { resource: 'module.execute', target: 'sample-module:graph' }, 'deny');
+        await expect(service.execute(user, session, 'sample-module', 'graph.commit', {})).rejects.toThrow(/Permission not granted: module.execute for sample-module:graph/);
         expect(handler).not.toHaveBeenCalled();
     });
 
     it('returns JSON-serializable manifests from listManifests and getManifest', () => {
         const service = createService();
-        service.register(buildManifest(), { 'vector.apply': vi.fn().mockResolvedValue({}) });
+        service.register(buildManifest(), { 'task.run': vi.fn().mockResolvedValue({}) });
 
         const list = service.listManifests();
-        const got = service.getManifest('st-bme');
+        const got = service.getManifest('sample-module');
 
         // The public manifest shape must round-trip through JSON with no
         // function-valued fields (requiredResources is a static array).
         expect(JSON.parse(JSON.stringify(list.modules[0]))).toEqual(list.modules[0]);
         expect(JSON.parse(JSON.stringify(got.module))).toEqual(got.module);
-        const listTransaction = list.modules[0]?.transactions['vector.apply'];
-        const gotTransaction = got.module.transactions['vector.apply'];
+        const listTransaction = list.modules[0]?.transactions['task.run'];
+        const gotTransaction = got.module.transactions['task.run'];
         expect(Array.isArray(listTransaction?.requiredResources)).toBe(true);
         expect(Array.isArray(gotTransaction?.requiredResources)).toBe(true);
     });
@@ -411,12 +411,12 @@ describe('ModuleHostService', () => {
     it('rejects dryRun execution requests with a validation error', async () => {
         const service = createService();
         const handler = vi.fn().mockResolvedValue({ result: { ok: true } });
-        service.register(buildManifest(), { 'vector.apply': handler });
+        service.register(buildManifest(), { 'task.run': handler });
 
         const user = createUser(false);
         const session = createSession(user);
 
-        await expect(service.execute(user, session, 'st-bme', 'vector.apply', {
+        await expect(service.execute(user, session, 'sample-module', 'task.run', {
             options: { dryRun: true },
         })).rejects.toThrow(/Dry-run execution is not supported/);
         expect(handler).not.toHaveBeenCalled();
@@ -424,20 +424,20 @@ describe('ModuleHostService', () => {
 
     it('rejects getManifest calls with an invalid module id', () => {
         const service = createService();
-        service.register(buildManifest(), { 'vector.apply': vi.fn().mockResolvedValue({}) });
+        service.register(buildManifest(), { 'task.run': vi.fn().mockResolvedValue({}) });
 
-        expect(() => service.getManifest('ST-BME')).toThrow(/Invalid module id/);
-        expect(() => service.getManifest('st bme')).toThrow(/Invalid module id/);
+        expect(() => service.getManifest('Sample-Module')).toThrow(/Invalid module id/);
+        expect(() => service.getManifest('sample module')).toThrow(/Invalid module id/);
     });
 
     it('rejects registration when a transaction key does not match its declared name', () => {
         const service = createService();
         const manifest = buildManifest({
             transactions: {
-                'vector.apply': buildTransaction({ name: 'vector.bulk-apply' }),
+                'task.run': buildTransaction({ name: 'task.bulk-run' }),
             },
         });
-        expect(() => service.register(manifest, { 'vector.apply': vi.fn() })).toThrow(/Transaction name mismatch/);
+        expect(() => service.register(manifest, { 'task.run': vi.fn() })).toThrow(/Transaction name mismatch/);
     });
 
     it('forwards the required resource reason to permissions.authorize', async () => {
@@ -459,29 +459,29 @@ describe('ModuleHostService', () => {
         service.register(
             buildManifest({
                 transactions: {
-                    'vector.apply': buildTransaction({
-                        name: 'vector.apply',
+                    'task.run': buildTransaction({
+                        name: 'task.run',
                         requiredResources: [
-                            { resource: 'trivium.private', target: 'bme', reason: 'vector apply target' },
+                            { resource: 'trivium.private', target: 'sample', reason: 'task run target' },
                         ],
                     }),
                 },
             }),
-            { 'vector.apply': handler },
+            { 'task.run': handler },
         );
 
         const user = createUser(false);
         const session = createSession(user);
 
-        const response = await service.execute(user, session, 'st-bme', 'vector.apply', {});
+        const response = await service.execute(user, session, 'sample-module', 'task.run', {});
         expect(response.ok).toBe(true);
 
         const requiredCall = authorizeSpy.mock.calls.find(call => call[2]?.resource === 'trivium.private');
         expect(requiredCall).toBeDefined();
         expect(requiredCall?.[2]).toMatchObject({
             resource: 'trivium.private',
-            target: 'bme',
-            reason: 'vector apply target',
+            target: 'sample',
+            reason: 'task run target',
         });
     });
 });

@@ -1507,7 +1507,7 @@ describe('AuthorityClient', () => {
 
         const requestWithSession = vi.fn(async () => ({
             modules: [
-                { id: 'st-bme', displayName: 'ST-BME', version: '1.0.0', protocolVersion: 1, transactions: {} },
+                { id: 'sample-module', displayName: 'Sample Module', version: '1.0.0', protocolVersion: 1, transactions: {} },
             ],
             count: 1,
         }));
@@ -1520,7 +1520,7 @@ describe('AuthorityClient', () => {
         const result = await client.modules.list();
 
         expect(result.count).toBe(1);
-        expect(result.modules[0]?.id).toBe('st-bme');
+        expect(result.modules[0]?.id).toBe('sample-module');
         expect(requestWithSession).toHaveBeenCalledWith('/modules');
     });
 
@@ -1536,8 +1536,8 @@ describe('AuthorityClient', () => {
         });
 
         const manifest = {
-            id: 'st-bme',
-            displayName: 'ST-BME',
+            id: 'sample-module',
+            displayName: 'Sample Module',
             version: '1.0.0',
             protocolVersion: 1,
             transactions: {},
@@ -1549,10 +1549,10 @@ describe('AuthorityClient', () => {
             requestWithSession,
         });
 
-        const result = await client.modules.get('st-bme');
+        const result = await client.modules.get('sample-module');
 
         expect(result).toEqual(manifest);
-        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme');
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/sample-module');
     });
 
     it('rejects modules.get with an empty moduleId before any request', async () => {
@@ -1590,8 +1590,8 @@ describe('AuthorityClient', () => {
         const ensurePermission = vi.fn().mockResolvedValue(undefined);
         const requestWithSession = vi.fn(async () => ({
             ok: true,
-            moduleId: 'st-bme',
-            transaction: 'vector.apply',
+            moduleId: 'sample-module',
+            transaction: 'task.run',
             transactionVersion: '1.0.0',
             result: { applied: 5 },
         }));
@@ -1602,7 +1602,7 @@ describe('AuthorityClient', () => {
             requestWithSession,
         });
 
-        const result = await client.modules.execute(' st-bme ', 'vector.apply', { count: 5 }, {
+        const result = await client.modules.execute(' sample-module ', 'task.run', { count: 5 }, {
             idempotencyKey: '  idem-1  ',
             timeoutMs: 5000,
         });
@@ -1610,10 +1610,10 @@ describe('AuthorityClient', () => {
         expect(result.result).toEqual({ applied: 5 });
         expect(ensurePermission).toHaveBeenCalledWith({
             resource: 'module.execute',
-            target: 'st-bme:vector.apply',
-            reason: '执行模块事务 st-bme:vector.apply',
+            target: 'sample-module:task.run',
+            reason: '执行模块事务 sample-module:task.run',
         });
-        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme/transactions/vector.apply', {
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/sample-module/transactions/task.run', {
             method: 'POST',
             body: {
                 input: { count: 5 },
@@ -1636,8 +1636,8 @@ describe('AuthorityClient', () => {
 
         const requestWithSession = vi.fn(async () => ({
             ok: true,
-            moduleId: 'st-bme',
-            transaction: 'vector.apply',
+            moduleId: 'sample-module',
+            transaction: 'task.run',
             transactionVersion: '1.0.0',
         }));
 
@@ -1647,9 +1647,9 @@ describe('AuthorityClient', () => {
             requestWithSession,
         });
 
-        await client.modules.execute('st-bme', 'vector.apply');
+        await client.modules.execute('sample-module', 'task.run');
 
-        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme/transactions/vector.apply', {
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/sample-module/transactions/task.run', {
             method: 'POST',
             body: {},
         });
@@ -1674,7 +1674,7 @@ describe('AuthorityClient', () => {
             requestWithSession,
         });
 
-        await expect(client.modules.execute('st-bme', 'vector:apply')).rejects.toThrow(/transactionName/);
+        await expect(client.modules.execute('sample-module', 'task:run')).rejects.toThrow(/transactionName/);
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(requestWithSession).not.toHaveBeenCalled();
     });
@@ -1698,9 +1698,9 @@ describe('AuthorityClient', () => {
             requestWithSession,
         });
 
-        await expect(client.modules.execute('st-bme', 'vector.apply', undefined, { timeoutMs: -1 }))
+        await expect(client.modules.execute('sample-module', 'task.run', undefined, { timeoutMs: -1 }))
             .rejects.toThrow(/timeoutMs/);
-        await expect(client.modules.execute('st-bme', 'vector.apply', undefined, { timeoutMs: 1.5 }))
+        await expect(client.modules.execute('sample-module', 'task.run', undefined, { timeoutMs: 1.5 }))
             .rejects.toThrow(/timeoutMs/);
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(requestWithSession).not.toHaveBeenCalled();
@@ -1726,16 +1726,16 @@ describe('AuthorityClient', () => {
         });
 
         // ':' would leak into the permission target delimiter.
-        await expect(client.modules.execute('st:bme', 'vector.apply'))
+        await expect(client.modules.execute('sample:module', 'task.run'))
             .rejects.toThrow(/moduleId/);
         // '/' would leak into the route path.
-        await expect(client.modules.execute('st/bme', 'vector.apply'))
+        await expect(client.modules.execute('sample/module', 'task.run'))
             .rejects.toThrow(/moduleId/);
         // Uppercase not permitted by the server module id pattern.
-        await expect(client.modules.execute('ST-BME', 'vector.apply'))
+        await expect(client.modules.execute('Sample-Module', 'task.run'))
             .rejects.toThrow(/moduleId/);
         // Empty after trim.
-        await expect(client.modules.execute('   ', 'vector.apply'))
+        await expect(client.modules.execute('   ', 'task.run'))
             .rejects.toThrow(/moduleId/);
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(requestWithSession).not.toHaveBeenCalled();
@@ -1755,8 +1755,8 @@ describe('AuthorityClient', () => {
         const ensurePermission = vi.fn().mockResolvedValue(undefined);
         const requestWithSession = vi.fn(async () => ({
             ok: true,
-            moduleId: 'st-bme',
-            transaction: 'vector.apply',
+            moduleId: 'sample-module',
+            transaction: 'task.run',
             transactionVersion: '1.0.0',
             result: { ok: 1 },
         }));
@@ -1767,15 +1767,15 @@ describe('AuthorityClient', () => {
             requestWithSession,
         });
 
-        const result = await client.tx('st-bme:vector.apply', { count: 9 });
+        const result = await client.tx('sample-module:task.run', { count: 9 });
 
         expect(result.result).toEqual({ ok: 1 });
         expect(ensurePermission).toHaveBeenCalledWith({
             resource: 'module.execute',
-            target: 'st-bme:vector.apply',
-            reason: '执行模块事务 st-bme:vector.apply',
+            target: 'sample-module:task.run',
+            reason: '执行模块事务 sample-module:task.run',
         });
-        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme/transactions/vector.apply', {
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/sample-module/transactions/task.run', {
             method: 'POST',
             body: { input: { count: 9 } },
         });
@@ -1794,16 +1794,16 @@ describe('AuthorityClient', () => {
 
         const execute = vi.fn(async () => ({
             ok: true,
-            moduleId: 'st-bme',
-            transaction: 'vector.apply',
+            moduleId: 'sample-module',
+            transaction: 'task.run',
             transactionVersion: '1.0.0',
         }));
 
         Object.assign(client.modules as object, { execute });
 
-        await client.tx('st-bme:vector.apply', { count: 3 }, { idempotencyKey: 'k-1', timeoutMs: 100 });
+        await client.tx('sample-module:task.run', { count: 3 }, { idempotencyKey: 'k-1', timeoutMs: 100 });
 
-        expect(execute).toHaveBeenCalledWith('st-bme', 'vector.apply', { count: 3 }, { idempotencyKey: 'k-1', timeoutMs: 100 });
+        expect(execute).toHaveBeenCalledWith('sample-module', 'task.run', { count: 3 }, { idempotencyKey: 'k-1', timeoutMs: 100 });
     });
 
     it('rejects ambiguous tx shorthand without a colon before permission prompt', async () => {
@@ -1822,7 +1822,7 @@ describe('AuthorityClient', () => {
         Object.assign(client as object, { ensurePermission });
         Object.assign(client.modules as object, { execute });
 
-        await expect(client.tx('st-bme.vector.apply')).rejects.toThrow(/colon/);
+        await expect(client.tx('sample-module.task.run')).rejects.toThrow(/colon/);
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
     });
@@ -1843,9 +1843,9 @@ describe('AuthorityClient', () => {
         Object.assign(client as object, { ensurePermission });
         Object.assign(client.modules as object, { execute });
 
-        await expect(client.tx(':vector.apply')).rejects.toThrow(/moduleId/);
-        await expect(client.tx('st-bme:')).rejects.toThrow(/transactionName/);
-        await expect(client.tx('st-bme:foo:bar')).rejects.toThrow(/transactionName/);
+        await expect(client.tx(':task.run')).rejects.toThrow(/moduleId/);
+        await expect(client.tx('sample-module:')).rejects.toThrow(/transactionName/);
+        await expect(client.tx('sample-module:foo:bar')).rejects.toThrow(/transactionName/);
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
     });

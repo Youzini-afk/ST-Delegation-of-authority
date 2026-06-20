@@ -178,14 +178,6 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean, moduleCount = 0): A
             jobsPage: true,
             benchmarkCore: true,
         },
-        bme: {
-            vectorManifest: true,
-            vectorApply: true,
-            vectorApplyJobs: false,
-            serverEmbeddingProbe: false,
-            candidateSearch: false,
-            protocolVersion: 1,
-        },
         modules: {
             enabled: true,
             registryVersion: AUTHORITY_MODULE_PROTOCOL_VERSION,

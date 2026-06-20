@@ -8,32 +8,8 @@ import { registerRoutes } from './routes.js';
 import { MAX_SQL_BATCH_STATEMENTS, NATIVE_MIGRATION_MAX_COMPRESSED_BYTES, NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES, UNMANAGED_TRANSFER_MAX_BYTES } from './constants.js';
 import type { AuthorityRuntime } from './runtime.js';
 import { AuthorityServiceError } from './utils.js';
-import { validateBmeVectorApplyDimensions } from './services/trivium-service.js';
 
 describe('registerRoutes', () => {
-    it('rejects BME vector apply batches with mixed dimensions', () => {
-        expect(() => validateBmeVectorApplyDimensions({
-            database: 'bme',
-            vectorSpaceId: 'vs_abc',
-            observedDim: 3,
-            items: [
-                { externalId: 'a', vector: [1, 2, 3], payload: { vectorSpaceId: 'vs_abc' } },
-                { externalId: 'b', vector: [1, 2], payload: { vectorSpaceId: 'vs_abc' } },
-            ],
-        })).toThrow(AuthorityServiceError);
-    });
-
-    it('rejects BME vector apply batches with mismatched vector spaces', () => {
-        expect(() => validateBmeVectorApplyDimensions({
-            database: 'bme',
-            vectorSpaceId: 'vs_abc',
-            observedDim: 3,
-            items: [
-                { externalId: 'a', vector: [1, 2, 3], payload: { vectorSpaceId: 'vs_other' } },
-            ],
-        })).toThrow(AuthorityServiceError);
-    });
-
     it('registers fs.private routes', () => {
         const posts: string[] = [];
         const gets: string[] = [];
@@ -68,8 +44,6 @@ describe('registerRoutes', () => {
         ]));
         expect(posts).toEqual(expect.arrayContaining([
             '/permissions/evaluate-batch',
-            '/bme/vector-manifest',
-            '/bme/vector-apply',
             '/transfers/init',
             '/transfers/:id/append',
             '/transfers/:id/read',
@@ -240,8 +214,6 @@ describe('registerRoutes', () => {
             '/trivium/check-mappings-integrity',
             '/trivium/delete-orphan-mappings',
             '/trivium/list-mappings',
-            '/bme/vector-manifest',
-            '/bme/vector-apply',
             '/modules/:moduleId/transactions/:transactionName',
             '/http/fetch',
             '/http/fetch-open',
@@ -470,12 +442,6 @@ describe('registerRoutes', () => {
 
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
             features: expect.objectContaining({
-                bme: expect.objectContaining({
-                    protocolVersion: 1,
-                    vectorManifest: true,
-                    vectorApply: true,
-                    serverEmbeddingProbe: false,
-                }),
                 modules: expect.objectContaining({
                     enabled: true,
                     registryVersion: 1,
@@ -558,177 +524,6 @@ describe('registerRoutes', () => {
                 maxStatements: MAX_SQL_BATCH_STATEMENTS,
             },
         });
-    });
-
-    it('returns a BME vector manifest through the session-gated route', async () => {
-        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
-        const router = {
-            get() {
-                return undefined;
-            },
-            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
-                posts.set(path, handler);
-            },
-        };
-        const runtime = {
-            sessions: {
-                assertSession: vi.fn().mockResolvedValue({
-                    extension: { id: 'third-party/st-bme' },
-                }),
-            },
-            permissions: {
-                authorize: vi.fn().mockResolvedValue(true),
-            },
-            trivium: {
-                getBmeVectorManifest: vi.fn().mockResolvedValue({
-                    database: 'st_bme_vectors',
-                    exists: false,
-                    status: 'missing',
-                    embeddingMode: 'client',
-                    serverEmbeddingSupported: false,
-                    vectorApplySupported: false,
-                    vectorManifestSupported: true,
-                    vectorDim: null,
-                    dtype: null,
-                    storageMode: null,
-                    syncMode: null,
-                    mappingCount: 0,
-                    nodeCount: null,
-                    lastFlushAt: null,
-                    updatedAt: null,
-                }),
-            },
-            audit: {
-                logError: vi.fn().mockResolvedValue(undefined),
-                logPermission: vi.fn().mockResolvedValue(undefined),
-            },
-        } as unknown as AuthorityRuntime;
-
-        registerRoutes(router, runtime);
-        const response = {
-            status: vi.fn().mockReturnThis(),
-            json: vi.fn(),
-            send: vi.fn(),
-            setHeader: vi.fn(),
-            write: vi.fn(),
-            end: vi.fn(),
-        };
-
-        await posts.get('/bme/vector-manifest')?.({
-            user: {
-                profile: {
-                    handle: 'alice',
-                    admin: false,
-                },
-                directories: {
-                    root: 'C:/users/alice',
-                },
-            },
-            body: { database: 'st_bme_vectors' },
-            headers: {},
-        }, response);
-
-        expect(runtime.permissions.authorize).toHaveBeenCalledWith(
-            expect.objectContaining({ handle: 'alice' }),
-            expect.objectContaining({ extension: { id: 'third-party/st-bme' } }),
-            { resource: 'trivium.private', target: 'st_bme_vectors' },
-        );
-        expect(runtime.trivium.getBmeVectorManifest).toHaveBeenCalledWith(
-            expect.objectContaining({ handle: 'alice' }),
-            'third-party/st-bme',
-            { database: 'st_bme_vectors' },
-        );
-        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-            database: 'st_bme_vectors',
-            embeddingMode: 'client',
-            vectorManifestSupported: true,
-        }));
-    });
-
-    it('applies BME client-provided vectors through the session-gated route', async () => {
-        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
-        const router = {
-            get() {
-                return undefined;
-            },
-            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
-                posts.set(path, handler);
-            },
-        };
-        const runtime = {
-            sessions: {
-                assertSession: vi.fn().mockResolvedValue({
-                    extension: { id: 'third-party/st-bme' },
-                }),
-            },
-            permissions: {
-                authorize: vi.fn().mockResolvedValue(true),
-            },
-            trivium: {
-                applyBmeVectorManifest: vi.fn().mockResolvedValue({
-                    ok: true,
-                    appliedAt: '2026-01-01T00:00:00.000Z',
-                    database: 'st_bme_vectors',
-                    manifest: { database: 'st_bme_vectors', exists: true, graphRevision: 7, revision: 7 },
-                    upsert: { totalCount: 1, successCount: 1, failureCount: 0, failures: [], items: [] },
-                    links: { totalCount: 0, successCount: 0, failureCount: 0, failures: [] },
-                    skippedLinkCount: 0,
-                }),
-            },
-            audit: {
-                logError: vi.fn().mockResolvedValue(undefined),
-                logPermission: vi.fn().mockResolvedValue(undefined),
-            },
-        } as unknown as AuthorityRuntime;
-
-        registerRoutes(router, runtime);
-        const response = {
-            status: vi.fn().mockReturnThis(),
-            json: vi.fn(),
-            send: vi.fn(),
-            setHeader: vi.fn(),
-            write: vi.fn(),
-            end: vi.fn(),
-        };
-        const body = {
-            database: 'st_bme_vectors',
-            graphRevision: 7,
-            collectionId: 'st-bme::chat-a',
-            chatId: 'chat-a',
-            modelScope: 'model-a',
-            items: [{ externalId: 'node-a', vector: [1, 0], payload: { text: 'a' } }],
-            links: [],
-        };
-
-        await posts.get('/bme/vector-apply')?.({
-            user: {
-                profile: {
-                    handle: 'alice',
-                    admin: false,
-                },
-                directories: {
-                    root: 'C:/users/alice',
-                },
-            },
-            body,
-            headers: {},
-        }, response);
-
-        expect(runtime.permissions.authorize).toHaveBeenCalledWith(
-            expect.objectContaining({ handle: 'alice' }),
-            expect.objectContaining({ extension: { id: 'third-party/st-bme' } }),
-            { resource: 'trivium.private', target: 'st_bme_vectors' },
-        );
-        expect(runtime.trivium.applyBmeVectorManifest).toHaveBeenCalledWith(
-            expect.objectContaining({ handle: 'alice' }),
-            'third-party/st-bme',
-            body,
-        );
-        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-            ok: true,
-            database: 'st_bme_vectors',
-            manifest: expect.objectContaining({ graphRevision: 7, revision: 7 }),
-        }));
     });
 
     it('resolves relative SillyTavern user directories from the server root before probing', async () => {
@@ -1060,25 +855,25 @@ describe('registerRoutes', () => {
         };
 
         const manifest = {
-            id: 'st-bme',
-            displayName: 'ST-BME',
+            id: 'sample-module',
+            displayName: 'Sample Module',
             version: '0.1.0',
             protocolVersion: 1,
             transactions: {
-                'vector.apply': {
-                    name: 'vector.apply',
+                'task.run': {
+                    name: 'task.run',
                     version: '1.0.0',
-                    title: 'Apply vectors',
-                    riskLevel: 'high',
+                    title: 'Run task',
+                    riskLevel: 'medium',
                     permissionTarget: { kind: 'transaction' },
-                    requiredResources: [{ resource: 'trivium.private' }],
+                    requiredResources: [{ resource: 'storage.kv' }],
                     idempotency: 'optional',
                 },
             },
         };
         const runtime = {
             sessions: {
-                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/sample-extension' } }),
             },
             modules: {
                 listManifests: vi.fn(() => ({ modules: [manifest], count: 1 })),
@@ -1110,7 +905,7 @@ describe('registerRoutes', () => {
         expect(runtime.sessions.assertSession).toHaveBeenCalled();
         expect(runtime.modules.listManifests).toHaveBeenCalled();
         expect(listResponse.json).toHaveBeenCalledWith(expect.objectContaining({
-            modules: expect.arrayContaining([expect.objectContaining({ id: 'st-bme' })]),
+            modules: expect.arrayContaining([expect.objectContaining({ id: 'sample-module' })]),
             count: 1,
         }));
 
@@ -1125,13 +920,13 @@ describe('registerRoutes', () => {
 
         await gets.get('/modules/:moduleId')?.({
             user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
-            params: { moduleId: 'st-bme' },
+            params: { moduleId: 'sample-module' },
             headers: {},
         }, getResponse);
 
-        expect(runtime.modules.getManifest).toHaveBeenCalledWith('st-bme');
+        expect(runtime.modules.getManifest).toHaveBeenCalledWith('sample-module');
         expect(getResponse.json).toHaveBeenCalledWith(expect.objectContaining({
-            module: expect.objectContaining({ id: 'st-bme' }),
+            module: expect.objectContaining({ id: 'sample-module' }),
         }));
     });
 
@@ -1148,7 +943,7 @@ describe('registerRoutes', () => {
 
         const runtime = {
             sessions: {
-                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/sample-extension' } }),
             },
             permissions: {
                 authorize: vi.fn().mockResolvedValue({ status: 'granted', source: 'system' }),
@@ -1156,8 +951,8 @@ describe('registerRoutes', () => {
             modules: {
                 execute: vi.fn().mockResolvedValue({
                     ok: true,
-                    moduleId: 'st-bme',
-                    transaction: 'vector.apply',
+                    moduleId: 'sample-module',
+                    transaction: 'task.run',
                     transactionVersion: '1.0.0',
                     idempotencyKey: 'idem-1',
                     result: { applied: true },
@@ -1182,22 +977,22 @@ describe('registerRoutes', () => {
 
         await posts.get('/modules/:moduleId/transactions/:transactionName')?.({
             user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
-            params: { moduleId: 'st-bme', transactionName: 'vector.apply' },
+            params: { moduleId: 'sample-module', transactionName: 'task.run' },
             body: { idempotencyKey: 'idem-1', input: { items: [] } },
             headers: {},
         }, response);
 
         expect(runtime.modules.execute).toHaveBeenCalledWith(
             expect.objectContaining({ handle: 'alice' }),
-            expect.objectContaining({ extension: { id: 'third-party/st-bme' } }),
-            'st-bme',
-            'vector.apply',
+            expect.objectContaining({ extension: { id: 'third-party/sample-extension' } }),
+            'sample-module',
+            'task.run',
             expect.objectContaining({ idempotencyKey: 'idem-1' }),
         );
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
             ok: true,
-            moduleId: 'st-bme',
-            transaction: 'vector.apply',
+            moduleId: 'sample-module',
+            transaction: 'task.run',
             idempotencyKey: 'idem-1',
         }));
     });
@@ -1215,10 +1010,10 @@ describe('registerRoutes', () => {
 
         const runtime = {
             sessions: {
-                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/sample-extension' } }),
             },
             modules: {
-                execute: vi.fn().mockRejectedValue(new Error('Permission not granted: module.execute for st-bme:vector.apply')),
+                execute: vi.fn().mockRejectedValue(new Error('Permission not granted: module.execute for sample-module:task.run')),
             },
             audit: {
                 logError: vi.fn().mockResolvedValue(undefined),
@@ -1238,7 +1033,7 @@ describe('registerRoutes', () => {
 
         await posts.get('/modules/:moduleId/transactions/:transactionName')?.({
             user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
-            params: { moduleId: 'st-bme', transactionName: 'vector.apply' },
+            params: { moduleId: 'sample-module', transactionName: 'task.run' },
             body: {},
             headers: {},
         }, response);
@@ -1246,13 +1041,13 @@ describe('registerRoutes', () => {
         expect(runtime.modules.execute).toHaveBeenCalled();
         expect(response.status).toHaveBeenCalledWith(403);
         expect(response.json).toHaveBeenCalledWith({
-            error: 'Permission not granted: module.execute for st-bme:vector.apply',
+            error: 'Permission not granted: module.execute for sample-module:task.run',
             code: 'permission_not_granted',
             category: 'permission',
             details: {
                 resource: 'module.execute',
-                target: 'st-bme:vector.apply',
-                key: 'module.execute:st-bme:vector.apply',
+                target: 'sample-module:task.run',
+                key: 'module.execute:sample-module:task.run',
                 riskLevel: 'medium',
             },
         });
@@ -1271,11 +1066,11 @@ describe('registerRoutes', () => {
 
         const runtime = {
             sessions: {
-                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/sample-extension' } }),
             },
             modules: {
                 execute: vi.fn().mockRejectedValue(new AuthorityServiceError(
-                    'Invalid module id: ST-BME',
+                    'Invalid module id: Sample.Module',
                     400,
                     'validation_error',
                     'validation',
@@ -1300,7 +1095,7 @@ describe('registerRoutes', () => {
 
         await posts.get('/modules/:moduleId/transactions/:transactionName')?.({
             user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
-            params: { moduleId: 'ST-BME', transactionName: 'vector.apply' },
+            params: { moduleId: 'Sample.Module', transactionName: 'task.run' },
             body: {},
             headers: {},
         }, response);
@@ -1308,7 +1103,7 @@ describe('registerRoutes', () => {
         expect(runtime.modules.execute).toHaveBeenCalled();
         expect(response.status).toHaveBeenCalledWith(400);
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-            error: 'Invalid module id: ST-BME',
+            error: 'Invalid module id: Sample.Module',
             code: 'validation_error',
             category: 'validation',
         }));

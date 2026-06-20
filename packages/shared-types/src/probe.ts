@@ -41,15 +41,7 @@ export interface AuthorityFeatureFlags {
         jobsPage: boolean;
         benchmarkCore: boolean;
     };
-    bme: {
-        vectorManifest: boolean;
-        vectorApply: boolean;
-        vectorApplyJobs: boolean;
-        serverEmbeddingProbe: boolean;
-        candidateSearch: boolean;
-        protocolVersion: number;
-    };
-    modules?: {
+    modules: {
         enabled: boolean;
         registryVersion: number;
         count: number;

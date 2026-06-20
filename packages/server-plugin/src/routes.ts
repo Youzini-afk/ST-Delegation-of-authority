@@ -51,7 +51,6 @@ import { registerJobsAndEventsRoutes } from './routes/jobs-events-routes.js';
 import { listPrivateTriviumDatabases, registerTriviumRoutes } from './routes/trivium-routes.js';
 import { listPrivateSqlDatabases, registerSqlRoutes } from './routes/sql-routes.js';
 import { registerHttpRoutes } from './routes/http-routes.js';
-import { registerBmeRoutes } from './routes/bme-routes.js';
 import { registerModuleRoutes } from './routes/module-routes.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
@@ -750,8 +749,6 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     registerSqlRoutes(router, runtime, fail);
 
     registerTriviumRoutes(router, runtime, fail);
-
-    registerBmeRoutes(router, runtime, fail);
 
     registerModuleRoutes(router, runtime, fail);
 

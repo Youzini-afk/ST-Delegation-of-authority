@@ -181,14 +181,14 @@ describe('PermissionService', () => {
         const user = createUser(false);
         const session = createSession(user, {
             modules: {
-                execute: ['st-bme:graph.commit'],
+                execute: ['sample-module:graph.commit'],
             },
         });
         const core = createMockCore();
         const permissions = new PermissionService(new PolicyService(core), core);
 
-        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:graph.commit' })).decision).toBe('granted');
-        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:vector.apply' })).decision).toBe('blocked');
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'sample-module:graph.commit' })).decision).toBe('granted');
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'sample-module:task.run' })).decision).toBe('blocked');
     });
 
     it('grants all module transactions when the extension declares execute=true', async () => {
@@ -201,8 +201,8 @@ describe('PermissionService', () => {
         const core = createMockCore();
         const permissions = new PermissionService(new PolicyService(core), core);
 
-        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:graph.commit' })).decision).toBe('granted');
-        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:vector.apply' })).decision).toBe('granted');
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'sample-module:graph.commit' })).decision).toBe('granted');
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'sample-module:task.run' })).decision).toBe('granted');
     });
 
     it('authorizes module.execute by default since default policy is granted', async () => {
@@ -211,7 +211,7 @@ describe('PermissionService', () => {
         const core = createMockCore();
         const permissions = new PermissionService(new PolicyService(core), core);
 
-        const grant = await permissions.authorize(user, session, { resource: 'module.execute', target: 'st-bme:vector.apply' });
+        const grant = await permissions.authorize(user, session, { resource: 'module.execute', target: 'sample-module:task.run' });
         expect(grant).not.toBeNull();
         expect(grant?.status).toBe('granted');
         expect(grant?.source).toBe('system');

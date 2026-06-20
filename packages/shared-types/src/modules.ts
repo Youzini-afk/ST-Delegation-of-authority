@@ -11,7 +11,7 @@ import type { PermissionResource, RiskLevel } from './permissions.js';
  * to module code.
  */
 
-/** Module identifier. Lowercase, dotted segments allowed (e.g. `st-bme`). */
+/** Module identifier. Lowercase, dotted segments allowed (e.g. `sample.module`). */
 export type ModuleId = string;
 
 /** Transaction identifier as declared by a module manifest. */
