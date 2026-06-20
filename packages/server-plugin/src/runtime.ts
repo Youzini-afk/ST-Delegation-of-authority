@@ -1,4 +1,5 @@
 import { SseBroker } from './events/sse-broker.js';
+import { registerStBmeModule } from './modules/builtin/st-bme-module.js';
 import { AdminPackageService } from './services/admin-package-service.js';
 import { AuditService } from './services/audit-service.js';
 import { CoreService } from './services/core-service.js';
@@ -60,6 +61,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const nativeMigrations = new NativeMigrationService();
     const adminPackages = new AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    registerStBmeModule(modules);
 
     return {
         adminPackages,
