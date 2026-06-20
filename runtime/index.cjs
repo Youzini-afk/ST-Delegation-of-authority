@@ -305,6 +305,177 @@ class SseBroker {
 
 /***/ },
 
+/***/ "./src/modules/builtin/st-bme-module.ts"
+/*!**********************************************!*\
+  !*** ./src/modules/builtin/st-bme-module.ts ***!
+  \**********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   ST_BME_MODULE_ID: () => (/* binding */ ST_BME_MODULE_ID),
+/* harmony export */   ST_BME_MODULE_VERSION: () => (/* binding */ ST_BME_MODULE_VERSION),
+/* harmony export */   ST_BME_TRANSACTION_APPLY: () => (/* binding */ ST_BME_TRANSACTION_APPLY),
+/* harmony export */   ST_BME_TRANSACTION_MANIFEST: () => (/* binding */ ST_BME_TRANSACTION_MANIFEST),
+/* harmony export */   buildBmeApplyPayload: () => (/* binding */ buildBmeApplyPayload),
+/* harmony export */   buildBmeManifestPayload: () => (/* binding */ buildBmeManifestPayload),
+/* harmony export */   buildStBmeModuleManifest: () => (/* binding */ buildStBmeModuleManifest),
+/* harmony export */   executeBmeVectorApply: () => (/* binding */ executeBmeVectorApply),
+/* harmony export */   executeBmeVectorManifest: () => (/* binding */ executeBmeVectorManifest),
+/* harmony export */   normalizeBmeDatabase: () => (/* binding */ normalizeBmeDatabase),
+/* harmony export */   registerStBmeModule: () => (/* binding */ registerStBmeModule),
+/* harmony export */   resolveBmeApplyRequiredResources: () => (/* binding */ resolveBmeApplyRequiredResources),
+/* harmony export */   resolveBmeManifestRequiredResources: () => (/* binding */ resolveBmeManifestRequiredResources),
+/* harmony export */   stBmeModuleHandlers: () => (/* binding */ stBmeModuleHandlers),
+/* harmony export */   stBmeModuleRequiredResourceResolvers: () => (/* binding */ stBmeModuleRequiredResourceResolvers)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../../constants.js */ "./src/constants.ts");
+/* harmony import */ var _version_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../../version.js */ "./src/version.ts");
+
+
+/**
+ * Built-in `st-bme` module.
+ *
+ * Phase 2 wires the existing BME vector manifest/apply operations into the
+ * authority module host without expanding {@link AuthorityFeatureFlags.bme}.
+ * The legacy `/bme/vector-*` HTTP routes continue to require only
+ * `trivium.private` for backwards compatibility with existing ST-BME clients
+ * that may not yet declare `modules.execute`; they reuse the same normalized
+ * payload helpers and trivium calls as the module handlers so the two paths
+ * cannot drift.
+ */
+const ST_BME_MODULE_ID = 'st-bme';
+const ST_BME_MODULE_VERSION = _version_js__WEBPACK_IMPORTED_MODULE_1__.AUTHORITY_VERSION;
+const ST_BME_TRANSACTION_MANIFEST = 'vector.manifest';
+const ST_BME_TRANSACTION_APPLY = 'vector.apply';
+const MANIFEST_REASON = 'BME vector manifest target database';
+const APPLY_REASON = 'BME vector apply target database';
+/**
+ * Normalize a BME database name the same way the trivium service does so the
+ * module host, dynamic required-resource resolvers, and legacy HTTP routes all
+ * agree on the permission target before invoking the trivium handler.
+ */
+function normalizeBmeDatabase(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+/**
+ * Clone the manifest request payload with a normalized `database`. The trivium
+ * service re-normalizes internally, but we patch the payload so authorization
+ * target resolution and the trivium call see the same value.
+ */
+function buildBmeManifestPayload(input) {
+    const raw = (input ?? {});
+    return { database: normalizeBmeDatabase(raw.database) };
+}
+/**
+ * Clone the apply request payload with a normalized `database`. Preserves all
+ * caller-provided fields (items, links, vectorSpaceId, etc.) so the only
+ * difference from the input is the patched `database` value.
+ */
+function buildBmeApplyPayload(input) {
+    const raw = (input ?? {});
+    return { ...raw, database: normalizeBmeDatabase(raw.database) };
+}
+/**
+ * Shared trivium call used by both the module transaction handler and the
+ * legacy `/bme/vector-manifest` HTTP route so the two paths cannot diverge.
+ */
+async function executeBmeVectorManifest(trivium, user, callerExtensionId, input) {
+    return await trivium.getBmeVectorManifest(user, callerExtensionId, buildBmeManifestPayload(input));
+}
+/**
+ * Shared trivium call used by both the module transaction handler and the
+ * legacy `/bme/vector-apply` HTTP route so the two paths cannot diverge.
+ */
+async function executeBmeVectorApply(trivium, user, callerExtensionId, input) {
+    return await trivium.applyBmeVectorManifest(user, callerExtensionId, buildBmeApplyPayload(input));
+}
+/**
+ * Dynamic required-resource resolver for `vector.manifest`. Resolves to a
+ * single `trivium.private` target derived from the (normalized) input
+ * `database`, defaulting to `default`.
+ */
+const resolveBmeManifestRequiredResources = (input) => {
+    const target = normalizeBmeDatabase(input?.database);
+    return [{ resource: 'trivium.private', target, reason: MANIFEST_REASON }];
+};
+/**
+ * Dynamic required-resource resolver for `vector.apply`. Resolves to a single
+ * `trivium.private` target derived from the (normalized) input `database`,
+ * defaulting to `default`.
+ */
+const resolveBmeApplyRequiredResources = (input) => {
+    const target = normalizeBmeDatabase(input?.database);
+    return [{ resource: 'trivium.private', target, reason: APPLY_REASON }];
+};
+const manifestTransaction = {
+    name: ST_BME_TRANSACTION_MANIFEST,
+    version: '1.0.0',
+    title: 'BME vector manifest',
+    description: 'Reads the BME vector manifest for a private trivium database.',
+    riskLevel: 'low',
+    permissionTarget: { kind: 'transaction' },
+    requiredResources: [],
+    idempotency: 'none',
+};
+const applyTransaction = {
+    name: ST_BME_TRANSACTION_APPLY,
+    version: '1.0.0',
+    title: 'BME vector apply',
+    description: 'Applies a BME vector manifest batch to a private trivium database.',
+    riskLevel: 'high',
+    permissionTarget: { kind: 'transaction' },
+    requiredResources: [],
+    idempotency: 'optional',
+};
+/**
+ * Build the public manifest for the built-in `st-bme` module. The manifest is
+ * JSON-serializable so it can be returned verbatim from `listManifests()` and
+ * `getManifest()`; dynamic resolvers stay server-side only.
+ */
+function buildStBmeModuleManifest() {
+    return {
+        id: ST_BME_MODULE_ID,
+        displayName: 'ST-BME',
+        version: ST_BME_MODULE_VERSION,
+        description: 'Built-in authority module exposing BME vector manifest and apply transactions.',
+        protocolVersion: _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_MODULE_PROTOCOL_VERSION,
+        transactions: {
+            [ST_BME_TRANSACTION_MANIFEST]: manifestTransaction,
+            [ST_BME_TRANSACTION_APPLY]: applyTransaction,
+        },
+    };
+}
+const bmeVectorManifestHandler = async (ctx, input) => {
+    const result = await executeBmeVectorManifest(ctx.trivium, ctx.user, ctx.callerExtensionId, input);
+    return { result };
+};
+const bmeVectorApplyHandler = async (ctx, input) => {
+    const result = await executeBmeVectorApply(ctx.trivium, ctx.user, ctx.callerExtensionId, input);
+    return { result };
+};
+/** Handlers for the built-in `st-bme` module, keyed by transaction name. */
+const stBmeModuleHandlers = {
+    [ST_BME_TRANSACTION_MANIFEST]: bmeVectorManifestHandler,
+    [ST_BME_TRANSACTION_APPLY]: bmeVectorApplyHandler,
+};
+/** Dynamic required-resource resolvers for the built-in `st-bme` module. */
+const stBmeModuleRequiredResourceResolvers = {
+    [ST_BME_TRANSACTION_MANIFEST]: resolveBmeManifestRequiredResources,
+    [ST_BME_TRANSACTION_APPLY]: resolveBmeApplyRequiredResources,
+};
+/**
+ * Register the built-in `st-bme` module with the authority module host. Called
+ * once during {@link createAuthorityRuntime} after the host has been
+ * constructed.
+ */
+function registerStBmeModule(modules) {
+    modules.register(buildStBmeModuleManifest(), stBmeModuleHandlers, { requiredResourceResolvers: stBmeModuleRequiredResourceResolvers });
+}
+
+
+/***/ },
+
 /***/ "./src/routes.ts"
 /*!***********************!*\
   !*** ./src/routes.ts ***!
@@ -1254,43 +1425,73 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   registerBmeRoutes: () => (/* binding */ registerBmeRoutes)
 /* harmony export */ });
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../modules/builtin/st-bme-module.js */ "./src/modules/builtin/st-bme-module.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
 
 function ok(res, data) {
     res.json(data);
 }
-function getTriviumDatabaseName(value) {
-    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+/**
+ * Resolves the extension id used for failure audit. Prefers the active
+ * session's extension id (so failures attribute to the calling extension);
+ * falls back to the bundled SDK extension id when no session is available.
+ */
+async function resolveAuditExtensionId(runtime, req) {
+    try {
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+        const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
+        return session.extension.id;
+    }
+    catch {
+        return _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+    }
 }
 function registerBmeRoutes(router, runtime, fail) {
     router.post('/bme/vector-manifest', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
             const payload = (req.body ?? {});
-            const database = getTriviumDatabaseName(payload.database);
+            const database = (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBmeDatabase)(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            ok(res, await runtime.trivium.getBmeVectorManifest(user, session.extension.id, payload));
+            // Legacy routes return the BME vector response shape directly, not
+            // the module envelope, and require only trivium.private (no
+            // module.execute) for backwards compatibility with existing ST-BME
+            // clients. The shared helper reuses the same normalized payload
+            // and trivium call as the built-in st-bme module handler.
+            ok(res, await (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.executeBmeVectorManifest)(runtime.trivium, user, session.extension.id, payload));
         }
         catch (error) {
-            fail(runtime, req, res, 'bme.vector', error);
+            // Fall back to session-resolved extension id when possible so
+            // audit attributes the failure to the calling extension rather
+            // than the SDK fallback id.
+            extensionId = await resolveAuditExtensionId(runtime, req);
+            fail(runtime, req, res, extensionId, error);
         }
     });
     router.post('/bme/vector-apply', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
             const payload = (req.body ?? {});
-            const database = getTriviumDatabaseName(payload.database);
+            const database = (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBmeDatabase)(payload.database);
             if (!await runtime.permissions.authorize(user, session, { resource: 'trivium.private', target: database })) {
                 throw new Error(`Permission not granted: trivium.private for ${database}`);
             }
-            ok(res, await runtime.trivium.applyBmeVectorManifest(user, session.extension.id, payload));
+            ok(res, await (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.executeBmeVectorApply)(runtime.trivium, user, session.extension.id, payload));
         }
         catch (error) {
-            fail(runtime, req, res, 'bme.vector', error);
+            extensionId = await resolveAuditExtensionId(runtime, req);
+            fail(runtime, req, res, extensionId, error);
         }
     });
 }
@@ -3431,24 +3632,26 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   createAuthorityRuntime: () => (/* binding */ createAuthorityRuntime)
 /* harmony export */ });
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
-/* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
-/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
-/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
-/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./modules/builtin/st-bme-module.js */ "./src/modules/builtin/st-bme-module.ts");
+/* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
+/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
+/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
+/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -3469,25 +3672,26 @@ __webpack_require__.r(__webpack_exports__);
 
 
 function createAuthorityRuntime() {
-    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__.CoreService();
+    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__.CoreService();
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
-    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__.AuditService(core);
-    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__.DataTransferService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__.PrivateFsService(core);
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__.NativeMigrationService();
-    const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_3__.AuditService(core);
+    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__.DataTransferService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__.ExtensionService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__.PrivateFsService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__.NativeMigrationService();
+    const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_2__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    (0,_modules_builtin_st_bme_module_js__WEBPACK_IMPORTED_MODULE_1__.registerStBmeModule)(modules);
     return {
         adminPackages,
         events,
@@ -12538,6 +12742,21 @@ function resolveUserDirectories(directories) {
     }
     return resolved;
 }
+
+
+/***/ },
+
+/***/ "./src/version.ts"
+/*!************************!*\
+  !*** ./src/version.ts ***!
+  \************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AUTHORITY_VERSION: () => (/* binding */ AUTHORITY_VERSION)
+/* harmony export */ });
+const AUTHORITY_VERSION = '1.4.8';
 
 
 /***/ },
