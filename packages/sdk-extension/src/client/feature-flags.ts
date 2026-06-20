@@ -25,7 +25,8 @@ export type AuthorityFeaturePath =
     | 'diagnostics.warnings'
     | 'diagnostics.activityPages'
     | 'diagnostics.jobsPage'
-    | 'diagnostics.benchmarkCore';
+    | 'diagnostics.benchmarkCore'
+    | 'modules.enabled';
 
 export function getFeatureAvailability(features: AuthorityFeatureFlags, feature: AuthorityFeaturePath): boolean {
     switch (feature) {
@@ -79,5 +80,7 @@ export function getFeatureAvailability(features: AuthorityFeatureFlags, feature:
             return features.diagnostics.jobsPage;
         case 'diagnostics.benchmarkCore':
             return features.diagnostics.benchmarkCore;
+        case 'modules.enabled':
+            return Boolean(features.modules?.enabled);
     }
 }

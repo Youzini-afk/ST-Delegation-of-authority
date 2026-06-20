@@ -1446,6 +1446,409 @@ describe('AuthorityClient', () => {
             },
         });
     });
+
+    it('reports modules.enabled availability based on the optional features.modules flag', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        authorityRequestMock.mockResolvedValue(buildProbe());
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        // No probe/session yet: absence => false.
+        expect(client.hasFeature('modules.enabled')).toBe(false);
+
+        await client.probe();
+        // Probe with no features.modules field: still false.
+        expect(client.hasFeature('modules.enabled')).toBe(false);
+
+        authorityRequestMock.mockResolvedValue(buildProbe({
+            modules: { enabled: true, registryVersion: 1, count: 2 },
+        }));
+        await client.probe(true);
+        expect(client.hasFeature('modules.enabled')).toBe(true);
+
+        authorityRequestMock.mockResolvedValue(buildProbe({
+            modules: { enabled: false, registryVersion: 1, count: 2 },
+        }));
+        await client.probe(true);
+        expect(client.hasFeature('modules.enabled')).toBe(false);
+    });
+
+    it('rejects modules.list when modules.enabled is absent', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        authorityRequestMock.mockResolvedValue(buildProbe());
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        await expect(client.modules.list()).rejects.toThrow('Authority 当前版本尚未提供模块事务能力');
+    });
+
+    it('routes modules.list through GET /modules', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async () => ({
+            modules: [
+                { id: 'st-bme', displayName: 'ST-BME', version: '1.0.0', protocolVersion: 1, transactions: {} },
+            ],
+            count: 1,
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const result = await client.modules.list();
+
+        expect(result.count).toBe(1);
+        expect(result.modules[0]?.id).toBe('st-bme');
+        expect(requestWithSession).toHaveBeenCalledWith('/modules');
+    });
+
+    it('routes modules.get through GET /modules/:moduleId and unwraps the manifest', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const manifest = {
+            id: 'st-bme',
+            displayName: 'ST-BME',
+            version: '1.0.0',
+            protocolVersion: 1,
+            transactions: {},
+        };
+        const requestWithSession = vi.fn(async () => ({ module: manifest }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        const result = await client.modules.get('st-bme');
+
+        expect(result).toEqual(manifest);
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme');
+    });
+
+    it('rejects modules.get with an empty moduleId before any request', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn();
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        await expect(client.modules.get('   ')).rejects.toThrow(/moduleId/);
+        expect(requestWithSession).not.toHaveBeenCalled();
+    });
+
+    it('routes modules.execute with permission target and trimmed body, omitting undefined/dryRun', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn().mockResolvedValue(undefined);
+        const requestWithSession = vi.fn(async () => ({
+            ok: true,
+            moduleId: 'st-bme',
+            transaction: 'vector.apply',
+            transactionVersion: '1.0.0',
+            result: { applied: 5 },
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission,
+            requestWithSession,
+        });
+
+        const result = await client.modules.execute(' st-bme ', 'vector.apply', { count: 5 }, {
+            idempotencyKey: '  idem-1  ',
+            timeoutMs: 5000,
+        });
+
+        expect(result.result).toEqual({ applied: 5 });
+        expect(ensurePermission).toHaveBeenCalledWith({
+            resource: 'module.execute',
+            target: 'st-bme:vector.apply',
+            reason: '执行模块事务 st-bme:vector.apply',
+        });
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme/transactions/vector.apply', {
+            method: 'POST',
+            body: {
+                input: { count: 5 },
+                idempotencyKey: 'idem-1',
+                options: { timeoutMs: 5000 },
+            },
+        });
+    });
+
+    it('omits idempotencyKey/options from modules.execute body when not provided', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const requestWithSession = vi.fn(async () => ({
+            ok: true,
+            moduleId: 'st-bme',
+            transaction: 'vector.apply',
+            transactionVersion: '1.0.0',
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+
+        await client.modules.execute('st-bme', 'vector.apply');
+
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme/transactions/vector.apply', {
+            method: 'POST',
+            body: {},
+        });
+    });
+
+    it('rejects modules.execute transaction names containing a colon before permission prompt', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn();
+        const requestWithSession = vi.fn();
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission,
+            requestWithSession,
+        });
+
+        await expect(client.modules.execute('st-bme', 'vector:apply')).rejects.toThrow(/transactionName/);
+        expect(ensurePermission).not.toHaveBeenCalled();
+        expect(requestWithSession).not.toHaveBeenCalled();
+    });
+
+    it('rejects modules.execute with an invalid timeoutMs before permission prompt', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn();
+        const requestWithSession = vi.fn();
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission,
+            requestWithSession,
+        });
+
+        await expect(client.modules.execute('st-bme', 'vector.apply', undefined, { timeoutMs: -1 }))
+            .rejects.toThrow(/timeoutMs/);
+        await expect(client.modules.execute('st-bme', 'vector.apply', undefined, { timeoutMs: 1.5 }))
+            .rejects.toThrow(/timeoutMs/);
+        expect(ensurePermission).not.toHaveBeenCalled();
+        expect(requestWithSession).not.toHaveBeenCalled();
+    });
+
+    it('rejects modules.execute with an invalid moduleId before permission prompt', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn();
+        const requestWithSession = vi.fn();
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission,
+            requestWithSession,
+        });
+
+        // ':' would leak into the permission target delimiter.
+        await expect(client.modules.execute('st:bme', 'vector.apply'))
+            .rejects.toThrow(/moduleId/);
+        // '/' would leak into the route path.
+        await expect(client.modules.execute('st/bme', 'vector.apply'))
+            .rejects.toThrow(/moduleId/);
+        // Uppercase not permitted by the server module id pattern.
+        await expect(client.modules.execute('ST-BME', 'vector.apply'))
+            .rejects.toThrow(/moduleId/);
+        // Empty after trim.
+        await expect(client.modules.execute('   ', 'vector.apply'))
+            .rejects.toThrow(/moduleId/);
+        expect(ensurePermission).not.toHaveBeenCalled();
+        expect(requestWithSession).not.toHaveBeenCalled();
+    });
+
+    it('delegates tx colon shorthand to modules.execute and posts the encoded route', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn().mockResolvedValue(undefined);
+        const requestWithSession = vi.fn(async () => ({
+            ok: true,
+            moduleId: 'st-bme',
+            transaction: 'vector.apply',
+            transactionVersion: '1.0.0',
+            result: { ok: 1 },
+        }));
+
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission,
+            requestWithSession,
+        });
+
+        const result = await client.tx('st-bme:vector.apply', { count: 9 });
+
+        expect(result.result).toEqual({ ok: 1 });
+        expect(ensurePermission).toHaveBeenCalledWith({
+            resource: 'module.execute',
+            target: 'st-bme:vector.apply',
+            reason: '执行模块事务 st-bme:vector.apply',
+        });
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/st-bme/transactions/vector.apply', {
+            method: 'POST',
+            body: { input: { count: 9 } },
+        });
+    });
+
+    it('delegates tx shorthand options through to modules.execute', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const execute = vi.fn(async () => ({
+            ok: true,
+            moduleId: 'st-bme',
+            transaction: 'vector.apply',
+            transactionVersion: '1.0.0',
+        }));
+
+        Object.assign(client.modules as object, { execute });
+
+        await client.tx('st-bme:vector.apply', { count: 3 }, { idempotencyKey: 'k-1', timeoutMs: 100 });
+
+        expect(execute).toHaveBeenCalledWith('st-bme', 'vector.apply', { count: 3 }, { idempotencyKey: 'k-1', timeoutMs: 100 });
+    });
+
+    it('rejects ambiguous tx shorthand without a colon before permission prompt', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn();
+        const execute = vi.fn();
+        Object.assign(client as object, { ensurePermission });
+        Object.assign(client.modules as object, { execute });
+
+        await expect(client.tx('st-bme.vector.apply')).rejects.toThrow(/colon/);
+        expect(ensurePermission).not.toHaveBeenCalled();
+        expect(execute).not.toHaveBeenCalled();
+    });
+
+    it('rejects tx shorthand with empty module or transaction before permission prompt', async () => {
+        const { AuthorityClient } = await import('./client.js');
+
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+
+        const ensurePermission = vi.fn();
+        const execute = vi.fn();
+        Object.assign(client as object, { ensurePermission });
+        Object.assign(client.modules as object, { execute });
+
+        await expect(client.tx(':vector.apply')).rejects.toThrow(/moduleId/);
+        await expect(client.tx('st-bme:')).rejects.toThrow(/transactionName/);
+        await expect(client.tx('st-bme:foo:bar')).rejects.toThrow(/transactionName/);
+        expect(ensurePermission).not.toHaveBeenCalled();
+        expect(execute).not.toHaveBeenCalled();
+    });
 });
 
 function buildProbe(overrides: Partial<{
@@ -1463,6 +1866,7 @@ function buildProbe(overrides: Partial<{
         'storageBlobWrite' | 'storageBlobRead' | 'privateFileWrite' | 'privateFileRead' | 'httpFetchRequest' | 'httpFetchResponse',
         number
     >>;
+    modules: { enabled: boolean; registryVersion: number; count: number };
 }> = {}): AuthorityProbeResponse {
     const sqlFeatures = {
         queryPage: true,
@@ -1523,6 +1927,7 @@ function buildProbe(overrides: Partial<{
                 jobsPage: true,
                 benchmarkCore: true,
             },
+            ...(overrides.modules ? { modules: overrides.modules } : {}),
         },
         limits: {
             maxRequestBytes: 1024,

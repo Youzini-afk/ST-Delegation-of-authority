@@ -22,6 +22,11 @@ import type {
     JobRecord,
     JobListRequest,
     JobListResponse,
+    AuthorityModuleManifest,
+    ModuleGetResponse,
+    ModuleListResponse,
+    ModuleTransactionRequest,
+    ModuleTransactionResponse,
     PermissionEvaluateBatchResponse,
     PermissionEvaluateRequest,
     PermissionEvaluateResponse,
@@ -267,6 +272,25 @@ export interface JobCreateOptions {
     idempotencyKey?: string;
     maxAttempts?: number;
 }
+
+/**
+ * Caller-provided options for invoking a module transaction through
+ * {@link AuthorityClient.modules.execute} / {@link AuthorityClient.tx}.
+ *
+ * `dryRun` and `signal` are intentionally omitted until they are wired end
+ * to end; do not silently forward unknown options to the module host.
+ */
+export interface AuthorityModuleTransactionOptions {
+    idempotencyKey?: string;
+    timeoutMs?: number;
+}
+
+/**
+ * SDK-side generic view of {@link ModuleTransactionResponse} so callers can
+ * narrow the opaque `result` payload to a typed shape via the generic
+ * parameter on {@link AuthorityClient.modules.execute} / {@link AuthorityClient.tx}.
+ */
+export type AuthorityModuleTransactionResponse<TResult = unknown> = Omit<ModuleTransactionResponse, 'result'> & { result?: TResult };
 
 export interface JobWaitForCompletionOptions {
     pollIntervalMs?: number;
@@ -521,6 +545,12 @@ export class AuthorityClient {
 
     readonly events: {
         subscribe: (channelOrOptions?: string | AuthorityEventsSubscribeOptions, handler?: (event: AuthorityEventEnvelope) => void) => Promise<AuthorityEventsSubscription>;
+    };
+
+    readonly modules: {
+        list: () => Promise<ModuleListResponse>;
+        get: (moduleId: string) => Promise<AuthorityModuleManifest>;
+        execute: <TResult = unknown>(moduleId: string, transactionName: string, input?: unknown, options?: AuthorityModuleTransactionOptions) => Promise<AuthorityModuleTransactionResponse<TResult>>;
     };
 
     private session: SessionInitResponse | null = null;
@@ -1649,6 +1679,59 @@ export class AuthorityClient {
                 };
             },
         };
+
+        this.modules = {
+            list: async () => {
+                await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
+                return await this.requestWithSession<ModuleListResponse>('/modules');
+            },
+            get: async moduleId => {
+                const trimmedModuleId = trimModuleIdentifier(moduleId);
+                await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
+                const response = await this.requestWithSession<ModuleGetResponse>(`/modules/${encodeURIComponent(trimmedModuleId)}`);
+                return response.module;
+            },
+            execute: async <TResult = unknown>(
+                moduleId: string,
+                transactionName: string,
+                input?: unknown,
+                options?: AuthorityModuleTransactionOptions,
+            ): Promise<AuthorityModuleTransactionResponse<TResult>> => {
+                const trimmedModuleId = trimModuleIdentifier(moduleId);
+                const trimmedTransactionName = trimModuleTransactionName(transactionName);
+
+                // All local request shaping/validation must run before the
+                // permission prompt so invalid local inputs never trigger a
+                // user-facing permission request.
+                const trimmedIdempotencyKey = options?.idempotencyKey?.trim();
+                const timeoutMs = options?.timeoutMs;
+                if (timeoutMs !== undefined && !(typeof timeoutMs === 'number' && Number.isSafeInteger(timeoutMs) && timeoutMs > 0)) {
+                    throw new Error('Authority modules.execute timeoutMs must be a positive safe integer');
+                }
+
+                const body: ModuleTransactionRequest = {
+                    ...(input !== undefined ? { input } : {}),
+                    ...(trimmedIdempotencyKey ? { idempotencyKey: trimmedIdempotencyKey } : {}),
+                    ...(timeoutMs !== undefined ? { options: { timeoutMs } } : {}),
+                };
+
+                await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
+
+                await this.ensurePermission({
+                    resource: 'module.execute',
+                    target: `${trimmedModuleId}:${trimmedTransactionName}`,
+                    reason: `执行模块事务 ${trimmedModuleId}:${trimmedTransactionName}`,
+                });
+
+                return await this.requestWithSession<AuthorityModuleTransactionResponse<TResult>>(
+                    `/modules/${encodeURIComponent(trimmedModuleId)}/transactions/${encodeURIComponent(trimmedTransactionName)}`,
+                    {
+                        method: 'POST',
+                        body,
+                    },
+                );
+            },
+        };
     }
 
     async init(force = false): Promise<SessionInitResponse> {
@@ -1700,6 +1783,37 @@ export class AuthorityClient {
         }
 
         throw new Error(message ?? `Authority feature not available: ${feature}`);
+    }
+
+    /**
+     * Colon-form shorthand for {@link AuthorityClient.modules.execute}:
+     * `<moduleId>:<transactionName>`. The shorthand is parsed on the first
+     * colon so transaction names are free to use other delimiters; a
+     * transaction name that itself contains `:` is rejected as ambiguous.
+     * All validation runs before any permission prompt is shown.
+     */
+    async tx<TResult = unknown>(
+        name: string,
+        input?: unknown,
+        options?: AuthorityModuleTransactionOptions,
+    ): Promise<AuthorityModuleTransactionResponse<TResult>> {
+        if (typeof name !== 'string' || !name.includes(':')) {
+            throw new Error('Authority tx shorthand must be colon form: `<moduleId>:<transactionName>`');
+        }
+        const colonIndex = name.indexOf(':');
+        const moduleId = name.slice(0, colonIndex).trim();
+        const transactionName = name.slice(colonIndex + 1);
+        if (!moduleId) {
+            throw new Error('Authority tx shorthand moduleId must be non-empty');
+        }
+        if (!transactionName.trim()) {
+            throw new Error('Authority tx shorthand transactionName must be non-empty');
+        }
+        if (transactionName.includes(':')) {
+            throw new Error('Authority tx shorthand transactionName must not contain \':\'');
+        }
+
+        return await this.modules.execute<TResult>(moduleId, transactionName, input, options);
     }
 
     getSession(): SessionInitResponse | null {
@@ -2518,4 +2632,51 @@ function getSqlDatabaseName(value: unknown): string {
 
 function getTriviumDatabaseName(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+
+/**
+ * Module identifier pattern mirroring the server-side
+ * `MODULE_ID_PATTERN` (see `module-host-service.ts`). Lowercase alphanumeric
+ * start, followed by up to 63 lowercase alphanumeric / `.` / `_` / `-`
+ * characters. Rejects `:` and `/` (and any other path/permission-target
+ * delimiter) before any permission prompt is shown.
+ */
+const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/**
+ * Validates and normalizes a module identifier for SDK-side module routes.
+ * Mirrors the server-side `MODULE_ID_PATTERN` so callers cannot build
+ * malformed `/modules/:moduleId` routes or ambiguous permission targets.
+ */
+function trimModuleIdentifier(value: unknown): string {
+    if (typeof value !== 'string') {
+        throw new Error('Authority modules moduleId must be a non-empty string');
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        throw new Error('Authority modules moduleId must be a non-empty string');
+    }
+    if (!MODULE_ID_PATTERN.test(trimmed)) {
+        throw new Error('Authority modules moduleId must match /^[a-z0-9][a-z0-9._-]{0,63}$/ and must not contain \':\' or \'/\'');
+    }
+    return trimmed;
+}
+
+/**
+ * Validates and normalizes a module transaction name. Rejects non-strings,
+ * empty-after-trim values, and names containing `:` so the combined
+ * `${moduleId}:${transactionName}` permission target stays unambiguous.
+ */
+function trimModuleTransactionName(value: unknown): string {
+    if (typeof value !== 'string') {
+        throw new Error('Authority modules transactionName must be a non-empty string');
+    }
+    if (value.includes(':')) {
+        throw new Error('Authority modules transactionName must not contain \':\'');
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        throw new Error('Authority modules transactionName must be a non-empty string');
+    }
+    return trimmed;
 }

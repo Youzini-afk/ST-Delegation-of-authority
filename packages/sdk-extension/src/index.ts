@@ -32,6 +32,8 @@ export type {
     AuthorityChunkedTriviumOptions,
     AuthorityChunkedTriviumProgress,
     AuthorityChunkedTriviumUpsertResult,
+    AuthorityModuleTransactionOptions,
+    AuthorityModuleTransactionResponse,
     AuthorityPermissionErrorCode,
     AuthorityPermissionErrorDecision,
     AuthorityPermissionErrorDetails,
