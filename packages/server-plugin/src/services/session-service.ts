@@ -64,6 +64,7 @@ export class SessionService {
         grants: SessionInitResponse['grants'],
         policies: SessionInitResponse['policies'],
         limits: SessionInitResponse['limits'],
+        moduleCount = 0,
     ): SessionInitResponse {
         return {
             sessionToken: session.token,
@@ -75,7 +76,7 @@ export class SessionService {
             grants,
             policies,
             limits,
-            features: buildAuthorityFeatureFlags(session.isAdmin),
+            features: buildAuthorityFeatureFlags(session.isAdmin, moduleCount),
         };
     }
 

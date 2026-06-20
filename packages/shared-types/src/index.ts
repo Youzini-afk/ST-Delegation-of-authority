@@ -5,6 +5,7 @@ export type * from './control.js';
 export type * from './diagnostics.js';
 export type * from './http.js';
 export type * from './jobs.js';
+export type * from './modules.js';
 export type * from './native-migration.js';
 export type * from './permissions.js';
 export type * from './private-fs.js';

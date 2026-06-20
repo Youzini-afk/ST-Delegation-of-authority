@@ -113,6 +113,7 @@ function createPortablePackage(): AuthorityPortablePackage {
             'http.fetch': 'prompt',
             'jobs.background': 'prompt',
             'events.stream': 'prompt',
+            'module.execute': 'prompt',
         },
         extensions: {
             'third-party/ext-a': {

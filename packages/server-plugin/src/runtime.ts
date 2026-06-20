@@ -7,6 +7,7 @@ import { ExtensionService } from './services/extension-service.js';
 import { HttpService } from './services/http-service.js';
 import { InstallService } from './services/install-service.js';
 import { JobService } from './services/job-service.js';
+import { ModuleHostService } from './services/module-host-service.js';
 import { NativeMigrationService } from './services/native-migration-service.js';
 import { PermissionService } from './services/permission-service.js';
 import { PolicyService } from './services/policy-service.js';
@@ -36,6 +37,7 @@ export interface AuthorityRuntime {
     jobs: JobService;
     trivium: TriviumService;
     nativeMigrations: NativeMigrationService;
+    modules: ModuleHostService;
 }
 
 export function createAuthorityRuntime(): AuthorityRuntime {
@@ -57,6 +59,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const trivium = new TriviumService(core);
     const nativeMigrations = new NativeMigrationService();
     const adminPackages = new AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
+    const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
 
     return {
         adminPackages,
@@ -77,5 +80,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         jobs,
         trivium,
         nativeMigrations,
+        modules,
     };
 }

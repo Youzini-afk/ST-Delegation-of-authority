@@ -8,3 +8,4 @@ coverage/
 .worktrees/
 *.log
 *.tsbuildinfo
+.slim/deepwork/

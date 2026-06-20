@@ -49,6 +49,11 @@ export interface AuthorityFeatureFlags {
         candidateSearch: boolean;
         protocolVersion: number;
     };
+    modules?: {
+        enabled: boolean;
+        registryVersion: number;
+        count: number;
+    };
 }
 
 export interface AuthorityJobRegistrySummary {

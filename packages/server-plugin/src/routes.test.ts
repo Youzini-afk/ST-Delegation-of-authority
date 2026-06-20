@@ -63,6 +63,8 @@ describe('registerRoutes', () => {
             '/admin/import-export/operations',
             '/admin/usage-summary',
             '/admin/diagnostic-bundle',
+            '/modules',
+            '/modules/:moduleId',
         ]));
         expect(posts).toEqual(expect.arrayContaining([
             '/permissions/evaluate-batch',
@@ -144,6 +146,8 @@ describe('registerRoutes', () => {
             '/extensions/:id',
             '/sql/databases',
             '/trivium/databases',
+            '/modules',
+            '/modules/:moduleId',
             '/jobs',
             '/jobs/:id',
             '/events/stream',
@@ -238,6 +242,7 @@ describe('registerRoutes', () => {
             '/trivium/list-mappings',
             '/bme/vector-manifest',
             '/bme/vector-apply',
+            '/modules/:moduleId/transactions/:transactionName',
             '/http/fetch',
             '/http/fetch-open',
             '/jobs/create',
@@ -430,6 +435,9 @@ describe('registerRoutes', () => {
                     installMessage: 'ready',
                 })),
             },
+            modules: {
+                count: vi.fn(() => 0),
+            },
         } as unknown as AuthorityRuntime;
 
         registerRoutes(router, runtime);
@@ -467,6 +475,11 @@ describe('registerRoutes', () => {
                     vectorManifest: true,
                     vectorApply: true,
                     serverEmbeddingProbe: false,
+                }),
+                modules: expect.objectContaining({
+                    enabled: true,
+                    registryVersion: 1,
+                    count: 0,
                 }),
             }),
             limits: expect.objectContaining({
@@ -753,6 +766,9 @@ describe('registerRoutes', () => {
                         installMessage: 'ready',
                     })),
                 },
+                modules: {
+                    count: vi.fn(() => 0),
+                },
             } as unknown as AuthorityRuntime;
 
             registerRoutes(router, runtime);
@@ -1030,5 +1046,271 @@ describe('registerRoutes', () => {
         expect(runtime.nativeMigrations.preview).toHaveBeenCalledWith('data', '/tmp/upload.zip', { sourceFileName: 'old-data.zip', adoptSource: true });
         expect(runtime.transfers.discard).toHaveBeenCalledWith(expect.anything(), 'third-party/st-authority-sdk', 'transfer-001');
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ id: 'migration-001' }));
+    });
+
+    it('exposes module manifest listings and single-module lookups behind a session', async () => {
+        const gets = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                gets.set(path, handler);
+            },
+            post() {
+                return undefined;
+            },
+        };
+
+        const manifest = {
+            id: 'st-bme',
+            displayName: 'ST-BME',
+            version: '0.1.0',
+            protocolVersion: 1,
+            transactions: {
+                'vector.apply': {
+                    name: 'vector.apply',
+                    version: '1.0.0',
+                    title: 'Apply vectors',
+                    riskLevel: 'high',
+                    permissionTarget: { kind: 'transaction' },
+                    requiredResources: [{ resource: 'trivium.private' }],
+                    idempotency: 'optional',
+                },
+            },
+        };
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+            },
+            modules: {
+                listManifests: vi.fn(() => ({ modules: [manifest], count: 1 })),
+                getManifest: vi.fn(() => ({ module: manifest })),
+                count: vi.fn(() => 1),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+                logPermission: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+
+        const listResponse = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await gets.get('/modules')?.({
+            user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
+            headers: {},
+        }, listResponse);
+
+        expect(runtime.sessions.assertSession).toHaveBeenCalled();
+        expect(runtime.modules.listManifests).toHaveBeenCalled();
+        expect(listResponse.json).toHaveBeenCalledWith(expect.objectContaining({
+            modules: expect.arrayContaining([expect.objectContaining({ id: 'st-bme' })]),
+            count: 1,
+        }));
+
+        const getResponse = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await gets.get('/modules/:moduleId')?.({
+            user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
+            params: { moduleId: 'st-bme' },
+            headers: {},
+        }, getResponse);
+
+        expect(runtime.modules.getManifest).toHaveBeenCalledWith('st-bme');
+        expect(getResponse.json).toHaveBeenCalledWith(expect.objectContaining({
+            module: expect.objectContaining({ id: 'st-bme' }),
+        }));
+    });
+
+    it('executes a module transaction through the session-gated route', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+            },
+            permissions: {
+                authorize: vi.fn().mockResolvedValue({ status: 'granted', source: 'system' }),
+            },
+            modules: {
+                execute: vi.fn().mockResolvedValue({
+                    ok: true,
+                    moduleId: 'st-bme',
+                    transaction: 'vector.apply',
+                    transactionVersion: '1.0.0',
+                    idempotencyKey: 'idem-1',
+                    result: { applied: true },
+                }),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+                logPermission: vi.fn().mockResolvedValue(undefined),
+                logUsage: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await posts.get('/modules/:moduleId/transactions/:transactionName')?.({
+            user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
+            params: { moduleId: 'st-bme', transactionName: 'vector.apply' },
+            body: { idempotencyKey: 'idem-1', input: { items: [] } },
+            headers: {},
+        }, response);
+
+        expect(runtime.modules.execute).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            expect.objectContaining({ extension: { id: 'third-party/st-bme' } }),
+            'st-bme',
+            'vector.apply',
+            expect.objectContaining({ idempotencyKey: 'idem-1' }),
+        );
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            ok: true,
+            moduleId: 'st-bme',
+            transaction: 'vector.apply',
+            idempotencyKey: 'idem-1',
+        }));
+    });
+
+    it('returns a structured permission error when module.execute is denied by the host', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+            },
+            modules: {
+                execute: vi.fn().mockRejectedValue(new Error('Permission not granted: module.execute for st-bme:vector.apply')),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+                logPermission: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await posts.get('/modules/:moduleId/transactions/:transactionName')?.({
+            user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
+            params: { moduleId: 'st-bme', transactionName: 'vector.apply' },
+            body: {},
+            headers: {},
+        }, response);
+
+        expect(runtime.modules.execute).toHaveBeenCalled();
+        expect(response.status).toHaveBeenCalledWith(403);
+        expect(response.json).toHaveBeenCalledWith({
+            error: 'Permission not granted: module.execute for st-bme:vector.apply',
+            code: 'permission_not_granted',
+            category: 'permission',
+            details: {
+                resource: 'module.execute',
+                target: 'st-bme:vector.apply',
+                key: 'module.execute:st-bme:vector.apply',
+                riskLevel: 'medium',
+            },
+        });
+    });
+
+    it('surfaces host validation errors as 400 responses', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-bme' } }),
+            },
+            modules: {
+                execute: vi.fn().mockRejectedValue(new AuthorityServiceError(
+                    'Invalid module id: ST-BME',
+                    400,
+                    'validation_error',
+                    'validation',
+                )),
+            },
+            audit: {
+                logError: vi.fn().mockResolvedValue(undefined),
+                logPermission: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+
+        registerRoutes(router, runtime);
+
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        await posts.get('/modules/:moduleId/transactions/:transactionName')?.({
+            user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
+            params: { moduleId: 'ST-BME', transactionName: 'vector.apply' },
+            body: {},
+            headers: {},
+        }, response);
+
+        expect(runtime.modules.execute).toHaveBeenCalled();
+        expect(response.status).toHaveBeenCalledWith(400);
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+            error: 'Invalid module id: ST-BME',
+            code: 'validation_error',
+            category: 'validation',
+        }));
     });
 });

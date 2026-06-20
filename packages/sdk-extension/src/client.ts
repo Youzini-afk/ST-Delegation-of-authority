@@ -2494,6 +2494,7 @@ function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items:
         'http.fetch': [],
         'jobs.background': [],
         'events.stream': [],
+        'module.execute': [],
     } as Record<PermissionResource, T[]>;
 
     for (const item of items) {

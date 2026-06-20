@@ -321,7 +321,8 @@ export class PermissionService {
             || declaredPermissions.trivium?.private
             || declaredPermissions.http?.allow?.length
             || declaredPermissions.jobs?.background
-            || declaredPermissions.events?.channels,
+            || declaredPermissions.events?.channels
+            || declaredPermissions.modules?.execute,
         );
     }
 
@@ -347,6 +348,8 @@ export class PermissionService {
                 return this.matchesDeclaredTarget(declaredPermissions.jobs?.background, resource, target);
             case 'events.stream':
                 return this.matchesDeclaredTarget(declaredPermissions.events?.channels, resource, target);
+            case 'module.execute':
+                return this.matchesDeclaredTarget(declaredPermissions.modules?.execute, resource, target);
             default:
                 return false;
         }

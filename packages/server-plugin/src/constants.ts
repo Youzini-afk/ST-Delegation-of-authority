@@ -34,6 +34,7 @@ export const SUPPORTED_RESOURCES: PermissionResource[] = [
     'http.fetch',
     'jobs.background',
     'events.stream',
+    'module.execute',
 ];
 
 export const RESOURCE_RISK: Record<PermissionResource, RiskLevel> = {
@@ -45,6 +46,7 @@ export const RESOURCE_RISK: Record<PermissionResource, RiskLevel> = {
     'http.fetch': 'medium',
     'jobs.background': 'medium',
     'events.stream': 'low',
+    'module.execute': 'medium',
 };
 
 export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus> = {
@@ -56,7 +58,11 @@ export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus>
     'http.fetch': 'granted',
     'jobs.background': 'granted',
     'events.stream': 'granted',
+    'module.execute': 'granted',
 };
+
+/** Authority module host protocol version. Bump when manifest/handler contract changes. */
+export const AUTHORITY_MODULE_PROTOCOL_VERSION = 1;
 
 export const BUILTIN_JOB_TYPES = ['delay', 'sql.backup', 'trivium.flush', 'fs.import-jsonl'] as const;
 
@@ -134,7 +140,7 @@ export const BUILTIN_JOB_REGISTRY_SUMMARY: AuthorityJobRegistrySummary = {
     ],
 };
 
-export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFlags {
+export function buildAuthorityFeatureFlags(isAdmin: boolean, moduleCount = 0): AuthorityFeatureFlags {
     return {
         securityCenter: true,
         admin: isAdmin,
@@ -179,6 +185,11 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean): AuthorityFeatureFl
             serverEmbeddingProbe: false,
             candidateSearch: false,
             protocolVersion: 1,
+        },
+        modules: {
+            enabled: true,
+            registryVersion: AUTHORITY_MODULE_PROTOCOL_VERSION,
+            count: moduleCount,
         },
     };
 }

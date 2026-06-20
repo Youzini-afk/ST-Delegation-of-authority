@@ -153,6 +153,7 @@ export function normalizePermissionTarget(resource: PermissionResource, target?:
             return normalizeHttpFetchTarget(trimmedTarget);
         case 'jobs.background':
         case 'events.stream':
+        case 'module.execute':
             return trimmedTarget || '*';
         default:
             return trimmedTarget || '*';

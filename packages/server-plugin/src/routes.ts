@@ -52,6 +52,7 @@ import { listPrivateTriviumDatabases, registerTriviumRoutes } from './routes/tri
 import { listPrivateSqlDatabases, registerSqlRoutes } from './routes/sql-routes.js';
 import { registerHttpRoutes } from './routes/http-routes.js';
 import { registerBmeRoutes } from './routes/bme-routes.js';
+import { registerModuleRoutes } from './routes/module-routes.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
 import { asErrorMessage, AuthorityServiceError, buildPermissionDescriptor, getSessionToken, getUserContext, isAuthorityServiceError } from './utils.js';
@@ -123,7 +124,8 @@ function isPermissionResource(value: string): value is PermissionResource {
         || value === 'trivium.private'
         || value === 'http.fetch'
         || value === 'jobs.background'
-        || value === 'events.stream';
+        || value === 'events.stream'
+        || value === 'module.execute';
 }
 
 function isPermissionErrorDetails(value: AuthorityErrorPayload['details']): value is NonNullable<AuthorityErrorPayload['details']> & {
@@ -316,7 +318,7 @@ async function buildProbeResponse(runtime: AuthorityRuntime, user: ReturnType<ty
     await runtime.core.refreshHealth();
     const install = runtime.install.getStatus();
     const core = runtime.core.getStatus();
-    const features = buildAuthorityFeatureFlags(user.isAdmin);
+    const features = buildAuthorityFeatureFlags(user.isAdmin, runtime.modules.count());
     const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
     const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
     return {
@@ -599,7 +601,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
-            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits));
+            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits, runtime.modules.count()));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -615,6 +617,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 await runtime.permissions.listPersistentGrants(user, session.extension.id),
                 await runtime.permissions.getPolicyEntries(user, session.extension.id),
                 limits,
+                runtime.modules.count(),
             ));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -749,6 +752,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     registerTriviumRoutes(router, runtime, fail);
 
     registerBmeRoutes(router, runtime, fail);
+
+    registerModuleRoutes(router, runtime, fail);
 
     registerHttpRoutes(router, runtime, fail);
 

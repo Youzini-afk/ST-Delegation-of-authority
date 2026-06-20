@@ -6,7 +6,8 @@ export type PermissionResource =
     | 'trivium.private'
     | 'http.fetch'
     | 'jobs.background'
-    | 'events.stream';
+    | 'events.stream'
+    | 'module.execute';
 
 export type PermissionStatus = 'granted' | 'denied' | 'prompt' | 'blocked';
 
@@ -45,6 +46,9 @@ export interface DeclaredPermissions {
     };
     events?: {
         channels?: boolean | string[];
+    };
+    modules?: {
+        execute?: boolean | string[];
     };
 }
 

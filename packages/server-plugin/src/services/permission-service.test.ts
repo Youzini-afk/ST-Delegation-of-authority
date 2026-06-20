@@ -177,6 +177,46 @@ describe('PermissionService', () => {
         expect((await permissions.evaluate(user, session, { resource: 'jobs.background', target: 'reindex' })).decision).toBe('blocked');
     });
 
+    it('blocks undeclared module transactions when the extension declares scoped execute', async () => {
+        const user = createUser(false);
+        const session = createSession(user, {
+            modules: {
+                execute: ['st-bme:graph.commit'],
+            },
+        });
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:graph.commit' })).decision).toBe('granted');
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:vector.apply' })).decision).toBe('blocked');
+    });
+
+    it('grants all module transactions when the extension declares execute=true', async () => {
+        const user = createUser(false);
+        const session = createSession(user, {
+            modules: {
+                execute: true,
+            },
+        });
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:graph.commit' })).decision).toBe('granted');
+        expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'st-bme:vector.apply' })).decision).toBe('granted');
+    });
+
+    it('authorizes module.execute by default since default policy is granted', async () => {
+        const user = createUser(false);
+        const session = createSession(user);
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        const grant = await permissions.authorize(user, session, { resource: 'module.execute', target: 'st-bme:vector.apply' });
+        expect(grant).not.toBeNull();
+        expect(grant?.status).toBe('granted');
+        expect(grant?.source).toBe('system');
+    });
+
     it('matches wildcard declared HTTP hosts', async () => {
         const user = createUser(false);
         const session = createSession(user, {

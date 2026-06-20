@@ -4147,6 +4147,7 @@ fn validate_supported_resource(field_name: &str, value: &str) -> Result<(), ApiE
             "http.fetch",
             "jobs.background",
             "events.stream",
+            "module.execute",
         ],
     )
 }
