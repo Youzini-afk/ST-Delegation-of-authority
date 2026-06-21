@@ -1697,13 +1697,6 @@ function readSqlSchemaObjectRecord(row) {
         sql: typeof row.sql === 'string' ? row.sql : null,
     };
 }
-function resolvePrivateSqlDatabaseDir(user, extensionId) {
-    const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.getUserAuthorityPaths)(user);
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.resolveContainedPath)(paths.sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(extensionId));
-}
-function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
-    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.resolveContainedPath)(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.sanitizeFileSegment)(databaseName)}.sqlite`);
-}
 async function sqlMigrationTableExists(runtime, dbPath, tableName) {
     const result = await runtime.core.querySql(dbPath, {
         statement: 'SELECT name FROM sqlite_master WHERE type = ?1 AND name = ?2 LIMIT 1',
@@ -1714,7 +1707,7 @@ async function sqlMigrationTableExists(runtime, dbPath, tableName) {
 async function listSqlMigrationsPage(runtime, user, extensionId, request) {
     const database = getSqlDatabaseName(request.database);
     const tableName = getSqlMigrationTableName(request.tableName);
-    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
+    const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, extensionId, database);
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath) || !await sqlMigrationTableExists(runtime, dbPath, tableName)) {
         return {
             tableName,
@@ -1735,7 +1728,7 @@ async function listSqlMigrationsPage(runtime, user, extensionId, request) {
 async function listSqlSchemaPage(runtime, user, extensionId, request) {
     const database = getSqlDatabaseName(request.database);
     const type = getSqlSchemaObjectType(request.type);
-    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, database);
+    const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, extensionId, database);
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(dbPath)) {
         return {
             objects: [],
@@ -1758,11 +1751,11 @@ async function listSqlSchemaPage(runtime, user, extensionId, request) {
     };
 }
 async function statPrivateSqlDatabase(runtime, user, extensionId, databaseName) {
-    const dbPath = resolvePrivateSqlDatabasePath(user, extensionId, databaseName);
+    const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, extensionId, databaseName);
     return await runtime.core.statSql(dbPath, { database: databaseName });
 }
 async function listPrivateSqlDatabases(runtime, user, extensionId) {
-    const databaseDir = resolvePrivateSqlDatabaseDir(user, extensionId);
+    const databaseDir = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabaseDir)(user, extensionId);
     if (!node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(databaseDir)) {
         return { databases: [] };
     }
@@ -1805,7 +1798,7 @@ function registerSqlRoutes(router, runtime, fail) {
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, session.extension.id, database);
             const result = await runtime.core.querySql(dbPath, {
                 ...payload,
                 database,
@@ -1829,7 +1822,7 @@ function registerSqlRoutes(router, runtime, fail) {
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, session.extension.id, database);
             const result = await runtime.core.execSql(dbPath, {
                 ...payload,
                 database,
@@ -1854,7 +1847,7 @@ function registerSqlRoutes(router, runtime, fail) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
             assertSqlStatementCount(payload.statements, 'SQL batch');
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, session.extension.id, database);
             const result = await runtime.core.batchSql(dbPath, {
                 ...payload,
                 database,
@@ -1879,7 +1872,7 @@ function registerSqlRoutes(router, runtime, fail) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
             assertSqlStatementCount(payload.statements, 'SQL transaction');
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, session.extension.id, database);
             const result = await runtime.core.transactionSql(dbPath, {
                 ...payload,
                 database,
@@ -1903,7 +1896,7 @@ function registerSqlRoutes(router, runtime, fail) {
             if (!await runtime.permissions.authorize(user, session, { resource: 'sql.private', target: database })) {
                 throw new Error(`Permission not granted: sql.private for ${database}`);
             }
-            const dbPath = resolvePrivateSqlDatabasePath(user, session.extension.id, database);
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, session.extension.id, database);
             const result = await runtime.core.migrateSql(dbPath, {
                 ...payload,
                 database,
@@ -3447,7 +3440,7 @@ function createAuthorityRuntime() {
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_11__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleDiscoveryService(install);
-    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit, trivium);
+    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core);
     return {
         adminPackages,
         events,
@@ -4697,10 +4690,15 @@ class AuditService {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   buildCompanionSqlCapability: () => (/* binding */ buildCompanionSqlCapability),
 /* harmony export */   buildCompanionTriviumCapability: () => (/* binding */ buildCompanionTriviumCapability)
 /* harmony export */ });
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-/* harmony import */ var _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./trivium-internal.js */ "./src/services/trivium-internal.ts");
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./trivium-internal.js */ "./src/services/trivium-internal.ts");
+
+
 
 
 /**
@@ -4737,7 +4735,7 @@ function buildCompanionTriviumCapability(trivium, permissions, audit, user, sess
                 target: database,
                 moduleId: ownerExtensionId,
             }).catch(() => undefined);
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(`Permission not granted: trivium.private for ${database}`, 403, 'permission_not_granted', 'permission', { resource: 'trivium.private', target: database, ownerExtensionId });
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Permission not granted: trivium.private for ${database}`, 403, 'permission_not_granted', 'permission', { resource: 'trivium.private', target: database, ownerExtensionId });
         }
     };
     return {
@@ -4776,8 +4774,8 @@ function buildCompanionTriviumCapability(trivium, permissions, audit, user, sess
             // safe integer for topK/expandDepth throws here, mirroring the
             // existing getBoundedPositiveInteger precedent used by
             // TriviumService for sampleLimit/limit.
-            const topK = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.getBoundedPositiveInteger)(request.topK, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.DEFAULT_SEARCH_TOP_K, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_SEARCH_TOP_K, 'topK');
-            const expandDepth = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.getBoundedPositiveInteger)(request.expandDepth, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.DEFAULT_SEARCH_EXPAND_DEPTH, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_SEARCH_EXPAND_DEPTH, 'expandDepth');
+            const topK = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.getBoundedPositiveInteger)(request.topK, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.DEFAULT_SEARCH_TOP_K, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.MAX_SEARCH_TOP_K, 'topK');
+            const expandDepth = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.getBoundedPositiveInteger)(request.expandDepth, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.DEFAULT_SEARCH_EXPAND_DEPTH, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.MAX_SEARCH_EXPAND_DEPTH, 'expandDepth');
             const clampedRequest = {
                 ...request,
                 topK,
@@ -4790,8 +4788,8 @@ function buildCompanionTriviumCapability(trivium, permissions, audit, user, sess
             await authorize(database);
             // Hard-reject oversized batches before delegating, matching the
             // MAX_TRIVIUM_BULK_ITEMS precedent in TriviumService.bulkUpsert.
-            if (request.items.length > _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(`Trivium resolveMany supports at most ${_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS} items per request`, 400, 'validation_error', 'validation', { limit: _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS, actual: request.items.length });
+            if (request.items.length > _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Trivium resolveMany supports at most ${_trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS} items per request`, 400, 'validation_error', 'validation', { limit: _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS, actual: request.items.length });
             }
             return await trivium.resolveMany(user, ownerExtensionId, request);
         },
@@ -4801,7 +4799,7 @@ function buildCompanionTriviumCapability(trivium, permissions, audit, user, sess
             // Clamp depth to the server-side cap. Shallow-copy the request
             // so the caller's object is not mutated. A non-positive safe
             // integer for depth throws here.
-            const depth = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.getBoundedPositiveInteger)(request.depth, 1, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_NEIGHBORS_DEPTH, 'depth');
+            const depth = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.getBoundedPositiveInteger)(request.depth, 1, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_3__.MAX_NEIGHBORS_DEPTH, 'depth');
             const clampedRequest = {
                 ...request,
                 depth,
@@ -4820,8 +4818,134 @@ function buildCompanionTriviumCapability(trivium, permissions, audit, user, sess
 function normalizeTriviumDatabase(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
+/**
+ * Build a {@link CompanionSqlCapability} bound to a specific companion
+ * module's owner extension id. The wrapper captures `user`, `session`, and
+ * `ownerExtensionId` at build time so companion code cannot override the
+ * extension scoping or pass a raw dbPath.
+ *
+ * @param core       The host's CoreService. NOT exposed on the returned
+ *                   wrapper; only the narrow SQL methods delegate to it.
+ * @param permissions The host's PermissionService. Used for defense-in-depth
+ *                   authorization before each SQL call.
+ * @param audit      The host's AuditService. Used to log permission denials.
+ * @param user       The calling user context (from the host's execute ctx).
+ * @param session    The calling session record (from the host's execute ctx).
+ * @param ownerExtensionId The companion module's owner extension id. This
+ *                   is the extension that shipped the `.authority/server.cjs`
+ *                   being activated, NOT the caller extension id from
+ *                   `session.extension.id`. The wrapper uses this id to
+ *                   resolve the private SQL database directory so two
+ *                   extensions cannot read or write each other's databases.
+ */
+function buildCompanionSqlCapability(core, permissions, audit, user, session, ownerExtensionId) {
+    const authorize = async (database) => {
+        const granted = await permissions.authorize(user, session, {
+            resource: 'sql.private',
+            target: database,
+        });
+        if (granted === null) {
+            // Log the denial for audit traceability, then throw a structured
+            // permission error. The wrapper uses the OWNER extension id for
+            // audit attribution so the denial is attributed to the companion
+            // module that attempted the operation, not the caller extension.
+            await audit.logPermission(user, ownerExtensionId, 'Permission denied: sql.private', {
+                resource: 'sql.private',
+                target: database,
+                moduleId: ownerExtensionId,
+            }).catch(() => undefined);
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Permission not granted: sql.private for ${database}`, 403, 'permission_not_granted', 'permission', { resource: 'sql.private', target: database, ownerExtensionId });
+        }
+    };
+    return {
+        async query(database, statement, params, page) {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            // Clamp page.limit to 1000 to match the route-layer cap in
+            // buildEmptySqlCursorPage (sql-routes.ts). Shallow-copy the
+            // request so the caller's page object is not mutated.
+            const clampedPage = page === undefined ? undefined : clampSqlPage(page);
+            const request = {
+                database: db,
+                statement,
+                ...(params === undefined ? {} : { params }),
+                ...(clampedPage === undefined ? {} : { page: clampedPage }),
+            };
+            // Resolve dbPath internally from ownerExtensionId; the wrapper
+            // never accepts a raw dbPath from companion code.
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.resolvePrivateSqlDatabasePath)(user, ownerExtensionId, db);
+            return await core.querySql(dbPath, { ...request });
+        },
+        async exec(database, statement, params) {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            const request = {
+                database: db,
+                statement,
+                ...(params === undefined ? {} : { params }),
+            };
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.resolvePrivateSqlDatabasePath)(user, ownerExtensionId, db);
+            return await core.execSql(dbPath, { ...request });
+        },
+        async transaction(database, statements) {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            // Hard-reject oversized batches before delegating, matching the
+            // route-layer assertSqlStatementCount precedent in sql-routes.ts.
+            if (statements.length > _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_SQL_BATCH_STATEMENTS) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`SQL transaction supports at most ${_constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_SQL_BATCH_STATEMENTS} statements per request`, 400, 'validation_error', 'validation', { limit: _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_SQL_BATCH_STATEMENTS, actual: statements.length });
+            }
+            const request = {
+                database: db,
+                statements,
+            };
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.resolvePrivateSqlDatabasePath)(user, ownerExtensionId, db);
+            return await core.transactionSql(dbPath, { ...request });
+        },
+        async migrate(database, migrations, tableName) {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            // Build the migrate request from positional args; shallow-copy
+            // so the caller's migrations array reference is not mutated by
+            // the service. tableName is optional; omit it when not supplied
+            // so the core falls back to its default migrations table name.
+            const migrateRequest = tableName === undefined
+                ? { database: db, migrations: [...migrations] }
+                : { database: db, migrations: [...migrations], tableName };
+            const dbPath = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.resolvePrivateSqlDatabasePath)(user, ownerExtensionId, db);
+            return await core.migrateSql(dbPath, migrateRequest);
+        },
+    };
+}
+/**
+ * Normalize a SQL database name to the same default the route layer uses
+ * (`getSqlDatabaseName`: empty/undefined -> 'default'). The wrapper uses
+ * this for authorization target normalization so that a request with
+ * `database: undefined` authorizes against `'default'`, matching the
+ * database the resolver will actually open.
+ */
+function normalizeSqlDatabase(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+/**
+ * Clamp a query page's `limit` to the server-side cap of 1000. Mirrors the
+ * route-layer cap in `buildEmptySqlCursorPage` (sql-routes.ts). Returns a
+ * shallow copy of the page so the caller's object is not mutated.
+ */
+function clampSqlPage(page) {
+    if (page.limit !== undefined
+        && typeof page.limit === 'number'
+        && Number.isSafeInteger(page.limit)
+        && page.limit > MAX_COMPANION_SQL_QUERY_PAGE_LIMIT) {
+        return { ...page, limit: MAX_COMPANION_SQL_QUERY_PAGE_LIMIT };
+    }
+    return page;
+}
+/** Server-side cap on `query` page.limit. Matches the route-layer cap. */
+const MAX_COMPANION_SQL_QUERY_PAGE_LIMIT = 1000;
 // Suppress unused-import warnings for type-only imports preserved for the
 // public API surface of this module.
+void undefined;
 void undefined;
 
 
@@ -4909,6 +5033,7 @@ class CompanionModuleLoaderService {
     permissions;
     audit;
     trivium;
+    core;
     /**
      * Lazy accessor for the runtime CommonJS `require` function. Webpack
      * replaces top-level `require` calls with `__webpack_require__`, which
@@ -4920,11 +5045,12 @@ class CompanionModuleLoaderService {
     runtimeRequire;
     logger;
     activationTimeoutMs;
-    constructor(modules, permissions, audit, trivium, options = {}) {
+    constructor(modules, permissions, audit, trivium, core, options = {}) {
         this.modules = modules;
         this.permissions = permissions;
         this.audit = audit;
         this.trivium = trivium;
+        this.core = core;
         this.runtimeRequire = resolveRuntimeRequire();
         this.logger = options.logger ?? console;
         this.activationTimeoutMs = options.activationTimeoutMs ?? DEFAULT_ACTIVATION_TIMEOUT_MS;
@@ -5075,7 +5201,7 @@ class CompanionModuleLoaderService {
                     severity: 'error',
                 });
             }
-            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.logger);
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.logger);
         }
         try {
             this.modules.registerCompanion(candidate.manifest, handlers, {
@@ -5192,7 +5318,7 @@ function registerCompanionTransaction(registrations, undeclared, manifest, modul
  * also rejects with `transaction_timeout` independently — the abort is a
  * cooperative hint, not a force-stop.
  */
-function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, trivium, logger) {
+function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, trivium, core, logger) {
     const companionHandler = registration.definition.handler;
     const transaction = candidate.manifest.transactions[transactionName];
     const moduleVersion = candidate.manifest.version;
@@ -5229,6 +5355,13 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
         // authorizes `trivium.private` before each call. No raw
         // TriviumService is exposed on the companion ctx.
         const triviumCapability = (0,_companion_capabilities_js__WEBPACK_IMPORTED_MODULE_2__.buildCompanionTriviumCapability)(trivium, permissions, audit, user, session, candidate.ownerExtensionId);
+        // Phase A: build the generic safe SQL wrapper bound to the
+        // companion module's owner extension id. The wrapper resolves the
+        // database filesystem path internally from `ownerExtensionId` so
+        // companion code cannot supply a raw dbPath; two extensions cannot
+        // read or write each other's databases. The wrapper authorizes
+        // `sql.private` before each call. No raw CoreService is exposed.
+        const sqlCapability = (0,_companion_capabilities_js__WEBPACK_IMPORTED_MODULE_2__.buildCompanionSqlCapability)(core, permissions, audit, user, session, candidate.ownerExtensionId);
         const companionCtx = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
@@ -5243,6 +5376,7 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
             authorize,
             signal,
             trivium: triviumCapability,
+            sql: sqlCapability,
         };
         // Phase 3: the host's execute() owns timeout enforcement and the
         // AbortController. The signal on companionCtx IS the host's signal,
@@ -14196,7 +14330,9 @@ function buildCrc32Table() {
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   getGlobalAuthorityPaths: () => (/* binding */ getGlobalAuthorityPaths),
-/* harmony export */   getUserAuthorityPaths: () => (/* binding */ getUserAuthorityPaths)
+/* harmony export */   getUserAuthorityPaths: () => (/* binding */ getUserAuthorityPaths),
+/* harmony export */   resolvePrivateSqlDatabaseDir: () => (/* binding */ resolvePrivateSqlDatabaseDir),
+/* harmony export */   resolvePrivateSqlDatabasePath: () => (/* binding */ resolvePrivateSqlDatabasePath)
 /* harmony export */ });
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
@@ -14219,6 +14355,30 @@ function getUserAuthorityPaths(user) {
         filesDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(storageDir, 'files'),
         controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
     };
+}
+/**
+ * Resolve the directory that holds a given extension's private SQLite
+ * database files. The directory is rooted under the user's
+ * `sqlPrivateDir` and scoped to the supplied extension id so two
+ * extensions cannot read or write each other's databases.
+ *
+ * Used by both the SQL routes (`/sql/*`) and the Phase A companion
+ * `ctx.sql` capability wrapper so the wrapper never accepts a raw
+ * filesystem path from companion code: it always derives the dbPath
+ * from the companion module's owner extension id.
+ */
+function resolvePrivateSqlDatabaseDir(user, extensionId) {
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.resolveContainedPath)(getUserAuthorityPaths(user).sqlPrivateDir, (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(extensionId));
+}
+/**
+ * Resolve the absolute filesystem path to a private SQLite database
+ * owned by `extensionId`. The database name is sanitized to a safe
+ * filename segment and the resulting path is verified to stay inside
+ * the extension's private SQL directory, preventing traversal outside
+ * the per-extension sandbox.
+ */
+function resolvePrivateSqlDatabasePath(user, extensionId, databaseName) {
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.resolveContainedPath)(resolvePrivateSqlDatabaseDir(user, extensionId), `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.sanitizeFileSegment)(databaseName)}.sqlite`);
 }
 function getGlobalAuthorityPaths() {
     const globalState = globalThis;

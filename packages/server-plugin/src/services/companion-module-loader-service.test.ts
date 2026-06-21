@@ -73,6 +73,32 @@ function createMockCore(): CoreServiceType {
         },
         updatedAt: new Date().toISOString(),
     };
+    // Phase A: stub the four CoreService SQL methods so the companion
+    // `ctx.sql` capability wrapper has something to delegate to in unit
+    // tests. Each stub returns a minimal valid response shape; individual
+    // tests override these via `vi.spyOn(core, '<method>')` to capture
+    // arguments or assert call counts.
+    const querySqlStub = vi.fn().mockResolvedValue({
+        kind: 'query' as const,
+        columns: [] as string[],
+        rows: [] as Record<string, unknown>[],
+        rowCount: 0,
+    });
+    const execSqlStub = vi.fn().mockResolvedValue({
+        kind: 'exec' as const,
+        rowsAffected: 0,
+        lastInsertRowid: null as number | null,
+    });
+    const transactionSqlStub = vi.fn().mockResolvedValue({
+        committed: true,
+        results: [] as unknown[],
+    });
+    const migrateSqlStub = vi.fn().mockResolvedValue({
+        tableName: '_authority_migrations',
+        applied: [] as string[],
+        skipped: [] as string[],
+        latestId: null as string | null,
+    });
     return {
         async listControlGrants() {
             return [...grants.values()];
@@ -116,6 +142,10 @@ function createMockCore(): CoreServiceType {
             };
             return policies;
         },
+        querySql: querySqlStub,
+        execSql: execSqlStub,
+        transactionSql: transactionSqlStub,
+        migrateSql: migrateSqlStub,
     } as unknown as CoreServiceType;
 }
 
@@ -160,6 +190,7 @@ function createRuntime(core: CoreServiceType = createMockCore(), trivium?: Trivi
     modules: ModuleHostService;
     loader: CompanionModuleLoaderService;
     trivium: TriviumService;
+    core: CoreServiceType;
 } {
     const permissions = new PermissionService(new PolicyService(core), core);
     const audit = createMockAudit();
@@ -173,11 +204,11 @@ function createRuntime(core: CoreServiceType = createMockCore(), trivium?: Trivi
         {} as JobService,
         {} as SseBroker,
     );
-    const loader = new CompanionModuleLoaderService(modules, permissions, audit, triviumService, {
+    const loader = new CompanionModuleLoaderService(modules, permissions, audit, triviumService, core, {
         logger: silentLogger as unknown as Console,
         activationTimeoutMs: 2000,
     });
-    return { permissions, audit, modules, loader, trivium: triviumService };
+    return { permissions, audit, modules, loader, trivium: triviumService, core };
 }
 
 interface WriteModuleOptions {
@@ -429,11 +460,12 @@ describe('CompanionModuleLoaderService', () => {
             'authorize',
             'signal',
             'trivium',
+            'sql',
         ]));
-        // Raw services MUST be absent. Note: 'trivium' is now present as a
-        // SAFE WRAPPER (not the raw TriviumService), so it is excluded from
-        // the forbidden list below.
-        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'sql', 'fs', 'blob', 'user', 'session']) {
+        // Raw services MUST be absent. Note: 'trivium' and 'sql' are now
+        // present as SAFE WRAPPERS (not raw TriviumService / CoreService),
+        // so they are excluded from the forbidden list below.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'fs', 'blob', 'user', 'session']) {
             expect(keys).not.toContain(forbidden);
         }
     });
@@ -2272,10 +2304,375 @@ function createTriviumFixture(): { fixture: Fixture; runtime: ReturnType<typeof 
         expect(result2.hasTriviumWrapper).toBe(true);
         // trivium is NOT the raw TriviumService (no repository property).
         expect(result2.triviumIsRaw).toBe(false);
-        // Raw services MUST be absent.
-        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'sql', 'fs', 'blob', 'user', 'session']) {
+        // Raw services MUST be absent. Note: 'sql' is now present as a
+        // SAFE WRAPPER (not the raw CoreService), so it is excluded from
+        // the forbidden list below.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'fs', 'blob', 'user', 'session']) {
             expect(result2.keys).not.toContain(forbidden);
         }
+    });
+});
+
+describe('CompanionModuleLoaderService Phase A sql wrapper', () => {
+    afterEach(() => {
+        while (cleanupDirs.length > 0) {
+            const dir = cleanupDirs.pop();
+            if (dir) {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    function createSqlFixture(): { fixture: Fixture; runtime: ReturnType<typeof createRuntime> } {
+        const fixture = createFixture();
+        const extensionDir = path.join(fixture.thirdPartyRoot, 'sql-extension');
+        fs.mkdirSync(extensionDir, { recursive: true });
+        writeModule(extensionDir, {
+            serverCjsContent: `
+                module.exports.activate = async function activate(ctx) {
+                    ctx.registerTransaction('task.run', {
+                        handler: async (txCtx, input) => {
+                            const op = input?.op ?? 'query';
+                            const database = input?.database;
+                            if (op === 'query') {
+                                const result = await txCtx.sql.query(
+                                    database,
+                                    input?.statement ?? 'SELECT 1 AS one',
+                                    input?.params,
+                                    input?.page,
+                                );
+                                return { result: { op, rowCount: result.rowCount, columns: result.columns } };
+                            }
+                            if (op === 'exec') {
+                                const result = await txCtx.sql.exec(
+                                    database,
+                                    input?.statement ?? 'CREATE TABLE t (id INTEGER)',
+                                    input?.params,
+                                );
+                                return { result: { op, rowsAffected: result.rowsAffected } };
+                            }
+                            if (op === 'transaction') {
+                                const result = await txCtx.sql.transaction(
+                                    database,
+                                    input?.statements ?? [],
+                                );
+                                return { result: { op, committed: result.committed } };
+                            }
+                            if (op === 'migrate') {
+                                const result = await txCtx.sql.migrate(
+                                    database,
+                                    input?.migrations ?? [],
+                                    input?.tableName,
+                                );
+                                return { result: { op, tableName: result.tableName, applied: result.applied } };
+                            }
+                            if (op === 'introspect') {
+                                return {
+                                    result: {
+                                        op,
+                                        keys: Object.keys(txCtx).sort(),
+                                        hasSqlWrapper: typeof txCtx.sql?.query === 'function',
+                                        hasSqlExec: typeof txCtx.sql?.exec === 'function',
+                                        hasSqlTransaction: typeof txCtx.sql?.transaction === 'function',
+                                        hasSqlMigrate: typeof txCtx.sql?.migrate === 'function',
+                                        sqlIsRawCore: typeof (txCtx.sql)?.querySql !== 'undefined' || typeof (txCtx.sql)?.execSql !== 'undefined',
+                                    },
+                                };
+                            }
+                            return { result: { op: 'unknown' } };
+                        },
+                    });
+                };
+            `,
+        });
+        const discovery = createDiscovery(fixture);
+        const result = discovery.discover();
+        // Use a mock CoreService that has the SQL stubs needed for
+        // query/exec/transaction/migrate. The mock returns empty/zero
+        // results; the tests assert the wrapper calls the service with
+        // the right dbPath (resolved from ownerExtensionId) and authorizes
+        // before the call, not the actual SQL data correctness.
+        const sqlCore = createMockCore();
+        const runtime = createRuntime(sqlCore);
+        runtime.modules.registerDiscoveredRecords(result.records);
+        return { fixture, runtime };
+    }
+
+    async function loadAndExecuteSql(
+        fixture: Fixture,
+        runtime: ReturnType<typeof createRuntime>,
+        input: unknown,
+    ): Promise<unknown> {
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const response = await runtime.modules.execute(user, session, 'third-party.sql-extension', 'task.run', { input });
+        return response.result;
+    }
+
+    it('exposes ctx.sql wrapper with query/exec/transaction/migrate', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const result = await loadAndExecuteSql(fixture, runtime, { op: 'introspect' });
+        const introspect = result as {
+            keys: string[];
+            hasSqlWrapper: boolean;
+            hasSqlExec: boolean;
+            hasSqlTransaction: boolean;
+            hasSqlMigrate: boolean;
+            sqlIsRawCore: boolean;
+        };
+        expect(introspect.hasSqlWrapper).toBe(true);
+        expect(introspect.hasSqlExec).toBe(true);
+        expect(introspect.hasSqlTransaction).toBe(true);
+        expect(introspect.hasSqlMigrate).toBe(true);
+        // The wrapper must NOT expose raw CoreService internals.
+        expect(introspect.sqlIsRawCore).toBe(false);
+        // sql wrapper IS present on the ctx.
+        expect(introspect.keys).toContain('sql');
+    });
+
+    it('raw CoreService is absent from the companion ctx', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const result = await loadAndExecuteSql(fixture, runtime, { op: 'introspect' });
+        const introspect = result as { keys: string[] };
+        // Raw services MUST be absent from the ctx.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'fs', 'blob', 'user', 'session']) {
+            expect(introspect.keys).not.toContain(forbidden);
+        }
+    });
+
+    it('no raw dbPath is exposed to companion code via ctx.sql', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        // Spy on the underlying core.querySql to capture the dbPath argument.
+        // The wrapper resolves dbPath internally; companion code never sees it.
+        const querySpy = runtime.core.querySql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, { op: 'query', database: 'test-db', statement: 'SELECT 1' });
+        expect(querySpy).toHaveBeenCalledTimes(1);
+        const dbPathArg = querySpy.mock.calls[0]?.[0];
+        // dbPath is a non-empty absolute filesystem path ending in .sqlite.
+        expect(typeof dbPathArg).toBe('string');
+        expect(dbPathArg.length).toBeGreaterThan(0);
+        expect(dbPathArg.endsWith('.sqlite')).toBe(true);
+        // The dbPath must be rooted under the OWNER extension's private SQL
+        // directory, not the caller extension's. The owner extension is
+        // 'third-party/sql-extension' (derived from the directory name).
+        expect(dbPathArg).toContain('sql-extension');
+        // And must NOT reference the caller extension ('third-party/test-extension').
+        expect(dbPathArg).not.toContain('test-extension');
+    });
+
+    it('query: wrapper calls CoreService.querySql with dbPath resolved from ownerExtensionId', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const querySpy = runtime.core.querySql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, { op: 'query', database: 'test-db', statement: 'SELECT 1 AS one' });
+        expect(querySpy).toHaveBeenCalledTimes(1);
+        const [dbPathArg, requestArg] = querySpy.mock.calls[0] as [string, { database: string; statement: string; params?: unknown[] }];
+        // dbPath is rooted under the OWNER extension's directory.
+        expect(dbPathArg).toContain('sql-extension');
+        // The wrapper passes the normalized database name through.
+        expect(requestArg.database).toBe('test-db');
+        expect(requestArg.statement).toBe('SELECT 1 AS one');
+    });
+
+    it('query: extensionId is owner not caller', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const querySpy = runtime.core.querySql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, { op: 'query', database: 'test-db' });
+        expect(querySpy).toHaveBeenCalledTimes(1);
+        const dbPathArg = querySpy.mock.calls[0]?.[0] as string;
+        // The wrapper resolved the dbPath using the OWNER extension id
+        // ('third-party/sql-extension'), NOT the caller extension id
+        // ('third-party/test-extension' from session.extension.id).
+        expect(dbPathArg).toContain('sql-extension');
+        expect(dbPathArg).not.toContain('test-extension');
+    });
+
+    it('query: authorizes sql.private before the service call; denial prevents service call', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        await runtime.permissions.resolve(user, session, { resource: 'sql.private', target: 'test-db' }, 'deny');
+        const querySpy = runtime.core.querySql as unknown as ReturnType<typeof vi.fn>;
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        let caught: unknown;
+        try {
+            await runtime.modules.execute(user, session, 'third-party.sql-extension', 'task.run', {
+                input: { op: 'query', database: 'test-db' },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(AuthorityServiceError);
+        const err = caught as AuthorityServiceError;
+        expect(err.status).toBe(403);
+        expect(err.code).toBe('permission_not_granted');
+        expect(querySpy).not.toHaveBeenCalled();
+    });
+
+    it('query: undefined database is normalized to default for authorization', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const authorizeSpy = vi.spyOn(runtime.permissions, 'authorize');
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        await runtime.modules.execute(user, session, 'third-party.sql-extension', 'task.run', {
+            input: { op: 'query' },
+        });
+        const sqlCall = authorizeSpy.mock.calls.find(call => call[2]?.resource === 'sql.private');
+        expect(sqlCall).toBeDefined();
+        expect(sqlCall?.[2]?.target).toBe('default');
+    });
+
+    it('query: page.limit clamped to 1000 (does not reject)', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const querySpy = runtime.core.querySql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, {
+            op: 'query',
+            database: 'test-db',
+            statement: 'SELECT 1',
+            page: { limit: 99999 },
+        });
+        expect(querySpy).toHaveBeenCalledTimes(1);
+        const requestArg = querySpy.mock.calls[0]?.[1] as { page?: { limit: number } };
+        expect(requestArg.page?.limit).toBe(1000);
+    });
+
+    it('query: does not mutate the caller page object', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const querySpy = runtime.core.querySql as unknown as ReturnType<typeof vi.fn>;
+        const callerPage = { limit: 99999 };
+        await loadAndExecuteSql(fixture, runtime, {
+            op: 'query',
+            database: 'test-db',
+            statement: 'SELECT 1',
+            page: callerPage,
+        });
+        // Caller's limit must be untouched.
+        expect(callerPage.limit).toBe(99999);
+        // Service received the clamped copy.
+        const requestArg = querySpy.mock.calls[0]?.[1] as { page?: { limit: number } };
+        expect(requestArg.page?.limit).toBe(1000);
+    });
+
+    it('exec: wrapper calls CoreService.execSql with dbPath resolved from ownerExtensionId', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const execSpy = runtime.core.execSql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, { op: 'exec', database: 'test-db', statement: 'CREATE TABLE t (id INTEGER)' });
+        expect(execSpy).toHaveBeenCalledTimes(1);
+        const [dbPathArg, requestArg] = execSpy.mock.calls[0] as [string, { database: string; statement: string }];
+        expect(dbPathArg).toContain('sql-extension');
+        expect(dbPathArg).not.toContain('test-extension');
+        expect(requestArg.database).toBe('test-db');
+        expect(requestArg.statement).toBe('CREATE TABLE t (id INTEGER)');
+    });
+
+    it('exec: authorizes sql.private before the service call; denial prevents service call', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        await runtime.permissions.resolve(user, session, { resource: 'sql.private', target: 'test-db' }, 'deny');
+        const execSpy = runtime.core.execSql as unknown as ReturnType<typeof vi.fn>;
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        let caught: unknown;
+        try {
+            await runtime.modules.execute(user, session, 'third-party.sql-extension', 'task.run', {
+                input: { op: 'exec', database: 'test-db', statement: 'CREATE TABLE t (id INTEGER)' },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(AuthorityServiceError);
+        const err = caught as AuthorityServiceError;
+        expect(err.status).toBe(403);
+        expect(err.code).toBe('permission_not_granted');
+        expect(execSpy).not.toHaveBeenCalled();
+    });
+
+    it('transaction: wrapper calls CoreService.transactionSql with dbPath resolved from ownerExtensionId', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const txSpy = runtime.core.transactionSql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, {
+            op: 'transaction',
+            database: 'test-db',
+            statements: [{ statement: 'CREATE TABLE t (id INTEGER)' }],
+        });
+        expect(txSpy).toHaveBeenCalledTimes(1);
+        const [dbPathArg, requestArg] = txSpy.mock.calls[0] as [string, { database: string; statements: unknown[] }];
+        expect(dbPathArg).toContain('sql-extension');
+        expect(dbPathArg).not.toContain('test-extension');
+        expect(requestArg.database).toBe('test-db');
+        expect(requestArg.statements).toHaveLength(1);
+    });
+
+    it('transaction: hard-rejects over-cap statements with 400 validation_error', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        // MAX_SQL_BATCH_STATEMENTS = 100; send 101 statements.
+        const statements = Array.from({ length: 101 }, () => ({ statement: 'SELECT 1' }));
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const txSpy = runtime.core.transactionSql as unknown as ReturnType<typeof vi.fn>;
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        let caught: unknown;
+        try {
+            await runtime.modules.execute(user, session, 'third-party.sql-extension', 'task.run', {
+                input: { op: 'transaction', database: 'test-db', statements },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(AuthorityServiceError);
+        const err = caught as AuthorityServiceError;
+        expect(err.status).toBe(400);
+        expect(err.code).toBe('validation_error');
+        // The wrapper hard-rejects BEFORE the service call.
+        expect(txSpy).not.toHaveBeenCalled();
+    });
+
+    it('transaction: exactly-100 statements accepted (boundary)', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const txSpy = runtime.core.transactionSql as unknown as ReturnType<typeof vi.fn>;
+        const statements = Array.from({ length: 100 }, () => ({ statement: 'SELECT 1' }));
+        await loadAndExecuteSql(fixture, runtime, {
+            op: 'transaction',
+            database: 'test-db',
+            statements,
+        });
+        expect(txSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('migrate: wrapper calls CoreService.migrateSql with dbPath resolved from ownerExtensionId', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const migrateSpy = runtime.core.migrateSql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, {
+            op: 'migrate',
+            database: 'test-db',
+            migrations: [{ id: '0001', statement: 'CREATE TABLE t (id INTEGER)' }],
+            tableName: 'custom_migrations',
+        });
+        expect(migrateSpy).toHaveBeenCalledTimes(1);
+        const [dbPathArg, requestArg] = migrateSpy.mock.calls[0] as [string, { database: string; migrations: unknown[]; tableName?: string }];
+        expect(dbPathArg).toContain('sql-extension');
+        expect(dbPathArg).not.toContain('test-extension');
+        expect(requestArg.database).toBe('test-db');
+        expect(requestArg.migrations).toHaveLength(1);
+        expect(requestArg.tableName).toBe('custom_migrations');
+    });
+
+    it('migrate: tableName passes through when omitted (core uses default)', async () => {
+        const { fixture, runtime } = createSqlFixture();
+        const migrateSpy = runtime.core.migrateSql as unknown as ReturnType<typeof vi.fn>;
+        await loadAndExecuteSql(fixture, runtime, {
+            op: 'migrate',
+            database: 'test-db',
+            migrations: [{ id: '0001', statement: 'CREATE TABLE t (id INTEGER)' }],
+        });
+        expect(migrateSpy).toHaveBeenCalledTimes(1);
+        const requestArg = migrateSpy.mock.calls[0]?.[1] as { database: string; migrations: unknown[]; tableName?: string };
+        expect(requestArg.database).toBe('test-db');
+        expect(requestArg.migrations).toHaveLength(1);
+        // tableName is not passed through when the caller omits it; the
+        // core applies its own default ('_authority_migrations').
+        expect(requestArg.tableName).toBeUndefined();
     });
 });
 

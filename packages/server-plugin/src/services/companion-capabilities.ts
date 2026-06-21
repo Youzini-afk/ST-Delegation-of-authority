@@ -1,4 +1,5 @@
 import type {
+    CursorPageRequest,
     PermissionEvaluateRequest,
     TriviumBulkDeleteRequest,
     TriviumBulkLinkRequest,
@@ -14,8 +15,22 @@ import type {
     TriviumSearchHybridRequest,
     TriviumStatRequest,
     TriviumStatResponse,
+    SqlBatchRequest,
+    SqlExecRequest,
+    SqlExecResult,
+    SqlMigrationInput,
+    SqlMigrateResponse,
+    SqlQueryRequest,
+    SqlQueryResult,
+    SqlStatementInput,
+    SqlTransactionRequest,
+    SqlTransactionResponse,
+    SqlValue,
 } from '@stdo/shared-types';
+import { MAX_SQL_BATCH_STATEMENTS } from '../constants.js';
+import { resolvePrivateSqlDatabasePath } from '../store/authority-paths.js';
 import type { AuditService } from './audit-service.js';
+import type { CoreService } from './core-service.js';
 import type { PermissionService } from './permission-service.js';
 import type { TriviumService } from './trivium-service.js';
 import type { SessionRecord, UserContext } from '../types.js';
@@ -64,8 +79,9 @@ import {
  *   `neighbors` clamps `depth`, and `resolveMany` hard-rejects oversized
  *   `items` arrays.
  *
- * Phase A scope: Trivium only. SQL/blob/fs/jobs/events wrappers are separate
- * future work per the design doc.
+ * Phase A scope: Trivium plus a generic SQL capability (`ctx.sql`) that
+ * delegates to the host's CoreService SQL methods. SQL/blob/fs/jobs/events
+ * wrappers beyond SQL are separate future work per the design doc.
  */
 export interface CompanionTriviumCapability {
     /**
@@ -286,6 +302,243 @@ function normalizeTriviumDatabase(value: string | undefined): string {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
 
+/**
+ * Phase A generic safe SQL wrapper exposed on the companion transaction
+ * ctx as `ctx.sql`.
+ *
+ * Boundary contract (non-negotiable):
+ *
+ * - The wrapper resolves the SQLite database filesystem path internally
+ *   from `ownerExtensionId` (the companion module's owner extension id),
+ *   NEVER from the caller extension id and NEVER from a raw path supplied
+ *   by companion code. Companion modules pass only a `database` NAME
+ *   (e.g. 'default', 'cache', 'index'); the wrapper maps it to a path
+ *   inside the owner extension's private SQL directory. This prevents a
+ *   companion module from reading/writing another extension's databases
+ *   or any file outside its private SQL sandbox.
+ * - The wrapper authorizes `sql.private` before every CoreService call,
+ *   normalized to the same database target the resolver will use. This is
+ *   defense-in-depth in addition to the host's manifest
+ *   `requiredResources` check: even if a companion transaction declares
+ *   `sql.private` in its manifest, the wrapper still re-checks before each
+ *   call so a logic bug in the host's required-resource resolver cannot
+ *   bypass authorization.
+ * - The wrapper exposes only narrow methods: `query`, `exec`,
+ *   `transaction`, `migrate`. No raw `CoreService` is exposed; companion
+ *   code cannot reach `querySql`'s sibling HTTP/control methods, the
+ *   authority-core process handle, the token, the port, or any other
+ *   CoreService internals.
+ * - The wrapper does not add business-specific methods. DOA stays generic;
+ *   the wrapper is a reusable SQL capability for companion modules and
+ *   contains no host-extension-specific helpers.
+ * - The wrapper applies server-side caps before delegating so a buggy or
+ *   hostile companion module cannot request unbounded work:
+ *   `transaction`/`batch` hard-reject statement counts above
+ *   {@link MAX_SQL_BATCH_STATEMENTS}; `query` clamps `page.limit` to 1000.
+ *   There is no per-statement byte cap for now (kept generous).
+ * - The wrapper shallow-copies the request object before delegating to the
+ *   CoreService so the caller's object is not mutated by the clamping or
+ *   by the service.
+ */
+export interface CompanionSqlCapability {
+    /**
+     * Run a SELECT-style statement against a database owned by the
+     * companion module's extension and return paged rows. Authorizes
+     * `sql.private` with the normalized database target, clamps
+     * `page.limit` to 1000, then delegates to
+     * {@link CoreService.querySql}. The wrapper resolves the dbPath
+     * internally from `ownerExtensionId`; companion code never supplies
+     * a raw filesystem path.
+     */
+    query(database: string, statement: string, params?: SqlValue[], page?: CursorPageRequest): Promise<SqlQueryResult>;
+
+    /**
+     * Run a single DDL/DML statement that does not return rows (INSERT,
+     * UPDATE, DELETE, CREATE TABLE, ...). Authorizes `sql.private` with
+     * the normalized database target before delegating to
+     * {@link CoreService.execSql}. The wrapper resolves the dbPath
+     * internally from `ownerExtensionId`; companion code never supplies
+     * a raw filesystem path.
+     */
+    exec(database: string, statement: string, params?: SqlValue[]): Promise<SqlExecResult>;
+
+    /**
+     * Run a batch of statements inside a single transaction against a
+     * database owned by the companion module's extension. Authorizes
+     * `sql.private` with the normalized database target, hard-rejects
+     * statement counts above {@link MAX_SQL_BATCH_STATEMENTS} (100),
+     * then delegates to {@link CoreService.transactionSql}. The wrapper
+     * resolves the dbPath internally from `ownerExtensionId`; companion
+     * code never supplies a raw filesystem path.
+     */
+    transaction(database: string, statements: SqlStatementInput[]): Promise<SqlTransactionResponse>;
+
+    /**
+     * Apply a set of idempotent migrations to a database owned by the
+     * companion module's extension, recording applied ids in a migrations
+     * table. Authorizes `sql.private` with the normalized database
+     * target before delegating to {@link CoreService.migrateSql}. The
+     * wrapper resolves the dbPath internally from `ownerExtensionId`;
+     * companion code never supplies a raw filesystem path.
+     */
+    migrate(database: string, migrations: SqlMigrationInput[], tableName?: string): Promise<SqlMigrateResponse>;
+}
+
+/**
+ * Build a {@link CompanionSqlCapability} bound to a specific companion
+ * module's owner extension id. The wrapper captures `user`, `session`, and
+ * `ownerExtensionId` at build time so companion code cannot override the
+ * extension scoping or pass a raw dbPath.
+ *
+ * @param core       The host's CoreService. NOT exposed on the returned
+ *                   wrapper; only the narrow SQL methods delegate to it.
+ * @param permissions The host's PermissionService. Used for defense-in-depth
+ *                   authorization before each SQL call.
+ * @param audit      The host's AuditService. Used to log permission denials.
+ * @param user       The calling user context (from the host's execute ctx).
+ * @param session    The calling session record (from the host's execute ctx).
+ * @param ownerExtensionId The companion module's owner extension id. This
+ *                   is the extension that shipped the `.authority/server.cjs`
+ *                   being activated, NOT the caller extension id from
+ *                   `session.extension.id`. The wrapper uses this id to
+ *                   resolve the private SQL database directory so two
+ *                   extensions cannot read or write each other's databases.
+ */
+export function buildCompanionSqlCapability(
+    core: CoreService,
+    permissions: PermissionService,
+    audit: AuditService,
+    user: UserContext,
+    session: SessionRecord,
+    ownerExtensionId: string,
+): CompanionSqlCapability {
+    const authorize = async (database: string): Promise<void> => {
+        const granted = await permissions.authorize(user, session, {
+            resource: 'sql.private',
+            target: database,
+        });
+        if (granted === null) {
+            // Log the denial for audit traceability, then throw a structured
+            // permission error. The wrapper uses the OWNER extension id for
+            // audit attribution so the denial is attributed to the companion
+            // module that attempted the operation, not the caller extension.
+            await audit.logPermission(user, ownerExtensionId, 'Permission denied: sql.private', {
+                resource: 'sql.private',
+                target: database,
+                moduleId: ownerExtensionId,
+            }).catch(() => undefined);
+            throw new AuthorityServiceError(
+                `Permission not granted: sql.private for ${database}`,
+                403,
+                'permission_not_granted',
+                'permission',
+                { resource: 'sql.private', target: database, ownerExtensionId },
+            );
+        }
+    };
+
+    return {
+        async query(database, statement, params, page): Promise<SqlQueryResult> {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            // Clamp page.limit to 1000 to match the route-layer cap in
+            // buildEmptySqlCursorPage (sql-routes.ts). Shallow-copy the
+            // request so the caller's page object is not mutated.
+            const clampedPage = page === undefined ? undefined : clampSqlPage(page);
+            const request: SqlQueryRequest = {
+                database: db,
+                statement,
+                ...(params === undefined ? {} : { params }),
+                ...(clampedPage === undefined ? {} : { page: clampedPage }),
+            };
+            // Resolve dbPath internally from ownerExtensionId; the wrapper
+            // never accepts a raw dbPath from companion code.
+            const dbPath = resolvePrivateSqlDatabasePath(user, ownerExtensionId, db);
+            return await core.querySql(dbPath, { ...request });
+        },
+
+        async exec(database, statement, params): Promise<SqlExecResult> {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            const request: SqlExecRequest = {
+                database: db,
+                statement,
+                ...(params === undefined ? {} : { params }),
+            };
+            const dbPath = resolvePrivateSqlDatabasePath(user, ownerExtensionId, db);
+            return await core.execSql(dbPath, { ...request });
+        },
+
+        async transaction(database, statements): Promise<SqlTransactionResponse> {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            // Hard-reject oversized batches before delegating, matching the
+            // route-layer assertSqlStatementCount precedent in sql-routes.ts.
+            if (statements.length > MAX_SQL_BATCH_STATEMENTS) {
+                throw new AuthorityServiceError(
+                    `SQL transaction supports at most ${MAX_SQL_BATCH_STATEMENTS} statements per request`,
+                    400,
+                    'validation_error',
+                    'validation',
+                    { limit: MAX_SQL_BATCH_STATEMENTS, actual: statements.length },
+                );
+            }
+            const request: SqlTransactionRequest = {
+                database: db,
+                statements,
+            };
+            const dbPath = resolvePrivateSqlDatabasePath(user, ownerExtensionId, db);
+            return await core.transactionSql(dbPath, { ...request });
+        },
+
+        async migrate(database, migrations, tableName): Promise<SqlMigrateResponse> {
+            const db = normalizeSqlDatabase(database);
+            await authorize(db);
+            // Build the migrate request from positional args; shallow-copy
+            // so the caller's migrations array reference is not mutated by
+            // the service. tableName is optional; omit it when not supplied
+            // so the core falls back to its default migrations table name.
+            const migrateRequest = tableName === undefined
+                ? { database: db, migrations: [...migrations] }
+                : { database: db, migrations: [...migrations], tableName };
+            const dbPath = resolvePrivateSqlDatabasePath(user, ownerExtensionId, db);
+            return await core.migrateSql(dbPath, migrateRequest);
+        },
+    };
+}
+
+/**
+ * Normalize a SQL database name to the same default the route layer uses
+ * (`getSqlDatabaseName`: empty/undefined -> 'default'). The wrapper uses
+ * this for authorization target normalization so that a request with
+ * `database: undefined` authorizes against `'default'`, matching the
+ * database the resolver will actually open.
+ */
+function normalizeSqlDatabase(value: string | undefined): string {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+
+/**
+ * Clamp a query page's `limit` to the server-side cap of 1000. Mirrors the
+ * route-layer cap in `buildEmptySqlCursorPage` (sql-routes.ts). Returns a
+ * shallow copy of the page so the caller's object is not mutated.
+ */
+function clampSqlPage(page: CursorPageRequest): CursorPageRequest {
+    if (
+        page.limit !== undefined
+        && typeof page.limit === 'number'
+        && Number.isSafeInteger(page.limit)
+        && page.limit > MAX_COMPANION_SQL_QUERY_PAGE_LIMIT
+    ) {
+        return { ...page, limit: MAX_COMPANION_SQL_QUERY_PAGE_LIMIT };
+    }
+    return page;
+}
+
+/** Server-side cap on `query` page.limit. Matches the route-layer cap. */
+const MAX_COMPANION_SQL_QUERY_PAGE_LIMIT = 1000;
+
 // Suppress unused-import warnings for type-only imports preserved for the
 // public API surface of this module.
 void (undefined as unknown as PermissionEvaluateRequest);
+void (undefined as unknown as SqlBatchRequest);

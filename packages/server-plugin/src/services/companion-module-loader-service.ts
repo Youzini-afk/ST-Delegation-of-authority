@@ -13,7 +13,12 @@ import type {
 } from '@stdo/shared-types';
 import { AUTHORITY_MODULE_PROTOCOL_VERSION } from '../constants.js';
 import type { AuditService } from './audit-service.js';
-import { buildCompanionTriviumCapability, type CompanionTriviumCapability } from './companion-capabilities.js';
+import {
+    buildCompanionSqlCapability,
+    buildCompanionTriviumCapability,
+    type CompanionSqlCapability,
+    type CompanionTriviumCapability,
+} from './companion-capabilities.js';
 import {
     MODULE_DEFAULT_REQUEST_BYTES,
     MODULE_DEFAULT_RESPONSE_BYTES,
@@ -26,6 +31,7 @@ import type { PermissionService } from './permission-service.js';
 import { revalidateLoadCandidate, type CompanionModuleLoadCandidate } from './module-discovery-service.js';
 import type { ModuleDiscoveryResult } from './module-discovery-service.js';
 import type { ModuleHostService, ModuleTransactionHandler, ModuleTransactionHandlerResult } from './module-host-service.js';
+import type { CoreService } from './core-service.js';
 import type { TriviumService } from './trivium-service.js';
 import type { SessionRecord, UserContext } from '../types.js';
 import { AuthorityServiceError } from '../utils.js';
@@ -100,6 +106,7 @@ export class CompanionModuleLoaderService {
         private readonly permissions: PermissionService,
         private readonly audit: AuditService,
         private readonly trivium: TriviumService,
+        private readonly core: CoreService,
         options: CompanionModuleLoaderServiceOptions = {},
     ) {
         this.runtimeRequire = resolveRuntimeRequire();
@@ -270,7 +277,7 @@ export class CompanionModuleLoaderService {
                     severity: 'error',
                 });
             }
-            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.logger);
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.logger);
         }
 
         try {
@@ -389,12 +396,17 @@ export type CompanionTransactionHandler = (
  * - `trivium`: Phase 2 generic safe Trivium wrapper. Forces
  *   `extensionId = ownerExtensionId`; companion code cannot pass an
  *   extension id. Authorizes `trivium.private` before each call.
+ * - `sql`: Phase A generic safe SQL wrapper. Resolves the database
+ *   filesystem path internally from `ownerExtensionId`; companion code
+ *   cannot pass a raw dbPath. Authorizes `sql.private` before each call.
  *
  * Raw SQL/fs/blob/jobs/events/runtime/core access is intentionally absent;
  * scoped wrappers are separate future work. The `trivium` wrapper is the
  * first scoped capability, added in Phase A for vector-first use cases and
  * extended in Phase 2 with `searchHybrid`, `resolveMany`, and `neighbors`
- * for server-side vector search, id resolution, and graph expansion.
+ * for server-side vector search, id resolution, and graph expansion. The
+ * `sql` wrapper is added in Phase A for companion modules that need
+ * server-side SQL work.
  */
 export interface CompanionModuleTransactionContext {
     moduleId: string;
@@ -420,6 +432,16 @@ export interface CompanionModuleTransactionContext {
      * hard-rejects oversized item batches.
      */
     trivium: CompanionTriviumCapability;
+    /**
+     * Phase A generic safe SQL wrapper. Resolves the database filesystem
+     * path internally from `ownerExtensionId` so companion code cannot
+     * supply a raw dbPath; two extensions cannot read or write each
+     * other's databases. Authorizes `sql.private` before each call.
+     * Exposes only `query`, `exec`, `transaction`, `migrate`; no raw
+     * `CoreService` is exposed. `transaction` hard-rejects statement
+     * counts above 100 and `query` clamps `page.limit` to 1000.
+     */
+    sql: CompanionSqlCapability;
 }
 
 /**
@@ -542,6 +564,7 @@ function buildCompanionHandler(
     permissions: PermissionService,
     audit: AuditService,
     trivium: TriviumService,
+    core: CoreService,
     logger: LoaderLogger,
 ): ModuleTransactionHandler {
     const companionHandler = registration.definition.handler;
@@ -592,6 +615,21 @@ function buildCompanionHandler(
             candidate.ownerExtensionId,
         );
 
+        // Phase A: build the generic safe SQL wrapper bound to the
+        // companion module's owner extension id. The wrapper resolves the
+        // database filesystem path internally from `ownerExtensionId` so
+        // companion code cannot supply a raw dbPath; two extensions cannot
+        // read or write each other's databases. The wrapper authorizes
+        // `sql.private` before each call. No raw CoreService is exposed.
+        const sqlCapability = buildCompanionSqlCapability(
+            core,
+            permissions,
+            audit,
+            user,
+            session,
+            candidate.ownerExtensionId,
+        );
+
         const companionCtx: CompanionModuleTransactionContext = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
@@ -606,6 +644,7 @@ function buildCompanionHandler(
             authorize,
             signal,
             trivium: triviumCapability,
+            sql: sqlCapability,
         };
 
         // Phase 3: the host's execute() owns timeout enforcement and the

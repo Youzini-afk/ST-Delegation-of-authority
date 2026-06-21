@@ -21,9 +21,9 @@ import type {
 } from '@stdo/shared-types';
 import { MAX_SQL_BATCH_STATEMENTS } from '../constants.js';
 import type { AuthorityRuntime } from '../runtime.js';
-import { getUserAuthorityPaths } from '../store/authority-paths.js';
+import { resolvePrivateSqlDatabaseDir, resolvePrivateSqlDatabasePath } from '../store/authority-paths.js';
 import type { AuthorityRequest, AuthorityResponse } from '../types.js';
-import { AuthorityServiceError, getSessionToken, getUserContext, resolveContainedPath, sanitizeFileSegment } from '../utils.js';
+import { AuthorityServiceError, getSessionToken, getUserContext } from '../utils.js';
 
 type RouterLike = {
     get(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
@@ -101,18 +101,6 @@ function readSqlSchemaObjectRecord(row: Record<string, unknown>): SqlSchemaObjec
         tableName: typeof row.tableName === 'string' && row.tableName.trim() ? row.tableName : null,
         sql: typeof row.sql === 'string' ? row.sql : null,
     };
-}
-
-function resolvePrivateSqlDatabaseDir(user: ReturnType<typeof getUserContext>, extensionId: string): string {
-    const paths = getUserAuthorityPaths(user);
-    return resolveContainedPath(paths.sqlPrivateDir, sanitizeFileSegment(extensionId));
-}
-
-function resolvePrivateSqlDatabasePath(user: ReturnType<typeof getUserContext>, extensionId: string, databaseName: string): string {
-    return resolveContainedPath(
-        resolvePrivateSqlDatabaseDir(user, extensionId),
-        `${sanitizeFileSegment(databaseName)}.sqlite`,
-    );
 }
 
 async function sqlMigrationTableExists(runtime: AuthorityRuntime, dbPath: string, tableName: string): Promise<boolean> {

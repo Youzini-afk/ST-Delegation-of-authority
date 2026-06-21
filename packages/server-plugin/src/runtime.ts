@@ -71,7 +71,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const adminPackages = new AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     const moduleDiscovery = new ModuleDiscoveryService(install);
-    const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium);
+    const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core);
 
     return {
         adminPackages,
