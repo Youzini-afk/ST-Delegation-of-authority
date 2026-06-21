@@ -14,8 +14,10 @@ import type {
 import { AUTHORITY_MODULE_PROTOCOL_VERSION } from '../constants.js';
 import type { AuditService } from './audit-service.js';
 import {
+    buildCompanionLocksCapability,
     buildCompanionSqlCapability,
     buildCompanionTriviumCapability,
+    type CompanionLocksCapability,
     type CompanionSqlCapability,
     type CompanionTriviumCapability,
 } from './companion-capabilities.js';
@@ -32,6 +34,7 @@ import { revalidateLoadCandidate, type CompanionModuleLoadCandidate } from './mo
 import type { ModuleDiscoveryResult } from './module-discovery-service.js';
 import type { ModuleHostService, ModuleTransactionHandler, ModuleTransactionHandlerResult } from './module-host-service.js';
 import type { CoreService } from './core-service.js';
+import type { LockService } from './lock-service.js';
 import type { TriviumService } from './trivium-service.js';
 import type { SessionRecord, UserContext } from '../types.js';
 import { AuthorityServiceError } from '../utils.js';
@@ -107,6 +110,7 @@ export class CompanionModuleLoaderService {
         private readonly audit: AuditService,
         private readonly trivium: TriviumService,
         private readonly core: CoreService,
+        private readonly lockService: LockService,
         options: CompanionModuleLoaderServiceOptions = {},
     ) {
         this.runtimeRequire = resolveRuntimeRequire();
@@ -277,7 +281,7 @@ export class CompanionModuleLoaderService {
                     severity: 'error',
                 });
             }
-            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.logger);
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.lockService, this.logger);
         }
 
         try {
@@ -378,7 +382,8 @@ export type CompanionTransactionHandler = (
 ) => Promise<ModuleTransactionHandlerResult>;
 
 /**
- * Phase 3 + Phase A safe transaction context for companion module handlers.
+ * Phase 3 + Phase A + Phase B safe transaction context for companion module
+ * handlers.
  *
  * This is intentionally distinct from the existing {@link ModuleTransactionContext}
  * which carries raw `trivium`, `storage`, `files`, `jobs`, `events` services.
@@ -399,6 +404,10 @@ export type CompanionTransactionHandler = (
  * - `sql`: Phase A generic safe SQL wrapper. Resolves the database
  *   filesystem path internally from `ownerExtensionId`; companion code
  *   cannot pass a raw dbPath. Authorizes `sql.private` before each call.
+ * - `locks`: Phase B generic in-process locks wrapper. Auto-prefixes
+ *   lock scope with `ownerExtensionId` so two companion modules cannot
+ *   interfere. Per-process only; NOT crash-durable; NOT cross-process.
+ *   Idempotency (Phase C) provides durability across crashes.
  *
  * Raw SQL/fs/blob/jobs/events/runtime/core access is intentionally absent;
  * scoped wrappers are separate future work. The `trivium` wrapper is the
@@ -406,7 +415,9 @@ export type CompanionTransactionHandler = (
  * extended in Phase 2 with `searchHybrid`, `resolveMany`, and `neighbors`
  * for server-side vector search, id resolution, and graph expansion. The
  * `sql` wrapper is added in Phase A for companion modules that need
- * server-side SQL work.
+ * server-side SQL work. The `locks` wrapper is added in Phase B for
+ * companion modules that need to serialize per-resource work (e.g.
+ * per-chat graph commits).
  */
 export interface CompanionModuleTransactionContext {
     moduleId: string;
@@ -442,6 +453,16 @@ export interface CompanionModuleTransactionContext {
      * counts above 100 and `query` clamps `page.limit` to 1000.
      */
     sql: CompanionSqlCapability;
+    /**
+     * Phase B generic in-process locks wrapper. Auto-prefixes lock scope
+     * with `ownerExtensionId` so two companion modules that pick the same
+     * scope string do not interfere. Exposes only `withLock`; no raw
+     * `LockService` is exposed. Defaults `timeoutMs` to 30 s and clamps
+     * to a 5 min hard cap. Per-process only; NOT crash-durable; NOT
+     * cross-process. Idempotency (Phase C) provides durability across
+     * crashes.
+     */
+    locks: CompanionLocksCapability;
 }
 
 /**
@@ -565,6 +586,7 @@ function buildCompanionHandler(
     audit: AuditService,
     trivium: TriviumService,
     core: CoreService,
+    lockService: LockService,
     logger: LoaderLogger,
 ): ModuleTransactionHandler {
     const companionHandler = registration.definition.handler;
@@ -630,6 +652,18 @@ function buildCompanionHandler(
             candidate.ownerExtensionId,
         );
 
+        // Phase B: build the generic in-process locks wrapper bound to the
+        // companion module's owner extension id. The wrapper auto-prefixes
+        // lock scope with `ownerExtensionId` so two companion modules that
+        // pick the same scope string do not interfere. The wrapper applies
+        // a default 30 s timeout and clamps to a 5 min hard cap. No raw
+        // LockService is exposed; companion code cannot reach the
+        // underlying `locks` Map or any other LockService internals.
+        const locksCapability = buildCompanionLocksCapability(
+            lockService,
+            candidate.ownerExtensionId,
+        );
+
         const companionCtx: CompanionModuleTransactionContext = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
@@ -645,6 +679,7 @@ function buildCompanionHandler(
             signal,
             trivium: triviumCapability,
             sql: sqlCapability,
+            locks: locksCapability,
         };
 
         // Phase 3: the host's execute() owns timeout enforcement and the

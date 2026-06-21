@@ -22,6 +22,7 @@ import type { JobService } from './job-service.js';
 import type { PrivateFsService } from './private-fs-service.js';
 import type { StorageService } from './storage-service.js';
 import { TriviumService } from './trivium-service.js';
+import { LockService } from './lock-service.js';
 import type { SseBroker } from '../events/sse-broker.js';
 import type { CoreService as CoreServiceType } from './core-service.js';
 import type { PoliciesState, SessionRecord, StoredGrantEntry, UserContext } from '../types.js';
@@ -191,6 +192,7 @@ function createRuntime(core: CoreServiceType = createMockCore(), trivium?: Trivi
     loader: CompanionModuleLoaderService;
     trivium: TriviumService;
     core: CoreServiceType;
+    locks: LockService;
 } {
     const permissions = new PermissionService(new PolicyService(core), core);
     const audit = createMockAudit();
@@ -204,11 +206,12 @@ function createRuntime(core: CoreServiceType = createMockCore(), trivium?: Trivi
         {} as JobService,
         {} as SseBroker,
     );
-    const loader = new CompanionModuleLoaderService(modules, permissions, audit, triviumService, core, {
+    const locks = new LockService();
+    const loader = new CompanionModuleLoaderService(modules, permissions, audit, triviumService, core, locks, {
         logger: silentLogger as unknown as Console,
         activationTimeoutMs: 2000,
     });
-    return { permissions, audit, modules, loader, trivium: triviumService, core };
+    return { permissions, audit, modules, loader, trivium: triviumService, core, locks };
 }
 
 interface WriteModuleOptions {
@@ -2673,6 +2676,359 @@ describe('CompanionModuleLoaderService Phase A sql wrapper', () => {
         // tableName is not passed through when the caller omits it; the
         // core applies its own default ('_authority_migrations').
         expect(requestArg.tableName).toBeUndefined();
+    });
+});
+
+describe('CompanionModuleLoaderService Phase B locks wrapper', () => {
+    afterEach(() => {
+        while (cleanupDirs.length > 0) {
+            const dir = cleanupDirs.pop();
+            if (dir) {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    function createLocksFixture(): { fixture: Fixture; runtime: ReturnType<typeof createRuntime> } {
+        const fixture = createFixture();
+        const extensionDir = path.join(fixture.thirdPartyRoot, 'locks-extension');
+        fs.mkdirSync(extensionDir, { recursive: true });
+        writeModule(extensionDir, {
+            serverCjsContent: `
+                module.exports.activate = async function activate(ctx) {
+                    ctx.registerTransaction('task.run', {
+                        handler: async (txCtx, input) => {
+                            const op = input?.op ?? 'withLock';
+                            const scope = input?.scope ?? 'chat:123';
+                            const timeoutMs = input?.timeoutMs;
+                            const options = timeoutMs === undefined ? {} : { timeoutMs };
+                            if (op === 'withLock') {
+                                try {
+                                    const result = await txCtx.locks.withLock(scope, options, async () => {
+                                        const startMs = Date.now();
+                                        if (input?.delay) {
+                                            await new Promise(r => setTimeout(r, input.delay));
+                                        }
+                                        const endMs = Date.now();
+                                        return { label: input?.label ?? 'x', startMs, endMs };
+                                    });
+                                    return { result: { op, scope, ok: true, ...result } };
+                                } catch (e) {
+                                    return {
+                                        result: {
+                                            op,
+                                            scope,
+                                            ok: false,
+                                            errorName: e?.name,
+                                            errorMessage: String(e?.message ?? e),
+                                            errorStatus: e?.status,
+                                            errorCode: e?.code,
+                                            errorCategory: e?.category,
+                                            errorDetails: e?.details,
+                                        },
+                                    };
+                                }
+                            }
+                            if (op === 'throw-inside') {
+                                try {
+                                    await txCtx.locks.withLock(scope, options, async () => {
+                                        throw new Error('companion fn exploded');
+                                    });
+                                    return { result: { op, scope, ok: true, threw: false } };
+                                } catch (e) {
+                                    return {
+                                        result: {
+                                            op,
+                                            scope,
+                                            ok: false,
+                                            threw: true,
+                                            errorMessage: String(e?.message ?? e),
+                                        },
+                                    };
+                                }
+                            }
+                            if (op === 'introspect') {
+                                return {
+                                    result: {
+                                        op,
+                                        keys: Object.keys(txCtx).sort(),
+                                        hasLocksWrapper: typeof txCtx.locks?.withLock === 'function',
+                                        locksIsRawService: typeof (txCtx.locks)?.locks !== 'undefined',
+                                    },
+                                };
+                            }
+                            if (op === 'empty-scope') {
+                                try {
+                                    await txCtx.locks.withLock('', {}, async () => 'never');
+                                    return { result: { op, threw: false } };
+                                } catch (e) {
+                                    return {
+                                        result: {
+                                            op,
+                                            threw: true,
+                                            errorMessage: String(e?.message ?? e),
+                                            errorStatus: e?.status,
+                                            errorCode: e?.code,
+                                            errorCategory: e?.category,
+                                        },
+                                    };
+                                }
+                            }
+                            if (op === 'whitespace-scope') {
+                                try {
+                                    await txCtx.locks.withLock('   ', {}, async () => 'never');
+                                    return { result: { op, threw: false } };
+                                } catch (e) {
+                                    return {
+                                        result: {
+                                            op,
+                                            threw: true,
+                                            errorMessage: String(e?.message ?? e),
+                                            errorStatus: e?.status,
+                                            errorCode: e?.code,
+                                            errorCategory: e?.category,
+                                        },
+                                    };
+                                }
+                            }
+                            return { result: { op: 'unknown' } };
+                        },
+                    });
+                };
+            `,
+        });
+        const discovery = createDiscovery(fixture);
+        const result = discovery.discover();
+        const runtime = createRuntime();
+        runtime.modules.registerDiscoveredRecords(result.records);
+        return { fixture, runtime };
+    }
+
+    async function loadAndExecuteLocks(
+        fixture: Fixture,
+        runtime: ReturnType<typeof createRuntime>,
+        input: unknown,
+    ): Promise<unknown> {
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const response = await runtime.modules.execute(user, session, 'third-party.locks-extension', 'task.run', { input });
+        return response.result;
+    }
+
+    it('exposes ctx.locks wrapper with withLock; raw LockService absent', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        const result = await loadAndExecuteLocks(fixture, runtime, { op: 'introspect' });
+        const introspect = result as {
+            keys: string[];
+            hasLocksWrapper: boolean;
+            locksIsRawService: boolean;
+        };
+        // Phase B: locks wrapper IS present on the companion ctx.
+        expect(introspect.hasLocksWrapper).toBe(true);
+        // The wrapper must NOT expose raw LockService internals.
+        expect(introspect.locksIsRawService).toBe(false);
+        // The wrapper is registered under the `locks` field.
+        expect(introspect.keys).toContain('locks');
+        // Raw services MUST still be absent.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'fs', 'blob', 'user', 'session']) {
+            expect(introspect.keys).not.toContain(forbidden);
+        }
+    });
+
+    it('withLock serializes concurrent calls to the same scope', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+
+        // Two concurrent task.run invocations targeting the same scope.
+        // Each holds the lock for 80 ms. If they ran concurrently, both
+        // would finish in ~80 ms; serialized, the pair takes ~160 ms.
+        const start = Date.now();
+        const [a, b] = await Promise.all([
+            runtime.modules.execute(user, session, 'third-party.locks-extension', 'task.run', {
+                input: { op: 'withLock', scope: 'chat:A', delay: 80, label: 'A' },
+            }),
+            runtime.modules.execute(user, session, 'third-party.locks-extension', 'task.run', {
+                input: { op: 'withLock', scope: 'chat:A', delay: 80, label: 'B' },
+            }),
+        ]);
+        const totalMs = Date.now() - start;
+
+        const aResult = a.result as { ok: boolean; label: string; startMs: number; endMs: number };
+        const bResult = b.result as { ok: boolean; label: string; startMs: number; endMs: number };
+
+        expect(aResult.ok).toBe(true);
+        expect(bResult.ok).toBe(true);
+
+        // The second call's start must be >= the first call's end
+        // (no interleave). One of them started first; sort by startMs.
+        const [first, second] = aResult.startMs <= bResult.startMs
+            ? [aResult, bResult]
+            : [bResult, aResult];
+        expect(second.startMs).toBeGreaterThanOrEqual(first.endMs);
+
+        // Total wall-clock time should be at least ~160 ms (two 80 ms
+        // holds serialized). Allow generous jitter tolerance.
+        expect(totalMs).toBeGreaterThanOrEqual(140);
+    });
+
+    it('auto-prefixes scope with ownerExtensionId so two modules do not interfere', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        // Spy on the underlying LockService.withLock to capture the
+        // scopeKey passed by the wrapper. It MUST be prefixed with the
+        // owner extension id ('third-party/locks-extension').
+        const withLockSpy = vi.spyOn(runtime.locks, 'withLock');
+
+        await loadAndExecuteLocks(fixture, runtime, { op: 'withLock', scope: 'chat:42' });
+
+        expect(withLockSpy).toHaveBeenCalledTimes(1);
+        const scopeKeyArg = withLockSpy.mock.calls[0]?.[0] as string;
+        // The scopeKey is auto-prefixed with the owner extension id.
+        expect(scopeKeyArg).toBe('third-party/locks-extension:chat:42');
+        // And must NOT be the raw caller-supplied scope.
+        expect(scopeKeyArg).not.toBe('chat:42');
+        // And must NOT be prefixed with the caller extension id from
+        // session.extension.id ('third-party/test-extension').
+        expect(scopeKeyArg).not.toContain('test-extension');
+    });
+
+    it('withLock throws lock_timeout (408) when the lock cannot be acquired in time', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+
+        // Hold the lock for 200 ms with the first call.
+        const slow = runtime.modules.execute(user, session, 'third-party.locks-extension', 'task.run', {
+            input: { op: 'withLock', scope: 'chat:slow', delay: 200, label: 'slow' },
+        });
+        // Give the slow call a moment to acquire the lock.
+        await new Promise(r => setTimeout(r, 20));
+
+        // Try to acquire the same scope with a 50 ms timeout. The wrapper
+        // catches the structured error and returns it as a result so the
+        // test can inspect the lock_timeout fields without going through
+        // the host's transaction_handler_failed sanitizer.
+        const result2 = await runtime.modules.execute(user, session, 'third-party.locks-extension', 'task.run', {
+            input: { op: 'withLock', scope: 'chat:slow', timeoutMs: 50, label: 'fast' },
+        });
+        const fast = result2.result as {
+            ok: boolean;
+            errorStatus: number;
+            errorCode: string;
+            errorCategory: string;
+            errorDetails?: { scopeKey: string; timeoutMs: number };
+            errorMessage: string;
+        };
+        expect(fast.ok).toBe(false);
+        expect(fast.errorStatus).toBe(408);
+        expect(fast.errorCode).toBe('lock_timeout');
+        expect(fast.errorCategory).toBe('concurrency');
+        expect(fast.errorDetails).toBeDefined();
+        expect(fast.errorDetails?.scopeKey).toBe('third-party/locks-extension:chat:slow');
+        expect(fast.errorDetails?.timeoutMs).toBe(50);
+
+        await slow;
+    });
+
+    it('empty scope throws 400 validation_error', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        const result = await loadAndExecuteLocks(fixture, runtime, { op: 'empty-scope' });
+        const empty = result as { threw: boolean; errorStatus: number; errorCode: string; errorCategory: string; errorMessage: string };
+        expect(empty.threw).toBe(true);
+        expect(empty.errorStatus).toBe(400);
+        expect(empty.errorCode).toBe('validation_error');
+        expect(empty.errorCategory).toBe('validation');
+        expect(empty.errorMessage).toMatch(/non-empty scope/);
+    });
+
+    it('whitespace-only scope throws 400 validation_error', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        const result = await loadAndExecuteLocks(fixture, runtime, { op: 'whitespace-scope' });
+        const ws = result as { threw: boolean; errorStatus: number; errorCode: string };
+        expect(ws.threw).toBe(true);
+        expect(ws.errorStatus).toBe(400);
+        expect(ws.errorCode).toBe('validation_error');
+    });
+
+    it('clamps timeoutMs to the 5 min hard cap when caller requests more', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        const withLockSpy = vi.spyOn(runtime.locks, 'withLock');
+        // Request 10 minutes (well above the 5 min cap).
+        await loadAndExecuteLocks(fixture, runtime, { op: 'withLock', scope: 'chat:1', timeoutMs: 10 * 60_000 });
+        expect(withLockSpy).toHaveBeenCalledTimes(1);
+        const optionsArg = withLockSpy.mock.calls[0]?.[1] as { timeoutMs: number };
+        // The wrapper clamps to 5 min (300_000 ms).
+        expect(optionsArg.timeoutMs).toBe(5 * 60_000);
+        expect(optionsArg.timeoutMs).toBeLessThan(10 * 60_000);
+    });
+
+    it('applies a 30 s default timeoutMs when caller omits it', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        const withLockSpy = vi.spyOn(runtime.locks, 'withLock');
+        // No timeoutMs supplied.
+        await loadAndExecuteLocks(fixture, runtime, { op: 'withLock', scope: 'chat:1' });
+        expect(withLockSpy).toHaveBeenCalledTimes(1);
+        const optionsArg = withLockSpy.mock.calls[0]?.[1] as { timeoutMs: number };
+        // The wrapper applies the 30 s default.
+        expect(optionsArg.timeoutMs).toBe(30_000);
+    });
+
+    it('treats a zero timeoutMs as "use the default" (defensive)', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        const withLockSpy = vi.spyOn(runtime.locks, 'withLock');
+        // timeoutMs = 0 is treated as "no value supplied" rather than
+        // "immediate timeout"; the wrapper applies the 30 s default.
+        await loadAndExecuteLocks(fixture, runtime, { op: 'withLock', scope: 'chat:1', timeoutMs: 0 });
+        expect(withLockSpy).toHaveBeenCalledTimes(1);
+        const optionsArg = withLockSpy.mock.calls[0]?.[1] as { timeoutMs: number };
+        expect(optionsArg.timeoutMs).toBe(30_000);
+    });
+
+    it('fn error propagates to the caller; the lock is still released', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+
+        // First call: hold the lock and throw inside fn. The handler
+        // catches the error and returns it as a result so the test can
+        // inspect it without going through the host's error sanitizer.
+        const throwResult = await runtime.modules.execute(user, session, 'third-party.locks-extension', 'task.run', {
+            input: { op: 'throw-inside', scope: 'chat:err' },
+        });
+        const throwPayload = throwResult.result as { ok: boolean; threw: boolean; errorMessage: string };
+        expect(throwPayload.threw).toBe(true);
+        expect(throwPayload.ok).toBe(false);
+        expect(throwPayload.errorMessage).toContain('companion fn exploded');
+
+        // The lock MUST be released even though fn threw; a follow-up
+        // caller for the same scope should succeed immediately without
+        // a timeout. Use a short timeout to surface any "lock still
+        // held" bug as a timeout rather than a hang.
+        const okResult = await runtime.modules.execute(user, session, 'third-party.locks-extension', 'task.run', {
+            input: { op: 'withLock', scope: 'chat:err', delay: 0, timeoutMs: 1000, label: 'after' },
+        });
+        const okPayload = okResult.result as { ok: boolean; label: string };
+        expect(okPayload.ok).toBe(true);
+        expect(okPayload.label).toBe('after');
+    });
+
+    it('does not expose raw services on the companion handler ctx (Phase B recheck)', async () => {
+        const { fixture, runtime } = createLocksFixture();
+        const result = await loadAndExecuteLocks(fixture, runtime, { op: 'introspect' });
+        const introspect = result as { keys: string[] };
+        // Phase B: 'locks' is now present as a SAFE WRAPPER (not the raw
+        // LockService), so it is excluded from the forbidden list below.
+        // 'trivium' and 'sql' are also safe wrappers from Phases 2/A.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'fs', 'blob', 'user', 'session']) {
+            expect(introspect.keys).not.toContain(forbidden);
+        }
+        expect(introspect.keys).toContain('locks');
+        expect(introspect.keys).toContain('trivium');
+        expect(introspect.keys).toContain('sql');
     });
 });
 

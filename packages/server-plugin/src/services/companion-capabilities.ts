@@ -31,6 +31,7 @@ import { MAX_SQL_BATCH_STATEMENTS } from '../constants.js';
 import { resolvePrivateSqlDatabasePath } from '../store/authority-paths.js';
 import type { AuditService } from './audit-service.js';
 import type { CoreService } from './core-service.js';
+import type { LockService } from './lock-service.js';
 import type { PermissionService } from './permission-service.js';
 import type { TriviumService } from './trivium-service.js';
 import type { SessionRecord, UserContext } from '../types.js';
@@ -82,6 +83,15 @@ import {
  * Phase A scope: Trivium plus a generic SQL capability (`ctx.sql`) that
  * delegates to the host's CoreService SQL methods. SQL/blob/fs/jobs/events
  * wrappers beyond SQL are separate future work per the design doc.
+ *
+ * Phase B scope: a generic in-process locks capability (`ctx.locks`) that
+ * delegates to the host's `LockService`. Companion modules use it to
+ * serialize per-resource work (e.g. per-chat graph commits) so two
+ * concurrent transactions targeting the same resource cannot interleave
+ * their reads and writes. Locks are per-process only; they are NOT
+ * crash-durable and NOT cross-process. Phase C idempotency provides
+ * durability across crashes; `ctx.locks` provides in-process concurrency
+ * safety only.
  */
 export interface CompanionTriviumCapability {
     /**
@@ -537,6 +547,131 @@ function clampSqlPage(page: CursorPageRequest): CursorPageRequest {
 
 /** Server-side cap on `query` page.limit. Matches the route-layer cap. */
 const MAX_COMPANION_SQL_QUERY_PAGE_LIMIT = 1000;
+
+/**
+ * Default `withLock` timeout (30 s) when the caller does not supply one.
+ * Prevents a companion module from holding a lock forever due to a logic
+ * bug or unhandled hang; the timeout throws `lock_timeout` so the caller
+ * can surface a structured error and the next waiter can proceed.
+ */
+const DEFAULT_COMPANION_LOCK_TIMEOUT_MS = 30_000;
+
+/**
+ * Hard upper bound on `withLock` timeout (5 min). Companion modules
+ * cannot request a longer timeout; values above this cap are clamped
+ * down so a buggy or hostile module cannot block the lock for the
+ * entire server lifetime.
+ */
+const MAX_COMPANION_LOCK_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Phase B generic in-process locks wrapper exposed on the companion
+ * transaction ctx as `ctx.locks`.
+ *
+ * Boundary contract (non-negotiable):
+ *
+ * - The wrapper auto-prefixes `scope` with `ownerExtensionId` so two
+ *   companion modules that happen to pick the same `scope` string (e.g.
+ *   'chat:123') do NOT interfere with each other. The full lock scopeKey
+ *   is `${ownerExtensionId}:${scope}`.
+ * - The wrapper applies a default `timeoutMs` of 30 s when the caller
+ *   omits it, and clamps any caller-supplied `timeoutMs` to a hard cap
+ *   of 5 min. This prevents a buggy or hostile companion module from
+ *   holding a lock indefinitely or requesting an unbounded wait.
+ * - The wrapper validates `scope` is a non-empty string and throws
+ *   `AuthorityServiceError(400, 'validation_error', 'validation', ...)`
+ *   otherwise. Empty/whitespace scope is rejected because an empty
+ *   scopeKey would collide across all callers within the same owner.
+ * - The wrapper exposes only `withLock`. No raw `LockService` is
+ *   exposed; companion code cannot reach the underlying `locks` Map or
+ *   any other LockService internals.
+ * - The wrapper does not add business-specific methods. DOA stays
+ *   generic; the wrapper is a reusable locks capability for companion
+ *   modules. In particular there is no convenience method for per-chat
+ *   locking; companion modules build their own scope string (e.g.
+ *   `chat:${chatId}`) and pass it to `withLock`.
+ * - Per-process only. NOT crash-durable. NOT cross-process. Single-process
+ *   ST server invariant. Idempotency (Phase C) provides durability across
+ *   crashes; this wrapper provides in-process concurrency safety only.
+ * - No nested acquisition detection. Acquiring the same `scope`
+ *   nestedly from the same async context WILL deadlock. Companion
+ *   modules must not do this.
+ */
+export interface CompanionLocksCapability {
+    /**
+     * Serialize `fn` against all other `withLock` calls for the same
+     * `scope` (auto-prefixed with `ownerExtensionId`). The lock is
+     * acquired after all prior waiters for this scope finish (success
+     * or failure), held while `fn` runs, and released in a `finally`
+     * block when `fn` settles.
+     *
+     * If `options.timeoutMs` is provided it overrides the 30 s default
+     * and is clamped to a 5 min hard cap. If the lock cannot be
+     * acquired within the timeout, throws
+     * `AuthorityServiceError(408, 'lock_timeout', 'concurrency', { scopeKey, timeoutMs })`
+     * where `scopeKey` is the auto-prefixed `${ownerExtensionId}:${scope}`.
+     *
+     * If `fn` throws, the error propagates to the caller; the lock is
+     * still released.
+     */
+    withLock<T>(scope: string, options: { timeoutMs?: number }, fn: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Build a {@link CompanionLocksCapability} bound to a specific companion
+ * module's owner extension id. The wrapper captures `ownerExtensionId`
+ * at build time so companion code cannot override the auto-prefixing or
+ * acquire locks in another extension's namespace.
+ *
+ * @param lockService      The host's LockService. NOT exposed on the
+ *                         returned wrapper; only `withLock` delegates
+ *                         to it.
+ * @param ownerExtensionId The companion module's owner extension id.
+ *                         This is the extension that shipped the
+ *                         `.authority/server.cjs` being activated, NOT
+ *                         the caller extension id from
+ *                         `session.extension.id`. The wrapper uses this
+ *                         id to prefix lock scopeKeys so two companion
+ *                         modules cannot interfere with each other.
+ */
+export function buildCompanionLocksCapability(
+    lockService: LockService,
+    ownerExtensionId: string,
+): CompanionLocksCapability {
+    return {
+        async withLock<T>(scope: string, options: { timeoutMs?: number }, fn: () => Promise<T>): Promise<T> {
+            // Validate scope is a non-empty string. An empty scopeKey
+            // would collide across all callers within the same owner;
+            // reject up front rather than silently allowing the collision.
+            if (typeof scope !== 'string' || scope.trim() === '') {
+                throw new AuthorityServiceError(
+                    `companion ctx.locks.withLock requires a non-empty scope string`,
+                    400,
+                    'validation_error',
+                    'validation',
+                    { ownerExtensionId, scope },
+                );
+            }
+            // Auto-prefix with ownerExtensionId so two companion modules
+            // that pick the same scope string do not interfere. The full
+            // scopeKey passed to the underlying LockService is
+            // `${ownerExtensionId}:${scope}`.
+            const scopeKey = `${ownerExtensionId}:${scope}`;
+            // Default to 30 s; clamp any caller-supplied value to the
+            // 5 min hard cap. A non-positive caller-supplied timeout is
+            // treated as "use the default" rather than "no timeout" so a
+            // buggy module cannot accidentally disable the safety net.
+            const callerTimeout = options.timeoutMs;
+            const effectiveTimeoutMs
+                = typeof callerTimeout === 'number'
+                && Number.isFinite(callerTimeout)
+                && callerTimeout > 0
+                    ? Math.min(callerTimeout, MAX_COMPANION_LOCK_TIMEOUT_MS)
+                    : DEFAULT_COMPANION_LOCK_TIMEOUT_MS;
+            return await lockService.withLock(scopeKey, { timeoutMs: effectiveTimeoutMs }, fn);
+        },
+    };
+}
 
 // Suppress unused-import warnings for type-only imports preserved for the
 // public API surface of this module.

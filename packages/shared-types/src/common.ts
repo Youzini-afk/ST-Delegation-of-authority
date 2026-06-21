@@ -4,7 +4,16 @@ export type InstallType = 'system' | 'local' | 'global';
 
 export type AuthorityLimitSource = 'runtime' | 'policy';
 
-export type AuthorityErrorCategory = 'permission' | 'auth' | 'session' | 'validation' | 'limit' | 'timeout' | 'core' | 'backpressure';
+export type AuthorityErrorCategory =
+    | 'permission'
+    | 'auth'
+    | 'session'
+    | 'validation'
+    | 'limit'
+    | 'timeout'
+    | 'core'
+    | 'backpressure'
+    | 'concurrency';
 
 export type AuthorityErrorCode =
     | 'permission_not_granted'
@@ -17,6 +26,7 @@ export type AuthorityErrorCode =
     | 'limit_exceeded'
     | 'job_queue_full'
     | 'concurrency_limit_exceeded'
+    | 'lock_timeout'
     | 'timeout'
     | 'core_unavailable'
     | 'core_request_failed';

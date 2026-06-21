@@ -8,6 +8,7 @@ import { ExtensionService } from './services/extension-service.js';
 import { HttpService } from './services/http-service.js';
 import { InstallService } from './services/install-service.js';
 import { JobService } from './services/job-service.js';
+import { LockService } from './services/lock-service.js';
 import { ModuleDiscoveryService } from './services/module-discovery-service.js';
 import { ModuleHostService } from './services/module-host-service.js';
 import { NativeMigrationService } from './services/native-migration-service.js';
@@ -42,6 +43,14 @@ export interface AuthorityRuntime {
     modules: ModuleHostService;
     moduleDiscovery: ModuleDiscoveryService;
     /**
+     * Phase B in-process lock service. Per-process only; NOT crash-durable;
+     * NOT cross-process. Companion modules reach it through the
+     * `ctx.locks` wrapper which auto-prefixes scope with the owner
+     * extension id; this field exposes the raw service for host-internal
+     * callers (none at present) and for tests.
+     */
+    locks: LockService;
+    /**
      * Phase 2 loader for companion authority modules. Loads
      * `.authority/server.cjs` for valid discovered records at startup and
      * re-registers their handlers with {@link modules} using the companion
@@ -71,7 +80,8 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const adminPackages = new AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     const moduleDiscovery = new ModuleDiscoveryService(install);
-    const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core);
+    const locks = new LockService();
+    const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks);
 
     return {
         adminPackages,
@@ -94,6 +104,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         nativeMigrations,
         modules,
         moduleDiscovery,
+        locks,
         companionLoader,
     };
 }
