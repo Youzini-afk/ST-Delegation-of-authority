@@ -14,9 +14,11 @@ import type {
 import { AUTHORITY_MODULE_PROTOCOL_VERSION } from '../constants.js';
 import type { AuditService } from './audit-service.js';
 import {
+    buildCompanionIdempotencyCapability,
     buildCompanionLocksCapability,
     buildCompanionSqlCapability,
     buildCompanionTriviumCapability,
+    type CompanionIdempotencyCapability,
     type CompanionLocksCapability,
     type CompanionSqlCapability,
     type CompanionTriviumCapability,
@@ -34,6 +36,7 @@ import { revalidateLoadCandidate, type CompanionModuleLoadCandidate } from './mo
 import type { ModuleDiscoveryResult } from './module-discovery-service.js';
 import type { ModuleHostService, ModuleTransactionHandler, ModuleTransactionHandlerResult } from './module-host-service.js';
 import type { CoreService } from './core-service.js';
+import type { IdempotencyService } from './idempotency-service.js';
 import type { LockService } from './lock-service.js';
 import type { TriviumService } from './trivium-service.js';
 import type { SessionRecord, UserContext } from '../types.js';
@@ -111,6 +114,7 @@ export class CompanionModuleLoaderService {
         private readonly trivium: TriviumService,
         private readonly core: CoreService,
         private readonly lockService: LockService,
+        private readonly idempotencyService: IdempotencyService,
         options: CompanionModuleLoaderServiceOptions = {},
     ) {
         this.runtimeRequire = resolveRuntimeRequire();
@@ -281,7 +285,7 @@ export class CompanionModuleLoaderService {
                     severity: 'error',
                 });
             }
-            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.lockService, this.logger);
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.lockService, this.idempotencyService, this.logger);
         }
 
         try {
@@ -382,8 +386,8 @@ export type CompanionTransactionHandler = (
 ) => Promise<ModuleTransactionHandlerResult>;
 
 /**
- * Phase 3 + Phase A + Phase B safe transaction context for companion module
- * handlers.
+ * Phase 3 + Phase A + Phase B + Phase C safe transaction context for
+ * companion module handlers.
  *
  * This is intentionally distinct from the existing {@link ModuleTransactionContext}
  * which carries raw `trivium`, `storage`, `files`, `jobs`, `events` services.
@@ -408,6 +412,14 @@ export type CompanionTransactionHandler = (
  *   lock scope with `ownerExtensionId` so two companion modules cannot
  *   interfere. Per-process only; NOT crash-durable; NOT cross-process.
  *   Idempotency (Phase C) provides durability across crashes.
+ * - `idempotency`: Phase C durable-ish idempotency replay wrapper.
+ *   Auto-prefixes the caller-supplied key with `ownerExtensionId` so
+ *   two companion modules that pick the same idempotency key do not
+ *   collide. Only successful results are cached; errors propagate
+ *   without caching. Per-process NO singleflight — companion modules
+ *   compose `ctx.locks.withLock` and `ctx.idempotency.run` themselves
+ *   when they need both in-process serialization AND cross-restart
+ *   replay.
  *
  * Raw SQL/fs/blob/jobs/events/runtime/core access is intentionally absent;
  * scoped wrappers are separate future work. The `trivium` wrapper is the
@@ -417,7 +429,10 @@ export type CompanionTransactionHandler = (
  * `sql` wrapper is added in Phase A for companion modules that need
  * server-side SQL work. The `locks` wrapper is added in Phase B for
  * companion modules that need to serialize per-resource work (e.g.
- * per-chat graph commits).
+ * per-chat graph commits). The `idempotency` wrapper is added in Phase C
+ * for companion modules that need durable-ish replay across restarts
+ * (e.g. to suppress duplicate side effects when a caller retries a
+ * successful request the caller believes may not have committed).
  */
 export interface CompanionModuleTransactionContext {
     moduleId: string;
@@ -463,6 +478,18 @@ export interface CompanionModuleTransactionContext {
      * crashes.
      */
     locks: CompanionLocksCapability;
+    /**
+     * Phase C durable-ish idempotency replay wrapper. Auto-prefixes the
+     * caller-supplied key with `ownerExtensionId` so two companion
+     * modules that pick the same idempotency key do not collide.
+     * Exposes only `run`, `lookup`, `record`; no raw
+     * `IdempotencyService` is exposed. Only successful results are
+     * cached (never errors). Defaults `ttlMs` to 24 h and clamps to a
+     * 7 d hard cap. NO in-process singleflight: two concurrent `run`
+     * calls with the same key both execute `fn`; companion modules
+     * compose `ctx.locks.withLock` for in-process serialization.
+     */
+    idempotency: CompanionIdempotencyCapability;
 }
 
 /**
@@ -587,6 +614,7 @@ function buildCompanionHandler(
     trivium: TriviumService,
     core: CoreService,
     lockService: LockService,
+    idempotencyService: IdempotencyService,
     logger: LoaderLogger,
 ): ModuleTransactionHandler {
     const companionHandler = registration.definition.handler;
@@ -664,6 +692,22 @@ function buildCompanionHandler(
             candidate.ownerExtensionId,
         );
 
+        // Phase C: build the durable-ish idempotency replay wrapper bound
+        // to the companion module's owner extension id and the calling
+        // user. The wrapper auto-prefixes the caller-supplied key with
+        // `ownerExtensionId` so two companion modules that pick the same
+        // idempotency key do not collide. The wrapper applies a 24 h
+        // default TTL and clamps to a 7 d hard cap. Only successful results
+        // are cached; errors propagate without caching. No raw
+        // IdempotencyService is exposed; companion code cannot reach the
+        // underlying `storage` handle or the un-prefixed `getRecord`/`record`
+        // methods.
+        const idempotencyCapability = buildCompanionIdempotencyCapability(
+            idempotencyService,
+            user,
+            candidate.ownerExtensionId,
+        );
+
         const companionCtx: CompanionModuleTransactionContext = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
@@ -680,6 +724,7 @@ function buildCompanionHandler(
             trivium: triviumCapability,
             sql: sqlCapability,
             locks: locksCapability,
+            idempotency: idempotencyCapability,
         };
 
         // Phase 3: the host's execute() owns timeout enforcement and the

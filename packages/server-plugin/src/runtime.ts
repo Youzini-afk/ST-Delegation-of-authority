@@ -6,6 +6,7 @@ import { CoreService } from './services/core-service.js';
 import { DataTransferService } from './services/data-transfer-service.js';
 import { ExtensionService } from './services/extension-service.js';
 import { HttpService } from './services/http-service.js';
+import { IdempotencyService } from './services/idempotency-service.js';
 import { InstallService } from './services/install-service.js';
 import { JobService } from './services/job-service.js';
 import { LockService } from './services/lock-service.js';
@@ -51,6 +52,15 @@ export interface AuthorityRuntime {
      */
     locks: LockService;
     /**
+     * Phase C durable-ish idempotency service. Backed by
+     * {@link storage} KV (per-extension sqlite). Companion modules reach
+     * it through the `ctx.idempotency` wrapper which auto-prefixes the
+     * caller-supplied key with the owner extension id and clamps TTL to
+     * a 7 d hard cap; this field exposes the raw service for host-internal
+     * callers (none at present) and for tests.
+     */
+    idempotency: IdempotencyService;
+    /**
      * Phase 2 loader for companion authority modules. Loads
      * `.authority/server.cjs` for valid discovered records at startup and
      * re-registers their handlers with {@link modules} using the companion
@@ -81,7 +91,8 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     const moduleDiscovery = new ModuleDiscoveryService(install);
     const locks = new LockService();
-    const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks);
+    const idempotency = new IdempotencyService(storage);
+    const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
 
     return {
         adminPackages,
@@ -105,6 +116,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         modules,
         moduleDiscovery,
         locks,
+        idempotency,
         companionLoader,
     };
 }

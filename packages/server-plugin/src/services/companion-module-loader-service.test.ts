@@ -15,12 +15,13 @@ import { ModuleHostService } from './module-host-service.js';
 import { PermissionService } from './permission-service.js';
 import { PolicyService } from './policy-service.js';
 import { InstallService } from './install-service.js';
+import { IdempotencyService } from './idempotency-service.js';
+import { StorageService } from './storage-service.js';
 import { AuthorityServiceError } from '../utils.js';
 import type { AuthorityModuleManifest } from '@stdo/shared-types';
 import type { AuditService } from './audit-service.js';
 import type { JobService } from './job-service.js';
 import type { PrivateFsService } from './private-fs-service.js';
-import type { StorageService } from './storage-service.js';
 import { TriviumService } from './trivium-service.js';
 import { LockService } from './lock-service.js';
 import type { SseBroker } from '../events/sse-broker.js';
@@ -66,6 +67,11 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 
 function createMockCore(): CoreServiceType {
     const grants = new Map<string, StoredGrantEntry>();
+    // Phase C: in-memory KV store keyed by dbPath, mirroring the mock
+    // pattern from storage-service.test.ts. Used by the real
+    // IdempotencyService + real StorageService when the wrapper-level
+    // tests exercise `ctx.idempotency`.
+    const kvStores = new Map<string, Map<string, unknown>>();
     let policies: PoliciesState = {
         defaults: {} as PoliciesState['defaults'],
         extensions: {},
@@ -143,6 +149,26 @@ function createMockCore(): CoreServiceType {
             };
             return policies;
         },
+        // Phase C: KV stubs back the real StorageService + IdempotencyService.
+        async getStorageKv(dbPath: string, request: { key: string }) {
+            const store = kvStores.get(dbPath) ?? new Map<string, unknown>();
+            kvStores.set(dbPath, store);
+            return store.get(request.key);
+        },
+        async setStorageKv(dbPath: string, request: { key: string; value: unknown }) {
+            const store = kvStores.get(dbPath) ?? new Map<string, unknown>();
+            kvStores.set(dbPath, store);
+            store.set(request.key, request.value);
+        },
+        async deleteStorageKv(dbPath: string, request: { key: string }) {
+            const store = kvStores.get(dbPath);
+            store?.delete(request.key);
+        },
+        async listStorageKv(dbPath: string) {
+            const store = kvStores.get(dbPath) ?? new Map<string, unknown>();
+            kvStores.set(dbPath, store);
+            return Object.fromEntries(store.entries());
+        },
         querySql: querySqlStub,
         execSql: execSqlStub,
         transactionSql: transactionSqlStub,
@@ -193,10 +219,19 @@ function createRuntime(core: CoreServiceType = createMockCore(), trivium?: Trivi
     trivium: TriviumService;
     core: CoreServiceType;
     locks: LockService;
+    storage: StorageService;
+    idempotency: IdempotencyService;
 } {
     const permissions = new PermissionService(new PolicyService(core), core);
     const audit = createMockAudit();
     const triviumService = trivium ?? new TriviumService(core);
+    // Phase C: real StorageService + real IdempotencyService backed by the
+    // mock core's in-memory KV stubs. Wrapper-level tests exercise the
+    // `ctx.idempotency` capability end-to-end through a companion module
+    // (with mock storage); direct unit tests for IdempotencyService live
+    // in idempotency-service.test.ts.
+    const storage = new StorageService(core);
+    const idempotency = new IdempotencyService(storage);
     const modules = new ModuleHostService(
         permissions,
         audit,
@@ -207,11 +242,20 @@ function createRuntime(core: CoreServiceType = createMockCore(), trivium?: Trivi
         {} as SseBroker,
     );
     const locks = new LockService();
-    const loader = new CompanionModuleLoaderService(modules, permissions, audit, triviumService, core, locks, {
-        logger: silentLogger as unknown as Console,
-        activationTimeoutMs: 2000,
-    });
-    return { permissions, audit, modules, loader, trivium: triviumService, core, locks };
+    const loader = new CompanionModuleLoaderService(
+        modules,
+        permissions,
+        audit,
+        triviumService,
+        core,
+        locks,
+        idempotency,
+        {
+            logger: silentLogger as unknown as Console,
+            activationTimeoutMs: 2000,
+        },
+    );
+    return { permissions, audit, modules, loader, trivium: triviumService, core, locks, storage, idempotency };
 }
 
 interface WriteModuleOptions {
@@ -3029,6 +3073,462 @@ describe('CompanionModuleLoaderService Phase B locks wrapper', () => {
         expect(introspect.keys).toContain('locks');
         expect(introspect.keys).toContain('trivium');
         expect(introspect.keys).toContain('sql');
+    });
+});
+
+describe('CompanionModuleLoaderService Phase C idempotency wrapper', () => {
+    afterEach(() => {
+        while (cleanupDirs.length > 0) {
+            const dir = cleanupDirs.pop();
+            if (dir) {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    function createIdempotencyFixture(): { fixture: Fixture; runtime: ReturnType<typeof createRuntime> } {
+        const fixture = createFixture();
+        const extensionDir = path.join(fixture.thirdPartyRoot, 'idem-extension');
+        fs.mkdirSync(extensionDir, { recursive: true });
+        writeModule(extensionDir, {
+            serverCjsContent: `
+                module.exports.activate = async function activate(ctx) {
+                    ctx.registerTransaction('task.run', {
+                        handler: async (txCtx, input) => {
+                            const op = input?.op ?? 'run';
+                            const key = input?.key ?? 'chat:123';
+                            const fingerprint = input?.fingerprint ?? 'fp-v1';
+                            const ttlMs = input?.ttlMs;
+                            const options = ttlMs === undefined ? {} : { ttlMs };
+                            if (op === 'run') {
+                                try {
+                                    const result = await txCtx.idempotency.run(key, fingerprint, async () => {
+                                        // Allow tests to make fn reject so the
+                                        // wrapper-level error-propagation path
+                                        // is exercised end-to-end through the
+                                        // ctx.idempotency capability. The
+                                        // rejection propagates through run to
+                                        // this catch block (and to the host if
+                                        // the caller does not catch).
+                                        if (input?.throw) {
+                                            throw new Error(input?.throwMessage ?? 'fail');
+                                        }
+                                        const value = input?.value ?? { ok: true, n: 1 };
+                                        if (input?.delay) {
+                                            await new Promise(r => setTimeout(r, input.delay));
+                                        }
+                                        return value;
+                                    }, options);
+                                    return { result: { op, key, ok: true, cached: false, value: result } };
+                                } catch (e) {
+                                    // The host JSON validator rejects
+                                    // undefined property values, so the
+                                    // structured AuthorityServiceError fields
+                                    // are only included when the caught error
+                                    // actually carries them. A plain Error
+                                    // (e.g. new Error('fail')) only
+                                    // populates errorName/errorMessage.
+                                    const errorResult = {
+                                        op,
+                                        key,
+                                        ok: false,
+                                        errorName: e instanceof Error ? e.name : (e?.name ?? 'Error'),
+                                        errorMessage: String(e?.message ?? e),
+                                    };
+                                    if (e?.status !== undefined) {
+                                        errorResult.errorStatus = e.status;
+                                    }
+                                    if (e?.code !== undefined) {
+                                        errorResult.errorCode = e.code;
+                                    }
+                                    if (e?.category !== undefined) {
+                                        errorResult.errorCategory = e.category;
+                                    }
+                                    if (e?.details !== undefined) {
+                                        errorResult.errorDetails = e.details;
+                                    }
+                                    return { result: errorResult };
+                                }
+                            }
+                            if (op === 'run-count') {
+                                // Exposes a counter so the test can assert whether
+                                // fn was actually called. The counter persists
+                                // across calls within the same module instance.
+                                if (!module.exports.__count) {
+                                    module.exports.__count = 0;
+                                }
+                                const result = await txCtx.idempotency.run(key, fingerprint, async () => {
+                                    module.exports.__count += 1;
+                                    return { count: module.exports.__count };
+                                }, options);
+                                return { result: { op, key, ok: true, value: result } };
+                            }
+                            if (op === 'lookup') {
+                                const record = await txCtx.idempotency.lookup(key);
+                                return {
+                                    result: {
+                                        op,
+                                        key,
+                                        found: record !== null,
+                                        fingerprint: record?.fingerprint ?? null,
+                                        responseJson: record?.responseJson ?? null,
+                                    },
+                                };
+                            }
+                            if (op === 'record') {
+                                await txCtx.idempotency.record(key, fingerprint, input?.value ?? { ok: true }, options);
+                                return { result: { op, key, ok: true } };
+                            }
+                            if (op === 'empty-key') {
+                                try {
+                                    await txCtx.idempotency.run('', fingerprint, async () => 'never', options);
+                                    return { result: { op, threw: false } };
+                                } catch (e) {
+                                    return {
+                                        result: {
+                                            op,
+                                            threw: true,
+                                            errorMessage: String(e?.message ?? e),
+                                            errorStatus: e?.status,
+                                            errorCode: e?.code,
+                                            errorCategory: e?.category,
+                                        },
+                                    };
+                                }
+                            }
+                            if (op === 'whitespace-key') {
+                                try {
+                                    await txCtx.idempotency.run('   ', fingerprint, async () => 'never', options);
+                                    return { result: { op, threw: false } };
+                                } catch (e) {
+                                    return {
+                                        result: {
+                                            op,
+                                            threw: true,
+                                            errorMessage: String(e?.message ?? e),
+                                            errorStatus: e?.status,
+                                            errorCode: e?.code,
+                                            errorCategory: e?.category,
+                                        },
+                                    };
+                                }
+                            }
+                            if (op === 'introspect') {
+                                return {
+                                    result: {
+                                        op,
+                                        keys: Object.keys(txCtx).sort(),
+                                        hasIdempotencyWrapper: typeof txCtx.idempotency?.run === 'function',
+                                        hasLookup: typeof txCtx.idempotency?.lookup === 'function',
+                                        hasRecord: typeof txCtx.idempotency?.record === 'function',
+                                        idempotencyIsRawService: typeof (txCtx.idempotency)?.storage !== 'undefined' || typeof (txCtx.idempotency)?.getRecord !== 'undefined',
+                                    },
+                                };
+                            }
+                            return { result: { op: 'unknown' } };
+                        },
+                    });
+                };
+            `,
+        });
+        const discovery = createDiscovery(fixture);
+        const result = discovery.discover();
+        const runtime = createRuntime();
+        runtime.modules.registerDiscoveredRecords(result.records);
+        return { fixture, runtime };
+    }
+
+    async function loadAndExecuteIdem(
+        fixture: Fixture,
+        runtime: ReturnType<typeof createRuntime>,
+        input: unknown,
+    ): Promise<unknown> {
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const response = await runtime.modules.execute(user, session, 'third-party.idem-extension', 'task.run', { input });
+        return response.result;
+    }
+
+    it('exposes ctx.idempotency wrapper with run/lookup/record; raw IdempotencyService absent', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        const result = await loadAndExecuteIdem(fixture, runtime, { op: 'introspect' });
+        const introspect = result as {
+            keys: string[];
+            hasIdempotencyWrapper: boolean;
+            hasLookup: boolean;
+            hasRecord: boolean;
+            idempotencyIsRawService: boolean;
+        };
+        // Phase C: idempotency wrapper IS present on the companion ctx.
+        expect(introspect.hasIdempotencyWrapper).toBe(true);
+        expect(introspect.hasLookup).toBe(true);
+        expect(introspect.hasRecord).toBe(true);
+        // The wrapper must NOT expose raw IdempotencyService internals
+        // (no `storage` field, no `getRecord` method that bypasses the
+        // auto-prefixing).
+        expect(introspect.idempotencyIsRawService).toBe(false);
+        // The wrapper is registered under the `idempotency` field.
+        expect(introspect.keys).toContain('idempotency');
+        // Raw services MUST still be absent.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'fs', 'blob', 'user', 'session']) {
+            expect(introspect.keys).not.toContain(forbidden);
+        }
+    });
+
+    it('auto-prefixes key with ownerExtensionId so two modules do not collide', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        // Spy on the underlying StorageService.setKv to capture the KV
+        // key passed by the wrapper through the service. The wrapper
+        // prefixes the caller-supplied key with `ownerExtensionId` and
+        // the service prefixes with `idempotency:` + `ownerExtensionId`
+        // (defense-in-depth on top of the per-extension sqlite scoping).
+        const setKvSpy = vi.spyOn(runtime.storage, 'setKv');
+        await loadAndExecuteIdem(fixture, runtime, { op: 'run', key: 'chat:42', value: { ok: true } });
+        expect(setKvSpy).toHaveBeenCalled();
+        // The third argument is the KV key. It MUST be prefixed with
+        // `idempotency:` and the owner extension id.
+        const kvKey = setKvSpy.mock.calls[0]?.[2] as string;
+        expect(kvKey).toBe('idempotency:third-party/idem-extension:third-party/idem-extension:chat:42');
+        // And must NOT be the raw caller-supplied key.
+        expect(kvKey).not.toBe('chat:42');
+    });
+
+    it('empty key throws 400 validation_error', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        const result = await loadAndExecuteIdem(fixture, runtime, { op: 'empty-key' });
+        const empty = result as { threw: boolean; errorStatus: number; errorCode: string; errorCategory: string; errorMessage: string };
+        expect(empty.threw).toBe(true);
+        expect(empty.errorStatus).toBe(400);
+        expect(empty.errorCode).toBe('validation_error');
+        expect(empty.errorCategory).toBe('validation');
+        expect(empty.errorMessage).toMatch(/non-empty key/);
+    });
+
+    it('whitespace-only key throws 400 validation_error', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        const result = await loadAndExecuteIdem(fixture, runtime, { op: 'whitespace-key' });
+        const ws = result as { threw: boolean; errorStatus: number; errorCode: string };
+        expect(ws.threw).toBe(true);
+        expect(ws.errorStatus).toBe(400);
+        expect(ws.errorCode).toBe('validation_error');
+    });
+
+    it('clamps ttlMs to the 7 d hard cap when caller requests more', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        const setKvSpy = vi.spyOn(runtime.storage, 'setKv');
+        // Request 14 days (well above the 7 d cap).
+        await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:clamp',
+            ttlMs: 14 * 24 * 60 * 60 * 1000,
+            value: { ok: true },
+        });
+        expect(setKvSpy).toHaveBeenCalled();
+        const storedRecord = setKvSpy.mock.calls[0]?.[3] as { expiresAt: number; createdAt: number };
+        // The wrapper clamps to 7 d (604_800_000 ms). The stored expiresAt
+        // must be at most createdAt + 7d.
+        const ttl = storedRecord.expiresAt - storedRecord.createdAt;
+        expect(ttl).toBeLessThanOrEqual(7 * 24 * 60 * 60 * 1000);
+        expect(ttl).toBeLessThan(14 * 24 * 60 * 60 * 1000);
+    });
+
+    it('applies a 24 h default ttlMs when caller omits it', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        const setKvSpy = vi.spyOn(runtime.storage, 'setKv');
+        // No ttlMs supplied.
+        await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:default-ttl',
+            value: { ok: true },
+        });
+        expect(setKvSpy).toHaveBeenCalled();
+        const storedRecord = setKvSpy.mock.calls[0]?.[3] as { expiresAt: number; createdAt: number };
+        // The wrapper applies the 24 h default.
+        const ttl = storedRecord.expiresAt - storedRecord.createdAt;
+        expect(ttl).toBe(24 * 60 * 60 * 1000);
+    });
+
+    it('run caches success and replays on second call with matching fingerprint (fn not called)', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        // Prime the module instance so we can assert call count via the
+        // 'run-count' op. The first call caches the result; the second
+        // call with the same key+fingerprint must return the cached
+        // result without re-executing fn.
+        await loadAndExecuteIdem(fixture, runtime, { op: 'run-count', key: 'chat:counter' });
+        // Reload the entry through Node require to inspect the counter.
+        const candidate = createDiscovery(fixture).discover().internalSources.get('third-party.idem-extension');
+        expect(candidate).toBeDefined();
+        const exported1 = loadCompanionModuleFromDisk(candidate!.entryPath) as { __count?: number };
+        expect(exported1.__count).toBe(1);
+
+        // Second call: same key, same fingerprint. The wrapper must return
+        // the cached result without calling fn.
+        await loadAndExecuteIdem(fixture, runtime, { op: 'run-count', key: 'chat:counter' });
+        const exported2 = loadCompanionModuleFromDisk(candidate!.entryPath) as { __count?: number };
+        // Counter must still be 1: fn was not called the second time.
+        expect(exported2.__count).toBe(1);
+    });
+
+    it('lookup returns the cached record after a successful run', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        // Prime the cache with a known value.
+        await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:lookup',
+            fingerprint: 'fp-A',
+            value: { ok: true, n: 7 },
+        });
+        // Now ask lookup for the same key.
+        const result = await loadAndExecuteIdem(fixture, runtime, {
+            op: 'lookup',
+            key: 'chat:lookup',
+        });
+        const lookup = result as { found: boolean; fingerprint: string | null; responseJson: string | null };
+        expect(lookup.found).toBe(true);
+        expect(lookup.fingerprint).toBe('fp-A');
+        expect(lookup.responseJson).toBe(JSON.stringify({ ok: true, n: 7 }));
+    });
+
+    it('lookup returns not-found (found=false) for an unknown key', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        const result = await loadAndExecuteIdem(fixture, runtime, {
+            op: 'lookup',
+            key: 'never-cached',
+        });
+        const lookup = result as { found: boolean; fingerprint: string | null; responseJson: string | null };
+        expect(lookup.found).toBe(false);
+        expect(lookup.fingerprint).toBeNull();
+        expect(lookup.responseJson).toBeNull();
+    });
+
+    it('record op pre-populates the cache (run replays the pre-populated value)', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        // Pre-populate the cache via the `record` op.
+        await loadAndExecuteIdem(fixture, runtime, {
+            op: 'record',
+            key: 'chat:pre-populated',
+            fingerprint: 'fp-pre',
+            value: { ok: true, source: 'pre-populated' },
+        });
+        // A follow-up `run` with the same key + fingerprint must return
+        // the pre-populated value (NOT execute fn).
+        const result = await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:pre-populated',
+            fingerprint: 'fp-pre',
+            value: { ok: true, source: 'should-not-execute' },
+        });
+        const runResult = result as { ok: boolean; value: { source: string } };
+        expect(runResult.ok).toBe(true);
+        expect(runResult.value.source).toBe('pre-populated');
+    });
+
+    it('run throws idempotency_conflict (409) on fingerprint mismatch', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        // Prime the cache with fingerprint 'fp-v1'.
+        await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:conflict',
+            fingerprint: 'fp-v1',
+            value: { ok: true, v: 1 },
+        });
+        // Second call with a different fingerprint under the SAME key must
+        // surface a structured 409 concurrency conflict. The wrapper-level
+        // handler catches the error and returns it as a result so the test
+        // can inspect the structured fields.
+        const result = await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:conflict',
+            fingerprint: 'fp-v2',
+            value: { ok: true, v: 2 },
+        });
+        const conflict = result as {
+            ok: boolean;
+            errorStatus: number;
+            errorCode: string;
+            errorCategory: string;
+            errorDetails?: { key: string; expectedFingerprint: string; actualFingerprint: string };
+            errorMessage: string;
+        };
+        expect(conflict.ok).toBe(false);
+        expect(conflict.errorStatus).toBe(409);
+        expect(conflict.errorCode).toBe('idempotency_conflict');
+        expect(conflict.errorCategory).toBe('concurrency');
+        expect(conflict.errorDetails).toBeDefined();
+        // The wrapper auto-prefixes the key with ownerExtensionId, so
+        // the `key` field in the details reflects the prefixed form.
+        expect(conflict.errorDetails?.key).toBe('third-party/idem-extension:chat:conflict');
+        expect(conflict.errorDetails?.expectedFingerprint).toBe('fp-v2');
+        expect(conflict.errorDetails?.actualFingerprint).toBe('fp-v1');
+    });
+
+    it('raw IdempotencyService is absent from the companion ctx (no escape hatch)', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        const result = await loadAndExecuteIdem(fixture, runtime, { op: 'introspect' });
+        const introspect = result as { keys: string[]; idempotencyIsRawService: boolean };
+        // Phase C: 'idempotency' is present as a SAFE WRAPPER (not the raw
+        // IdempotencyService), so it is excluded from the forbidden list.
+        // 'trivium', 'sql', and 'locks' are also safe wrappers from Phases 2/A/B.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'fs', 'blob', 'user', 'session']) {
+            expect(introspect.keys).not.toContain(forbidden);
+        }
+        expect(introspect.keys).toContain('idempotency');
+        expect(introspect.keys).toContain('trivium');
+        expect(introspect.keys).toContain('sql');
+        expect(introspect.keys).toContain('locks');
+        expect(introspect.idempotencyIsRawService).toBe(false);
+        void runtime; // suppress unused-var warning
+    });
+
+    it('fn error propagates to the caller and is NOT cached', async () => {
+        const { fixture, runtime } = createIdempotencyFixture();
+        // Regression: the previous version of this test did NOT
+        // actually exercise the error path through `ctx.idempotency`.
+        // It primed the cache with a successful value and then
+        // verified the cache replayed on retry — the OPPOSITE of
+        // "NOT cached". This version actually calls
+        // `ctx.idempotency.run(key, fingerprint, fn)` with an `fn`
+        // that rejects, asserts the rejection propagates through
+        // `run` to the handler (the handler catches it and surfaces
+        // the error in the result), and then asserts
+        // `ctx.idempotency.lookup(key)` returns null (not cached).
+        const result1 = await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:err-not-cached',
+            fingerprint: 'fp-err',
+            throw: true,
+            throwMessage: 'fail',
+        });
+        const errResult = result1 as { ok: boolean; errorMessage: string; errorName?: string };
+        // The rejection from fn MUST propagate through `run` to the
+        // handler's catch block; the result carries the error info.
+        expect(errResult.ok).toBe(false);
+        expect(errResult.errorMessage).toBe('fail');
+        expect(errResult.errorName).toBe('Error');
+        // The cache MUST be empty: errors are never cached. Verify
+        // via the `lookup` op (which delegates to
+        // `ctx.idempotency.lookup(key)`).
+        const lookupResult = await loadAndExecuteIdem(fixture, runtime, {
+            op: 'lookup',
+            key: 'chat:err-not-cached',
+        });
+        const lookup = lookupResult as { found: boolean; fingerprint: string | null; responseJson: string | null };
+        expect(lookup.found).toBe(false);
+        expect(lookup.fingerprint).toBeNull();
+        expect(lookup.responseJson).toBeNull();
+        // A follow-up `run` with the same key + fingerprint MUST
+        // re-execute fn (no cached replay). Use a successful value to
+        // prove fn was actually invoked this time.
+        const result2 = await loadAndExecuteIdem(fixture, runtime, {
+            op: 'run',
+            key: 'chat:err-not-cached',
+            fingerprint: 'fp-err',
+            value: { ok: true, source: 'after-error' },
+        });
+        const runResult2 = result2 as { ok: boolean; value: { source: string } };
+        expect(runResult2.ok).toBe(true);
+        expect(runResult2.value.source).toBe('after-error');
     });
 });
 

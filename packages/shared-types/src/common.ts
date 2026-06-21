@@ -27,6 +27,7 @@ export type AuthorityErrorCode =
     | 'job_queue_full'
     | 'concurrency_limit_exceeded'
     | 'lock_timeout'
+    | 'idempotency_conflict'
     | 'timeout'
     | 'core_unavailable'
     | 'core_request_failed';

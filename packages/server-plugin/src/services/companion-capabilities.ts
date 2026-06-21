@@ -31,6 +31,7 @@ import { MAX_SQL_BATCH_STATEMENTS } from '../constants.js';
 import { resolvePrivateSqlDatabasePath } from '../store/authority-paths.js';
 import type { AuditService } from './audit-service.js';
 import type { CoreService } from './core-service.js';
+import type { IdempotencyRecord, IdempotencyService } from './idempotency-service.js';
 import type { LockService } from './lock-service.js';
 import type { PermissionService } from './permission-service.js';
 import type { TriviumService } from './trivium-service.js';
@@ -671,6 +672,199 @@ export function buildCompanionLocksCapability(
             return await lockService.withLock(scopeKey, { timeoutMs: effectiveTimeoutMs }, fn);
         },
     };
+}
+
+/**
+ * Default `ttlMs` for cached idempotency records (24 h). Prevents the KV
+ * store from growing unboundedly with stale success caches: a record that
+ * has not been retried within 24 h is treated as expired and a future
+ * retry re-executes `fn`. Generous enough to cover caller-side retry
+ * storms; tight enough that the cache does not retain data indefinitely.
+ */
+const DEFAULT_COMPANION_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Hard upper bound on `ttlMs` (7 d). Companion modules cannot request a
+ * longer TTL; values above this cap are clamped down so a buggy or
+ * hostile module cannot pin a cache entry for the entire server lifetime.
+ */
+const MAX_COMPANION_IDEMPOTENCY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Phase C durable-ish idempotency replay wrapper exposed on the companion
+ * transaction ctx as `ctx.idempotency`.
+ *
+ * Boundary contract (non-negotiable):
+ *
+ * - The wrapper auto-prefixes `key` with `ownerExtensionId` so two
+ *   companion modules that happen to pick the same idempotency key
+ *   (e.g. 'chat:123') do NOT collide. The full idempotency key passed
+ *   to the underlying {@link IdempotencyService} is
+ *   `${ownerExtensionId}:${key}`; the service then prefixes it with
+ *   `idempotency:` and `${ownerExtensionId}` again (defense-in-depth on
+ *   top of the per-extension sqlite scoping) so the final KV key is
+ *   `idempotency:${ownerExtensionId}:${ownerExtensionId}:${key}`. The
+ *   double `ownerExtensionId` prefix is intentional: the wrapper-level
+ *   prefix is for cross-companion-module isolation, the service-level
+ *   prefix is for cross-extension isolation within the same per-extension
+ *   KV database.
+ * - The wrapper validates `key` is a non-empty string and throws
+ *   `AuthorityServiceError(400, 'validation_error', 'validation', ...)`
+ *   otherwise. Empty/whitespace key is rejected because an empty key
+ *   would collide across all callers within the same owner.
+ * - The wrapper applies a default `ttlMs` of 24 h when the caller
+ *   omits it, and clamps any caller-supplied `ttlMs` to a 7 d hard cap.
+ *   A non-positive caller-supplied `ttlMs` is treated as "use the
+ *   default" rather than "no TTL" so a buggy module cannot accidentally
+ *   disable cache expiry.
+ * - The wrapper exposes only `run`, `lookup`, `record`. No raw
+ *   `IdempotencyService` is exposed; companion code cannot reach the
+ *   underlying `storage` handle, the `getRecord`/`record` methods
+ *   without the auto-prefix, or any other service internals.
+ * - The wrapper does not add business-specific methods. DOA stays
+ *   generic; the wrapper is a reusable idempotency capability for
+ *   companion modules. In particular there is no convenience method
+ *   like `runWithLock`; companion modules compose `ctx.locks.withLock`
+ *   and `ctx.idempotency.run` themselves when they need both in-process
+ *   serialization AND cross-restart replay.
+ * - Only successful results are cached (never errors, never CAS
+ *   conflicts, never timeouts). See {@link IdempotencyService} for the
+ *   full caching contract including the "lost success cache" window and
+ *   the 128 KiB response cap.
+ * - NO in-process singleflight. Two concurrent `run(...)` calls with the
+ *   same key both execute `fn` and both attempt to cache; the second
+ *   `record(...)` overwrites the first. In-process serialization is the
+ *   responsibility of the `ctx.locks` wrapper (Phase B); the idempotency
+ *   wrapper is for cross-restart replay, not in-process concurrency.
+ */
+export interface CompanionIdempotencyCapability {
+    /**
+     * Idempotent execution with cached replay. Looks up an existing
+     * cached result by `key` (auto-prefixed with `ownerExtensionId`):
+     *
+     * - If a non-expired cached result exists with a MATCHING
+     *   `fingerprint`, returns the cached result without calling `fn`.
+     * - If a non-expired cached result exists with a MISMATCHED
+     *   `fingerprint`, throws
+     *   `AuthorityServiceError(409, 'idempotency_conflict', 'concurrency', { key, expectedFingerprint, actualFingerprint })`.
+     * - Otherwise (no cache, or cache expired), executes `fn`. If `fn`
+     *   resolves successfully, caches the result and returns it. If `fn`
+     *   rejects, propagates the error WITHOUT caching — a retry after
+     *   an error re-executes `fn`.
+     *
+     * `options.ttlMs` defaults to 24 h and is clamped to a 7 d hard cap.
+     * A non-positive `ttlMs` is treated as "use the default".
+     */
+    run<T>(key: string, fingerprint: string, fn: () => Promise<T>, options?: { ttlMs?: number }): Promise<T>;
+
+    /**
+     * Look up the cached record for `key` (auto-prefixed with
+     * `ownerExtensionId`). Returns `null` when no record exists, when
+     * the stored value fails to parse, or when the record has expired.
+     * Exposed so companion modules can inspect the cache for diagnostics
+     * (e.g. to detect a fingerprint mismatch before invoking `run`).
+     */
+    lookup(key: string): Promise<IdempotencyRecord | null>;
+
+    /**
+     * Cache a successful response under `key` (auto-prefixed with
+     * `ownerExtensionId`) with the given `fingerprint`. Exposed so
+     * companion modules can pre-populate the cache when they have an
+     * externally-known success they want to replay under the same key
+     * (e.g. when migrating from an external idempotency store). Responses
+     * larger than 128 KiB are NOT cached; the call is a no-op and a
+     * warning is logged.
+     *
+     * `options.ttlMs` defaults to 24 h and is clamped to a 7 d hard cap.
+     */
+    record(key: string, fingerprint: string, response: unknown, options?: { ttlMs?: number }): Promise<void>;
+}
+
+/**
+ * Build a {@link CompanionIdempotencyCapability} bound to a specific
+ * companion module's owner extension id and calling user. The wrapper
+ * captures `user` and `ownerExtensionId` at build time so companion code
+ * cannot override the extension scoping or write idempotency records
+ * under another user's KV namespace.
+ *
+ * @param idempotencyService The host's IdempotencyService. NOT exposed
+ *                           on the returned wrapper; only `run`,
+ *                           `lookup`, `record` delegate to it.
+ * @param user               The calling user context (from the host's
+ *                           execute ctx). The underlying
+ *                           {@link StorageService.getKv}/{@link StorageService.setKv}
+ *                           require a `UserContext` to resolve the
+ *                           per-user kvDir, so the wrapper captures it
+ *                           at build time (same pattern as the trivium,
+ *                           sql, and audit wrappers).
+ * @param ownerExtensionId   The companion module's owner extension id.
+ *                           This is the extension that shipped the
+ *                           `.authority/server.cjs` being activated,
+ *                           NOT the caller extension id from
+ *                           `session.extension.id`. The wrapper uses
+ *                           this id to prefix the idempotency key so
+ *                           two companion modules cannot collide.
+ */
+export function buildCompanionIdempotencyCapability(
+    idempotencyService: IdempotencyService,
+    user: UserContext,
+    ownerExtensionId: string,
+): CompanionIdempotencyCapability {
+    const resolveTtl = (options: { ttlMs?: number } | undefined): number => {
+        const callerTtl = options?.ttlMs;
+        return typeof callerTtl === 'number'
+            && Number.isFinite(callerTtl)
+            && callerTtl > 0
+            ? Math.min(callerTtl, MAX_COMPANION_IDEMPOTENCY_TTL_MS)
+            : DEFAULT_COMPANION_IDEMPOTENCY_TTL_MS;
+    };
+    return {
+        async run<T>(
+            key: string,
+            fingerprint: string,
+            fn: () => Promise<T>,
+            options?: { ttlMs?: number },
+        ): Promise<T> {
+            const normalizedKey = normalizeIdempotencyKey(key, ownerExtensionId);
+            const ttlMs = resolveTtl(options);
+            return await idempotencyService.run(user, ownerExtensionId, normalizedKey, fingerprint, fn, ttlMs);
+        },
+        async lookup(key: string): Promise<IdempotencyRecord | null> {
+            const normalizedKey = normalizeIdempotencyKey(key, ownerExtensionId);
+            return await idempotencyService.getRecord(user, ownerExtensionId, normalizedKey);
+        },
+        async record(
+            key: string,
+            fingerprint: string,
+            response: unknown,
+            options?: { ttlMs?: number },
+        ): Promise<void> {
+            const normalizedKey = normalizeIdempotencyKey(key, ownerExtensionId);
+            const ttlMs = resolveTtl(options);
+            await idempotencyService.record(user, ownerExtensionId, normalizedKey, fingerprint, response, ttlMs);
+        },
+    };
+}
+
+/**
+ * Validate `key` is a non-empty string and auto-prefix it with
+ * `ownerExtensionId` so two companion modules that pick the same
+ * idempotency key do NOT collide. The full key passed to the underlying
+ * {@link IdempotencyService} is `${ownerExtensionId}:${key}`; the
+ * service then prefixes with `idempotency:` and `${ownerExtensionId}`
+ * again (defense-in-depth on top of the per-extension sqlite scoping).
+ */
+function normalizeIdempotencyKey(key: string, ownerExtensionId: string): string {
+    if (typeof key !== 'string' || key.trim() === '') {
+        throw new AuthorityServiceError(
+            `companion ctx.idempotency requires a non-empty key string`,
+            400,
+            'validation_error',
+            'validation',
+            { ownerExtensionId, key },
+        );
+    }
+    return `${ownerExtensionId}:${key}`;
 }
 
 // Suppress unused-import warnings for type-only imports preserved for the
