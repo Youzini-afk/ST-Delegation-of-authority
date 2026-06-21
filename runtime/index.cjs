@@ -4712,6 +4712,7 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+
 /**
  * Webpack-specific runtime require. When the plugin source is bundled by
  * webpack (target: node), `__non_webpack_require__` resolves to the real Node
@@ -5041,9 +5042,19 @@ function registerCompanionTransaction(registrations, undeclared, manifest, modul
  * safe {@link CompanionModuleTransactionContext} for the companion handler.
  * The raw services that the built-in `ModuleTransactionContext` carries
  * (trivium/storage/files/jobs/events) are intentionally absent here.
+ *
+ * Phase 3: the host's `execute()` owns timeout enforcement centrally AND
+ * owns the AbortController. The host passes `signal` on the raw ctx; this
+ * wrapper propagates that SAME signal onto the companion ctx so companion
+ * handlers see the abort event when the host's timer fires. The host's race
+ * also rejects with `transaction_timeout` independently — the abort is a
+ * cooperative hint, not a force-stop.
  */
 function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, logger) {
     const companionHandler = registration.definition.handler;
+    const transaction = candidate.manifest.transactions[transactionName];
+    const moduleVersion = candidate.manifest.version;
+    const transactionVersion = transaction ? transaction.version : '0.0.0';
     return async (rawCtx, input, request) => {
         // rawCtx is the host's ModuleTransactionContext. We deliberately do
         // NOT forward it to companion code; we build a minimal safe ctx.
@@ -5051,7 +5062,10 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
         const session = rawCtx.session;
         const callerExtensionId = rawCtx.callerExtensionId;
         const requestId = generateRequestId();
-        const abortController = new AbortController();
+        // Phase 3: propagate the host-owned signal so companion handlers see
+        // the same abort event as the host's timeout race. The host created
+        // this controller in execute() and aborts it when the timer fires.
+        const signal = rawCtx.signal;
         const authorize = async (permRequest) => {
             const grant = await permissions.authorize(user, session, permRequest);
             return grant !== null;
@@ -5061,67 +5075,66 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
             logWarning: (message, details) => audit.logWarning(user, candidate.ownerExtensionId, message, details).catch(() => undefined),
             logError: (message, details) => audit.logError(user, candidate.ownerExtensionId, message, details).catch(() => undefined),
         };
+        // Phase 3: expose effective limits as safe metadata only. The host
+        // enforces them centrally; the companion handler can read them to
+        // shape its behavior (e.g. stream large outputs instead of inlining).
+        // Built-in `Infinity`-carrying limits are not exposed here because
+        // this ctx is only built for companion modules.
+        const limits = resolveCompanionLimits(transaction);
         const companionCtx = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
+            moduleVersion,
             transactionName,
+            transactionVersion,
             callerExtensionId,
             requestId,
+            limits,
             logger,
             audit: auditWrapper,
             authorize,
-            signal: abortController.signal,
+            signal,
         };
-        // Apply the manifest's per-transaction timeout (default 120 s, hard
-        // cap 10 min). The timeout races the companion handler so a hung
-        // transaction cannot hold the request forever.
-        const transaction = candidate.manifest.transactions[transactionName];
-        const timeoutMs = resolveTransactionTimeoutMs(transaction);
-        const timeoutPromise = new Promise((_, reject) => {
-            const timer = setTimeout(() => {
-                abortController.abort();
-                reject(new TransactionTimeoutError(candidate.moduleId, transactionName, timeoutMs));
-            }, timeoutMs);
-            if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
-                timer.unref();
-            }
-        });
-        try {
-            const result = await Promise.race([
-                companionHandler(companionCtx, input, request),
-                timeoutPromise,
-            ]);
-            return result;
-        }
-        catch (error) {
-            if (error instanceof TransactionTimeoutError) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(error.message, 504, 'core_request_failed', 'core', { code: 'transaction_timeout', moduleId: candidate.moduleId, transaction: transactionName, timeoutMs });
-            }
-            throw error;
-        }
+        // Phase 3: the host's execute() owns timeout enforcement and the
+        // AbortController. The signal on companionCtx IS the host's signal,
+        // so companion handlers observing `signal.aborted` or
+        // `signal.addEventListener('abort', ...)` see the host's timeout
+        // fire. The host's race also rejects with `transaction_timeout`
+        // independently.
+        return await companionHandler(companionCtx, input, request);
     };
 }
-class TransactionTimeoutError extends Error {
-    constructor(moduleId, transactionName, timeoutMs) {
-        super(`Transaction '${moduleId}/${transactionName}' timed out after ${timeoutMs} ms.`);
-        this.name = 'TransactionTimeoutError';
-    }
-}
 /**
- * Resolve the effective per-transaction timeout for a companion transaction.
- * Falls back to {@link DEFAULT_TRANSACTION_TIMEOUT_MS} when the manifest
- * does not specify one. Capped by {@link MAX_TRANSACTION_TIMEOUT_MS}.
+ * Resolve effective per-transaction limits for a companion handler ctx.
+ * Companion modules always get host defaults (64 MiB / 120 s) capped by the
+ * hard max (256 MiB / 10 min) when the manifest does not declare an explicit
+ * value. These are metadata only; the host's execute() enforces them.
  */
-function resolveTransactionTimeoutMs(transaction) {
-    if (!transaction || typeof transaction.timeoutMs !== 'number' || !Number.isFinite(transaction.timeoutMs) || transaction.timeoutMs <= 0) {
-        return DEFAULT_TRANSACTION_TIMEOUT_MS;
+function resolveCompanionLimits(transaction) {
+    if (!transaction) {
+        return {
+            maxRequestBytes: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_REQUEST_BYTES,
+            maxResponseBytes: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_RESPONSE_BYTES,
+            timeoutMs: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_TIMEOUT_MS,
+            source: 'host_default',
+        };
     }
-    return Math.min(transaction.timeoutMs, MAX_TRANSACTION_TIMEOUT_MS);
+    const maxRequestBytes = transaction.maxRequestBytes !== undefined
+        ? Math.min(transaction.maxRequestBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_MAX_REQUEST_BYTES)
+        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_REQUEST_BYTES;
+    const maxResponseBytes = transaction.maxResponseBytes !== undefined
+        ? Math.min(transaction.maxResponseBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_MAX_RESPONSE_BYTES)
+        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_RESPONSE_BYTES;
+    const timeoutMs = transaction.timeoutMs !== undefined
+        ? Math.min(transaction.timeoutMs, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_MAX_TIMEOUT_MS)
+        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_TIMEOUT_MS;
+    const source = (transaction.maxRequestBytes !== undefined
+        || transaction.maxResponseBytes !== undefined
+        || transaction.timeoutMs !== undefined)
+        ? 'manifest'
+        : 'host_default';
+    return { maxRequestBytes, maxResponseBytes, timeoutMs, source };
 }
-/** Default per-transaction timeout (120 s), aligned with discovery defaults. */
-const DEFAULT_TRANSACTION_TIMEOUT_MS = 120_000;
-/** Hard upper bound on per-transaction timeout (10 min). */
-const MAX_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1000;
 function generateRequestId() {
     try {
         // Prefer crypto.randomUUID when available; fall back to a timestamp.
@@ -8412,30 +8425,332 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   ModuleHostService: () => (/* binding */ ModuleHostService)
 /* harmony export */ });
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TRANSACTION_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 function validateModuleId(moduleId) {
     if (!MODULE_ID_PATTERN.test(moduleId)) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Invalid module id: ${moduleId}`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Invalid module id: ${moduleId}`, 400, 'validation_error', 'validation');
     }
 }
 function validateTransactionName(transactionName) {
     if (transactionName.includes(':')) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
     }
     if (!TRANSACTION_NAME_PATTERN.test(transactionName)) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
     }
 }
 function assertTransactionManifest(module, transactionName) {
     const transaction = module.manifest.transactions[transactionName];
     if (!transaction) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Transaction not found: ${module.manifest.id}/${transactionName}`, 404, 'validation_error', 'validation');
+        return null;
     }
     return transaction;
+}
+/**
+ * Resolve a single limit (bytes or timeout) for a transaction.
+ *
+ * - Built-in modules without an explicit manifest limit return `Infinity` so
+ *   they are not accidentally subject to companion defaults. This preserves
+ *   Phase 1 backward compatibility.
+ * - Companion modules without an explicit manifest limit use the host default
+ *   (e.g. 64 MiB bytes, 120 s timeout).
+ * - Any explicit manifest limit is capped by the hard max so a malicious
+ *   companion manifest cannot raise the cap above the host ceiling.
+ */
+function resolveLimit(isCompanion, manifestValue, hostDefault, hardMax) {
+    if (manifestValue !== undefined && typeof manifestValue === 'number' && Number.isFinite(manifestValue) && manifestValue > 0) {
+        return Math.min(manifestValue, hardMax);
+    }
+    return isCompanion ? hostDefault : Infinity;
+}
+/**
+ * Measure the byte size of a transaction request payload. Phase 3 measures
+ * the WHOLE `ModuleTransactionRequest` (input + idempotencyKey + options +
+ * future fields), not just `request.input`, so a malicious huge idempotencyKey
+ * or options object cannot bypass the limit. Uses JSON serialization to count
+ * the actual wire bytes the host would emit; returns 0 for `undefined`/
+ * `null` requests so empty requests never trip the limit.
+ */
+function measureRequestBytes(request) {
+    if (request === undefined || request === null) {
+        return 0;
+    }
+    try {
+        return Buffer.byteLength(JSON.stringify(request), 'utf8');
+    }
+    catch {
+        // Non-serializable input: treat as oversized so the handler never
+        // sees a payload it cannot round-trip. The precise non-serializable
+        // code is reserved for response checks; for requests we surface
+        // module_request_too_large with a sentinel byte count.
+        return Number.POSITIVE_INFINITY;
+    }
+}
+/**
+ * Validate that a value is JSON-serializable WITHOUT silent data loss.
+ * `JSON.stringify` silently drops `undefined` object fields, function-valued
+ * properties, and symbol-keyed properties; it throws on circular refs and
+ * BigInt; it converts Map/Set/Date/RegExp/class instances to `{}` or string
+ * forms that lose their semantic meaning. Phase 3 must reject all of these
+ * explicitly so a handler cannot return a result that round-trips through
+ * JSON with missing fields or unexpected type coercions the caller never
+ * sees.
+ *
+ * Returns `null` when the value is a clean JSON value, or a human-readable
+ * reason string describing the first violation found.
+ */
+function validateJsonValue(value, path = '$', seen = new WeakSet()) {
+    if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        if (typeof value === 'number' && !Number.isFinite(value)) {
+            return `${path}: non-finite number (NaN/Infinity) is not JSON-serializable`;
+        }
+        return null;
+    }
+    if (typeof value === 'undefined') {
+        // Top-level undefined is not a valid JSON value. Nested undefined
+        // in objects/arrays is caught by the object/array branches below.
+        return `${path}: undefined is not a JSON value`;
+    }
+    if (typeof value === 'function') {
+        return `${path}: function is not JSON-serializable`;
+    }
+    if (typeof value === 'symbol') {
+        return `${path}: symbol is not JSON-serializable`;
+    }
+    if (typeof value === 'bigint') {
+        return `${path}: BigInt is not JSON-serializable`;
+    }
+    if (typeof value !== 'object') {
+        return `${path}: unknown type ${typeof value} is not JSON-serializable`;
+    }
+    // Object or array. Check for circular references via a WeakSet of
+    // already-visited objects on the current path.
+    if (seen.has(value)) {
+        return `${path}: circular reference detected`;
+    }
+    seen.add(value);
+    try {
+        if (Array.isArray(value)) {
+            // Reject arrays created via subclasses (e.g. `class MyArray
+            // extends Array`) because JSON.stringify serializes them as
+            // plain arrays but the caller may rely on the subclass
+            // semantics. Only plain Array instances are accepted.
+            if (Object.getPrototypeOf(value) !== Array.prototype) {
+                return `${path}: array subclass is not a plain JSON array`;
+            }
+            for (let i = 0; i < value.length; i++) {
+                const item = value[i];
+                if (item === undefined) {
+                    // JSON.stringify converts array undefined to null, which
+                    // IS data loss for a caller expecting to distinguish
+                    // undefined from null. Reject explicitly.
+                    return `${path}[${i}]: undefined array element is not JSON-serializable`;
+                }
+                const reason = validateJsonValue(item, `${path}[${i}]`, seen);
+                if (reason) {
+                    return reason;
+                }
+            }
+            return null;
+        }
+        // Reject non-plain objects. JSON.stringify silently converts Map to
+        // `{}`, Set to `{}`, Date to an ISO string (which may be intended
+        // but is a type coercion the caller should make explicit), RegExp
+        // to `{}`, and class instances to `{}` (dropping private fields).
+        // Require plain objects (Object.prototype or null prototype) so the
+        // wire payload matches what the handler actually returned.
+        const proto = Object.getPrototypeOf(value);
+        if (proto !== null && proto !== Object.prototype) {
+            const ctorName = proto.constructor?.name ?? 'unknown';
+            return `${path}: non-plain object (${ctorName}) is not JSON-serializable; convert to a plain object or array first`;
+        }
+        // Plain object. Check own enumerable symbol keys (JSON.stringify
+        // silently drops ALL symbol-keyed properties) and own enumerable
+        // string keys for undefined/function/symbol values.
+        const obj = value;
+        // Object.getOwnPropertySymbols returns own symbol keys (enumerable
+        // or not). JSON.stringify drops symbol keys entirely; reject them.
+        const symbolKeys = Object.getOwnPropertySymbols(obj);
+        for (const sym of symbolKeys) {
+            if (Object.prototype.propertyIsEnumerable.call(obj, sym)) {
+                return `${path}: symbol-keyed property ${sym.toString()} is not JSON-serializable`;
+            }
+        }
+        for (const key of Object.keys(obj)) {
+            const propValue = obj[key];
+            if (propValue === undefined) {
+                return `${path}.${key}: undefined property value is not JSON-serializable`;
+            }
+            if (typeof propValue === 'function' || typeof propValue === 'symbol') {
+                return `${path}.${key}: ${typeof propValue} property value is not JSON-serializable`;
+            }
+            const reason = validateJsonValue(propValue, `${path}.${key}`, seen);
+            if (reason) {
+                return reason;
+            }
+        }
+        return null;
+    }
+    finally {
+        seen.delete(value);
+    }
+}
+/**
+ * Sanitize a thrown error message for inclusion in public error details.
+ * Strips stack traces and absolute filesystem paths so a handler that throws
+ * `Error('at /tmp/authority-companion-XYZ/...')` cannot leak the host's
+ * filesystem layout through the wire payload.
+ */
+function sanitizeErrorMessage(message) {
+    let sanitized = message;
+    // Strip stack trace fragments (lines starting with "    at ").
+    sanitized = sanitized.replace(/\n\s*at\s+[^\n]+/g, '').trim();
+    // Strip absolute filesystem paths. Matches a leading `/` followed by at
+    // least two path segments (e.g. `/tmp/secret/...`, `/home/user/...`).
+    // Single-segment paths like `/api` are preserved because they read as
+    // URL paths, not filesystem paths.
+    sanitized = sanitized.replace(ABSOLUTE_PATH_PATTERN, '<redacted-path>');
+    return sanitized;
+}
+/**
+ * Pattern matching absolute filesystem paths with at least two segments.
+ * Used by {@link sanitizeErrorMessage} and {@link sanitizeDetailsObject} to
+ * scrub host filesystem layout from public wire payloads. The pattern
+ * intentionally requires a path separator after the first segment so that
+ * URL-like single-segment paths (`/api`, `/modules`) are preserved.
+ */
+const ABSOLUTE_PATH_PATTERN = /\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)+/g;
+/**
+ * Sanitize discovery/load diagnostics for inclusion in public error details.
+ * Strips absolute paths, stack traces, and raw thrown objects from
+ * `details` while preserving useful `code`/`message`/`severity` fields.
+ */
+function sanitizeDiagnosticsForWire(diagnostics) {
+    if (!diagnostics || diagnostics.length === 0) {
+        return [];
+    }
+    return diagnostics.map(diagnostic => {
+        const sanitized = {
+            code: diagnostic.code,
+            message: sanitizeErrorMessage(diagnostic.message),
+            severity: diagnostic.severity,
+        };
+        if (diagnostic.details !== undefined) {
+            sanitized.details = sanitizeDetailsObject(diagnostic.details);
+        }
+        return sanitized;
+    });
+}
+/**
+ * Internal-only keys that must NEVER appear in public wire payloads. These
+ * are server-side absolute path fields used by the loader and discovery
+ * service, plus raw error/stack structures that can leak host internals
+ * (filesystem layout, source file paths, internal call sites). Even if a
+ * loader or discovery path accidentally stores them on a public record's
+ * diagnostics details, the sanitizer strips both the key and its value so
+ * the host filesystem layout, stack traces, and raw thrown objects cannot
+ * leak through `/modules` or `/modules/:moduleId/record` or
+ * `module_load_error` payloads.
+ */
+const FORBIDDEN_DETAIL_KEYS = new Set([
+    // Internal absolute path fields used by the loader and discovery.
+    'extensionDir',
+    'moduleDir',
+    'manifestPath',
+    'entryPath',
+    'absolutePath',
+    'resolvedEntry',
+    'realEntry',
+    'realModuleDir',
+    // Raw error / stack structures. These carry host filesystem paths,
+    // internal call sites, and raw thrown objects. The sanitizer strips
+    // them entirely rather than echoing the key name (which would leak that
+    // the host has such structures). Useful fragments like the sanitized
+    // error message are preserved on the diagnostic `message` field.
+    'stack',
+    'rawError',
+    'error',
+    'cause',
+    'originalError',
+    'thrown',
+    'exception',
+    'trace',
+    'stacktrace',
+]);
+/**
+ * Recursively sanitize a details object: strip strings that look like
+ * absolute paths or stack traces, and drop internal-only keys entirely.
+ * Numbers, booleans, and arrays are preserved; nested objects are recursed.
+ */
+function sanitizeDetailsObject(details) {
+    const result = {};
+    for (const [key, value] of Object.entries(details)) {
+        // Drop forbidden keys entirely so the wire payload does not even
+        // echo the key name (which would leak that the host has such
+        // paths/stack/raw-error structures).
+        if (FORBIDDEN_DETAIL_KEYS.has(key)) {
+            continue;
+        }
+        if (typeof value === 'string') {
+            result[key] = sanitizeErrorMessage(value);
+        }
+        else if (Array.isArray(value)) {
+            result[key] = value.map(item => (typeof item === 'string' ? sanitizeErrorMessage(item) : item));
+        }
+        else if (value && typeof value === 'object') {
+            result[key] = sanitizeDetailsObject(value);
+        }
+        else {
+            result[key] = value;
+        }
+    }
+    return result;
+}
+/**
+ * Sanitize a public {@link AuthorityModuleRecord} for wire exposure.
+ *
+ * Phase 3 blocker fix: `CompanionModuleLoaderService.markLoadError()` stores
+ * raw diagnostics on public records; `listRecords()` / `getRecord()` /
+ * `listManifests()` / `getManifest()` return records directly. This helper
+ * is the single sanitization boundary for ALL public reads so that absolute
+ * paths, stack traces, raw thrown objects, and forbidden detail keys
+ * (`extensionDir`, `moduleDir`, `manifestPath`, `entryPath`, `stack`,
+ * `rawError`, `error`, `cause`, etc. — see {@link FORBIDDEN_DETAIL_KEYS})
+ * never leak through `/modules`, `/modules/:moduleId`, or
+ * `module_load_error` payloads even if a loader or discovery path
+ * accidentally stored them on the record.
+ *
+ * The returned record is a shallow copy with sanitized diagnostics; the
+ * manifest and source are already JSON-serializable shapes from discovery
+ * and are passed through unchanged.
+ */
+function sanitizeRecordForWire(record) {
+    const sanitized = {
+        moduleId: record.moduleId,
+        ownerExtensionId: record.ownerExtensionId,
+        status: record.status,
+        manifest: record.manifest,
+        source: record.source,
+    };
+    if (record.diagnostics !== undefined && record.diagnostics.length > 0) {
+        sanitized.diagnostics = sanitizeDiagnosticsForWire(record.diagnostics);
+    }
+    return sanitized;
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+class ModuleHandlerTimeoutError extends Error {
+    constructor(moduleId, transactionName, timeoutMs) {
+        super(`Transaction '${moduleId}/${transactionName}' timed out after ${timeoutMs} ms.`);
+        this.name = 'ModuleHandlerTimeoutError';
+    }
 }
 /**
  * Authority module host.
@@ -8490,24 +8805,24 @@ class ModuleHostService {
     registerInternal(manifest, handlers, options, contextMode) {
         validateModuleId(manifest.id);
         if (manifest.protocolVersion !== _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_MODULE_PROTOCOL_VERSION) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Unsupported module protocol version: ${manifest.protocolVersion}`, 400, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Unsupported module protocol version: ${manifest.protocolVersion}`, 400, 'validation_error', 'validation');
         }
         if (this.modules.has(manifest.id)) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module already registered: ${manifest.id}`, 409, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module already registered: ${manifest.id}`, 409, 'validation_error', 'validation');
         }
         const handlerMap = new Map();
         for (const name of Object.keys(manifest.transactions)) {
             validateTransactionName(name);
             const transaction = manifest.transactions[name];
             if (!transaction) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Transaction entry missing for: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction entry missing for: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
             }
             if (transaction.name !== name) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Transaction name mismatch for ${manifest.id}/${name}: declared name '${transaction.name}'`, 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction name mismatch for ${manifest.id}/${name}: declared name '${transaction.name}'`, 400, 'validation_error', 'validation');
             }
             const handler = handlers[name];
             if (!handler) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Missing handler for transaction: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Missing handler for transaction: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
             }
             handlerMap.set(name, handler);
         }
@@ -8569,14 +8884,30 @@ class ModuleHostService {
             this.registerDiscoveredRecord(record);
         }
     }
-    /** Returns all discovery records (loaded + discovered + error statuses). */
+    /**
+     * Returns all discovery records (loaded + discovered + error statuses).
+     *
+     * Phase 3: returns sanitized copies so `/modules` never leaks absolute
+     * paths, stack traces, or internal keys even if a loader or discovery
+     * path accidentally stored them on the record.
+     */
     listRecords() {
-        return [...this.records];
+        return this.records.map(record => sanitizeRecordForWire(record));
     }
-    /** Returns the primary discovery record for a module id, if any. */
+    /**
+     * Returns the primary discovery record for a module id, if any.
+     *
+     * Phase 3: returns a sanitized copy so `/modules/:moduleId/record` and
+     * `getManifest()` never leak absolute paths, stack traces, or internal
+     * keys.
+     */
     getRecord(moduleId) {
         const index = this.primaryRecordByModuleId.get(moduleId);
-        return index !== undefined ? this.records[index] ?? null : null;
+        if (index === undefined) {
+            return null;
+        }
+        const record = this.records[index];
+        return record ? sanitizeRecordForWire(record) : null;
     }
     /** Returns the total number of discovery records (visible module count). */
     recordCount() {
@@ -8600,7 +8931,7 @@ class ModuleHostService {
             if (record && record.manifest) {
                 return { module: record.manifest, record };
             }
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
         }
         return {
             module: module.manifest,
@@ -8624,25 +8955,66 @@ class ModuleHostService {
         validateModuleId(moduleId);
         validateTransactionName(transactionName);
         if (request.options?.dryRun === true) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Dry-run execution is not supported: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Dry-run execution is not supported: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation', { code: 'dry_run_unsupported', moduleId, transaction: transactionName });
         }
         const module = this.modules.get(moduleId);
         if (!module) {
             const record = this.getRecord(moduleId);
+            if (record && record.status === 'load_error') {
+                // Phase 3: load_error records return a structured
+                // module_load_error with sanitized diagnostics, NOT the
+                // generic module_not_loaded path. This lets the frontend
+                // distinguish "broken module" from "not yet loaded".
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module failed to load: ${moduleId}`, 409, 'validation_error', 'validation', {
+                    code: 'module_load_error',
+                    moduleId,
+                    status: record.status,
+                    diagnostics: sanitizeDiagnosticsForWire(record.diagnostics),
+                });
+            }
             if (record && record.manifest) {
                 // Discovered-but-not-loaded module: structured error so the
                 // frontend can distinguish "missing" from "available but
                 // not activated yet".
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not loaded: ${moduleId}`, 409, 'validation_error', 'validation', { code: 'module_not_loaded', moduleId, status: record.status });
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module not loaded: ${moduleId}`, 409, 'validation_error', 'validation', { code: 'module_not_loaded', moduleId, status: record.status });
             }
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation', { code: 'module_not_found', moduleId });
         }
         const transaction = assertTransactionManifest(module, transactionName);
+        if (!transaction) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction not found: ${moduleId}/${transactionName}`, 404, 'validation_error', 'validation', { code: 'transaction_not_found', moduleId, transaction: transactionName });
+        }
         if (transaction.idempotency === 'required') {
             const key = typeof request.idempotencyKey === 'string' ? request.idempotencyKey.trim() : '';
             if (!key) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Idempotency key required for transaction: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Idempotency key required for transaction: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation', { code: 'idempotency_required', moduleId, transaction: transactionName });
             }
+        }
+        // Resolve effective limits. Built-in modules are NOT accidentally
+        // subject to companion defaults: built-ins only enforce limits when
+        // the manifest explicitly declares them (source: 'manifest'). When
+        // a built-in manifest omits a limit, the host does not enforce it
+        // for that module — preserving backward compatibility with Phase 1
+        // built-ins that have no byte/timeout expectations. Companion
+        // modules always get host defaults (source: 'host_default' or
+        // 'hard_cap') because they are untrusted external code.
+        const limits = this.resolveEffectiveLimits(module, transaction);
+        // Phase 3: enforce request size centrally before dispatching to the
+        // handler. Measure the WHOLE request payload (input + idempotencyKey
+        // + options + future fields), not just `request.input`, so a
+        // malicious huge idempotencyKey or options object cannot bypass the
+        // limit. Built-ins without an explicit manifest limit have
+        // maxRequestBytes: Infinity and are not constrained.
+        const requestBytes = measureRequestBytes(request);
+        if (requestBytes > limits.maxRequestBytes) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction request too large: ${moduleId}/${transactionName} (${requestBytes} bytes > ${limits.maxRequestBytes} bytes)`, 413, 'limit_exceeded', 'limit', {
+                code: 'module_request_too_large',
+                moduleId,
+                transaction: transactionName,
+                requestBytes,
+                maxRequestBytes: limits.maxRequestBytes,
+                limitSource: limits.source,
+            });
         }
         const permissionTarget = this.resolvePermissionTarget(transaction, moduleId, transactionName);
         const authorize = this.buildAuthorize(user, session);
@@ -8667,6 +9039,13 @@ class ModuleHostService {
                     : `Permission not granted: ${required.resource}`);
             }
         }
+        // Phase 3: the host owns the AbortController for timeout
+        // enforcement. The same signal is exposed on the ctx (both the
+        // built-in ModuleTransactionContext.signal and, via the loader
+        // wrapper, CompanionModuleTransactionContext.signal) so cooperative
+        // handlers see the abort event when the timer fires. The host's race
+        // also rejects with `transaction_timeout` independently.
+        const abortController = new AbortController();
         // Phase 2: companion modules do NOT receive the raw service ctx.
         // Their handlers are wrapped by the CompanionModuleLoaderService to
         // build a minimal safe CompanionModuleTransactionContext from the
@@ -8674,8 +9053,8 @@ class ModuleHostService {
         // are intentionally absent for companion code. We still pass a
         // metadata-only stub ctx here so that built-in handlers continue to
         // receive the full ModuleTransactionContext, and so companion
-        // handler wrappers can read user/session/callerExtensionId without
-        // needing the raw services.
+        // handler wrappers can read user/session/callerExtensionId and the
+        // host-owned `signal` without needing the raw services.
         const ctx = {
             user,
             session,
@@ -8689,31 +9068,90 @@ class ModuleHostService {
             files: this.files,
             jobs: this.jobs,
             events: this.events,
+            signal: abortController.signal,
         };
         const handler = module.handlers.get(transactionName);
         if (!handler) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Handler missing for transaction: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Handler missing for transaction: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core', { code: 'transaction_handler_failed', moduleId, transaction: transactionName, reason: 'handler_missing' });
         }
         const input = request.input ?? undefined;
         // For companion modules the handler is already wrapped by the loader
         // to ignore the raw ctx and build a CompanionModuleTransactionContext
         // internally. We still pass the metadata-bearing ctx so the wrapper
-        // can read user/session/callerExtensionId without us leaking raw
-        // services into companion code paths.
+        // can read user/session/callerExtensionId and the host-owned
+        // `signal` without us leaking raw services into companion code paths.
         void module.contextMode;
-        const handlerResult = await handler(ctx, input, request);
-        const idempotencyKey = typeof request.idempotencyKey === 'string' && request.idempotencyKey.trim()
-            ? request.idempotencyKey.trim()
-            : undefined;
+        // Phase 3: enforce timeout centrally. The handler races a timer so a
+        // hung transaction cannot hold the request forever. Built-ins
+        // without an explicit manifest timeout have timeoutMs: Infinity and
+        // are not constrained, preserving Phase 1 compatibility. When a
+        // timeout IS enforced, the host aborts `abortController` when the
+        // timer fires so cooperative handlers (built-in and companion) see
+        // `signal.aborted === true`.
+        const handlerResult = await this.invokeHandlerWithLimits(handler, ctx, input, request, module, transaction, limits, abortController);
+        // Phase 3: serialize the response to detect non-serializable results
+        // before returning to the HTTP route. JSON.stringify throws on
+        // circular references, BigInt, functions, etc.
         const response = {
             ok: true,
             moduleId,
             transaction: transactionName,
             transactionVersion: transaction.version,
-            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-            ...(handlerResult.result === undefined ? {} : { result: handlerResult.result }),
-            ...(handlerResult.diagnostics === undefined ? {} : { diagnostics: handlerResult.diagnostics }),
         };
+        const idempotencyKey = typeof request.idempotencyKey === 'string' && request.idempotencyKey.trim()
+            ? request.idempotencyKey.trim()
+            : undefined;
+        if (idempotencyKey !== undefined) {
+            response.idempotencyKey = idempotencyKey;
+        }
+        if (handlerResult.result !== undefined) {
+            response.result = handlerResult.result;
+        }
+        if (handlerResult.diagnostics !== undefined) {
+            response.diagnostics = handlerResult.diagnostics;
+        }
+        // Phase 3: response size + serializability check. We validate the
+        // JSON shape FIRST (catches functions, symbols, undefined object
+        // fields/array elements, BigInt, and circular refs that
+        // JSON.stringify would either throw on or silently drop), then
+        // serialize to measure byte length (catches oversized responses).
+        // Both surface as structured module error codes.
+        const validationReason = validateJsonValue(response);
+        if (validationReason !== null) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction response is not JSON-serializable: ${moduleId}/${transactionName}: ${validationReason}`, 500, 'core_request_failed', 'core', {
+                code: 'module_response_not_serializable',
+                moduleId,
+                transaction: transactionName,
+                reason: validationReason,
+            });
+        }
+        let serializedResponseBytes;
+        try {
+            const serialized = JSON.stringify(response);
+            serializedResponseBytes = Buffer.byteLength(serialized, 'utf8');
+        }
+        catch (error) {
+            // Defensive: the validator should have caught everything
+            // stringify would throw on, but if a new edge case slips through
+            // we still surface it as module_response_not_serializable rather
+            // than letting an opaque TypeError reach the route layer.
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction response is not JSON-serializable: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core', {
+                code: 'module_response_not_serializable',
+                moduleId,
+                transaction: transactionName,
+                reason: errorMessage(error),
+            });
+        }
+        if (serializedResponseBytes > limits.maxResponseBytes) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction response too large: ${moduleId}/${transactionName} (${serializedResponseBytes} bytes > ${limits.maxResponseBytes} bytes)`, 413, 'limit_exceeded', 'limit', {
+                code: 'module_response_too_large',
+                moduleId,
+                transaction: transactionName,
+                responseBytes: serializedResponseBytes,
+                maxResponseBytes: limits.maxResponseBytes,
+                limitSource: limits.source,
+            });
+        }
         await this.audit.logUsage(user, session.extension.id, `Module transaction executed: ${moduleId}/${transactionName}`, {
             moduleId,
             transaction: transactionName,
@@ -8721,6 +9159,116 @@ class ModuleHostService {
             ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         }).catch(() => undefined);
         return response;
+    }
+    /**
+     * Resolve effective per-transaction limits. Built-in compiled modules
+     * are only constrained when their manifest explicitly declares a limit;
+     * built-ins without explicit limits get `Infinity` and are not
+     * accidentally subject to companion defaults. Companion modules always
+     * get host defaults (64 MiB / 120 s) capped by the hard max (256 MiB /
+     * 10 min) because they are untrusted external code.
+     */
+    resolveEffectiveLimits(module, transaction) {
+        const isCompanion = module.contextMode === 'companion';
+        const maxRequestBytes = resolveLimit(isCompanion, transaction.maxRequestBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_DEFAULT_REQUEST_BYTES, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_REQUEST_BYTES);
+        const maxResponseBytes = resolveLimit(isCompanion, transaction.maxResponseBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_DEFAULT_RESPONSE_BYTES, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_RESPONSE_BYTES);
+        const timeoutMs = resolveLimit(isCompanion, transaction.timeoutMs, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_DEFAULT_TIMEOUT_MS, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS);
+        const source = (transaction.maxRequestBytes !== undefined
+            || transaction.maxResponseBytes !== undefined
+            || transaction.timeoutMs !== undefined)
+            ? 'manifest'
+            : isCompanion ? 'host_default' : 'host_default';
+        return { maxRequestBytes, maxResponseBytes, timeoutMs, source };
+    }
+    /**
+     * Invoke the handler with a timeout race. Phase 3 owns timeout
+     * enforcement centrally so it applies uniformly to built-ins (when their
+     * manifest declares a timeout) and companion modules (always). Built-ins
+     * without an explicit timeout have `timeoutMs: Infinity` and are not
+     * constrained.
+     *
+     * When a timeout IS enforced, the host aborts `abortController` when the
+     * timer fires. The same signal is exposed on the ctx (both built-in and,
+     * via the loader wrapper, companion) so cooperative handlers see
+     * `signal.aborted === true` and can cancel early. The host's race also
+     * rejects with `transaction_timeout` independently — the abort is a
+     * cooperative hint, not a force-stop.
+     *
+     * The timer is cleared on both resolve and reject so it cannot fire
+     * after the handler has completed and abort a signal that the caller
+     * may have retained for post-processing (e.g. a companion handler that
+     * stored the signal on a long-lived object).
+     */
+    async invokeHandlerWithLimits(handler, ctx, input, request, module, transaction, limits, abortController) {
+        if (limits.timeoutMs === Infinity) {
+            // No timeout: invoke directly. The signal on ctx is never
+            // aborted. Handler failures still surface as
+            // transaction_handler_failed with a sanitized message.
+            try {
+                return await handler(ctx, input, request);
+            }
+            catch (error) {
+                throw this.wrapHandlerError(error, module.manifest.id, transaction.name);
+            }
+        }
+        let timer;
+        const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+                // Abort the controller FIRST so cooperative handlers
+                // observing `signal.aborted` see the abort event before
+                // the host rejects the race.
+                abortController.abort();
+                reject(new ModuleHandlerTimeoutError(module.manifest.id, transaction.name, limits.timeoutMs));
+            }, limits.timeoutMs);
+            if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+                timer.unref();
+            }
+        });
+        try {
+            const result = await Promise.race([
+                handler(ctx, input, request),
+                timeoutPromise,
+            ]);
+            return result;
+        }
+        catch (error) {
+            if (error instanceof ModuleHandlerTimeoutError) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(error.message, 504, 'timeout', 'timeout', {
+                    code: 'transaction_timeout',
+                    moduleId: module.manifest.id,
+                    transaction: transaction.name,
+                    timeoutMs: limits.timeoutMs,
+                    limitSource: limits.source,
+                });
+            }
+            throw this.wrapHandlerError(error, module.manifest.id, transaction.name);
+        }
+        finally {
+            // Always clear the timer on settle so it cannot fire after the
+            // race has resolved/rejected. Without this, a timer scheduled
+            // with `unref()` could still abort the controller later if the
+            // caller retained the signal for post-processing, surprising
+            // downstream code that did not expect an abort.
+            if (timer !== undefined) {
+                clearTimeout(timer);
+            }
+        }
+    }
+    wrapHandlerError(error, moduleId, transactionName) {
+        // If the handler already threw an AuthorityServiceError with a module
+        // error code, preserve it rather than double-wrapping. This lets
+        // companion handler wrappers (e.g. the loader's timeout wrapper)
+        // surface their own structured codes.
+        if (error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError) {
+            return error;
+        }
+        const message = sanitizeErrorMessage(errorMessage(error));
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction handler failed: ${moduleId}/${transactionName}: ${message}`, 500, 'core_request_failed', 'core', {
+            code: 'transaction_handler_failed',
+            moduleId,
+            transaction: transactionName,
+            message,
+        });
     }
     buildAuthorize(user, session) {
         return async (request) => {

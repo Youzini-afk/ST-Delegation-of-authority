@@ -5,6 +5,7 @@ import type {
     AuthorityModuleManifest,
     AuthorityModuleRecord,
     ModuleStatus,
+    ModuleTransactionEffectiveLimits,
     ModuleTransactionManifest,
     ModuleTransactionName,
     ModuleTransactionRequest,
@@ -12,6 +13,14 @@ import type {
 } from '@stdo/shared-types';
 import { AUTHORITY_MODULE_PROTOCOL_VERSION } from '../constants.js';
 import type { AuditService } from './audit-service.js';
+import {
+    MODULE_DEFAULT_REQUEST_BYTES,
+    MODULE_DEFAULT_RESPONSE_BYTES,
+    MODULE_DEFAULT_TIMEOUT_MS,
+    MODULE_MAX_REQUEST_BYTES,
+    MODULE_MAX_RESPONSE_BYTES,
+    MODULE_MAX_TIMEOUT_MS,
+} from './module-discovery-service.js';
 import type { PermissionService } from './permission-service.js';
 import { revalidateLoadCandidate, type CompanionModuleLoadCandidate } from './module-discovery-service.js';
 import type { ModuleDiscoveryResult } from './module-discovery-service.js';
@@ -359,28 +368,35 @@ export type CompanionTransactionHandler = (
 ) => Promise<ModuleTransactionHandlerResult>;
 
 /**
- * Phase 2 minimal safe transaction context for companion module handlers.
+ * Phase 3 minimal safe transaction context for companion module handlers.
  *
  * This is intentionally distinct from the existing {@link ModuleTransactionContext}
  * which carries raw `trivium`, `storage`, `files`, `jobs`, `events` services.
- * Companion modules in Phase 2 receive only:
+ * Companion modules receive only:
  *
- * - metadata (`moduleId`, `ownerExtensionId`, `transactionName`, `callerExtensionId`)
+ * - safe metadata: `moduleId`, `ownerExtensionId`, `transactionName`,
+ *   `callerExtensionId`, `moduleVersion`, `transactionVersion`
+ * - `limits`: effective per-transaction `maxRequestBytes`/
+ *   `maxResponseBytes`/`timeoutMs` (metadata only, NOT service handles)
  * - `logger` (host-scoped)
  * - `audit` wrapper bound to the calling user + owner extension
  * - `authorize(request)` for `PermissionEvaluateRequest`
  * - `signal` (AbortSignal) for cooperative cancellation
  * - `requestId` for tracing
  *
- * Raw SQL/fs/blob/trivium/jobs/events/runtime/core access arrives in Phase 3
- * as scoped wrappers bound to user + ownerExtensionId/moduleId.
+ * Raw SQL/fs/blob/trivium/jobs/events/runtime/core access is intentionally
+ * absent in Phase 3; scoped wrappers are separate future work.
  */
 export interface CompanionModuleTransactionContext {
     moduleId: string;
     ownerExtensionId: string;
+    moduleVersion: string;
     transactionName: string;
+    transactionVersion: string;
     callerExtensionId: string;
     requestId: string;
+    /** Effective per-transaction limits enforced centrally by the host. */
+    limits: ModuleTransactionEffectiveLimits;
     logger: LoaderLogger;
     audit: CompanionAuditWrapper;
     authorize: (request: PermissionEvaluateRequest) => Promise<boolean>;
@@ -492,6 +508,13 @@ function registerCompanionTransaction(
  * safe {@link CompanionModuleTransactionContext} for the companion handler.
  * The raw services that the built-in `ModuleTransactionContext` carries
  * (trivium/storage/files/jobs/events) are intentionally absent here.
+ *
+ * Phase 3: the host's `execute()` owns timeout enforcement centrally AND
+ * owns the AbortController. The host passes `signal` on the raw ctx; this
+ * wrapper propagates that SAME signal onto the companion ctx so companion
+ * handlers see the abort event when the host's timer fires. The host's race
+ * also rejects with `transaction_timeout` independently — the abort is a
+ * cooperative hint, not a force-stop.
  */
 function buildCompanionHandler(
     candidate: CompanionModuleLoadCandidate,
@@ -502,6 +525,9 @@ function buildCompanionHandler(
     logger: LoaderLogger,
 ): ModuleTransactionHandler {
     const companionHandler = registration.definition.handler;
+    const transaction = candidate.manifest.transactions[transactionName];
+    const moduleVersion = candidate.manifest.version;
+    const transactionVersion = transaction ? transaction.version : '0.0.0';
     return async (rawCtx, input, request) => {
         // rawCtx is the host's ModuleTransactionContext. We deliberately do
         // NOT forward it to companion code; we build a minimal safe ctx.
@@ -509,7 +535,10 @@ function buildCompanionHandler(
         const session: SessionRecord = rawCtx.session;
         const callerExtensionId = rawCtx.callerExtensionId;
         const requestId = generateRequestId();
-        const abortController = new AbortController();
+        // Phase 3: propagate the host-owned signal so companion handlers see
+        // the same abort event as the host's timeout race. The host created
+        // this controller in execute() and aborts it when the timer fires.
+        const signal = rawCtx.signal;
 
         const authorize = async (permRequest: PermissionEvaluateRequest): Promise<boolean> => {
             const grant = await permissions.authorize(user, session, permRequest);
@@ -522,77 +551,70 @@ function buildCompanionHandler(
             logError: (message, details) => audit.logError(user, candidate.ownerExtensionId, message, details).catch(() => undefined),
         };
 
+        // Phase 3: expose effective limits as safe metadata only. The host
+        // enforces them centrally; the companion handler can read them to
+        // shape its behavior (e.g. stream large outputs instead of inlining).
+        // Built-in `Infinity`-carrying limits are not exposed here because
+        // this ctx is only built for companion modules.
+        const limits = resolveCompanionLimits(transaction);
+
         const companionCtx: CompanionModuleTransactionContext = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
+            moduleVersion,
             transactionName,
+            transactionVersion,
             callerExtensionId,
             requestId,
+            limits,
             logger,
             audit: auditWrapper,
             authorize,
-            signal: abortController.signal,
+            signal,
         };
 
-        // Apply the manifest's per-transaction timeout (default 120 s, hard
-        // cap 10 min). The timeout races the companion handler so a hung
-        // transaction cannot hold the request forever.
-        const transaction = candidate.manifest.transactions[transactionName];
-        const timeoutMs = resolveTransactionTimeoutMs(transaction);
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            const timer = setTimeout(() => {
-                abortController.abort();
-                reject(new TransactionTimeoutError(candidate.moduleId, transactionName, timeoutMs));
-            }, timeoutMs);
-            if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
-                timer.unref();
-            }
-        });
-
-        try {
-            const result = await Promise.race([
-                companionHandler(companionCtx, input, request),
-                timeoutPromise,
-            ]);
-            return result;
-        } catch (error) {
-            if (error instanceof TransactionTimeoutError) {
-                throw new AuthorityServiceError(
-                    error.message,
-                    504,
-                    'core_request_failed',
-                    'core',
-                    { code: 'transaction_timeout', moduleId: candidate.moduleId, transaction: transactionName, timeoutMs },
-                );
-            }
-            throw error;
-        }
+        // Phase 3: the host's execute() owns timeout enforcement and the
+        // AbortController. The signal on companionCtx IS the host's signal,
+        // so companion handlers observing `signal.aborted` or
+        // `signal.addEventListener('abort', ...)` see the host's timeout
+        // fire. The host's race also rejects with `transaction_timeout`
+        // independently.
+        return await companionHandler(companionCtx, input, request);
     };
 }
 
-class TransactionTimeoutError extends Error {
-    constructor(moduleId: string, transactionName: string, timeoutMs: number) {
-        super(`Transaction '${moduleId}/${transactionName}' timed out after ${timeoutMs} ms.`);
-        this.name = 'TransactionTimeoutError';
-    }
-}
-
 /**
- * Resolve the effective per-transaction timeout for a companion transaction.
- * Falls back to {@link DEFAULT_TRANSACTION_TIMEOUT_MS} when the manifest
- * does not specify one. Capped by {@link MAX_TRANSACTION_TIMEOUT_MS}.
+ * Resolve effective per-transaction limits for a companion handler ctx.
+ * Companion modules always get host defaults (64 MiB / 120 s) capped by the
+ * hard max (256 MiB / 10 min) when the manifest does not declare an explicit
+ * value. These are metadata only; the host's execute() enforces them.
  */
-function resolveTransactionTimeoutMs(transaction: ModuleTransactionManifest | undefined): number {
-    if (!transaction || typeof transaction.timeoutMs !== 'number' || !Number.isFinite(transaction.timeoutMs) || transaction.timeoutMs <= 0) {
-        return DEFAULT_TRANSACTION_TIMEOUT_MS;
+function resolveCompanionLimits(transaction: ModuleTransactionManifest | undefined): ModuleTransactionEffectiveLimits {
+    if (!transaction) {
+        return {
+            maxRequestBytes: MODULE_DEFAULT_REQUEST_BYTES,
+            maxResponseBytes: MODULE_DEFAULT_RESPONSE_BYTES,
+            timeoutMs: MODULE_DEFAULT_TIMEOUT_MS,
+            source: 'host_default',
+        };
     }
-    return Math.min(transaction.timeoutMs, MAX_TRANSACTION_TIMEOUT_MS);
+    const maxRequestBytes = transaction.maxRequestBytes !== undefined
+        ? Math.min(transaction.maxRequestBytes, MODULE_MAX_REQUEST_BYTES)
+        : MODULE_DEFAULT_REQUEST_BYTES;
+    const maxResponseBytes = transaction.maxResponseBytes !== undefined
+        ? Math.min(transaction.maxResponseBytes, MODULE_MAX_RESPONSE_BYTES)
+        : MODULE_DEFAULT_RESPONSE_BYTES;
+    const timeoutMs = transaction.timeoutMs !== undefined
+        ? Math.min(transaction.timeoutMs, MODULE_MAX_TIMEOUT_MS)
+        : MODULE_DEFAULT_TIMEOUT_MS;
+    const source: ModuleTransactionEffectiveLimits['source']
+        = (transaction.maxRequestBytes !== undefined
+            || transaction.maxResponseBytes !== undefined
+            || transaction.timeoutMs !== undefined)
+            ? 'manifest'
+            : 'host_default';
+    return { maxRequestBytes, maxResponseBytes, timeoutMs, source };
 }
-
-/** Default per-transaction timeout (120 s), aligned with discovery defaults. */
-const DEFAULT_TRANSACTION_TIMEOUT_MS = 120_000;
-/** Hard upper bound on per-transaction timeout (10 min). */
-const MAX_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1000;
 
 function generateRequestId(): string {
     try {

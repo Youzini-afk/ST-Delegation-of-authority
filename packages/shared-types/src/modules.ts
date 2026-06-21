@@ -147,6 +147,78 @@ export interface ModuleTransactionResponse {
 }
 
 /**
+ * Standardized module transaction error detail codes.
+ *
+ * Phase 3 hardening requires `ModuleHostService.execute()` to surface these
+ * stable codes inside `AuthorityServiceError.details.code` so frontends can
+ * branch on a known set rather than parsing free-form messages. The host's
+ * existing top-level `code: AuthorityErrorCode` field is preserved for
+ * backward compatibility with route-layer normalization.
+ *
+ * - `module_not_found`               -> no record and no executable module
+ *                                       registered under this id.
+ * - `transaction_not_found`          -> module exists but the named
+ *                                       transaction is not declared.
+ * - `module_not_loaded`              -> discovered-but-not-loaded record;
+ *                                       execute forbidden.
+ * - `module_load_error`             -> record carries `load_error` status;
+ *                                       execute forbidden with sanitized
+ *                                       diagnostics.
+ * - `idempotency_required`           -> manifest declares idempotency
+ *                                       `required` and caller omitted the
+ *                                       idempotency key.
+ * - `dry_run_unsupported`           -> caller passed `options.dryRun = true`
+ *                                       but dry-run is not supported.
+ * - `module_request_too_large`       -> request payload size exceeded the
+ *                                       effective per-transaction
+ *                                       `maxRequestBytes` limit.
+ * - `module_response_too_large`      -> response payload size exceeded the
+ *                                       effective per-transaction
+ *                                       `maxResponseBytes` limit.
+ * - `module_response_not_serializable` -> handler returned a result that
+ *                                       cannot be JSON-serialized (e.g.
+ *                                       circular reference, BigInt, function).
+ * - `transaction_timeout`           -> handler did not complete within the
+ *                                       effective per-transaction timeout.
+ * - `transaction_handler_failed`     -> handler threw an error; the original
+ *                                       error message is sanitized and
+ *                                       included in `details.message`.
+ */
+export type ModuleErrorCode =
+    | 'module_not_found'
+    | 'transaction_not_found'
+    | 'module_not_loaded'
+    | 'module_load_error'
+    | 'idempotency_required'
+    | 'dry_run_unsupported'
+    | 'module_request_too_large'
+    | 'module_response_too_large'
+    | 'module_response_not_serializable'
+    | 'transaction_timeout'
+    | 'transaction_handler_failed';
+
+/**
+ * Effective per-transaction byte and timeout limits enforced centrally by
+ * {@link ModuleHostService.execute()}.
+ *
+ * Phase 3 exposes these on the companion transaction ctx as safe metadata
+ * only; they are NOT service handles. Built-in compiled modules receive the
+ * existing {@link ModuleTransactionContext} and are only constrained by
+ * these limits when the manifest explicitly declares them — built-ins are
+ * not accidentally subject to companion defaults.
+ */
+export interface ModuleTransactionEffectiveLimits {
+    /** Effective max inline request bytes for this transaction. */
+    maxRequestBytes: number;
+    /** Effective max inline response bytes for this transaction. */
+    maxResponseBytes: number;
+    /** Effective per-transaction timeout in milliseconds. */
+    timeoutMs: number;
+    /** Source of the resolved limits: manifest, host default, or hard cap. */
+    source: 'manifest' | 'host_default' | 'hard_cap';
+}
+
+/**
  * Lifecycle / discovery status for an authority module record.
  *
  * - `loaded`                -> executable handler registered; execute allowed.
