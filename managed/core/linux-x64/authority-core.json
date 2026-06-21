@@ -1,9 +1,9 @@
 {
   "managedBy": "authority",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "platform": "linux",
   "arch": "x64",
   "binaryName": "authority-core",
-  "binarySha256": "efd3403a7b342a61774fb2b89fb6a5525476748fcffdd7a4e20f4ad4111223fe",
-  "builtAt": "2026-06-21T10:58:01.949Z"
+  "binarySha256": "1cf730e78415fb6f3afaffe658a7d68f292e3be8ab8bbae470290176834563ad",
+  "builtAt": "2026-06-21T15:58:03.256Z"
 }

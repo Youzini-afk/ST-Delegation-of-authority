@@ -4700,6 +4700,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   buildCompanionTriviumCapability: () => (/* binding */ buildCompanionTriviumCapability)
 /* harmony export */ });
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./trivium-internal.js */ "./src/services/trivium-internal.ts");
+
 
 /**
  * Build a {@link CompanionTriviumCapability} bound to a specific companion
@@ -4765,6 +4767,46 @@ function buildCompanionTriviumCapability(trivium, permissions, audit, user, sess
             const database = normalizeTriviumDatabase(request.database);
             await authorize(database);
             return await trivium.bulkDelete(user, ownerExtensionId, request);
+        },
+        async searchHybrid(request) {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            // Clamp topK/expandDepth to server-side caps. Shallow-copy the
+            // request so the caller's object is not mutated. A non-positive
+            // safe integer for topK/expandDepth throws here, mirroring the
+            // existing getBoundedPositiveInteger precedent used by
+            // TriviumService for sampleLimit/limit.
+            const topK = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.getBoundedPositiveInteger)(request.topK, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.DEFAULT_SEARCH_TOP_K, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_SEARCH_TOP_K, 'topK');
+            const expandDepth = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.getBoundedPositiveInteger)(request.expandDepth, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.DEFAULT_SEARCH_EXPAND_DEPTH, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_SEARCH_EXPAND_DEPTH, 'expandDepth');
+            const clampedRequest = {
+                ...request,
+                topK,
+                expandDepth,
+            };
+            return await trivium.searchHybrid(user, ownerExtensionId, clampedRequest);
+        },
+        async resolveMany(request) {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            // Hard-reject oversized batches before delegating, matching the
+            // MAX_TRIVIUM_BULK_ITEMS precedent in TriviumService.bulkUpsert.
+            if (request.items.length > _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(`Trivium resolveMany supports at most ${_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS} items per request`, 400, 'validation_error', 'validation', { limit: _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_TRIVIUM_RESOLVE_MANY_ITEMS, actual: request.items.length });
+            }
+            return await trivium.resolveMany(user, ownerExtensionId, request);
+        },
+        async neighbors(request) {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            // Clamp depth to the server-side cap. Shallow-copy the request
+            // so the caller's object is not mutated. A non-positive safe
+            // integer for depth throws here.
+            const depth = (0,_trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.getBoundedPositiveInteger)(request.depth, 1, _trivium_internal_js__WEBPACK_IMPORTED_MODULE_1__.MAX_NEIGHBORS_DEPTH, 'depth');
+            const clampedRequest = {
+                ...request,
+                depth,
+            };
+            return await trivium.neighbors(user, ownerExtensionId, clampedRequest);
         },
     };
 }
@@ -12229,6 +12271,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   DEFAULT_CURSOR_PAGE_LIMIT: () => (/* binding */ DEFAULT_CURSOR_PAGE_LIMIT),
 /* harmony export */   DEFAULT_INTEGRITY_SAMPLE_LIMIT: () => (/* binding */ DEFAULT_INTEGRITY_SAMPLE_LIMIT),
 /* harmony export */   DEFAULT_ORPHAN_DELETE_LIMIT: () => (/* binding */ DEFAULT_ORPHAN_DELETE_LIMIT),
+/* harmony export */   DEFAULT_SEARCH_EXPAND_DEPTH: () => (/* binding */ DEFAULT_SEARCH_EXPAND_DEPTH),
+/* harmony export */   DEFAULT_SEARCH_TOP_K: () => (/* binding */ DEFAULT_SEARCH_TOP_K),
 /* harmony export */   EXTERNAL_IDS_TABLE: () => (/* binding */ EXTERNAL_IDS_TABLE),
 /* harmony export */   LAST_COMPACTION_META_KEY: () => (/* binding */ LAST_COMPACTION_META_KEY),
 /* harmony export */   LAST_CONTENT_MUTATION_META_KEY: () => (/* binding */ LAST_CONTENT_MUTATION_META_KEY),
@@ -12237,6 +12281,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   LAST_TEXT_INDEX_REBUILD_META_KEY: () => (/* binding */ LAST_TEXT_INDEX_REBUILD_META_KEY),
 /* harmony export */   LAST_TEXT_INDEX_WRITE_META_KEY: () => (/* binding */ LAST_TEXT_INDEX_WRITE_META_KEY),
 /* harmony export */   MAX_CURSOR_PAGE_LIMIT: () => (/* binding */ MAX_CURSOR_PAGE_LIMIT),
+/* harmony export */   MAX_NEIGHBORS_DEPTH: () => (/* binding */ MAX_NEIGHBORS_DEPTH),
+/* harmony export */   MAX_SEARCH_EXPAND_DEPTH: () => (/* binding */ MAX_SEARCH_EXPAND_DEPTH),
+/* harmony export */   MAX_SEARCH_TOP_K: () => (/* binding */ MAX_SEARCH_TOP_K),
+/* harmony export */   MAX_TRIVIUM_RESOLVE_MANY_ITEMS: () => (/* binding */ MAX_TRIVIUM_RESOLVE_MANY_ITEMS),
 /* harmony export */   META_TABLE: () => (/* binding */ META_TABLE),
 /* harmony export */   PROPERTY_INDEXES_TABLE: () => (/* binding */ PROPERTY_INDEXES_TABLE),
 /* harmony export */   buildEmptyCursorPage: () => (/* binding */ buildEmptyCursorPage),
@@ -12279,6 +12327,15 @@ const DEFAULT_CURSOR_PAGE_LIMIT = 50;
 const MAX_CURSOR_PAGE_LIMIT = 500;
 const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
 const DEFAULT_ORPHAN_DELETE_LIMIT = 100;
+// Phase 2 companion Trivium capability caps. Generous practical values so
+// companion modules can do real work without being toy-limited; the wrappers
+// clamp/validate against these before delegating to TriviumService.
+const DEFAULT_SEARCH_TOP_K = 10;
+const MAX_SEARCH_TOP_K = 200;
+const DEFAULT_SEARCH_EXPAND_DEPTH = 2;
+const MAX_SEARCH_EXPAND_DEPTH = 5;
+const MAX_NEIGHBORS_DEPTH = 5;
+const MAX_TRIVIUM_RESOLVE_MANY_ITEMS = 5000;
 function getTriviumDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
 }
