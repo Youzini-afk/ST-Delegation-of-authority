@@ -3447,7 +3447,7 @@ function createAuthorityRuntime() {
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_11__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleDiscoveryService(install);
-    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit);
+    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit, trivium);
     return {
         adminPackages,
         events,
@@ -4689,6 +4689,102 @@ class AuditService {
 
 /***/ },
 
+/***/ "./src/services/companion-capabilities.ts"
+/*!************************************************!*\
+  !*** ./src/services/companion-capabilities.ts ***!
+  \************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   buildCompanionTriviumCapability: () => (/* binding */ buildCompanionTriviumCapability)
+/* harmony export */ });
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+/**
+ * Build a {@link CompanionTriviumCapability} bound to a specific companion
+ * module's owner extension id. The wrapper captures `user`, `session`, and
+ * `ownerExtensionId` at build time so companion code cannot override the
+ * extension scoping.
+ *
+ * @param trivium    The host's TriviumService. NOT exposed on the returned
+ *                   wrapper; only the narrow methods delegate to it.
+ * @param permissions The host's PermissionService. Used for defense-in-depth
+ *                   authorization before each Trivium call.
+ * @param audit      The host's AuditService. Used to log permission denials.
+ * @param user       The calling user context (from the host's execute ctx).
+ * @param session    The calling session record (from the host's execute ctx).
+ * @param ownerExtensionId The companion module's owner extension id. This
+ *                   is the extension that shipped the `.authority/server.cjs`
+ *                   being activated, NOT the caller extension id from
+ *                   `session.extension.id`.
+ */
+function buildCompanionTriviumCapability(trivium, permissions, audit, user, session, ownerExtensionId) {
+    const authorize = async (database) => {
+        const granted = await permissions.authorize(user, session, {
+            resource: 'trivium.private',
+            target: database,
+        });
+        if (granted === null) {
+            // Log the denial for audit traceability, then throw a structured
+            // permission error. The wrapper uses the OWNER extension id for
+            // audit attribution so the denial is attributed to the companion
+            // module that attempted the operation, not the caller extension.
+            await audit.logPermission(user, ownerExtensionId, 'Permission denied: trivium.private', {
+                resource: 'trivium.private',
+                target: database,
+                moduleId: ownerExtensionId,
+            }).catch(() => undefined);
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(`Permission not granted: trivium.private for ${database}`, 403, 'permission_not_granted', 'permission', { resource: 'trivium.private', target: database, ownerExtensionId });
+        }
+    };
+    return {
+        async listDatabases() {
+            // List spans all databases for the owner extension; there is no
+            // per-database target. Use `*` to match the route-layer convention
+            // for list operations.
+            await authorize('*');
+            return await trivium.listDatabases(user, ownerExtensionId);
+        },
+        async stat(request) {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            return await trivium.stat(user, ownerExtensionId, request);
+        },
+        async bulkUpsert(request) {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            return await trivium.bulkUpsert(user, ownerExtensionId, request);
+        },
+        async bulkLink(request) {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            return await trivium.bulkLink(user, ownerExtensionId, request);
+        },
+        async bulkDelete(request) {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            return await trivium.bulkDelete(user, ownerExtensionId, request);
+        },
+    };
+}
+/**
+ * Normalize a Trivium database name to the same default the TriviumService
+ * uses internally (`getTriviumDatabaseName`: empty/undefined -> 'default').
+ * The wrapper uses this for authorization target normalization so that a
+ * request with `database: undefined` authorizes against `'default'`, matching
+ * the database the service will actually open.
+ */
+function normalizeTriviumDatabase(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : 'default';
+}
+// Suppress unused-import warnings for type-only imports preserved for the
+// public API surface of this module.
+void undefined;
+
+
+/***/ },
+
 /***/ "./src/services/companion-module-loader-service.ts"
 /*!*********************************************************!*\
   !*** ./src/services/companion-module-loader-service.ts ***!
@@ -4705,8 +4801,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _companion_capabilities_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./companion-capabilities.js */ "./src/services/companion-capabilities.ts");
+/* harmony import */ var _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 
@@ -4768,6 +4866,7 @@ class CompanionModuleLoaderService {
     modules;
     permissions;
     audit;
+    trivium;
     /**
      * Lazy accessor for the runtime CommonJS `require` function. Webpack
      * replaces top-level `require` calls with `__webpack_require__`, which
@@ -4779,10 +4878,11 @@ class CompanionModuleLoaderService {
     runtimeRequire;
     logger;
     activationTimeoutMs;
-    constructor(modules, permissions, audit, options = {}) {
+    constructor(modules, permissions, audit, trivium, options = {}) {
         this.modules = modules;
         this.permissions = permissions;
         this.audit = audit;
+        this.trivium = trivium;
         this.runtimeRequire = resolveRuntimeRequire();
         this.logger = options.logger ?? console;
         this.activationTimeoutMs = options.activationTimeoutMs ?? DEFAULT_ACTIVATION_TIMEOUT_MS;
@@ -4821,7 +4921,7 @@ class CompanionModuleLoaderService {
         }
         // Revalidate entry just before require() to defend against TOCTOU
         // edits between discovery and load.
-        const revalidation = (0,_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.revalidateLoadCandidate)(candidate);
+        const revalidation = (0,_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.revalidateLoadCandidate)(candidate);
         if (revalidation) {
             return this.markLoadError(primaryRecord, revalidation);
         }
@@ -4933,7 +5033,7 @@ class CompanionModuleLoaderService {
                     severity: 'error',
                 });
             }
-            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.logger);
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.logger);
         }
         try {
             this.modules.registerCompanion(candidate.manifest, handlers, {
@@ -5020,13 +5120,13 @@ function extractActivate(moduleExports) {
  */
 function registerCompanionTransaction(registrations, undeclared, manifest, moduleId, name, definition) {
     if (typeof name !== 'string' || name.trim() === '' || name.includes(':')) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Invalid transaction name in registerTransaction: ${formatValue(name)}`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`Invalid transaction name in registerTransaction: ${formatValue(name)}`, 400, 'validation_error', 'validation');
     }
     if (registrations.has(name)) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module '${moduleId}' registered transaction '${name}' more than once`, 409, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`Module '${moduleId}' registered transaction '${name}' more than once`, 409, 'validation_error', 'validation');
     }
     if (!definition || typeof definition.handler !== 'function') {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module '${moduleId}' registerTransaction('${name}') definition.handler must be a function`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`Module '${moduleId}' registerTransaction('${name}') definition.handler must be a function`, 400, 'validation_error', 'validation');
     }
     // Record undeclared registrations separately so the loader can produce a
     // precise `load_transaction_undeclared` diagnostic after activation
@@ -5050,7 +5150,7 @@ function registerCompanionTransaction(registrations, undeclared, manifest, modul
  * also rejects with `transaction_timeout` independently — the abort is a
  * cooperative hint, not a force-stop.
  */
-function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, logger) {
+function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, trivium, logger) {
     const companionHandler = registration.definition.handler;
     const transaction = candidate.manifest.transactions[transactionName];
     const moduleVersion = candidate.manifest.version;
@@ -5081,6 +5181,12 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
         // Built-in `Infinity`-carrying limits are not exposed here because
         // this ctx is only built for companion modules.
         const limits = resolveCompanionLimits(transaction);
+        // Phase A: build the generic safe Trivium wrapper bound to the
+        // companion module's owner extension id. The wrapper forces
+        // `extensionId = ownerExtensionId` (NOT callerExtensionId) and
+        // authorizes `trivium.private` before each call. No raw
+        // TriviumService is exposed on the companion ctx.
+        const triviumCapability = (0,_companion_capabilities_js__WEBPACK_IMPORTED_MODULE_2__.buildCompanionTriviumCapability)(trivium, permissions, audit, user, session, candidate.ownerExtensionId);
         const companionCtx = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
@@ -5094,6 +5200,7 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
             audit: auditWrapper,
             authorize,
             signal,
+            trivium: triviumCapability,
         };
         // Phase 3: the host's execute() owns timeout enforcement and the
         // AbortController. The signal on companionCtx IS the host's signal,
@@ -5113,21 +5220,21 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
 function resolveCompanionLimits(transaction) {
     if (!transaction) {
         return {
-            maxRequestBytes: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_REQUEST_BYTES,
-            maxResponseBytes: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_RESPONSE_BYTES,
-            timeoutMs: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_TIMEOUT_MS,
+            maxRequestBytes: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_DEFAULT_REQUEST_BYTES,
+            maxResponseBytes: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_DEFAULT_RESPONSE_BYTES,
+            timeoutMs: _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_DEFAULT_TIMEOUT_MS,
             source: 'host_default',
         };
     }
     const maxRequestBytes = transaction.maxRequestBytes !== undefined
-        ? Math.min(transaction.maxRequestBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_MAX_REQUEST_BYTES)
-        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_REQUEST_BYTES;
+        ? Math.min(transaction.maxRequestBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_MAX_REQUEST_BYTES)
+        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_DEFAULT_REQUEST_BYTES;
     const maxResponseBytes = transaction.maxResponseBytes !== undefined
-        ? Math.min(transaction.maxResponseBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_MAX_RESPONSE_BYTES)
-        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_RESPONSE_BYTES;
+        ? Math.min(transaction.maxResponseBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_MAX_RESPONSE_BYTES)
+        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_DEFAULT_RESPONSE_BYTES;
     const timeoutMs = transaction.timeoutMs !== undefined
-        ? Math.min(transaction.timeoutMs, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_MAX_TIMEOUT_MS)
-        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.MODULE_DEFAULT_TIMEOUT_MS;
+        ? Math.min(transaction.timeoutMs, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_MAX_TIMEOUT_MS)
+        : _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_3__.MODULE_DEFAULT_TIMEOUT_MS;
     const source = (transaction.maxRequestBytes !== undefined
         || transaction.maxResponseBytes !== undefined
         || transaction.timeoutMs !== undefined)
@@ -5158,7 +5265,7 @@ function extractErrorDetails(error) {
         if (error.stack) {
             details.stack = error.stack;
         }
-        if (error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError) {
+        if (error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError) {
             details.code = error.code;
             details.category = error.category;
             if (error.details) {

@@ -21,7 +21,7 @@ import type { AuditService } from './audit-service.js';
 import type { JobService } from './job-service.js';
 import type { PrivateFsService } from './private-fs-service.js';
 import type { StorageService } from './storage-service.js';
-import type { TriviumService } from './trivium-service.js';
+import { TriviumService } from './trivium-service.js';
 import type { SseBroker } from '../events/sse-broker.js';
 import type { CoreService as CoreServiceType } from './core-service.js';
 import type { PoliciesState, SessionRecord, StoredGrantEntry, UserContext } from '../types.js';
@@ -154,28 +154,30 @@ function createSession(user: UserContext): SessionRecord {
     };
 }
 
-function createRuntime(core: CoreServiceType = createMockCore()): {
+function createRuntime(core: CoreServiceType = createMockCore(), trivium?: TriviumService): {
     permissions: PermissionService;
     audit: AuditService;
     modules: ModuleHostService;
     loader: CompanionModuleLoaderService;
+    trivium: TriviumService;
 } {
     const permissions = new PermissionService(new PolicyService(core), core);
     const audit = createMockAudit();
+    const triviumService = trivium ?? new TriviumService(core);
     const modules = new ModuleHostService(
         permissions,
         audit,
-        {} as TriviumService,
+        triviumService,
         {} as StorageService,
         {} as PrivateFsService,
         {} as JobService,
         {} as SseBroker,
     );
-    const loader = new CompanionModuleLoaderService(modules, permissions, audit, {
+    const loader = new CompanionModuleLoaderService(modules, permissions, audit, triviumService, {
         logger: silentLogger as unknown as Console,
         activationTimeoutMs: 2000,
     });
-    return { permissions, audit, modules, loader };
+    return { permissions, audit, modules, loader, trivium: triviumService };
 }
 
 interface WriteModuleOptions {
@@ -426,9 +428,12 @@ describe('CompanionModuleLoaderService', () => {
             'audit',
             'authorize',
             'signal',
+            'trivium',
         ]));
-        // Raw services MUST be absent.
-        for (const forbidden of ['trivium', 'storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'sql', 'fs', 'blob', 'user', 'session']) {
+        // Raw services MUST be absent. Note: 'trivium' is now present as a
+        // SAFE WRAPPER (not the raw TriviumService), so it is excluded from
+        // the forbidden list below.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'sql', 'fs', 'blob', 'user', 'session']) {
             expect(keys).not.toContain(forbidden);
         }
     });
@@ -869,7 +874,13 @@ describe('CompanionModuleLoaderService', () => {
                     ctx.registerTransaction('task.run', {
                         handler: async (txCtx) => ({
                             result: {
-                                hasTrivium: 'trivium' in txCtx,
+                                hasTriviumWrapper: 'trivium' in txCtx,
+                                triviumHasListDatabases: typeof txCtx.trivium?.listDatabases === 'function',
+                                triviumHasStat: typeof txCtx.trivium?.stat === 'function',
+                                triviumHasBulkUpsert: typeof txCtx.trivium?.bulkUpsert === 'function',
+                                triviumHasBulkLink: typeof txCtx.trivium?.bulkLink === 'function',
+                                triviumHasBulkDelete: typeof txCtx.trivium?.bulkDelete === 'function',
+                                triviumIsRawService: typeof (txCtx.trivium)?.repository !== 'undefined' || typeof (txCtx.trivium)?.mappingStore !== 'undefined',
                                 hasStorage: 'storage' in txCtx,
                                 hasFiles: 'files' in txCtx,
                                 hasJobs: 'jobs' in txCtx,
@@ -896,7 +907,16 @@ describe('CompanionModuleLoaderService', () => {
         const session = createSession(user);
         const response = await runtime.modules.execute(user, session, 'third-party.raw-leak-extension', 'task.run', {});
         const result2 = response.result as Record<string, boolean>;
-        expect(result2.hasTrivium).toBe(false);
+        // Phase A: trivium wrapper IS present on the companion ctx.
+        expect(result2.hasTriviumWrapper).toBe(true);
+        expect(result2.triviumHasListDatabases).toBe(true);
+        expect(result2.triviumHasStat).toBe(true);
+        expect(result2.triviumHasBulkUpsert).toBe(true);
+        expect(result2.triviumHasBulkLink).toBe(true);
+        expect(result2.triviumHasBulkDelete).toBe(true);
+        // The trivium wrapper must NOT expose raw service internals.
+        expect(result2.triviumIsRawService).toBe(false);
+        // Raw services MUST still be absent.
         expect(result2.hasStorage).toBe(false);
         expect(result2.hasFiles).toBe(false);
         expect(result2.hasJobs).toBe(false);
@@ -1426,7 +1446,8 @@ describe('CompanionModuleLoaderService', () => {
                                 limits: txCtx.limits,
                                 moduleVersion: txCtx.moduleVersion,
                                 transactionVersion: txCtx.transactionVersion,
-                                hasTrivium: 'trivium' in txCtx,
+                                hasTriviumWrapper: 'trivium' in txCtx,
+                                triviumHasListDatabases: typeof txCtx.trivium?.listDatabases === 'function',
                                 hasStorage: 'storage' in txCtx,
                                 hasFiles: 'files' in txCtx,
                                 hasJobs: 'jobs' in txCtx,
@@ -1457,7 +1478,8 @@ describe('CompanionModuleLoaderService', () => {
             limits: { maxRequestBytes: number; maxResponseBytes: number; timeoutMs: number; source: string };
             moduleVersion: string;
             transactionVersion: string;
-            hasTrivium: boolean;
+            hasTriviumWrapper: boolean;
+            triviumHasListDatabases: boolean;
             hasStorage: boolean;
             hasFiles: boolean;
             hasJobs: boolean;
@@ -1475,8 +1497,10 @@ describe('CompanionModuleLoaderService', () => {
         expect(result2.limits.source).toBe('manifest');
         expect(result2.moduleVersion).toBe('1.0.0');
         expect(result2.transactionVersion).toBe('1.0.0');
-        // Raw services MUST still be absent in Phase 3.
-        expect(result2.hasTrivium).toBe(false);
+        // Phase A: trivium wrapper IS present on the companion ctx.
+        expect(result2.hasTriviumWrapper).toBe(true);
+        expect(result2.triviumHasListDatabases).toBe(true);
+        // Raw services MUST still be absent.
         expect(result2.hasStorage).toBe(false);
         expect(result2.hasFiles).toBe(false);
         expect(result2.hasJobs).toBe(false);
@@ -1744,6 +1768,299 @@ describe('CompanionModuleLoaderService', () => {
 
         // The useful diagnostic code must survive sanitization.
         expect(serializedGet).toContain('load_activation_threw');
+    });
+});
+
+describe('CompanionModuleLoaderService Phase A trivium wrapper', () => {
+    afterEach(() => {
+        while (cleanupDirs.length > 0) {
+            const dir = cleanupDirs.pop();
+            if (dir) {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }
+    });
+
+function createTriviumFixture(): { fixture: Fixture; runtime: ReturnType<typeof createRuntime> } {
+    const fixture = createFixture();
+    const extensionDir = path.join(fixture.thirdPartyRoot, 'trivium-extension');
+    fs.mkdirSync(extensionDir, { recursive: true });
+    writeModule(extensionDir, {
+        serverCjsContent: `
+            module.exports.activate = async function activate(ctx) {
+                ctx.registerTransaction('task.run', {
+                    handler: async (txCtx, input) => {
+                        const op = input?.op ?? 'stat';
+                        if (op === 'listDatabases') {
+                            const result = await txCtx.trivium.listDatabases();
+                            return { result: { op, databases: result.databases.map(d => d.entryName) } };
+                        }
+                            if (op === 'stat') {
+                                const db = input.database ?? 'default';
+                                const result = await txCtx.trivium.stat({ database: db });
+                                return { result: { op, exists: result.exists, database: db } };
+                            }
+                        if (op === 'bulkUpsert') {
+                            const result = await txCtx.trivium.bulkUpsert({
+                                database: input.database,
+                                dim: input.dim ?? 3,
+                                items: input.items ?? [],
+                            });
+                            return { result: { op, totalCount: result.totalCount, successCount: result.successCount } };
+                        }
+                        if (op === 'bulkLink') {
+                            const result = await txCtx.trivium.bulkLink({
+                                database: input.database,
+                                items: input.items ?? [],
+                            });
+                            return { result: { op, totalCount: result.totalCount, successCount: result.successCount } };
+                        }
+                        if (op === 'bulkDelete') {
+                            const result = await txCtx.trivium.bulkDelete({
+                                database: input.database,
+                                items: input.items ?? [],
+                            });
+                            return { result: { op, totalCount: result.totalCount, successCount: result.successCount } };
+                        }
+                        return { result: { op: 'unknown' } };
+                    },
+                });
+            };
+        `,
+    });
+    const discovery = createDiscovery(fixture);
+    const result = discovery.discover();
+    // Use a mock CoreService that has the trivium stubs needed for
+    // listDatabases/stat/bulkUpsert/bulkLink/bulkDelete. The mock returns
+    // empty/zero results; the tests assert the wrapper calls the service
+    // with the right extensionId and authorizes before the call, not the
+    // actual trivium data correctness.
+    const triviumCore = createMockCore();
+    const triviumService = new TriviumService(triviumCore);
+    // Stub the trivium service methods that would delegate to the native
+    // core (which is not available in unit tests). Each stub returns a
+    // minimal valid response shape.
+    vi.spyOn(triviumService, 'listDatabases').mockResolvedValue({ databases: [] });
+    vi.spyOn(triviumService, 'stat').mockResolvedValue({
+        exists: false,
+        entryName: '',
+        sizeBytes: 0,
+        nodeCount: 0,
+        edgeCount: 0,
+        indexCount: 0,
+        updatedAt: null,
+        lastFlushAt: null,
+        mappingCount: 0,
+        orphanMappingCount: null,
+        indexHealth: null,
+    } as never);
+    vi.spyOn(triviumService, 'bulkUpsert').mockResolvedValue({
+        totalCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        failures: [],
+        items: [],
+    });
+    vi.spyOn(triviumService, 'bulkLink').mockResolvedValue({
+        totalCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        failures: [],
+    });
+    vi.spyOn(triviumService, 'bulkDelete').mockResolvedValue({
+        totalCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        failures: [],
+    });
+    const runtime = createRuntime(triviumCore, triviumService);
+    runtime.modules.registerDiscoveredRecords(result.records);
+    return { fixture, runtime };
+}
+
+    async function loadAndExecute(
+        fixture: Fixture,
+        runtime: ReturnType<typeof createRuntime>,
+        input: unknown,
+    ): Promise<unknown> {
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const response = await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', { input });
+        return response.result;
+    }
+
+    it('exposes ctx.trivium wrapper with listDatabases/stat/bulkUpsert/bulkLink/bulkDelete', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        // Just call stat on a non-existent database to verify the wrapper is wired.
+        const result = await loadAndExecute(fixture, runtime, { op: 'stat', database: 'test-db' });
+        expect(result).toMatchObject({ op: 'stat', exists: false, database: 'test-db' });
+    });
+
+    it('wrapper calls TriviumService with ownerExtensionId, not caller extension id', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        // Spy on the TriviumService.stat method to capture the extensionId argument.
+        const statSpy = vi.spyOn(runtime.trivium, 'stat');
+        await loadAndExecute(fixture, runtime, { op: 'stat', database: 'test-db' });
+        expect(statSpy).toHaveBeenCalledTimes(1);
+        // The second argument is the extensionId. It MUST be the owner
+        // extension id (third-party/trivium-extension), NOT the caller
+        // extension id from session.extension.id (third-party/test-extension).
+        const extensionIdArg = statSpy.mock.calls[0]?.[1];
+        expect(extensionIdArg).toBe('third-party/trivium-extension');
+        expect(extensionIdArg).not.toBe('third-party/test-extension');
+    });
+
+    it('wrapper authorizes trivium.private before the service call; denial prevents service call', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        // Deny trivium.private for the 'test-db' database.
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        await runtime.permissions.resolve(user, session, { resource: 'trivium.private', target: 'test-db' }, 'deny');
+
+        // Spy on the TriviumService.stat method to verify it is NOT called.
+        const statSpy = vi.spyOn(runtime.trivium, 'stat');
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        let caught: unknown;
+        try {
+            await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', {
+                input: { op: 'stat', database: 'test-db' },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(AuthorityServiceError);
+        const err = caught as AuthorityServiceError;
+        expect(err.status).toBe(403);
+        expect(err.code).toBe('permission_not_granted');
+        expect(statSpy).not.toHaveBeenCalled();
+    });
+
+    it('default/undefined database authorization target matches Trivium default (default)', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        // Spy on the permissions.authorize method to capture the target.
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const authorizeSpy = vi.spyOn(runtime.permissions, 'authorize');
+
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        // Call stat with no database field (undefined) -> should authorize
+        // against 'default', matching getTriviumDatabaseName normalization.
+        await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', {
+            input: { op: 'stat' },
+        });
+
+        // Find the authorize call for trivium.private.
+        const triviumCall = authorizeSpy.mock.calls.find(call => call[2]?.resource === 'trivium.private');
+        expect(triviumCall).toBeDefined();
+        expect(triviumCall?.[2]?.target).toBe('default');
+    });
+
+    it('listDatabases authorizes with target * (no per-database target for list)', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const authorizeSpy = vi.spyOn(runtime.permissions, 'authorize');
+
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', {
+            input: { op: 'listDatabases' },
+        });
+
+        const triviumCall = authorizeSpy.mock.calls.find(call => call[2]?.resource === 'trivium.private');
+        expect(triviumCall).toBeDefined();
+        expect(triviumCall?.[2]?.target).toBe('*');
+    });
+
+    it('bulkUpsert calls TriviumService.bulkUpsert with ownerExtensionId', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const upsertSpy = vi.spyOn(runtime.trivium, 'bulkUpsert');
+        await loadAndExecute(fixture, runtime, {
+            op: 'bulkUpsert',
+            database: 'test-db',
+            dim: 3,
+            items: [{ externalId: 'node-1', namespace: 'default', vector: [1, 2, 3], payload: { label: 'test' } }],
+        });
+        expect(upsertSpy).toHaveBeenCalledTimes(1);
+        const extensionIdArg = upsertSpy.mock.calls[0]?.[1];
+        expect(extensionIdArg).toBe('third-party/trivium-extension');
+    });
+
+    it('bulkLink calls TriviumService.bulkLink with ownerExtensionId', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const linkSpy = vi.spyOn(runtime.trivium, 'bulkLink');
+        // bulkLink requires existing nodes; the call will likely fail at the
+        // service level, but the spy still captures the extensionId argument
+        // before the service throws. The wrapper re-throws, so we catch.
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        try {
+            await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', {
+                input: {
+                    op: 'bulkLink',
+                    database: 'test-db',
+                    items: [{ src: { externalId: 'a' }, dst: { externalId: 'b' } }],
+                },
+            });
+        } catch {
+            // expected: bulkLink on non-existent nodes fails
+        }
+        expect(linkSpy).toHaveBeenCalledTimes(1);
+        const extensionIdArg = linkSpy.mock.calls[0]?.[1];
+        expect(extensionIdArg).toBe('third-party/trivium-extension');
+    });
+
+    it('bulkDelete calls TriviumService.bulkDelete with ownerExtensionId', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const deleteSpy = vi.spyOn(runtime.trivium, 'bulkDelete');
+        await loadAndExecute(fixture, runtime, {
+            op: 'bulkDelete',
+            database: 'test-db',
+            items: [{ externalId: 'nonexistent' }],
+        });
+        expect(deleteSpy).toHaveBeenCalledTimes(1);
+        const extensionIdArg = deleteSpy.mock.calls[0]?.[1];
+        expect(extensionIdArg).toBe('third-party/trivium-extension');
+    });
+
+    it('companion ctx still lacks raw storage/files/jobs/events/core/runtime/sql services', async () => {
+        const fixture = createFixture();
+        const extensionDir = path.join(fixture.thirdPartyRoot, 'trivium-raw-check');
+        fs.mkdirSync(extensionDir, { recursive: true });
+        writeModule(extensionDir, {
+            serverCjsContent: `
+                module.exports.activate = async function activate(ctx) {
+                    ctx.registerTransaction('task.run', {
+                        handler: async (txCtx) => ({
+                            result: {
+                                keys: Object.keys(txCtx).sort(),
+                                hasTriviumWrapper: typeof txCtx.trivium?.listDatabases === 'function',
+                                triviumIsRaw: typeof (txCtx.trivium)?.repository !== 'undefined',
+                            },
+                        }),
+                    });
+                };
+            `,
+        });
+        const discovery = createDiscovery(fixture);
+        const result = discovery.discover();
+        const runtime = createRuntime();
+        runtime.modules.registerDiscoveredRecords(result.records);
+        await runtime.loader.loadAll(result);
+
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const response = await runtime.modules.execute(user, session, 'third-party.trivium-raw-check', 'task.run', {});
+        const result2 = response.result as { keys: string[]; hasTriviumWrapper: boolean; triviumIsRaw: boolean };
+        // trivium wrapper IS present.
+        expect(result2.hasTriviumWrapper).toBe(true);
+        // trivium is NOT the raw TriviumService (no repository property).
+        expect(result2.triviumIsRaw).toBe(false);
+        // Raw services MUST be absent.
+        for (const forbidden of ['storage', 'files', 'jobs', 'events', 'core', 'runtime', 'permissions', 'sql', 'fs', 'blob', 'user', 'session']) {
+            expect(result2.keys).not.toContain(forbidden);
+        }
     });
 });
 

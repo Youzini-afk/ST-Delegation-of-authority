@@ -13,6 +13,7 @@ import type {
 } from '@stdo/shared-types';
 import { AUTHORITY_MODULE_PROTOCOL_VERSION } from '../constants.js';
 import type { AuditService } from './audit-service.js';
+import { buildCompanionTriviumCapability, type CompanionTriviumCapability } from './companion-capabilities.js';
 import {
     MODULE_DEFAULT_REQUEST_BYTES,
     MODULE_DEFAULT_RESPONSE_BYTES,
@@ -25,6 +26,7 @@ import type { PermissionService } from './permission-service.js';
 import { revalidateLoadCandidate, type CompanionModuleLoadCandidate } from './module-discovery-service.js';
 import type { ModuleDiscoveryResult } from './module-discovery-service.js';
 import type { ModuleHostService, ModuleTransactionHandler, ModuleTransactionHandlerResult } from './module-host-service.js';
+import type { TriviumService } from './trivium-service.js';
 import type { SessionRecord, UserContext } from '../types.js';
 import { AuthorityServiceError } from '../utils.js';
 
@@ -97,6 +99,7 @@ export class CompanionModuleLoaderService {
         private readonly modules: ModuleHostService,
         private readonly permissions: PermissionService,
         private readonly audit: AuditService,
+        private readonly trivium: TriviumService,
         options: CompanionModuleLoaderServiceOptions = {},
     ) {
         this.runtimeRequire = resolveRuntimeRequire();
@@ -267,7 +270,7 @@ export class CompanionModuleLoaderService {
                     severity: 'error',
                 });
             }
-            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.logger);
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.logger);
         }
 
         try {
@@ -368,7 +371,7 @@ export type CompanionTransactionHandler = (
 ) => Promise<ModuleTransactionHandlerResult>;
 
 /**
- * Phase 3 minimal safe transaction context for companion module handlers.
+ * Phase 3 + Phase A safe transaction context for companion module handlers.
  *
  * This is intentionally distinct from the existing {@link ModuleTransactionContext}
  * which carries raw `trivium`, `storage`, `files`, `jobs`, `events` services.
@@ -383,9 +386,13 @@ export type CompanionTransactionHandler = (
  * - `authorize(request)` for `PermissionEvaluateRequest`
  * - `signal` (AbortSignal) for cooperative cancellation
  * - `requestId` for tracing
+ * - `trivium`: Phase A generic safe Trivium wrapper. Forces
+ *   `extensionId = ownerExtensionId`; companion code cannot pass an
+ *   extension id. Authorizes `trivium.private` before each call.
  *
- * Raw SQL/fs/blob/trivium/jobs/events/runtime/core access is intentionally
- * absent in Phase 3; scoped wrappers are separate future work.
+ * Raw SQL/fs/blob/jobs/events/runtime/core access is intentionally absent;
+ * scoped wrappers are separate future work. The `trivium` wrapper is the
+ * first scoped capability, added in Phase A for vector-first use cases.
  */
 export interface CompanionModuleTransactionContext {
     moduleId: string;
@@ -401,6 +408,13 @@ export interface CompanionModuleTransactionContext {
     audit: CompanionAuditWrapper;
     authorize: (request: PermissionEvaluateRequest) => Promise<boolean>;
     signal: AbortSignal;
+    /**
+     * Phase A generic safe Trivium wrapper. Forces
+     * `extensionId = ownerExtensionId` and authorizes `trivium.private`
+     * before each call. Exposes only `listDatabases`, `stat`, `bulkUpsert`,
+     * `bulkLink`, `bulkDelete`; no raw `TriviumService` is exposed.
+     */
+    trivium: CompanionTriviumCapability;
 }
 
 /**
@@ -522,6 +536,7 @@ function buildCompanionHandler(
     registration: CompanionTransactionRegistration,
     permissions: PermissionService,
     audit: AuditService,
+    trivium: TriviumService,
     logger: LoaderLogger,
 ): ModuleTransactionHandler {
     const companionHandler = registration.definition.handler;
@@ -558,6 +573,20 @@ function buildCompanionHandler(
         // this ctx is only built for companion modules.
         const limits = resolveCompanionLimits(transaction);
 
+        // Phase A: build the generic safe Trivium wrapper bound to the
+        // companion module's owner extension id. The wrapper forces
+        // `extensionId = ownerExtensionId` (NOT callerExtensionId) and
+        // authorizes `trivium.private` before each call. No raw
+        // TriviumService is exposed on the companion ctx.
+        const triviumCapability = buildCompanionTriviumCapability(
+            trivium,
+            permissions,
+            audit,
+            user,
+            session,
+            candidate.ownerExtensionId,
+        );
+
         const companionCtx: CompanionModuleTransactionContext = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
@@ -571,6 +600,7 @@ function buildCompanionHandler(
             audit: auditWrapper,
             authorize,
             signal,
+            trivium: triviumCapability,
         };
 
         // Phase 3: the host's execute() owns timeout enforcement and the
