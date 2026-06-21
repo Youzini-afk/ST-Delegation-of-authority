@@ -1,6 +1,7 @@
 import { SseBroker } from './events/sse-broker.js';
 import { AdminPackageService } from './services/admin-package-service.js';
 import { AuditService } from './services/audit-service.js';
+import { CompanionModuleLoaderService } from './services/companion-module-loader-service.js';
 import { CoreService } from './services/core-service.js';
 import { DataTransferService } from './services/data-transfer-service.js';
 import { ExtensionService } from './services/extension-service.js';
@@ -40,6 +41,13 @@ export interface AuthorityRuntime {
     nativeMigrations: NativeMigrationService;
     modules: ModuleHostService;
     moduleDiscovery: ModuleDiscoveryService;
+    /**
+     * Phase 2 loader for companion authority modules. Loads
+     * `.authority/server.cjs` for valid discovered records at startup and
+     * re-registers their handlers with {@link modules} using the companion
+     * registration path so handlers receive a minimal safe ctx.
+     */
+    companionLoader: CompanionModuleLoaderService;
 }
 
 export function createAuthorityRuntime(): AuthorityRuntime {
@@ -63,6 +71,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const adminPackages = new AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
     const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
     const moduleDiscovery = new ModuleDiscoveryService(install);
+    const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit);
 
     return {
         adminPackages,
@@ -85,5 +94,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         nativeMigrations,
         modules,
         moduleDiscovery,
+        companionLoader,
     };
 }

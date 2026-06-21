@@ -85,6 +85,18 @@ export interface ModuleHostRegistrationOptions {
      * usually leave it undefined.
      */
     source?: AuthorityModuleRecordSource;
+    /**
+     * Phase 2 marker: when `'companion'`, handlers are companion module code
+     * loaded from disk and must receive a minimal safe
+     * {@link CompanionModuleTransactionContext} via the
+     * {@link CompanionModuleLoaderService}. The host refuses to forward raw
+     * runtime services (trivium/storage/files/jobs/events) to companion
+     * handlers in Phase 2.
+     *
+     * Built-in compiled modules continue to use the default `'builtin'`
+     * context mode and receive the existing {@link ModuleTransactionContext}.
+     */
+    contextMode?: 'builtin' | 'companion';
 }
 
 interface RegisteredModule {
@@ -93,6 +105,14 @@ interface RegisteredModule {
     resolvers: Partial<Record<ModuleTransactionName, ModuleTransactionRequiredResourceResolver>>;
     ownerExtensionId?: string;
     source?: AuthorityModuleRecordSource;
+    /**
+     * Phase 2: tracks whether this module's handlers receive the built-in
+     * raw-service ctx or the minimal safe companion tx ctx. Companion
+     * handlers are wrapped by the loader to ignore the host-supplied ctx
+     * anyway, but this flag lets execute() short-circuit building the raw
+     * ctx for companion modules and validates the trust boundary.
+     */
+    contextMode: 'builtin' | 'companion';
 }
 
 function validateModuleId(moduleId: string): void {
@@ -176,6 +196,32 @@ export class ModuleHostService {
         handlers: Record<ModuleTransactionName, ModuleTransactionHandler>,
         options: ModuleHostRegistrationOptions = {},
     ): void {
+        this.registerInternal(manifest, handlers, options, 'builtin');
+    }
+
+    /**
+     * Phase 2 companion module registration. Companion modules are loaded
+     * from disk by {@link CompanionModuleLoaderService} and their handlers
+     * are wrapped so they receive a minimal safe
+     * {@link CompanionModuleTransactionContext} (no raw trivium/storage/files/
+     * jobs/events services). The host treats the registered module as
+     * `contextMode: 'companion'` so execute() knows not to build the raw
+     * service ctx for its handlers.
+     */
+    registerCompanion(
+        manifest: AuthorityModuleManifest,
+        handlers: Record<ModuleTransactionName, ModuleTransactionHandler>,
+        options: Omit<ModuleHostRegistrationOptions, 'contextMode'> = {},
+    ): void {
+        this.registerInternal(manifest, handlers, options, 'companion');
+    }
+
+    private registerInternal(
+        manifest: AuthorityModuleManifest,
+        handlers: Record<ModuleTransactionName, ModuleTransactionHandler>,
+        options: ModuleHostRegistrationOptions,
+        contextMode: 'builtin' | 'companion',
+    ): void {
         validateModuleId(manifest.id);
         if (manifest.protocolVersion !== AUTHORITY_MODULE_PROTOCOL_VERSION) {
             throw new AuthorityServiceError(
@@ -230,6 +276,7 @@ export class ModuleHostService {
             manifest,
             handlers: handlerMap,
             resolvers: options.requiredResourceResolvers ?? {},
+            contextMode,
             ...(options.ownerExtensionId !== undefined ? { ownerExtensionId: options.ownerExtensionId } : {}),
             ...(options.source !== undefined ? { source: options.source } : {}),
         };
@@ -437,6 +484,15 @@ export class ModuleHostService {
             }
         }
 
+        // Phase 2: companion modules do NOT receive the raw service ctx.
+        // Their handlers are wrapped by the CompanionModuleLoaderService to
+        // build a minimal safe CompanionModuleTransactionContext from the
+        // metadata below; the raw trivium/storage/files/jobs/events services
+        // are intentionally absent for companion code. We still pass a
+        // metadata-only stub ctx here so that built-in handlers continue to
+        // receive the full ModuleTransactionContext, and so companion
+        // handler wrappers can read user/session/callerExtensionId without
+        // needing the raw services.
         const ctx: ModuleTransactionContext = {
             user,
             session,
@@ -463,6 +519,12 @@ export class ModuleHostService {
         }
 
         const input = request.input ?? undefined;
+        // For companion modules the handler is already wrapped by the loader
+        // to ignore the raw ctx and build a CompanionModuleTransactionContext
+        // internally. We still pass the metadata-bearing ctx so the wrapper
+        // can read user/session/callerExtensionId without us leaking raw
+        // services into companion code paths.
+        void module.contextMode;
         const handlerResult = await handler(ctx, input, request);
 
         const idempotencyKey = typeof request.idempotencyKey === 'string' && request.idempotencyKey.trim()

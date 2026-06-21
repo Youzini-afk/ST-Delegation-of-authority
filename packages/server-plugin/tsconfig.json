@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
-    "rootDir": "./src",
+    "rootDir": ".",
     "outDir": "./dist/types",
     "types": [
       "node"
@@ -14,7 +14,8 @@
     }
   ],
   "include": [
-    "src/**/*.ts"
+    "src/**/*.ts",
+    "../../stubs/globals.d.ts"
   ]
 }
 

@@ -3387,23 +3387,25 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
 /* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
 /* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
-/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
-/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
+/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
+/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -3425,26 +3427,27 @@ __webpack_require__.r(__webpack_exports__);
 
 
 function createAuthorityRuntime() {
-    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_3__.CoreService();
+    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__.CoreService();
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
     const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__.AuditService(core);
-    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__.DataTransferService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__.PrivateFsService(core);
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__.NativeMigrationService();
+    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__.DataTransferService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__.ExtensionService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_14__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_13__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_16__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_17__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_18__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_19__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_15__.PrivateFsService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_20__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_12__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
-    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_9__.ModuleDiscoveryService(install);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_11__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleDiscoveryService(install);
+    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit);
     return {
         adminPackages,
         events,
@@ -3466,6 +3469,7 @@ function createAuthorityRuntime() {
         nativeMigrations,
         modules,
         moduleDiscovery,
+        companionLoader,
     };
 }
 
@@ -4681,6 +4685,510 @@ class AuditService {
         });
     }
 }
+
+
+/***/ },
+
+/***/ "./src/services/companion-module-loader-service.ts"
+/*!*********************************************************!*\
+  !*** ./src/services/companion-module-loader-service.ts ***!
+  \*********************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   CompanionModuleLoaderService: () => (/* binding */ CompanionModuleLoaderService),
+/* harmony export */   DEFAULT_ACTIVATION_TIMEOUT_MS: () => (/* binding */ DEFAULT_ACTIVATION_TIMEOUT_MS),
+/* harmony export */   MAX_ACTIVATION_TIMEOUT_MS: () => (/* binding */ MAX_ACTIVATION_TIMEOUT_MS),
+/* harmony export */   loadCompanionModuleFromDisk: () => (/* binding */ loadCompanionModuleFromDisk)
+/* harmony export */ });
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+/**
+ * Webpack-specific runtime require. When the plugin source is bundled by
+ * webpack (target: node), `__non_webpack_require__` resolves to the real Node
+ * `require` function at runtime instead of webpack's bundle-time
+ * `__webpack_require__`. This is what lets the bundled `runtime/index.cjs`
+ * load external `.authority/server.cjs` files from disk by absolute path.
+ *
+ * The ambient declaration lives in `stubs/globals.d.ts` so the rest of the
+ * codebase stays unaware of it.
+ *
+ * When the source runs unbundled (vitest, ts-node), `__non_webpack_require__`
+ * is undefined and we fall back to `createRequire(import.meta.url)` which
+ * produces a Node require rooted at this module URL.
+ */
+function resolveRuntimeRequire() {
+    if (typeof require !== 'undefined') {
+        return require;
+    }
+    return /* createRequire() */ undefined;
+}
+/**
+ * Companion authority module loader.
+ *
+ * Phase 2 scope: load local `.authority/server.cjs` for valid discovered
+ * companion module records at startup, invoke `module.exports.activate(ctx)`,
+ * validate that activation registers exactly the transactions declared in the
+ * manifest, and re-register the resulting handlers with the
+ * {@link ModuleHostService} so `execute()` works. Failures never block DOA
+ * startup; the affected record transitions to `load_error` and the host
+ * surfaces it through `/modules` for diagnostics.
+ *
+ * Boundary contract (non-negotiable):
+ *
+ * - Only `available` records with a manifest + entry + internal source reach
+ *   `require()`. Invalid, duplicate, disabled, incompatible,
+ *   entry-missing, and no-entry records never load.
+ * - The activation ctx exposes only `moduleId`, `ownerExtensionId`,
+ *   `moduleDir`, `logger`, and `registerTransaction(name, definition)`. It
+ *   does NOT receive SQL/fs/blob/trivium/jobs/events/runtime/core/raw
+ *   services.
+ * - Companion transaction handlers receive a deliberately tiny safe
+ *   {@link CompanionModuleTransactionContext} in Phase 2: metadata, logger,
+ *   audit wrapper, authorize, AbortSignal, requestId. Richer scoped wrappers
+ *   arrive in Phase 3.
+ * - Loading is webpack-safe: a runtime `createRequire` from `node:module`
+ *   loads the absolute entry path at runtime, never bundle-time imports. The
+ *   built `runtime/index.cjs` therefore can load external `.authority/
+ *   server.cjs` files from disk.
+ * - Loading failure marks the module `load_error` with a structured
+ *   diagnostic and never throws out of `loadAll`.
+ */
+class CompanionModuleLoaderService {
+    modules;
+    permissions;
+    audit;
+    /**
+     * Lazy accessor for the runtime CommonJS `require` function. Webpack
+     * replaces top-level `require` calls with `__webpack_require__`, which
+     * only resolves bundled modules. To load arbitrary `.cjs` files from
+     * disk at runtime we use `node:module.createRequire` anchored at the
+     * loader's own module URL, which webpack leaves intact because it is a
+     * runtime call on an imported binding rather than a bare `require`.
+     */
+    runtimeRequire;
+    logger;
+    activationTimeoutMs;
+    constructor(modules, permissions, audit, options = {}) {
+        this.modules = modules;
+        this.permissions = permissions;
+        this.audit = audit;
+        this.runtimeRequire = resolveRuntimeRequire();
+        this.logger = options.logger ?? console;
+        this.activationTimeoutMs = options.activationTimeoutMs ?? DEFAULT_ACTIVATION_TIMEOUT_MS;
+    }
+    /**
+     * Load every valid companion module in the discovery result. Safe to
+     * call during `init()`; never throws. Each record's status is updated
+     * in place through {@link ModuleHostService.registerDiscoveredRecord} so
+     * that `/modules` reflects `loaded` or `load_error` consistently.
+     *
+     * @returns the list of updated records (loaded + load_error).
+     */
+    async loadAll(discovery) {
+        const updated = [];
+        for (const candidate of discovery.internalSources.values()) {
+            const record = await this.loadOne(candidate, discovery);
+            if (record) {
+                updated.push(record);
+            }
+        }
+        return updated;
+    }
+    /**
+     * Load a single companion module from its discovery candidate. Returns
+     * the updated public record (loaded or load_error) or `null` when the
+     * candidate could not be found in the discovery records at all.
+     */
+    async loadOne(candidate, discovery) {
+        const primaryRecord = discovery.byModuleId.get(candidate.moduleId);
+        if (!primaryRecord || primaryRecord.status !== 'available') {
+            // Defensive: only `available` records may load. Duplicate,
+            // invalid, disabled, incompatible, entry_missing, and no-entry
+            // records never reach this path because they have no internal
+            // source.
+            return null;
+        }
+        // Revalidate entry just before require() to defend against TOCTOU
+        // edits between discovery and load.
+        const revalidation = (0,_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_2__.revalidateLoadCandidate)(candidate);
+        if (revalidation) {
+            return this.markLoadError(primaryRecord, revalidation);
+        }
+        let moduleExports;
+        try {
+            moduleExports = this.runtimeRequire(candidate.entryPath);
+        }
+        catch (error) {
+            return this.markLoadError(primaryRecord, {
+                code: 'load_require_failed',
+                message: `Failed to require '${candidate.manifest.entry}': ${errorMessage(error)}`,
+                severity: 'error',
+                details: { ownerExtensionId: candidate.ownerExtensionId },
+            });
+        }
+        const activate = extractActivate(moduleExports);
+        if (typeof activate !== 'function') {
+            return this.markLoadError(primaryRecord, {
+                code: 'load_activate_not_a_function',
+                message: `Entry '${candidate.manifest.entry}' did not export an activate(ctx) function.`,
+                severity: 'error',
+                details: { exportType: typeof activate },
+            });
+        }
+        // Collect registered transactions through the activation ctx. The
+        // ctx is intentionally minimal: only metadata, logger, and a
+        // registerTransaction callback. No raw services.
+        const registrations = new Map();
+        const undeclared = new Set();
+        const activationCtx = {
+            moduleId: candidate.moduleId,
+            ownerExtensionId: candidate.ownerExtensionId,
+            moduleDir: candidate.moduleDir,
+            logger: this.logger,
+            registerTransaction: (name, definition) => {
+                registerCompanionTransaction(registrations, undeclared, candidate.manifest, candidate.moduleId, name, definition);
+            },
+        };
+        let activationTimedOut = false;
+        const activationPromise = Promise.resolve().then(() => activate(activationCtx));
+        const timeoutPromise = new Promise((_, reject) => {
+            const timer = setTimeout(() => {
+                activationTimedOut = true;
+                reject(new ActivationTimeoutError(candidate.moduleId, this.activationTimeoutMs));
+            }, this.activationTimeoutMs);
+            // Allow the Node process to exit even if the timer is still
+            // pending (companion modules should not hang startup, but the
+            // timeout is the safety net).
+            if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+                timer.unref();
+            }
+        });
+        try {
+            await Promise.race([activationPromise, timeoutPromise]);
+        }
+        catch (error) {
+            if (activationTimedOut) {
+                return this.markLoadError(primaryRecord, {
+                    code: 'load_activation_timeout',
+                    message: `Activation timed out after ${this.activationTimeoutMs} ms for module '${candidate.moduleId}'.`,
+                    severity: 'error',
+                    ...buildOptionalDetails({ timeoutMs: this.activationTimeoutMs }),
+                });
+            }
+            return this.markLoadError(primaryRecord, {
+                code: 'load_activation_threw',
+                message: `activate(ctx) threw: ${errorMessage(error)}`,
+                severity: 'error',
+                ...buildOptionalDetails(extractErrorDetails(error)),
+            });
+        }
+        // Validate declared vs registered transactions. Missing handlers and
+        // undeclared handlers both surface as load_error with a precise code.
+        const declared = Object.keys(candidate.manifest.transactions);
+        const registered = [...registrations.keys()];
+        const missing = declared.filter(name => !registrations.has(name));
+        const undeclaredList = [...undeclared];
+        if (missing.length > 0 || undeclaredList.length > 0) {
+            const diagnostics = [];
+            if (missing.length > 0) {
+                diagnostics.push({
+                    code: 'load_transaction_handler_missing',
+                    message: `Module '${candidate.moduleId}' did not register handlers for: ${missing.join(', ')}.`,
+                    severity: 'error',
+                    ...buildOptionalDetails({ missing }),
+                });
+            }
+            if (undeclaredList.length > 0) {
+                diagnostics.push({
+                    code: 'load_transaction_undeclared',
+                    message: `Module '${candidate.moduleId}' registered undeclared transactions: ${undeclaredList.join(', ')}.`,
+                    severity: 'error',
+                    ...buildOptionalDetails({ undeclared: undeclaredList }),
+                });
+            }
+            return this.markLoadError(primaryRecord, diagnostics[0], diagnostics);
+        }
+        // All declared transactions have handlers; re-register with the
+        // host using the companion registration path so execute() builds a
+        // minimal safe companion tx ctx instead of the raw service ctx.
+        const handlers = {};
+        for (const name of declared) {
+            const registration = registrations.get(name);
+            if (!registration) {
+                // Defensive: filtered above; should not happen.
+                return this.markLoadError(primaryRecord, {
+                    code: 'load_transaction_handler_missing',
+                    message: `Internal error: handler vanished for ${candidate.moduleId}/${name} after validation.`,
+                    severity: 'error',
+                });
+            }
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.logger);
+        }
+        try {
+            this.modules.registerCompanion(candidate.manifest, handlers, {
+                ownerExtensionId: candidate.ownerExtensionId,
+                source: primaryRecord.source,
+            });
+        }
+        catch (error) {
+            return this.markLoadError(primaryRecord, {
+                code: 'load_register_failed',
+                message: `ModuleHostService.registerCompanion threw: ${errorMessage(error)}`,
+                severity: 'error',
+                ...buildOptionalDetails(extractErrorDetails(error)),
+            });
+        }
+        const loadedRecord = {
+            ...primaryRecord,
+            status: 'loaded',
+            manifest: candidate.manifest,
+        };
+        // Replace the available record with the loaded one through the
+        // public upsert path so /modules reflects the new status.
+        this.modules.registerDiscoveredRecord(loadedRecord);
+        return this.modules.getRecord(candidate.moduleId) ?? loadedRecord;
+    }
+    markLoadError(record, primary, extra) {
+        const diagnostics = [primary, ...(extra ?? [])];
+        const errorRecord = {
+            ...record,
+            status: 'load_error',
+            diagnostics,
+        };
+        this.logger.error(`[authority] Companion module load failed for '${record.moduleId}': ${primary.message}`);
+        // Replace the available record with the load_error record through
+        // the public upsert path so /modules reflects the new status.
+        this.modules.registerDiscoveredRecord(errorRecord);
+        return this.modules.getRecord(record.moduleId) ?? errorRecord;
+    }
+}
+/** Default activation timeout: 10 s. Hard cap 30 s. */
+const DEFAULT_ACTIVATION_TIMEOUT_MS = 10_000;
+/** Hard upper bound on activation timeout. */
+const MAX_ACTIVATION_TIMEOUT_MS = 30_000;
+class ActivationTimeoutError extends Error {
+    constructor(moduleId, timeoutMs) {
+        super(`Activation timed out after ${timeoutMs} ms for module '${moduleId}'.`);
+        this.name = 'ActivationTimeoutError';
+    }
+}
+/**
+ * Extract the `activate(ctx)` export from a CommonJS module. Accepts either
+ * `module.exports = activate` or `module.exports.activate = activate`.
+ * Returns `null` when no valid function export is present so the loader can
+ * surface a precise `load_activate_not_a_function` diagnostic.
+ */
+function extractActivate(moduleExports) {
+    if (typeof moduleExports === 'function') {
+        return moduleExports;
+    }
+    if (moduleExports && typeof moduleExports === 'object') {
+        const activate = moduleExports.activate;
+        if (typeof activate === 'function') {
+            return activate;
+        }
+    }
+    return null;
+}
+/**
+ * Validate and store a transaction registration made through the activation
+ * ctx. Throws a structured validation error for hard contract violations
+ * (invalid name shape, duplicate registration, non-function handler) so the
+ * loader can convert it to a `load_activation_threw` diagnostic. For
+ * undeclared transactions (name not in the manifest), the registration is
+ * recorded in the `undeclared` set rather than thrown, so the loader can
+ * surface a precise `load_transaction_undeclared` diagnostic after activation
+ * completes alongside any missing-handler diagnostics.
+ *
+ * Validation:
+ * - name must match the manifest's transaction name pattern (no colons,
+ *   alphanumeric prefix).
+ * - definition.handler must be a function.
+ * - duplicate registration of the same name in one activation is an error.
+ * - name not declared in the manifest -> recorded in `undeclared` (not thrown).
+ */
+function registerCompanionTransaction(registrations, undeclared, manifest, moduleId, name, definition) {
+    if (typeof name !== 'string' || name.trim() === '' || name.includes(':')) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Invalid transaction name in registerTransaction: ${formatValue(name)}`, 400, 'validation_error', 'validation');
+    }
+    if (registrations.has(name)) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module '${moduleId}' registered transaction '${name}' more than once`, 409, 'validation_error', 'validation');
+    }
+    if (!definition || typeof definition.handler !== 'function') {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module '${moduleId}' registerTransaction('${name}') definition.handler must be a function`, 400, 'validation_error', 'validation');
+    }
+    // Record undeclared registrations separately so the loader can produce a
+    // precise `load_transaction_undeclared` diagnostic after activation
+    // completes. The handler is still stored so a follow-up missing-handler
+    // check has the registration available if the manifest also declares it.
+    if (!manifest.transactions[name]) {
+        undeclared.add(name);
+    }
+    registrations.set(name, { definition });
+}
+/**
+ * Build a {@link ModuleTransactionHandler} adapter that constructs a minimal
+ * safe {@link CompanionModuleTransactionContext} for the companion handler.
+ * The raw services that the built-in `ModuleTransactionContext` carries
+ * (trivium/storage/files/jobs/events) are intentionally absent here.
+ */
+function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, logger) {
+    const companionHandler = registration.definition.handler;
+    return async (rawCtx, input, request) => {
+        // rawCtx is the host's ModuleTransactionContext. We deliberately do
+        // NOT forward it to companion code; we build a minimal safe ctx.
+        const user = rawCtx.user;
+        const session = rawCtx.session;
+        const callerExtensionId = rawCtx.callerExtensionId;
+        const requestId = generateRequestId();
+        const abortController = new AbortController();
+        const authorize = async (permRequest) => {
+            const grant = await permissions.authorize(user, session, permRequest);
+            return grant !== null;
+        };
+        const auditWrapper = {
+            logUsage: (message, details) => audit.logUsage(user, candidate.ownerExtensionId, message, details).catch(() => undefined),
+            logWarning: (message, details) => audit.logWarning(user, candidate.ownerExtensionId, message, details).catch(() => undefined),
+            logError: (message, details) => audit.logError(user, candidate.ownerExtensionId, message, details).catch(() => undefined),
+        };
+        const companionCtx = {
+            moduleId: candidate.moduleId,
+            ownerExtensionId: candidate.ownerExtensionId,
+            transactionName,
+            callerExtensionId,
+            requestId,
+            logger,
+            audit: auditWrapper,
+            authorize,
+            signal: abortController.signal,
+        };
+        // Apply the manifest's per-transaction timeout (default 120 s, hard
+        // cap 10 min). The timeout races the companion handler so a hung
+        // transaction cannot hold the request forever.
+        const transaction = candidate.manifest.transactions[transactionName];
+        const timeoutMs = resolveTransactionTimeoutMs(transaction);
+        const timeoutPromise = new Promise((_, reject) => {
+            const timer = setTimeout(() => {
+                abortController.abort();
+                reject(new TransactionTimeoutError(candidate.moduleId, transactionName, timeoutMs));
+            }, timeoutMs);
+            if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+                timer.unref();
+            }
+        });
+        try {
+            const result = await Promise.race([
+                companionHandler(companionCtx, input, request),
+                timeoutPromise,
+            ]);
+            return result;
+        }
+        catch (error) {
+            if (error instanceof TransactionTimeoutError) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(error.message, 504, 'core_request_failed', 'core', { code: 'transaction_timeout', moduleId: candidate.moduleId, transaction: transactionName, timeoutMs });
+            }
+            throw error;
+        }
+    };
+}
+class TransactionTimeoutError extends Error {
+    constructor(moduleId, transactionName, timeoutMs) {
+        super(`Transaction '${moduleId}/${transactionName}' timed out after ${timeoutMs} ms.`);
+        this.name = 'TransactionTimeoutError';
+    }
+}
+/**
+ * Resolve the effective per-transaction timeout for a companion transaction.
+ * Falls back to {@link DEFAULT_TRANSACTION_TIMEOUT_MS} when the manifest
+ * does not specify one. Capped by {@link MAX_TRANSACTION_TIMEOUT_MS}.
+ */
+function resolveTransactionTimeoutMs(transaction) {
+    if (!transaction || typeof transaction.timeoutMs !== 'number' || !Number.isFinite(transaction.timeoutMs) || transaction.timeoutMs <= 0) {
+        return DEFAULT_TRANSACTION_TIMEOUT_MS;
+    }
+    return Math.min(transaction.timeoutMs, MAX_TRANSACTION_TIMEOUT_MS);
+}
+/** Default per-transaction timeout (120 s), aligned with discovery defaults. */
+const DEFAULT_TRANSACTION_TIMEOUT_MS = 120_000;
+/** Hard upper bound on per-transaction timeout (10 min). */
+const MAX_TRANSACTION_TIMEOUT_MS = 10 * 60 * 1000;
+function generateRequestId() {
+    try {
+        // Prefer crypto.randomUUID when available; fall back to a timestamp.
+        // The global crypto may be absent in very old Node runtime paths.
+        const g = globalThis;
+        if (g.crypto && typeof g.crypto.randomUUID === 'function') {
+            return g.crypto.randomUUID();
+        }
+    }
+    catch {
+        // ignore
+    }
+    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function extractErrorDetails(error) {
+    if (error instanceof Error) {
+        const details = { message: error.message };
+        if (error.stack) {
+            details.stack = error.stack;
+        }
+        if (error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError) {
+            details.code = error.code;
+            details.category = error.category;
+            if (error.details) {
+                details.details = error.details;
+            }
+        }
+        return details;
+    }
+    return { value: String(error) };
+}
+/**
+ * Helper for `exactOptionalPropertyTypes`: returns `{ details }` when value is
+ * present, `{}` otherwise. Spreading this keeps `details` from being typed as
+ * `T | undefined` on the diagnostic object.
+ */
+function buildOptionalDetails(details) {
+    if (details === undefined) {
+        return {};
+    }
+    return { details };
+}
+function formatValue(value) {
+    if (value === undefined) {
+        return '<undefined>';
+    }
+    if (value === null) {
+        return '<null>';
+    }
+    if (typeof value === 'string') {
+        return value.length === 0 ? '<empty>' : `'${value}'`;
+    }
+    return JSON.stringify(value);
+}
+// Re-export the runtime require helper for bundled runtime smoke tests.
+// Tests need a way to invoke the loader's webpack-safe require path without
+// reaching into private state.
+function loadCompanionModuleFromDisk(absolutePath) {
+    return resolveRuntimeRequire()(absolutePath);
+}
+// Suppress unused-import warnings for type-only imports preserved for the
+// public API surface of this module.
+void _constants_js__WEBPACK_IMPORTED_MODULE_1__.AUTHORITY_MODULE_PROTOCOL_VERSION;
+void (node_path__WEBPACK_IMPORTED_MODULE_0___default());
 
 
 /***/ },
@@ -7117,7 +7625,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   MODULE_MAX_REQUEST_BYTES: () => (/* binding */ MODULE_MAX_REQUEST_BYTES),
 /* harmony export */   MODULE_MAX_RESPONSE_BYTES: () => (/* binding */ MODULE_MAX_RESPONSE_BYTES),
 /* harmony export */   MODULE_MAX_TIMEOUT_MS: () => (/* binding */ MODULE_MAX_TIMEOUT_MS),
-/* harmony export */   ModuleDiscoveryService: () => (/* binding */ ModuleDiscoveryService)
+/* harmony export */   ModuleDiscoveryService: () => (/* binding */ ModuleDiscoveryService),
+/* harmony export */   revalidateLoadCandidate: () => (/* binding */ revalidateLoadCandidate)
 /* harmony export */ });
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
@@ -7196,11 +7705,12 @@ class ModuleDiscoveryService {
     discover() {
         const sillyTavernRoot = this.resolveSillyTavernRoot();
         if (!sillyTavernRoot) {
-            return { records: [], byModuleId: new Map() };
+            return { records: [], byModuleId: new Map(), internalSources: new Map() };
         }
         const extensionDirs = this.resolveExtensionDirs(sillyTavernRoot);
         const records = [];
         const byModuleId = new Map();
+        const internalSources = new Map();
         for (const { extensionId, extensionDir } of extensionDirs) {
             const moduleDir = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, '.authority');
             const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(moduleDir, 'module.json');
@@ -7222,10 +7732,39 @@ class ModuleDiscoveryService {
                 }
                 else {
                     byModuleId.set(record.moduleId, record);
+                    // Only the winning record contributes an internal load
+                    // candidate. The candidate requires an entry; manifests
+                    // without an entry surface as available-but-unloadable
+                    // and intentionally have no candidate.
+                    const candidate = this.buildLoadCandidate(extensionDir, moduleDir, manifestPath, record);
+                    if (candidate) {
+                        internalSources.set(record.moduleId, candidate);
+                    }
                 }
             }
         }
-        return { records, byModuleId };
+        return { records, byModuleId, internalSources };
+    }
+    /**
+     * Build a server-only {@link CompanionModuleLoadCandidate} for a valid
+     * `available` record. Returns `null` when the record has no manifest
+     * entry (Phase 1 allows manifests without an entry; Phase 2 simply does
+     * not load them) or when the entry path cannot be revalidated.
+     */
+    buildLoadCandidate(extensionDir, moduleDir, manifestPath, record) {
+        if (!record.manifest || typeof record.manifest.entry !== 'string' || record.manifest.entry.trim() === '') {
+            return null;
+        }
+        const entryPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().resolve(moduleDir, record.manifest.entry);
+        return {
+            moduleId: record.moduleId,
+            ownerExtensionId: record.ownerExtensionId,
+            extensionDir,
+            moduleDir,
+            manifestPath,
+            entryPath,
+            manifest: record.manifest,
+        };
     }
     discoverRecord(extensionId, extensionDir, moduleDir, manifestPath) {
         // Public source carries only safe relative metadata; absolute paths
@@ -7622,6 +8161,68 @@ function validateEntry(entry, moduleDir) {
     }
     return { status: 'available' };
 }
+/**
+ * Revalidate a discovery {@link CompanionModuleLoadCandidate} just before the
+ * Phase 2 loader calls `require()` on its entry. This guards against TOCTOU
+ * edits between discovery and load: a manifest/entry that was valid at
+ * discovery time may have been swapped, symlinked, deleted, or moved outside
+ * `.authority` before activation.
+ *
+ * Returns `null` when the candidate is still safe to load, or a structured
+ * diagnostic describing the failure otherwise. Callers should mark the
+ * affected record as `load_error` with the returned diagnostic.
+ */
+function revalidateLoadCandidate(candidate) {
+    // Manifest file must still be a regular non-symlink file.
+    if (isSymlink(candidate.manifestPath) || !isRegularFileStrict(candidate.manifestPath)) {
+        return {
+            code: 'load_manifest_changed',
+            message: 'Manifest file changed or is no longer a regular file since discovery.',
+            severity: 'error',
+        };
+    }
+    // Re-read and shape-check the manifest so a swap cannot bypass validation.
+    let parsed;
+    try {
+        parsed = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(candidate.manifestPath, 'utf8'));
+    }
+    catch (error) {
+        return {
+            code: 'load_manifest_unreadable',
+            message: `Manifest could not be re-read: ${errorMessage(error)}`,
+            severity: 'error',
+        };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return {
+            code: 'load_manifest_shape_invalid',
+            message: 'Re-read manifest is not a JSON object.',
+            severity: 'error',
+        };
+    }
+    const raw = parsed;
+    if (raw.id !== candidate.moduleId) {
+        return {
+            code: 'load_manifest_id_changed',
+            message: `Manifest id changed since discovery: ${formatValue(raw.id)} vs ${candidate.moduleId}.`,
+            severity: 'error',
+        };
+    }
+    if (typeof raw.entry !== 'string' || raw.entry !== candidate.manifest.entry) {
+        return {
+            code: 'load_entry_changed',
+            message: 'Manifest entry changed since discovery.',
+            severity: 'error',
+        };
+    }
+    // Re-run the full entry validation: relative, .cjs, inside .authority,
+    // not a symlink, realpath contained.
+    const entryValidation = validateEntry(candidate.manifest.entry, candidate.moduleDir);
+    if (entryValidation.status !== 'available') {
+        return entryValidation.diagnostic;
+    }
+    return null;
+}
 function isModuleIdOwnedByExtension(moduleId, ownerExtensionId) {
     const normalizedOwner = normalizeOwnerExtensionId(ownerExtensionId);
     if (!normalizedOwner) {
@@ -7872,6 +8473,21 @@ class ModuleHostService {
         this.events = events;
     }
     register(manifest, handlers, options = {}) {
+        this.registerInternal(manifest, handlers, options, 'builtin');
+    }
+    /**
+     * Phase 2 companion module registration. Companion modules are loaded
+     * from disk by {@link CompanionModuleLoaderService} and their handlers
+     * are wrapped so they receive a minimal safe
+     * {@link CompanionModuleTransactionContext} (no raw trivium/storage/files/
+     * jobs/events services). The host treats the registered module as
+     * `contextMode: 'companion'` so execute() knows not to build the raw
+     * service ctx for its handlers.
+     */
+    registerCompanion(manifest, handlers, options = {}) {
+        this.registerInternal(manifest, handlers, options, 'companion');
+    }
+    registerInternal(manifest, handlers, options, contextMode) {
         validateModuleId(manifest.id);
         if (manifest.protocolVersion !== _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_MODULE_PROTOCOL_VERSION) {
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Unsupported module protocol version: ${manifest.protocolVersion}`, 400, 'validation_error', 'validation');
@@ -7899,6 +8515,7 @@ class ModuleHostService {
             manifest,
             handlers: handlerMap,
             resolvers: options.requiredResourceResolvers ?? {},
+            contextMode,
             ...(options.ownerExtensionId !== undefined ? { ownerExtensionId: options.ownerExtensionId } : {}),
             ...(options.source !== undefined ? { source: options.source } : {}),
         };
@@ -8050,6 +8667,15 @@ class ModuleHostService {
                     : `Permission not granted: ${required.resource}`);
             }
         }
+        // Phase 2: companion modules do NOT receive the raw service ctx.
+        // Their handlers are wrapped by the CompanionModuleLoaderService to
+        // build a minimal safe CompanionModuleTransactionContext from the
+        // metadata below; the raw trivium/storage/files/jobs/events services
+        // are intentionally absent for companion code. We still pass a
+        // metadata-only stub ctx here so that built-in handlers continue to
+        // receive the full ModuleTransactionContext, and so companion
+        // handler wrappers can read user/session/callerExtensionId without
+        // needing the raw services.
         const ctx = {
             user,
             session,
@@ -8069,6 +8695,12 @@ class ModuleHostService {
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Handler missing for transaction: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core');
         }
         const input = request.input ?? undefined;
+        // For companion modules the handler is already wrapped by the loader
+        // to ignore the raw ctx and build a CompanionModuleTransactionContext
+        // internally. We still pass the metadata-bearing ctx so the wrapper
+        // can read user/session/callerExtensionId without us leaking raw
+        // services into companion code paths.
+        void module.contextMode;
         const handlerResult = await handler(ctx, input, request);
         const idempotencyKey = typeof request.idempotencyKey === 'string' && request.idempotencyKey.trim()
             ? request.idempotencyKey.trim()
@@ -13353,13 +13985,23 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   exit: () => (/* binding */ exit),
 /* harmony export */   info: () => (/* binding */ info),
-/* harmony export */   init: () => (/* binding */ init)
+/* harmony export */   init: () => (/* binding */ init),
+/* harmony export */   loadCompanionModuleFromDisk: () => (/* reexport safe */ _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.loadCompanionModuleFromDisk)
 /* harmony export */ });
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
 /* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
 /* harmony import */ var _routes_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./routes.js */ "./src/routes.ts");
+/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
 
 
+
+/**
+ * Webpack-safe runtime require for the bundled `runtime/index.cjs`. Tests
+ * and the smoke-test entry point use this to load external `.authority/
+ * server.cjs` files from disk without going through webpack's bundle-time
+ * `__webpack_require__`. Built on `node:module.createRequire(import.meta.url)`,
+ * which webpack leaves intact as a runtime call on an imported binding.
+ */
 
 const info = {
     id: _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_PLUGIN_ID,
@@ -13371,21 +14013,23 @@ async function init(router) {
     runtime ??= (0,_runtime_js__WEBPACK_IMPORTED_MODULE_1__.createAuthorityRuntime)();
     (0,_routes_js__WEBPACK_IMPORTED_MODULE_2__.registerRoutes)(router, runtime);
     await runtime.install.bootstrap();
-    // Phase 1: discover companion module manifests without loading any
-    // server.cjs. Discovery failures must never block DOA startup; they are
-    // recorded as diagnostics on the affected records and surfaced through
-    // /modules for admin/debug inspection.
+    // Phase 1+2: discover companion module manifests and then load their
+    // server.cjs at startup. Discovery failures must never block DOA
+    // startup; they are recorded as diagnostics on the affected records and
+    // surfaced through /modules for admin/debug inspection. Loader failures
+    // (invalid export, activate throw, activation timeout, missing/undeclared
+    // handler) transition the record to load_error without throwing.
     try {
         const result = runtime.moduleDiscovery.discover();
         runtime.modules.registerDiscoveredRecords(result.records);
+        await runtime.companionLoader.loadAll(result);
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         runtime.install.getStatus();
         // There is no public logger on AuthorityRuntime; rely on the install
-        // service's logger indirectly via console for now. Phase 2 will route
-        // this through a dedicated runtime logger.
-        console.warn(`[authority] Module discovery failed: ${message}`);
+        // service's logger indirectly via console for now.
+        console.warn(`[authority] Companion module discovery/load failed: ${message}`);
     }
     void runtime.core.start();
 }

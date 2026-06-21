@@ -73,6 +73,34 @@ export interface ModuleDiscoveryResult {
     records: AuthorityModuleRecord[];
     /** Records keyed by module id. Later duplicates are not present here. */
     byModuleId: Map<string, AuthorityModuleRecord>;
+    /**
+     * Server-only internal source metadata keyed by module id. Carries
+     * absolute filesystem paths for valid `available` records so that the
+     * Phase 2 companion loader can `require()` the entry without re-resolving
+     * paths. This map is intentionally NOT exposed through public shared
+     * types or `/modules` JSON; only the loader consumes it.
+     */
+    internalSources: Map<string, CompanionModuleLoadCandidate>;
+}
+
+/**
+ * Server-only load candidate for a discovered companion module.
+ *
+ * Phase 2 keeps absolute filesystem paths here, separate from the public
+ * {@link AuthorityModuleRecordSource} shape so that `/modules` responses
+ * cannot leak the host filesystem layout to SDK callers or frontend
+ * extensions. Only valid `available` records (manifest + entry + revalidated
+ * paths) appear here; invalid/duplicate/disabled records never reach the
+ * loader.
+ */
+export interface CompanionModuleLoadCandidate {
+    moduleId: string;
+    ownerExtensionId: string;
+    extensionDir: string;
+    moduleDir: string;
+    manifestPath: string;
+    entryPath: string;
+    manifest: AuthorityModuleManifest;
 }
 
 export interface ModuleDiscoveryServiceOptions {
@@ -107,12 +135,13 @@ export class ModuleDiscoveryService {
     discover(): ModuleDiscoveryResult {
         const sillyTavernRoot = this.resolveSillyTavernRoot();
         if (!sillyTavernRoot) {
-            return { records: [], byModuleId: new Map() };
+            return { records: [], byModuleId: new Map(), internalSources: new Map() };
         }
 
         const extensionDirs = this.resolveExtensionDirs(sillyTavernRoot);
         const records: AuthorityModuleRecord[] = [];
         const byModuleId = new Map<string, AuthorityModuleRecord>();
+        const internalSources = new Map<string, CompanionModuleLoadCandidate>();
 
         for (const { extensionId, extensionDir } of extensionDirs) {
             const moduleDir = path.join(extensionDir, '.authority');
@@ -137,11 +166,46 @@ export class ModuleDiscoveryService {
                     records[records.length - 1] = markDuplicate(record, existing);
                 } else {
                     byModuleId.set(record.moduleId, record);
+                    // Only the winning record contributes an internal load
+                    // candidate. The candidate requires an entry; manifests
+                    // without an entry surface as available-but-unloadable
+                    // and intentionally have no candidate.
+                    const candidate = this.buildLoadCandidate(extensionDir, moduleDir, manifestPath, record);
+                    if (candidate) {
+                        internalSources.set(record.moduleId, candidate);
+                    }
                 }
             }
         }
 
-        return { records, byModuleId };
+        return { records, byModuleId, internalSources };
+    }
+
+    /**
+     * Build a server-only {@link CompanionModuleLoadCandidate} for a valid
+     * `available` record. Returns `null` when the record has no manifest
+     * entry (Phase 1 allows manifests without an entry; Phase 2 simply does
+     * not load them) or when the entry path cannot be revalidated.
+     */
+    private buildLoadCandidate(
+        extensionDir: string,
+        moduleDir: string,
+        manifestPath: string,
+        record: AuthorityModuleRecord,
+    ): CompanionModuleLoadCandidate | null {
+        if (!record.manifest || typeof record.manifest.entry !== 'string' || record.manifest.entry.trim() === '') {
+            return null;
+        }
+        const entryPath = path.resolve(moduleDir, record.manifest.entry);
+        return {
+            moduleId: record.moduleId,
+            ownerExtensionId: record.ownerExtensionId,
+            extensionDir,
+            moduleDir,
+            manifestPath,
+            entryPath,
+            manifest: record.manifest,
+        };
     }
 
     private discoverRecord(
@@ -738,6 +802,70 @@ function validateEntry(entry: string | undefined, moduleDir: string): EntryValid
     }
 
     return { status: 'available' };
+}
+
+/**
+ * Revalidate a discovery {@link CompanionModuleLoadCandidate} just before the
+ * Phase 2 loader calls `require()` on its entry. This guards against TOCTOU
+ * edits between discovery and load: a manifest/entry that was valid at
+ * discovery time may have been swapped, symlinked, deleted, or moved outside
+ * `.authority` before activation.
+ *
+ * Returns `null` when the candidate is still safe to load, or a structured
+ * diagnostic describing the failure otherwise. Callers should mark the
+ * affected record as `load_error` with the returned diagnostic.
+ */
+export function revalidateLoadCandidate(candidate: CompanionModuleLoadCandidate): AuthorityModuleDiagnostic | null {
+    // Manifest file must still be a regular non-symlink file.
+    if (isSymlink(candidate.manifestPath) || !isRegularFileStrict(candidate.manifestPath)) {
+        return {
+            code: 'load_manifest_changed',
+            message: 'Manifest file changed or is no longer a regular file since discovery.',
+            severity: 'error',
+        };
+    }
+
+    // Re-read and shape-check the manifest so a swap cannot bypass validation.
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(fs.readFileSync(candidate.manifestPath, 'utf8'));
+    } catch (error) {
+        return {
+            code: 'load_manifest_unreadable',
+            message: `Manifest could not be re-read: ${errorMessage(error)}`,
+            severity: 'error',
+        };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return {
+            code: 'load_manifest_shape_invalid',
+            message: 'Re-read manifest is not a JSON object.',
+            severity: 'error',
+        };
+    }
+    const raw = parsed as Record<string, unknown>;
+    if (raw.id !== candidate.moduleId) {
+        return {
+            code: 'load_manifest_id_changed',
+            message: `Manifest id changed since discovery: ${formatValue(raw.id)} vs ${candidate.moduleId}.`,
+            severity: 'error',
+        };
+    }
+    if (typeof raw.entry !== 'string' || raw.entry !== candidate.manifest.entry) {
+        return {
+            code: 'load_entry_changed',
+            message: 'Manifest entry changed since discovery.',
+            severity: 'error',
+        };
+    }
+
+    // Re-run the full entry validation: relative, .cjs, inside .authority,
+    // not a symlink, realpath contained.
+    const entryValidation = validateEntry(candidate.manifest.entry, candidate.moduleDir);
+    if (entryValidation.status !== 'available') {
+        return entryValidation.diagnostic;
+    }
+    return null;
 }
 
 function isModuleIdOwnedByExtension(moduleId: string, ownerExtensionId: string): boolean {
