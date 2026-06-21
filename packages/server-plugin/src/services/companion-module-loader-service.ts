@@ -386,13 +386,15 @@ export type CompanionTransactionHandler = (
  * - `authorize(request)` for `PermissionEvaluateRequest`
  * - `signal` (AbortSignal) for cooperative cancellation
  * - `requestId` for tracing
- * - `trivium`: Phase A generic safe Trivium wrapper. Forces
+ * - `trivium`: Phase 2 generic safe Trivium wrapper. Forces
  *   `extensionId = ownerExtensionId`; companion code cannot pass an
  *   extension id. Authorizes `trivium.private` before each call.
  *
  * Raw SQL/fs/blob/jobs/events/runtime/core access is intentionally absent;
  * scoped wrappers are separate future work. The `trivium` wrapper is the
- * first scoped capability, added in Phase A for vector-first use cases.
+ * first scoped capability, added in Phase A for vector-first use cases and
+ * extended in Phase 2 with `searchHybrid`, `resolveMany`, and `neighbors`
+ * for server-side vector search, id resolution, and graph expansion.
  */
 export interface CompanionModuleTransactionContext {
     moduleId: string;
@@ -409,10 +411,13 @@ export interface CompanionModuleTransactionContext {
     authorize: (request: PermissionEvaluateRequest) => Promise<boolean>;
     signal: AbortSignal;
     /**
-     * Phase A generic safe Trivium wrapper. Forces
+     * Phase 2 generic safe Trivium wrapper. Forces
      * `extensionId = ownerExtensionId` and authorizes `trivium.private`
      * before each call. Exposes only `listDatabases`, `stat`, `bulkUpsert`,
-     * `bulkLink`, `bulkDelete`; no raw `TriviumService` is exposed.
+     * `bulkLink`, `bulkDelete`, `searchHybrid`, `resolveMany`, `neighbors`;
+     * no raw `TriviumService` is exposed. `searchHybrid`/`neighbors` clamp
+     * their numeric request fields to server-side caps and `resolveMany`
+     * hard-rejects oversized item batches.
      */
     trivium: CompanionTriviumCapability;
 }

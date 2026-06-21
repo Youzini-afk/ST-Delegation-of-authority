@@ -6,6 +6,12 @@ import type {
     TriviumBulkUpsertRequest,
     TriviumBulkUpsertResponse,
     TriviumListDatabasesResponse,
+    TriviumNeighborsRequest,
+    TriviumNeighborsResponse,
+    TriviumResolveManyRequest,
+    TriviumResolveManyResponse,
+    TriviumSearchHit,
+    TriviumSearchHybridRequest,
     TriviumStatRequest,
     TriviumStatResponse,
 } from '@stdo/shared-types';
@@ -14,6 +20,15 @@ import type { PermissionService } from './permission-service.js';
 import type { TriviumService } from './trivium-service.js';
 import type { SessionRecord, UserContext } from '../types.js';
 import { AuthorityServiceError } from '../utils.js';
+import {
+    DEFAULT_SEARCH_EXPAND_DEPTH,
+    DEFAULT_SEARCH_TOP_K,
+    MAX_NEIGHBORS_DEPTH,
+    MAX_SEARCH_EXPAND_DEPTH,
+    MAX_SEARCH_TOP_K,
+    MAX_TRIVIUM_RESOLVE_MANY_ITEMS,
+    getBoundedPositiveInteger,
+} from './trivium-internal.js';
 
 /**
  * Phase A generic safe Trivium wrapper exposed on the companion transaction
@@ -33,11 +48,21 @@ import { AuthorityServiceError } from '../utils.js';
  *   manifest, the wrapper still re-checks before each call so a logic bug in
  *   the host's required-resource resolver cannot bypass authorization.
  * - The wrapper exposes only narrow methods: `listDatabases`, `stat`,
- *   `bulkUpsert`, `bulkLink`, `bulkDelete`. No raw `TriviumService` is
- *   exposed; companion code cannot reach `repository`, `mappingStore`,
- *   `resolvePaths`, or any other internal method.
+ *   `bulkUpsert`, `bulkLink`, `bulkDelete`, `searchHybrid`, `resolveMany`,
+ *   `neighbors`. No raw `TriviumService` is exposed; companion code cannot
+ *   reach `repository`, `mappingStore`, `resolvePaths`, or any other
+ *   internal method.
  * - The wrapper does not add business-specific methods. DOA stays generic;
  *   the wrapper is a reusable Trivium capability for companion modules.
+ *   In particular there is no convenience method like
+ *   `neighborsByExternalId`; companion modules do the two-call
+ *   resolve-then-neighbors dance themselves using `resolveMany` followed
+ *   by `neighbors`.
+ * - The wrapper applies server-side caps before delegating so a buggy or
+ *   hostile companion module cannot request unbounded vector search or
+ *   graph expansion: `searchHybrid` clamps `topK`/`expandDepth`,
+ *   `neighbors` clamps `depth`, and `resolveMany` hard-rejects oversized
+ *   `items` arrays.
  *
  * Phase A scope: Trivium only. SQL/blob/fs/jobs/events wrappers are separate
  * future work per the design doc.
@@ -78,6 +103,36 @@ export interface CompanionTriviumCapability {
      * database target before delegating to {@link TriviumService.bulkDelete}.
      */
     bulkDelete(request: TriviumBulkDeleteRequest): Promise<TriviumBulkMutationResponse>;
+
+    /**
+     * Hybrid vector + text search against a database owned by the companion
+     * module's extension. Authorizes `trivium.private` with the normalized
+     * database target, clamps `topK`/`expandDepth` to server-side caps, then
+     * delegates to {@link TriviumService.searchHybrid}. The wrapper does not
+     * mutate the caller's request object; it shallow-copies the request
+     * with the clamped values before delegating.
+     */
+    searchHybrid(request: TriviumSearchHybridRequest): Promise<TriviumSearchHit[]>;
+
+    /**
+     * Resolve a batch of `TriviumNodeReference` items (mixed internal ids
+     * and external ids) against a database owned by the companion module's
+     * extension. Authorizes `trivium.private` with the normalized database
+     * target, hard-rejects requests with more than
+     * `MAX_TRIVIUM_RESOLVE_MANY_ITEMS` items, then delegates to
+     * {@link TriviumService.resolveMany}.
+     */
+    resolveMany(request: TriviumResolveManyRequest): Promise<TriviumResolveManyResponse>;
+
+    /**
+     * Expand the graph around a node id in a database owned by the
+     * companion module's extension. Authorizes `trivium.private` with the
+     * normalized database target, clamps `depth` to a server-side cap, then
+     * delegates to {@link TriviumService.neighbors}. The wrapper does not
+     * mutate the caller's request object; it shallow-copies the request
+     * with the clamped value before delegating.
+     */
+    neighbors(request: TriviumNeighborsRequest): Promise<TriviumNeighborsResponse>;
 }
 
 /**
@@ -162,6 +217,60 @@ export function buildCompanionTriviumCapability(
             const database = normalizeTriviumDatabase(request.database);
             await authorize(database);
             return await trivium.bulkDelete(user, ownerExtensionId, request);
+        },
+
+        async searchHybrid(request: TriviumSearchHybridRequest): Promise<TriviumSearchHit[]> {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            // Clamp topK/expandDepth to server-side caps. Shallow-copy the
+            // request so the caller's object is not mutated. A non-positive
+            // safe integer for topK/expandDepth throws here, mirroring the
+            // existing getBoundedPositiveInteger precedent used by
+            // TriviumService for sampleLimit/limit.
+            const topK = getBoundedPositiveInteger(request.topK, DEFAULT_SEARCH_TOP_K, MAX_SEARCH_TOP_K, 'topK');
+            const expandDepth = getBoundedPositiveInteger(
+                request.expandDepth,
+                DEFAULT_SEARCH_EXPAND_DEPTH,
+                MAX_SEARCH_EXPAND_DEPTH,
+                'expandDepth',
+            );
+            const clampedRequest: TriviumSearchHybridRequest = {
+                ...request,
+                topK,
+                expandDepth,
+            };
+            return await trivium.searchHybrid(user, ownerExtensionId, clampedRequest);
+        },
+
+        async resolveMany(request: TriviumResolveManyRequest): Promise<TriviumResolveManyResponse> {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            // Hard-reject oversized batches before delegating, matching the
+            // MAX_TRIVIUM_BULK_ITEMS precedent in TriviumService.bulkUpsert.
+            if (request.items.length > MAX_TRIVIUM_RESOLVE_MANY_ITEMS) {
+                throw new AuthorityServiceError(
+                    `Trivium resolveMany supports at most ${MAX_TRIVIUM_RESOLVE_MANY_ITEMS} items per request`,
+                    400,
+                    'validation_error',
+                    'validation',
+                    { limit: MAX_TRIVIUM_RESOLVE_MANY_ITEMS, actual: request.items.length },
+                );
+            }
+            return await trivium.resolveMany(user, ownerExtensionId, request);
+        },
+
+        async neighbors(request: TriviumNeighborsRequest): Promise<TriviumNeighborsResponse> {
+            const database = normalizeTriviumDatabase(request.database);
+            await authorize(database);
+            // Clamp depth to the server-side cap. Shallow-copy the request
+            // so the caller's object is not mutated. A non-positive safe
+            // integer for depth throws here.
+            const depth = getBoundedPositiveInteger(request.depth, 1, MAX_NEIGHBORS_DEPTH, 'depth');
+            const clampedRequest: TriviumNeighborsRequest = {
+                ...request,
+                depth,
+            };
+            return await trivium.neighbors(user, ownerExtensionId, clampedRequest);
         },
     };
 }

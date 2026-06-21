@@ -30,6 +30,15 @@ export const DEFAULT_CURSOR_PAGE_LIMIT = 50;
 export const MAX_CURSOR_PAGE_LIMIT = 500;
 export const DEFAULT_INTEGRITY_SAMPLE_LIMIT = 100;
 export const DEFAULT_ORPHAN_DELETE_LIMIT = 100;
+// Phase 2 companion Trivium capability caps. Generous practical values so
+// companion modules can do real work without being toy-limited; the wrappers
+// clamp/validate against these before delegating to TriviumService.
+export const DEFAULT_SEARCH_TOP_K = 10;
+export const MAX_SEARCH_TOP_K = 200;
+export const DEFAULT_SEARCH_EXPAND_DEPTH = 2;
+export const MAX_SEARCH_EXPAND_DEPTH = 5;
+export const MAX_NEIGHBORS_DEPTH = 5;
+export const MAX_TRIVIUM_RESOLVE_MANY_ITEMS = 5000;
 
 export interface TriviumPathSet {
     dbPath: string;

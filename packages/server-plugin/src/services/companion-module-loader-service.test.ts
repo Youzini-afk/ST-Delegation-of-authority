@@ -1822,6 +1822,31 @@ function createTriviumFixture(): { fixture: Fixture; runtime: ReturnType<typeof 
                             });
                             return { result: { op, totalCount: result.totalCount, successCount: result.successCount } };
                         }
+                        if (op === 'searchHybrid') {
+                            const result = await txCtx.trivium.searchHybrid({
+                                database: input.database,
+                                vector: input.vector ?? [1, 2, 3],
+                                queryText: input.queryText ?? 'hello',
+                                topK: input.topK,
+                                expandDepth: input.expandDepth,
+                            });
+                            return { result: { op, hits: result.length } };
+                        }
+                        if (op === 'resolveMany') {
+                            const result = await txCtx.trivium.resolveMany({
+                                database: input.database,
+                                items: input.items ?? [],
+                            });
+                            return { result: { op, items: result.items.length } };
+                        }
+                        if (op === 'neighbors') {
+                            const result = await txCtx.trivium.neighbors({
+                                database: input.database,
+                                id: input.id ?? 1,
+                                depth: input.depth,
+                            });
+                            return { result: { op, ids: result.ids.length } };
+                        }
                         return { result: { op: 'unknown' } };
                     },
                 });
@@ -1873,6 +1898,9 @@ function createTriviumFixture(): { fixture: Fixture; runtime: ReturnType<typeof 
         failureCount: 0,
         failures: [],
     });
+    vi.spyOn(triviumService, 'resolveMany').mockResolvedValue({ items: [] });
+    vi.spyOn(triviumService, 'searchHybrid').mockResolvedValue([]);
+    vi.spyOn(triviumService, 'neighbors').mockResolvedValue({ ids: [], nodes: [] });
     const runtime = createRuntime(triviumCore, triviumService);
     runtime.modules.registerDiscoveredRecords(result.records);
     return { fixture, runtime };
@@ -2022,6 +2050,193 @@ function createTriviumFixture(): { fixture: Fixture; runtime: ReturnType<typeof 
         expect(deleteSpy).toHaveBeenCalledTimes(1);
         const extensionIdArg = deleteSpy.mock.calls[0]?.[1];
         expect(extensionIdArg).toBe('third-party/trivium-extension');
+    });
+
+    it('searchHybrid calls TriviumService.searchHybrid with ownerExtensionId', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const searchSpy = vi.spyOn(runtime.trivium, 'searchHybrid');
+        await loadAndExecute(fixture, runtime, {
+            op: 'searchHybrid',
+            database: 'test-db',
+            vector: [1, 2, 3],
+            queryText: 'hello',
+            topK: 5,
+        });
+        expect(searchSpy).toHaveBeenCalledTimes(1);
+        const extensionIdArg = searchSpy.mock.calls[0]?.[1];
+        expect(extensionIdArg).toBe('third-party/trivium-extension');
+        expect(extensionIdArg).not.toBe('third-party/test-extension');
+    });
+
+    it('searchHybrid authorizes before the service call; denial prevents service call', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        await runtime.permissions.resolve(user, session, { resource: 'trivium.private', target: 'test-db' }, 'deny');
+        const searchSpy = vi.spyOn(runtime.trivium, 'searchHybrid');
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        let caught: unknown;
+        try {
+            await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', {
+                input: { op: 'searchHybrid', database: 'test-db', vector: [1, 2, 3], queryText: 'hello' },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(AuthorityServiceError);
+        const err = caught as AuthorityServiceError;
+        expect(err.status).toBe(403);
+        expect(err.code).toBe('permission_not_granted');
+        expect(searchSpy).not.toHaveBeenCalled();
+    });
+
+    it('searchHybrid normalizes undefined database to default for authorization', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        const authorizeSpy = vi.spyOn(runtime.permissions, 'authorize');
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', {
+            input: { op: 'searchHybrid', vector: [1, 2, 3], queryText: 'hello' },
+        });
+        const triviumCall = authorizeSpy.mock.calls.find(call => call[2]?.resource === 'trivium.private');
+        expect(triviumCall).toBeDefined();
+        expect(triviumCall?.[2]?.target).toBe('default');
+    });
+
+    it('searchHybrid clamps over-cap topK and expandDepth (does not reject)', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const searchSpy = vi.spyOn(runtime.trivium, 'searchHybrid');
+        // 9999 exceeds MAX_SEARCH_TOP_K (200); 99 exceeds MAX_SEARCH_EXPAND_DEPTH (5).
+        await loadAndExecute(fixture, runtime, {
+            op: 'searchHybrid',
+            database: 'test-db',
+            vector: [1, 2, 3],
+            queryText: 'hello',
+            topK: 9999,
+            expandDepth: 99,
+        });
+        expect(searchSpy).toHaveBeenCalledTimes(1);
+        const passedRequest = searchSpy.mock.calls[0]?.[2];
+        expect(passedRequest?.topK).toBe(200);
+        expect(passedRequest?.expandDepth).toBe(5);
+    });
+
+    it('searchHybrid does not mutate the caller request object', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const searchSpy = vi.spyOn(runtime.trivium, 'searchHybrid');
+        const callerRequest = {
+            op: 'searchHybrid',
+            database: 'test-db',
+            vector: [1, 2, 3],
+            queryText: 'hello',
+            topK: 9999,
+            expandDepth: 99,
+        };
+        await loadAndExecute(fixture, runtime, callerRequest);
+        // Caller's topK/expandDepth must be untouched.
+        expect(callerRequest.topK).toBe(9999);
+        expect(callerRequest.expandDepth).toBe(99);
+        // Service received the clamped copy.
+        const passedRequest = searchSpy.mock.calls[0]?.[2];
+        expect(passedRequest?.topK).toBe(200);
+        expect(passedRequest?.expandDepth).toBe(5);
+    });
+
+    it('resolveMany calls TriviumService.resolveMany with ownerExtensionId', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const resolveSpy = vi.spyOn(runtime.trivium, 'resolveMany');
+        await loadAndExecute(fixture, runtime, {
+            op: 'resolveMany',
+            database: 'test-db',
+            items: [{ externalId: 'a' }, { id: 1 }],
+        });
+        expect(resolveSpy).toHaveBeenCalledTimes(1);
+        const extensionIdArg = resolveSpy.mock.calls[0]?.[1];
+        expect(extensionIdArg).toBe('third-party/trivium-extension');
+        expect(extensionIdArg).not.toBe('third-party/test-extension');
+    });
+
+    it('resolveMany hard-rejects oversized item batches with 400 validation_error', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const resolveSpy = vi.spyOn(runtime.trivium, 'resolveMany');
+        // MAX_TRIVIUM_RESOLVE_MANY_ITEMS = 5000; send 5001 items.
+        const items = Array.from({ length: 5001 }, (_v, i) => ({ id: i + 1 }));
+        const user = createUser(false, fixture.sillyTavernRoot);
+        const session = createSession(user);
+        await runtime.loader.loadAll(createDiscovery(fixture).discover());
+        let caught: unknown;
+        try {
+            await runtime.modules.execute(user, session, 'third-party.trivium-extension', 'task.run', {
+                input: { op: 'resolveMany', database: 'test-db', items },
+            });
+        } catch (error) {
+            caught = error;
+        }
+        expect(caught).toBeInstanceOf(AuthorityServiceError);
+        const err = caught as AuthorityServiceError;
+        expect(err.status).toBe(400);
+        expect(err.code).toBe('validation_error');
+        // The wrapper hard-rejects BEFORE the service call.
+        expect(resolveSpy).not.toHaveBeenCalled();
+    });
+
+    it('resolveMany at exactly the cap is accepted (boundary)', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const resolveSpy = vi.spyOn(runtime.trivium, 'resolveMany');
+        // MAX_TRIVIUM_RESOLVE_MANY_ITEMS = 5000; send exactly 5000 items.
+        const items = Array.from({ length: 5000 }, (_v, i) => ({ id: i + 1 }));
+        await loadAndExecute(fixture, runtime, {
+            op: 'resolveMany',
+            database: 'test-db',
+            items,
+        });
+        expect(resolveSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('neighbors calls TriviumService.neighbors with ownerExtensionId', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const neighborsSpy = vi.spyOn(runtime.trivium, 'neighbors');
+        await loadAndExecute(fixture, runtime, {
+            op: 'neighbors',
+            database: 'test-db',
+            id: 1,
+            depth: 2,
+        });
+        expect(neighborsSpy).toHaveBeenCalledTimes(1);
+        const extensionIdArg = neighborsSpy.mock.calls[0]?.[1];
+        expect(extensionIdArg).toBe('third-party/trivium-extension');
+        expect(extensionIdArg).not.toBe('third-party/test-extension');
+    });
+
+    it('neighbors clamps over-cap depth (does not reject)', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const neighborsSpy = vi.spyOn(runtime.trivium, 'neighbors');
+        // 99 exceeds MAX_NEIGHBORS_DEPTH (5).
+        await loadAndExecute(fixture, runtime, {
+            op: 'neighbors',
+            database: 'test-db',
+            id: 1,
+            depth: 99,
+        });
+        expect(neighborsSpy).toHaveBeenCalledTimes(1);
+        const passedRequest = neighborsSpy.mock.calls[0]?.[2];
+        expect(passedRequest?.depth).toBe(5);
+    });
+
+    it('neighbors does not mutate the caller request object', async () => {
+        const { fixture, runtime } = createTriviumFixture();
+        const neighborsSpy = vi.spyOn(runtime.trivium, 'neighbors');
+        const callerRequest = {
+            op: 'neighbors',
+            database: 'test-db',
+            id: 1,
+            depth: 99,
+        };
+        await loadAndExecute(fixture, runtime, callerRequest);
+        expect(callerRequest.depth).toBe(99);
+        const passedRequest = neighborsSpy.mock.calls[0]?.[2];
+        expect(passedRequest?.depth).toBe(5);
     });
 
     it('companion ctx still lacks raw storage/files/jobs/events/core/runtime/sql services', async () => {
