@@ -60,6 +60,24 @@ export function registerModuleRoutes(router: RouterLike, runtime: AuthorityRunti
         }
     });
 
+    router.get('/modules/:moduleId/record', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = getUserContext(req);
+            const session = await runtime.sessions.assertSession(getSessionToken(req), user);
+            extensionId = session.extension.id;
+            const moduleId = decodeParam(req.params?.moduleId);
+            const record = runtime.modules.getRecord(moduleId);
+            if (!record) {
+                ok(res, { moduleId, record: null });
+            } else {
+                ok(res, { moduleId, record });
+            }
+        } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
     router.post('/modules/:moduleId/transactions/:transactionName', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {

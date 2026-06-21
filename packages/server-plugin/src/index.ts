@@ -14,6 +14,21 @@ export async function init(router: any): Promise<void> {
     runtime ??= createAuthorityRuntime();
     registerRoutes(router, runtime);
     await runtime.install.bootstrap();
+    // Phase 1: discover companion module manifests without loading any
+    // server.cjs. Discovery failures must never block DOA startup; they are
+    // recorded as diagnostics on the affected records and surfaced through
+    // /modules for admin/debug inspection.
+    try {
+        const result = runtime.moduleDiscovery.discover();
+        runtime.modules.registerDiscoveredRecords(result.records);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        runtime.install.getStatus();
+        // There is no public logger on AuthorityRuntime; rely on the install
+        // service's logger indirectly via console for now. Phase 2 will route
+        // this through a dedicated runtime logger.
+        console.warn(`[authority] Module discovery failed: ${message}`);
+    }
     void runtime.core.start();
 }
 

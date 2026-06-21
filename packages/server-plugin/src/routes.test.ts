@@ -41,6 +41,7 @@ describe('registerRoutes', () => {
             '/admin/diagnostic-bundle',
             '/modules',
             '/modules/:moduleId',
+            '/modules/:moduleId/record',
         ]));
         expect(posts).toEqual(expect.arrayContaining([
             '/permissions/evaluate-batch',
@@ -122,6 +123,7 @@ describe('registerRoutes', () => {
             '/trivium/databases',
             '/modules',
             '/modules/:moduleId',
+            '/modules/:moduleId/record',
             '/jobs',
             '/jobs/:id',
             '/events/stream',
@@ -409,6 +411,7 @@ describe('registerRoutes', () => {
             },
             modules: {
                 count: vi.fn(() => 0),
+                visibleCount: vi.fn(() => 0),
             },
         } as unknown as AuthorityRuntime;
 
@@ -563,6 +566,7 @@ describe('registerRoutes', () => {
                 },
                 modules: {
                     count: vi.fn(() => 0),
+                    visibleCount: vi.fn(() => 0),
                 },
             } as unknown as AuthorityRuntime;
 

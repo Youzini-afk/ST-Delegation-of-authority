@@ -317,7 +317,7 @@ async function buildProbeResponse(runtime: AuthorityRuntime, user: ReturnType<ty
     await runtime.core.refreshHealth();
     const install = runtime.install.getStatus();
     const core = runtime.core.getStatus();
-    const features = buildAuthorityFeatureFlags(user.isAdmin, runtime.modules.count());
+    const features = buildAuthorityFeatureFlags(user.isAdmin, runtime.modules.visibleCount());
     const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
     const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
     return {
@@ -600,7 +600,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
-            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits, runtime.modules.count()));
+            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits, runtime.modules.visibleCount()));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
         }
@@ -616,7 +616,7 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
                 await runtime.permissions.listPersistentGrants(user, session.extension.id),
                 await runtime.permissions.getPolicyEntries(user, session.extension.id),
                 limits,
-                runtime.modules.count(),
+                runtime.modules.visibleCount(),
             ));
         } catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);

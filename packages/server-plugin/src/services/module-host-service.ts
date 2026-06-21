@@ -1,5 +1,7 @@
 import type {
     AuthorityModuleManifest,
+    AuthorityModuleRecord,
+    AuthorityModuleRecordSource,
     ModuleGetResponse,
     ModuleListResponse,
     ModuleTransactionDiagnostics,
@@ -71,12 +73,26 @@ export interface ModuleHostRegistrationOptions {
      * time; otherwise the transaction's static `requiredResources` are used.
      */
     requiredResourceResolvers?: Partial<Record<ModuleTransactionName, ModuleTransactionRequiredResourceResolver>>;
+    /**
+     * Owner extension id for an executable module registered by trusted
+     * built-in code. Stored on the discovery record so `/modules` can show
+     * the owner alongside discovered companion modules.
+     */
+    ownerExtensionId?: string;
+    /**
+     * Optional filesystem source for the registered module. Discovery records
+     * carry this for discovered companion modules; built-in registrations
+     * usually leave it undefined.
+     */
+    source?: AuthorityModuleRecordSource;
 }
 
 interface RegisteredModule {
     manifest: AuthorityModuleManifest;
     handlers: Map<ModuleTransactionName, ModuleTransactionHandler>;
     resolvers: Partial<Record<ModuleTransactionName, ModuleTransactionRequiredResourceResolver>>;
+    ownerExtensionId?: string;
+    source?: AuthorityModuleRecordSource;
 }
 
 function validateModuleId(moduleId: string): void {
@@ -141,6 +157,9 @@ function assertTransactionManifest(
  */
 export class ModuleHostService {
     private readonly modules = new Map<string, RegisteredModule>();
+    private readonly records: AuthorityModuleRecord[] = [];
+    private readonly primaryRecordByModuleId = new Map<string, number>();
+    private readonly recordsByOwner = new Map<string, Set<string>>();
 
     constructor(
         private readonly permissions: PermissionService,
@@ -207,25 +226,107 @@ export class ModuleHostService {
             handlerMap.set(name, handler);
         }
 
-        this.modules.set(manifest.id, {
+        const registered: RegisteredModule = {
             manifest,
             handlers: handlerMap,
             resolvers: options.requiredResourceResolvers ?? {},
-        });
+            ...(options.ownerExtensionId !== undefined ? { ownerExtensionId: options.ownerExtensionId } : {}),
+            ...(options.source !== undefined ? { source: options.source } : {}),
+        };
+        this.modules.set(manifest.id, registered);
+
+        // Reflect the executable module as a `loaded` record so /modules can
+        // surface one consistent picture across built-in and discovered modules.
+        this.upsertRecord(this.buildLoadedRecord(registered));
+    }
+
+    /**
+     * Register (or replace) a discovery record that is not (yet) backed by an
+     * executable handler. Used by {@link ModuleDiscoveryService} and admin
+     * shims. Records with `loaded` status are kept in sync with executable
+     * registrations through {@link register} and should not normally be
+     * registered here.
+     *
+     * Duplicate handling: if a primary record (`available`/`loaded`) already
+     * exists for the same moduleId from a different owner extension, the
+     * incoming record is stored as a `duplicate_id` record alongside the
+     * original rather than overwriting it. The first valid record wins.
+     */
+    registerDiscoveredRecord(record: AuthorityModuleRecord): void {
+        const existingIndex = this.primaryRecordByModuleId.get(record.moduleId);
+        const existing = existingIndex !== undefined ? this.records[existingIndex] : undefined;
+
+        // Preserve any already-loaded executable record: a discovered
+        // `available` record for an id that is currently loaded must not
+        // overwrite the loaded status.
+        if (existing?.status === 'loaded' && record.status !== 'loaded') {
+            this.appendDuplicateRecord(record, existing);
+            return;
+        }
+
+        // Duplicate handling: when an existing record is already present with
+        // a primary status (available/loaded) and the incoming record also
+        // claims the same moduleId with a primary status from a different
+        // owner, treat the incoming one as a duplicate_id rather than
+        // silently overwriting the winner.
+        if (
+            existing
+            && (existing.status === 'available' || existing.status === 'loaded')
+            && (record.status === 'available' || record.status === 'loaded')
+            && existing.source.extensionId !== record.source.extensionId
+        ) {
+            this.appendDuplicateRecord(record, existing);
+            return;
+        }
+
+        this.upsertRecord(record);
+    }
+
+    /**
+     * Bulk-register discovery records. Deterministic: first valid record for
+     * a module id wins; later duplicates become `duplicate_id` records.
+     */
+    registerDiscoveredRecords(records: Iterable<AuthorityModuleRecord>): void {
+        for (const record of records) {
+            this.registerDiscoveredRecord(record);
+        }
+    }
+
+    /** Returns all discovery records (loaded + discovered + error statuses). */
+    listRecords(): AuthorityModuleRecord[] {
+        return [...this.records];
+    }
+
+    /** Returns the primary discovery record for a module id, if any. */
+    getRecord(moduleId: string): AuthorityModuleRecord | null {
+        const index = this.primaryRecordByModuleId.get(moduleId);
+        return index !== undefined ? this.records[index] ?? null : null;
+    }
+
+    /** Returns the total number of discovery records (visible module count). */
+    recordCount(): number {
+        return this.records.length;
     }
 
     listManifests(): ModuleListResponse {
         const modules = [...this.modules.values()].map(entry => entry.manifest);
+        const records = this.listRecords();
         return {
             modules,
             count: modules.length,
+            records,
+            recordCount: records.length,
         };
     }
 
     getManifest(moduleId: string): ModuleGetResponse {
         validateModuleId(moduleId);
         const module = this.modules.get(moduleId);
+        const record = this.getRecord(moduleId);
         if (!module) {
+            if (record && record.manifest) {
+                return { module: record.manifest, record };
+            }
             throw new AuthorityServiceError(
                 `Module not found: ${moduleId}`,
                 404,
@@ -233,11 +334,25 @@ export class ModuleHostService {
                 'validation',
             );
         }
-        return { module: module.manifest };
+        return {
+            module: module.manifest,
+            ...(record ? { record } : {}),
+        };
     }
 
     count(): number {
         return this.modules.size;
+    }
+
+    /**
+     * Returns the visible module count for probe/session features. Phase 1
+     * prefers discovery record count (loaded + available + error statuses)
+     * so that installed companion modules surface even before their handlers
+     * are loaded. Falls back to executable count when no records exist.
+     */
+    visibleCount(): number {
+        const recordCount = this.records.length;
+        return recordCount > 0 ? recordCount : this.modules.size;
     }
 
     async execute(
@@ -261,6 +376,19 @@ export class ModuleHostService {
 
         const module = this.modules.get(moduleId);
         if (!module) {
+            const record = this.getRecord(moduleId);
+            if (record && record.manifest) {
+                // Discovered-but-not-loaded module: structured error so the
+                // frontend can distinguish "missing" from "available but
+                // not activated yet".
+                throw new AuthorityServiceError(
+                    `Module not loaded: ${moduleId}`,
+                    409,
+                    'validation_error',
+                    'validation',
+                    { code: 'module_not_loaded', moduleId, status: record.status },
+                );
+            }
             throw new AuthorityServiceError(
                 `Module not found: ${moduleId}`,
                 404,
@@ -395,5 +523,73 @@ export class ModuleHostService {
             return await resolver(input);
         }
         return transaction.requiredResources;
+    }
+
+    private upsertRecord(record: AuthorityModuleRecord): void {
+        const existingIndex = this.primaryRecordByModuleId.get(record.moduleId);
+        if (existingIndex !== undefined) {
+            const existing = this.records[existingIndex];
+            if (existing) {
+                // Preserve diagnostics across upserts so callers can see why a
+                // record was originally marked unavailable.
+                const mergedDiagnostics = [
+                    ...(existing.diagnostics ?? []),
+                    ...(record.diagnostics ?? []),
+                ];
+                const merged: AuthorityModuleRecord = {
+                    ...record,
+                    ...(mergedDiagnostics.length > 0 ? { diagnostics: mergedDiagnostics } : {}),
+                };
+                this.records[existingIndex] = merged;
+            } else {
+                this.records.push(record);
+                this.primaryRecordByModuleId.set(record.moduleId, this.records.length - 1);
+            }
+        } else {
+            this.records.push(record);
+            this.primaryRecordByModuleId.set(record.moduleId, this.records.length - 1);
+        }
+
+        const ownerSet = this.recordsByOwner.get(record.ownerExtensionId) ?? new Set<string>();
+        ownerSet.add(record.moduleId);
+        this.recordsByOwner.set(record.ownerExtensionId, ownerSet);
+    }
+
+    /**
+     * Append a `duplicate_id` record to the records list without disturbing
+     * the primary record for this module id. The duplicate is stored as a
+     * separate entry so `/modules` can show both the winner and the
+     * rejected duplicate for diagnostics.
+     */
+    private appendDuplicateRecord(record: AuthorityModuleRecord, winner: AuthorityModuleRecord): void {
+        const duplicate: AuthorityModuleRecord = {
+            ...record,
+            status: 'duplicate_id',
+            diagnostics: [
+                ...(record.diagnostics ?? []),
+                {
+                    code: 'duplicate_module_id',
+                    message: `Module id '${record.moduleId}' already registered from ${winner.source.extensionId}.`,
+                    severity: 'warning',
+                },
+            ],
+        };
+        this.records.push(duplicate);
+
+        const ownerSet = this.recordsByOwner.get(duplicate.ownerExtensionId) ?? new Set<string>();
+        ownerSet.add(duplicate.moduleId);
+        this.recordsByOwner.set(duplicate.ownerExtensionId, ownerSet);
+    }
+
+    private buildLoadedRecord(module: RegisteredModule): AuthorityModuleRecord {
+        const ownerExtensionId = module.ownerExtensionId ?? 'builtin';
+        const source: AuthorityModuleRecordSource = module.source ?? { extensionId: ownerExtensionId };
+        return {
+            moduleId: module.manifest.id,
+            ownerExtensionId,
+            status: 'loaded',
+            manifest: module.manifest,
+            source,
+        };
     }
 }

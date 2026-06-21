@@ -187,6 +187,16 @@ export class InstallService {
         return this.pluginRoot;
     }
 
+    /**
+     * Returns the resolved SillyTavern root directory, or `null` when the
+     * current working directory and plugin location do not look like a
+     * SillyTavern install. Public so that discovery services can resolve
+     * extension directories without re-implementing the candidate walk.
+     */
+    getSillyTavernRoot(): string | null {
+        return this.resolveSillyTavernRoot();
+    }
+
     redeployBundledSdk(): Promise<InstallStatusSnapshot> {
         return this.bootstrap();
     }

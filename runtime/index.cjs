@@ -550,7 +550,7 @@ async function buildProbeResponse(runtime, user) {
     await runtime.core.refreshHealth();
     const install = runtime.install.getStatus();
     const core = runtime.core.getStatus();
-    const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin, runtime.modules.count());
+    const features = (0,_constants_js__WEBPACK_IMPORTED_MODULE_2__.buildAuthorityFeatureFlags)(user.isAdmin, runtime.modules.visibleCount());
     const effectiveInlineThresholdBytes = buildEffectiveInlineThresholds();
     const effectiveTransferMaxBytes = buildEffectiveTransferMaxBytes();
     return {
@@ -789,7 +789,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const policies = await runtime.permissions.getPolicyEntries(user, session.extension.id);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             await runtime.audit.logUsage(user, session.extension.id, 'Session initialized');
-            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits, runtime.modules.count()));
+            ok(res, runtime.sessions.buildSessionResponse(session, grants, policies, limits, runtime.modules.visibleCount()));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -800,7 +800,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
             const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
             const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
-            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits, runtime.modules.count()));
+            ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits, runtime.modules.visibleCount()));
         }
         catch (error) {
             fail(runtime, req, res, 'third-party/st-authority-sdk', error);
@@ -1562,6 +1562,25 @@ function registerModuleRoutes(router, runtime, fail) {
             extensionId = session.extension.id;
             const moduleId = decodeParam(req.params?.moduleId);
             ok(res, runtime.modules.getManifest(moduleId));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/modules/:moduleId/record', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const moduleId = decodeParam(req.params?.moduleId);
+            const record = runtime.modules.getRecord(moduleId);
+            if (!record) {
+                ok(res, { moduleId, record: null });
+            }
+            else {
+                ok(res, { moduleId, record });
+            }
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
@@ -3374,16 +3393,18 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
 /* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
 /* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+
 
 
 
@@ -3410,19 +3431,20 @@ function createAuthorityRuntime() {
     const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_4__.DataTransferService();
     const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_5__.ExtensionService(core);
     const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_7__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_12__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_11__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_14__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_15__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_16__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_13__.PrivateFsService(core);
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_13__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_12__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_15__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_16__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_17__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_18__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_14__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_6__.HttpService(core);
     const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_8__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_18__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_10__.NativeMigrationService();
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_19__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_11__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_9__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_9__.ModuleDiscoveryService(install);
     return {
         adminPackages,
         events,
@@ -3443,6 +3465,7 @@ function createAuthorityRuntime() {
         trivium,
         nativeMigrations,
         modules,
+        moduleDiscovery,
     };
 }
 
@@ -6497,6 +6520,15 @@ class InstallService {
     getPluginRoot() {
         return this.pluginRoot;
     }
+    /**
+     * Returns the resolved SillyTavern root directory, or `null` when the
+     * current working directory and plugin location do not look like a
+     * SillyTavern install. Public so that discovery services can resolve
+     * extension directories without re-implementing the candidate walk.
+     */
+    getSillyTavernRoot() {
+        return this.resolveSillyTavernRoot();
+    }
     redeployBundledSdk() {
         return this.bootstrap();
     }
@@ -7071,6 +7103,703 @@ class JobService {
 
 /***/ },
 
+/***/ "./src/services/module-discovery-service.ts"
+/*!**************************************************!*\
+  !*** ./src/services/module-discovery-service.ts ***!
+  \**************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   MODULE_DEFAULT_REQUEST_BYTES: () => (/* binding */ MODULE_DEFAULT_REQUEST_BYTES),
+/* harmony export */   MODULE_DEFAULT_RESPONSE_BYTES: () => (/* binding */ MODULE_DEFAULT_RESPONSE_BYTES),
+/* harmony export */   MODULE_DEFAULT_TIMEOUT_MS: () => (/* binding */ MODULE_DEFAULT_TIMEOUT_MS),
+/* harmony export */   MODULE_MAX_REQUEST_BYTES: () => (/* binding */ MODULE_MAX_REQUEST_BYTES),
+/* harmony export */   MODULE_MAX_RESPONSE_BYTES: () => (/* binding */ MODULE_MAX_RESPONSE_BYTES),
+/* harmony export */   MODULE_MAX_TIMEOUT_MS: () => (/* binding */ MODULE_MAX_TIMEOUT_MS),
+/* harmony export */   ModuleDiscoveryService: () => (/* binding */ ModuleDiscoveryService)
+/* harmony export */ });
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+
+
+
+/**
+ * Authority companion module discovery service.
+ *
+ * Phase 1 scope: scan installed SillyTavern extensions for
+ * `.authority/module.json`, validate the manifest shape, schema, protocol
+ * version, module id, transaction names, required resources, idempotency,
+ * realistic inline byte limits, owner-extension identity, and entry path
+ * containment; produce {@link AuthorityModuleRecord}s that the
+ * {@link ModuleHostService} can surface through `/modules` without loading
+ * any companion `server.cjs`.
+ *
+ * This service never executes companion code. It does not follow symlinks,
+ * does not recurse into nested directories, and skips `node_modules`, `dist`,
+ * `.git`, `target`, and hidden directories other than the exact `.authority`
+ * candidate path.
+ */
+/** Module id pattern, mirroring {@link ModuleHostService}. */
+const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** Transaction name pattern, mirroring {@link ModuleHostService}. */
+const TRANSACTION_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+/** Owner extension id segment pattern (e.g. `third-party/some-extension`). */
+const OWNER_EXTENSION_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
+/** Manifest schema version accepted by Phase 1. */
+const AUTHORITY_MODULE_SCHEMA_VERSION = 1;
+/** Default inline request/response byte limit (64 MiB). */
+const MODULE_DEFAULT_REQUEST_BYTES = 64 * 1024 * 1024;
+const MODULE_DEFAULT_RESPONSE_BYTES = 64 * 1024 * 1024;
+/**
+ * Hard inline transaction byte cap (256 MiB), aligned with
+ * {@link UNMANAGED_TRANSFER_MAX_BYTES} and below SillyTavern's 500 MB body
+ * parser limit. Larger payloads must use DOA transfer/blob primitives, not
+ * inline transaction bodies.
+ */
+const MODULE_MAX_REQUEST_BYTES = 256 * 1024 * 1024;
+const MODULE_MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
+/** Default per-transaction timeout (120 s). */
+const MODULE_DEFAULT_TIMEOUT_MS = 120_000;
+/** Hard upper bound on per-transaction timeout (10 min). */
+const MODULE_MAX_TIMEOUT_MS = 10 * 60 * 1000;
+const SKIP_DIRECTORY_NAMES = new Set([
+    'node_modules',
+    'dist',
+    '.git',
+    'target',
+]);
+const SUPPORTED_RISK_LEVELS = new Set(['low', 'medium', 'high']);
+const SUPPORTED_IDEMPOTENCY = new Set(['none', 'optional', 'required']);
+const SUPPORTED_PERMISSION_TARGET_KINDS = new Set(['module', 'transaction', 'custom']);
+class ModuleDiscoveryService {
+    install;
+    logger;
+    sillyTavernRootOverride;
+    extensionDirsOverride;
+    constructor(install, options = {}) {
+        this.install = install;
+        this.logger = options.logger ?? console;
+        this.sillyTavernRootOverride = options.sillyTavernRoot;
+        this.extensionDirsOverride = options.extensionDirs;
+    }
+    /**
+     * Discover all companion module records under the resolved SillyTavern
+     * extension directories. Discovery never throws on a per-module failure;
+     * failures are recorded as diagnostics on the returned records. A throw
+     * here only signals that the SillyTavern root itself could not be
+     * resolved, in which case the caller should treat discovery as a no-op.
+     */
+    discover() {
+        const sillyTavernRoot = this.resolveSillyTavernRoot();
+        if (!sillyTavernRoot) {
+            return { records: [], byModuleId: new Map() };
+        }
+        const extensionDirs = this.resolveExtensionDirs(sillyTavernRoot);
+        const records = [];
+        const byModuleId = new Map();
+        for (const { extensionId, extensionDir } of extensionDirs) {
+            const moduleDir = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionDir, '.authority');
+            const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(moduleDir, 'module.json');
+            // Skip silently when there is no module.json at all. When the path
+            // exists but is a symlink (or otherwise not a regular file), fall
+            // through to discoverRecord so the failure is recorded as a
+            // diagnostic on a record rather than silently dropped.
+            const manifestExists = pathExistsAny(manifestPath);
+            if (!manifestExists) {
+                continue;
+            }
+            const record = this.discoverRecord(extensionId, extensionDir, moduleDir, manifestPath);
+            records.push(record);
+            if (record.manifest && (record.status === 'available' || record.status === 'loaded')) {
+                const existing = byModuleId.get(record.moduleId);
+                if (existing && existing.manifest && (existing.status === 'available' || existing.status === 'loaded')) {
+                    // First valid record wins; later duplicate becomes a non-executable duplicate.
+                    records[records.length - 1] = markDuplicate(record, existing);
+                }
+                else {
+                    byModuleId.set(record.moduleId, record);
+                }
+            }
+        }
+        return { records, byModuleId };
+    }
+    discoverRecord(extensionId, extensionDir, moduleDir, manifestPath) {
+        // Public source carries only safe relative metadata; absolute paths
+        // are kept in local variables for server-side validation only.
+        const source = {
+            extensionId,
+            modulePath: '.authority/module.json',
+        };
+        // Refuse to follow symlinks at the extension, module dir, or manifest
+        // file level. lstat-based checks catch all three before any read.
+        if (isSymlink(extensionDir) || isSymlink(moduleDir)) {
+            return buildRecord(extensionId, null, 'incompatible_host', source, {
+                code: 'symlink_extension_ignored',
+                message: 'Symlinked extension or .authority directories are ignored.',
+                severity: 'warning',
+            });
+        }
+        if (isSymlink(manifestPath)) {
+            return buildRecord(extensionId, null, 'incompatible_host', source, {
+                code: 'manifest_symlink_rejected',
+                message: 'Symlinked .authority/module.json is rejected.',
+                severity: 'warning',
+            });
+        }
+        if (!isRegularFileStrict(manifestPath)) {
+            return buildRecord(extensionId, null, 'invalid_manifest', source, {
+                code: 'manifest_not_a_file',
+                message: '.authority/module.json is not a regular file.',
+                severity: 'error',
+            });
+        }
+        let parsed;
+        try {
+            parsed = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_0___default().readFileSync(manifestPath, 'utf8'));
+        }
+        catch (error) {
+            return buildRecord(extensionId, null, 'invalid_manifest', source, {
+                code: 'manifest_json_parse_error',
+                message: `Failed to parse module.json: ${errorMessage(error)}`,
+                severity: 'error',
+            });
+        }
+        const manifestValidation = validateManifest(parsed, extensionId);
+        if (!manifestValidation.ok) {
+            // Distinguish protocol mismatch from generic manifest invalidity so
+            // hosts can show "incompatible host" vs "broken manifest".
+            const status = manifestValidation.incompatibleHost ? 'incompatible_host' : 'invalid_manifest';
+            return buildRecord(extensionId, null, status, source, manifestValidation.diagnostic);
+        }
+        const manifest = manifestValidation.manifest;
+        const moduleId = manifest.id;
+        // Reflect the manifest-declared entry (relative) on the public source.
+        if (typeof manifest.entry === 'string') {
+            source.entry = manifest.entry;
+        }
+        // Validate entry: relative, .cjs only, resolves inside .authority,
+        // not a symlink, and realpath stays inside realpath(moduleDir).
+        const entryValidation = validateEntry(manifest.entry, moduleDir);
+        if (entryValidation.status !== 'available') {
+            const record = buildRecord(extensionId, manifest, entryValidation.status, source, entryValidation.diagnostic);
+            record.moduleId = moduleId;
+            return record;
+        }
+        const record = buildRecord(extensionId, manifest, 'available', source);
+        record.moduleId = moduleId;
+        return record;
+    }
+    resolveSillyTavernRoot() {
+        if (this.sillyTavernRootOverride !== undefined) {
+            return this.sillyTavernRootOverride && isSillyTavernRoot(this.sillyTavernRootOverride)
+                ? this.sillyTavernRootOverride
+                : null;
+        }
+        return this.install.getSillyTavernRoot();
+    }
+    resolveExtensionDirs(sillyTavernRoot) {
+        if (this.extensionDirsOverride !== undefined) {
+            return this.extensionDirsOverride.map(extensionDir => ({
+                extensionId: deriveExtensionId(sillyTavernRoot, extensionDir),
+                extensionDir,
+            }));
+        }
+        const dirs = [];
+        const extensionsRoot = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions');
+        const thirdPartyRoot = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionsRoot, 'third-party');
+        // Direct extension dirs: <extensionsRoot>/<name>
+        if (node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(extensionsRoot)) {
+            for (const entry of listDirectoryEntries(extensionsRoot)) {
+                if (!entry.isDirectory() || entry.name === 'third-party') {
+                    continue;
+                }
+                if (SKIP_DIRECTORY_NAMES.has(entry.name) || isHiddenName(entry.name)) {
+                    continue;
+                }
+                const extensionDir = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionsRoot, entry.name);
+                if (isSymlink(extensionDir)) {
+                    continue;
+                }
+                dirs.push({ extensionId: entry.name, extensionDir });
+            }
+        }
+        // Third-party extensions: <extensionsRoot>/third-party/<name>
+        if (node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(thirdPartyRoot)) {
+            for (const entry of listDirectoryEntries(thirdPartyRoot)) {
+                if (!entry.isDirectory()) {
+                    continue;
+                }
+                if (SKIP_DIRECTORY_NAMES.has(entry.name) || isHiddenName(entry.name)) {
+                    continue;
+                }
+                const extensionDir = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(thirdPartyRoot, entry.name);
+                if (isSymlink(extensionDir)) {
+                    continue;
+                }
+                dirs.push({ extensionId: `third-party/${entry.name}`, extensionDir });
+            }
+        }
+        return dirs;
+    }
+}
+function validateManifest(parsed, ownerExtensionId) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return fail('manifest_shape_invalid', 'module.json must be a JSON object.', false);
+    }
+    const raw = parsed;
+    const schemaVersion = raw.schemaVersion;
+    if (schemaVersion !== AUTHORITY_MODULE_SCHEMA_VERSION) {
+        return fail('manifest_schema_version_unsupported', `Unsupported manifest schemaVersion: ${formatValue(schemaVersion)} (expected ${AUTHORITY_MODULE_SCHEMA_VERSION}).`, false);
+    }
+    const protocolVersion = raw.protocolVersion;
+    if (protocolVersion !== _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_MODULE_PROTOCOL_VERSION) {
+        return fail('manifest_protocol_version_incompatible', `Unsupported module protocolVersion: ${formatValue(protocolVersion)} (expected ${_constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_MODULE_PROTOCOL_VERSION}).`, true);
+    }
+    const id = raw.id;
+    if (typeof id !== 'string' || !MODULE_ID_PATTERN.test(id)) {
+        return fail('manifest_id_invalid', `Invalid module id: ${formatValue(id)}.`, false);
+    }
+    const displayName = raw.displayName;
+    if (typeof displayName !== 'string' || displayName.trim() === '') {
+        return fail('manifest_display_name_invalid', `Invalid displayName: ${formatValue(displayName)}.`, false);
+    }
+    const version = raw.version;
+    if (typeof version !== 'string' || version.trim() === '') {
+        return fail('manifest_version_invalid', `Invalid module version: ${formatValue(version)}.`, false);
+    }
+    const ownerExtensionIdInManifest = raw.ownerExtensionId;
+    if (typeof ownerExtensionIdInManifest !== 'string' || ownerExtensionIdInManifest.trim() === '') {
+        return fail('manifest_owner_extension_id_missing', 'ownerExtensionId is required.', false);
+    }
+    if (ownerExtensionIdInManifest !== ownerExtensionId) {
+        return fail('manifest_owner_extension_id_mismatch', `ownerExtensionId '${ownerExtensionIdInManifest}' does not match discovered extension id '${ownerExtensionId}'.`, false);
+    }
+    if (!isModuleIdOwnedByExtension(id, ownerExtensionId)) {
+        return fail('manifest_id_owner_mismatch', `Module id '${id}' must equal the normalized owner id '${normalizeOwnerExtensionId(ownerExtensionId)}' or start with that prefix followed by '.'.`, false);
+    }
+    const entry = raw.entry;
+    if (entry !== undefined && (typeof entry !== 'string' || entry.trim() === '')) {
+        return fail('manifest_entry_invalid', `Invalid entry: ${formatValue(entry)}.`, false);
+    }
+    const transactions = raw.transactions;
+    if (!transactions || typeof transactions !== 'object' || Array.isArray(transactions)) {
+        return fail('manifest_transactions_invalid', 'transactions must be a record of transaction manifests.', false);
+    }
+    const transactionEntries = Object.entries(transactions);
+    if (transactionEntries.length === 0) {
+        return fail('manifest_transactions_empty', 'transactions must declare at least one transaction.', false);
+    }
+    const validatedTransactions = {};
+    for (const [transactionName, transactionRaw] of transactionEntries) {
+        const transactionValidation = validateTransaction(transactionName, transactionRaw, id);
+        if (!transactionValidation.ok) {
+            return fail(transactionValidation.code, transactionValidation.message, false);
+        }
+        validatedTransactions[transactionName] = transactionValidation.transaction;
+    }
+    const manifest = {
+        id,
+        displayName,
+        version,
+        protocolVersion,
+        schemaVersion,
+        ownerExtensionId,
+        ...(typeof entry === 'string' ? { entry } : {}),
+        transactions: validatedTransactions,
+    };
+    return { ok: true, manifest };
+}
+function validateTransaction(name, raw, moduleId) {
+    if (typeof name !== 'string' || name.includes(':') || !TRANSACTION_NAME_PATTERN.test(name)) {
+        return transactionFail('manifest_transaction_name_invalid', `Invalid transaction name: ${formatValue(name)}`);
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return transactionFail('manifest_transaction_shape_invalid', `Transaction '${name}' must be an object.`);
+    }
+    const tx = raw;
+    const declaredName = tx.name;
+    if (typeof declaredName !== 'string' || declaredName !== name) {
+        return transactionFail('manifest_transaction_name_mismatch', `Transaction name mismatch for ${moduleId}/${name}: declared name ${formatValue(declaredName)}.`);
+    }
+    const version = tx.version;
+    if (typeof version !== 'string' || version.trim() === '') {
+        return transactionFail('manifest_transaction_version_invalid', `Transaction '${name}' version must be a non-empty string.`);
+    }
+    const title = tx.title;
+    if (typeof title !== 'string' || title.trim() === '') {
+        return transactionFail('manifest_transaction_title_invalid', `Transaction '${name}' title must be a non-empty string.`);
+    }
+    const riskLevel = tx.riskLevel;
+    if (typeof riskLevel !== 'string' || !SUPPORTED_RISK_LEVELS.has(riskLevel)) {
+        return transactionFail('manifest_transaction_risk_level_invalid', `Transaction '${name}' riskLevel must be one of low|medium|high.`);
+    }
+    const permissionTarget = tx.permissionTarget;
+    const permissionTargetValidation = validatePermissionTarget(name, permissionTarget, moduleId);
+    if (!permissionTargetValidation.ok) {
+        return permissionTargetValidation;
+    }
+    const requiredResources = tx.requiredResources;
+    if (!Array.isArray(requiredResources)) {
+        return transactionFail('manifest_transaction_required_resources_invalid', `Transaction '${name}' requiredResources must be an array.`);
+    }
+    const validatedRequiredResources = [];
+    for (const item of requiredResources) {
+        const resourceValidation = validateRequiredResource(name, item);
+        if (!resourceValidation.ok) {
+            return resourceValidation;
+        }
+        validatedRequiredResources.push(resourceValidation.value);
+    }
+    const idempotency = tx.idempotency;
+    if (typeof idempotency !== 'string' || !SUPPORTED_IDEMPOTENCY.has(idempotency)) {
+        return transactionFail('manifest_transaction_idempotency_invalid', `Transaction '${name}' idempotency must be one of none|optional|required.`);
+    }
+    const timeoutMsRaw = tx.timeoutMs;
+    if (timeoutMsRaw !== undefined) {
+        if (typeof timeoutMsRaw !== 'number' || !Number.isFinite(timeoutMsRaw) || timeoutMsRaw <= 0 || timeoutMsRaw > MODULE_MAX_TIMEOUT_MS) {
+            return transactionFail('manifest_transaction_timeout_invalid', `Transaction '${name}' timeoutMs must be a positive number up to ${MODULE_MAX_TIMEOUT_MS} ms.`);
+        }
+    }
+    const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : undefined;
+    const maxRequestBytesRaw = tx.maxRequestBytes;
+    if (maxRequestBytesRaw !== undefined) {
+        if (!isByteLimit(maxRequestBytesRaw, MODULE_MAX_REQUEST_BYTES)) {
+            return transactionFail('manifest_transaction_max_request_bytes_invalid', `Transaction '${name}' maxRequestBytes must be a positive integer up to ${MODULE_MAX_REQUEST_BYTES}.`);
+        }
+    }
+    const maxRequestBytes = isByteLimit(maxRequestBytesRaw, MODULE_MAX_REQUEST_BYTES) ? maxRequestBytesRaw : undefined;
+    const maxResponseBytesRaw = tx.maxResponseBytes;
+    if (maxResponseBytesRaw !== undefined) {
+        if (!isByteLimit(maxResponseBytesRaw, MODULE_MAX_RESPONSE_BYTES)) {
+            return transactionFail('manifest_transaction_max_response_bytes_invalid', `Transaction '${name}' maxResponseBytes must be a positive integer up to ${MODULE_MAX_RESPONSE_BYTES}.`);
+        }
+    }
+    const maxResponseBytes = isByteLimit(maxResponseBytesRaw, MODULE_MAX_RESPONSE_BYTES) ? maxResponseBytesRaw : undefined;
+    const transaction = {
+        name,
+        version,
+        title,
+        ...(typeof tx.description === 'string' ? { description: tx.description } : {}),
+        riskLevel: riskLevel,
+        permissionTarget: permissionTargetValidation.value,
+        requiredResources: validatedRequiredResources,
+        idempotency: idempotency,
+        ...(typeof tx.lockScope === 'string' ? { lockScope: tx.lockScope } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(maxRequestBytes !== undefined ? { maxRequestBytes } : {}),
+        ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
+    };
+    return { ok: true, transaction };
+}
+function validatePermissionTarget(transactionName, raw, moduleId) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return transactionFail('manifest_transaction_permission_target_invalid', `Transaction '${transactionName}' permissionTarget must be an object.`);
+    }
+    const target = raw;
+    const kind = target.kind;
+    if (typeof kind !== 'string' || !SUPPORTED_PERMISSION_TARGET_KINDS.has(kind)) {
+        return transactionFail('manifest_transaction_permission_target_invalid', `Transaction '${transactionName}' permissionTarget.kind must be one of module|transaction|custom.`);
+    }
+    if (kind === 'module') {
+        return { ok: true, value: { kind: 'module' } };
+    }
+    if (kind === 'transaction') {
+        return { ok: true, value: { kind: 'transaction' } };
+    }
+    const customTarget = target.target;
+    if (typeof customTarget !== 'string' || customTarget.trim() === '') {
+        return transactionFail('manifest_transaction_permission_target_invalid', `Transaction '${transactionName}' permissionTarget.target must be a non-empty string for kind=custom.`);
+    }
+    // Custom permission targets in companion manifests must be scoped to the
+    // module's own permission namespace. Acceptable forms:
+    //   - exactly the moduleId
+    //   - moduleId followed by ':' and a non-empty suffix (moduleId:txName,
+    //     moduleId:*, moduleId:prefix)
+    // This prevents a companion module from declaring execute permission for
+    // arbitrary other modules or unrelated permission keys.
+    if (!isCustomTargetScopedToModule(customTarget, moduleId)) {
+        return transactionFail('manifest_transaction_permission_target_invalid', `Transaction '${transactionName}' permissionTarget.target '${customTarget}' must equal moduleId '${moduleId}' or start with '${moduleId}:'.`);
+    }
+    return { ok: true, value: { kind: 'custom', target: customTarget } };
+}
+function isCustomTargetScopedToModule(customTarget, moduleId) {
+    if (customTarget === moduleId) {
+        return true;
+    }
+    if (!customTarget.startsWith(`${moduleId}:`)) {
+        return false;
+    }
+    const suffix = customTarget.slice(moduleId.length + 1);
+    return suffix.length > 0 && !suffix.includes(':');
+}
+const SUPPORTED_RESOURCES = new Set([
+    'storage.kv',
+    'storage.blob',
+    'fs.private',
+    'sql.private',
+    'trivium.private',
+    'http.fetch',
+    'jobs.background',
+    'events.stream',
+    'module.execute',
+]);
+/**
+ * Companion modules may only declare data/runtime permission resources in
+ * `requiredResources`. `module.execute` is reserved for the host's own
+ * permission target derivation and must not be re-declared by a companion
+ * manifest, otherwise a malicious module could grant itself execute rights.
+ */
+const FORBIDDEN_COMPANION_RESOURCES = new Set([
+    'module.execute',
+]);
+function validateRequiredResource(transactionName, raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return transactionFail('manifest_transaction_required_resource_invalid', `Transaction '${transactionName}' requiredResources entries must be objects.`);
+    }
+    const item = raw;
+    const resource = item.resource;
+    if (typeof resource !== 'string' || !SUPPORTED_RESOURCES.has(resource)) {
+        return transactionFail('manifest_transaction_required_resource_invalid', `Transaction '${transactionName}' requiredResources resource must be a supported companion PermissionResource.`);
+    }
+    if (FORBIDDEN_COMPANION_RESOURCES.has(resource)) {
+        return transactionFail('manifest_transaction_required_resource_forbidden', `Transaction '${transactionName}' requiredResources resource '${resource}' is not allowed in companion manifests.`);
+    }
+    const value = { resource: resource };
+    if (typeof item.target === 'string') {
+        value.target = item.target;
+    }
+    if (typeof item.reason === 'string') {
+        value.reason = item.reason;
+    }
+    return { ok: true, value };
+}
+function validateEntry(entry, moduleDir) {
+    if (entry === undefined) {
+        // Phase 1 allows manifests that declare no entry; they surface as
+        // available-but-unloadable. Phase 2 will require entry for activation.
+        return { status: 'available' };
+    }
+    if (typeof entry !== 'string' || entry.trim() === '') {
+        return entryFail('entry_invalid', `Invalid entry: ${formatValue(entry)}.`, 'invalid_manifest');
+    }
+    // Entry must be relative and end in .cjs for MVP.
+    if (node_path__WEBPACK_IMPORTED_MODULE_1___default().isAbsolute(entry)) {
+        return entryFail('entry_path_absolute', 'Entry must be a relative path.', 'invalid_manifest');
+    }
+    if (!entry.toLowerCase().endsWith('.cjs')) {
+        return entryFail('entry_extension_unsupported', 'Entry must be a .cjs file.', 'invalid_manifest');
+    }
+    // Resolve and require the entry to remain inside the module's .authority dir.
+    const resolvedEntry = node_path__WEBPACK_IMPORTED_MODULE_1___default().resolve(moduleDir, entry);
+    if (!isPathInside(moduleDir, resolvedEntry)) {
+        return entryFail('entry_path_escape', `Entry '${entry}' resolves outside the module .authority directory.`, 'invalid_manifest');
+    }
+    // Reject symlinked entry files. lstat does not follow symlinks, so a
+    // symlinked entry pointing outside .authority is caught here even when
+    // its eventual target exists.
+    if (isSymlink(resolvedEntry)) {
+        return entryFail('entry_symlink_rejected', `Entry '${entry}' is a symlink; symlinked entries are rejected.`, 'invalid_manifest');
+    }
+    if (!isRegularFileStrict(resolvedEntry)) {
+        return entryFail('entry_missing', `Entry '${entry}' does not exist at the resolved path.`, 'entry_missing');
+    }
+    // Realpath containment: resolve the real module dir and the real entry
+    // path (following any parent symlinks), then require the real entry to
+    // remain inside the real .authority dir. This catches cases where the
+    // .authority dir itself (or an ancestor) is a symlink whose target the
+    // entry escapes via `..`.
+    const realModuleDir = realpathSync(moduleDir);
+    const realEntry = realpathSync(resolvedEntry);
+    if (realModuleDir === null || realEntry === null) {
+        return entryFail('entry_missing', `Entry '${entry}' could not be resolved to a real path.`, 'entry_missing');
+    }
+    if (!isPathInside(realModuleDir, realEntry)) {
+        return entryFail('entry_path_escape', `Entry '${entry}' real path escapes the module .authority directory.`, 'invalid_manifest');
+    }
+    return { status: 'available' };
+}
+function isModuleIdOwnedByExtension(moduleId, ownerExtensionId) {
+    const normalizedOwner = normalizeOwnerExtensionId(ownerExtensionId);
+    if (!normalizedOwner) {
+        return false;
+    }
+    return moduleId === normalizedOwner || moduleId.startsWith(`${normalizedOwner}.`);
+}
+function normalizeOwnerExtensionId(ownerExtensionId) {
+    // Convert `third-party/some-extension` -> `third-party.some-extension`.
+    // Validate each segment so owners cannot inject characters that would
+    // bypass the module-id prefix check.
+    const segments = ownerExtensionId.split('/');
+    if (segments.length === 0) {
+        return '';
+    }
+    const normalizedSegments = segments.map(segment => segment.toLowerCase());
+    if (!normalizedSegments.every(segment => OWNER_EXTENSION_SEGMENT_PATTERN.test(segment))) {
+        return '';
+    }
+    return normalizedSegments.join('.');
+}
+function deriveExtensionId(sillyTavernRoot, extensionDir) {
+    const extensionsRoot = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions');
+    const thirdPartyRoot = node_path__WEBPACK_IMPORTED_MODULE_1___default().join(extensionsRoot, 'third-party');
+    const relativeToThirdParty = node_path__WEBPACK_IMPORTED_MODULE_1___default().relative(thirdPartyRoot, extensionDir);
+    if (relativeToThirdParty && !relativeToThirdParty.startsWith('..') && !node_path__WEBPACK_IMPORTED_MODULE_1___default().isAbsolute(relativeToThirdParty)) {
+        return `third-party/${relativeToThirdParty.split((node_path__WEBPACK_IMPORTED_MODULE_1___default().sep))[0] ?? ''}`;
+    }
+    const relativeToExtensions = node_path__WEBPACK_IMPORTED_MODULE_1___default().relative(extensionsRoot, extensionDir);
+    if (relativeToExtensions && !relativeToExtensions.startsWith('..') && !node_path__WEBPACK_IMPORTED_MODULE_1___default().isAbsolute(relativeToExtensions)) {
+        return relativeToExtensions.split((node_path__WEBPACK_IMPORTED_MODULE_1___default().sep))[0] ?? '';
+    }
+    return node_path__WEBPACK_IMPORTED_MODULE_1___default().basename(extensionDir);
+}
+function isByteLimit(value, max) {
+    return typeof value === 'number'
+        && Number.isFinite(value)
+        && Number.isInteger(value)
+        && value > 0
+        && value <= max;
+}
+function isPathInside(basePath, candidatePath) {
+    const base = node_path__WEBPACK_IMPORTED_MODULE_1___default().resolve(basePath);
+    const candidate = node_path__WEBPACK_IMPORTED_MODULE_1___default().resolve(candidatePath);
+    const relative = node_path__WEBPACK_IMPORTED_MODULE_1___default().relative(base, candidate);
+    return relative === '' || (relative !== '' && !relative.startsWith('..') && !node_path__WEBPACK_IMPORTED_MODULE_1___default().isAbsolute(relative));
+}
+function isHiddenName(name) {
+    return name.length > 0 && name.startsWith('.') && name !== '.';
+}
+function isSymlink(targetPath) {
+    try {
+        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().lstatSync(targetPath).isSymbolicLink();
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Returns true if `targetPath` exists in any form (regular file, symlink,
+ * directory, etc.). Uses lstat so symlinked paths that point to missing
+ * targets still report true (the symlink entry itself exists).
+ */
+function pathExistsAny(targetPath) {
+    try {
+        node_fs__WEBPACK_IMPORTED_MODULE_0___default().lstatSync(targetPath);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Returns true if `targetPath` is a regular file and not a symlink. Uses
+ * lstat so symlinked manifests/entries are rejected before the host reads
+ * or loads them.
+ */
+function isRegularFileStrict(targetPath) {
+    try {
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_0___default().lstatSync(targetPath);
+        return stat.isFile() && !stat.isSymbolicLink();
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Resolves the real absolute path of `targetPath` (following symlinks), or
+ * `null` if the path cannot be resolved. Used for realpath containment
+ * checks on the entry file and module dir.
+ */
+function realpathSync(targetPath) {
+    try {
+        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().realpathSync(targetPath);
+    }
+    catch {
+        return null;
+    }
+}
+function isSillyTavernRoot(candidate) {
+    return node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(candidate, 'plugins'))
+        && node_fs__WEBPACK_IMPORTED_MODULE_0___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_1___default().join(candidate, 'public', 'scripts', 'extensions'));
+}
+function listDirectoryEntries(dir) {
+    try {
+        return node_fs__WEBPACK_IMPORTED_MODULE_0___default().readdirSync(dir, { withFileTypes: true });
+    }
+    catch {
+        return [];
+    }
+}
+function buildRecord(ownerExtensionId, manifest, status, source, diagnostic) {
+    const moduleId = manifest?.id ?? deriveModuleIdFromSource(source);
+    const record = {
+        moduleId,
+        ownerExtensionId,
+        status,
+        manifest,
+        source,
+    };
+    if (diagnostic) {
+        record.diagnostics = [diagnostic];
+    }
+    return record;
+}
+function markDuplicate(record, existing) {
+    const duplicate = {
+        ...record,
+        status: 'duplicate_id',
+        diagnostics: [
+            {
+                code: 'duplicate_module_id',
+                message: `Module id '${record.moduleId}' already discovered from ${existing.source.extensionId}.`,
+                severity: 'warning',
+            },
+        ],
+    };
+    return duplicate;
+}
+function deriveModuleIdFromSource(source) {
+    // Fallback when the manifest could not be parsed; use the extension id
+    // normalized to a module-id-shaped string so callers can still inspect
+    // the record by id.
+    const normalized = normalizeOwnerExtensionId(source.extensionId);
+    return normalized || source.extensionId.replace(/[^a-z0-9._-]/gi, '_');
+}
+function fail(code, message, incompatibleHost) {
+    return {
+        ok: false,
+        incompatibleHost,
+        diagnostic: { code, message, severity: incompatibleHost ? 'warning' : 'error' },
+    };
+}
+function transactionFail(code, message) {
+    return { ok: false, code, message };
+}
+function entryFail(code, message, status) {
+    return { status, diagnostic: { code, message, severity: 'error' } };
+}
+function formatValue(value) {
+    if (value === undefined) {
+        return '<undefined>';
+    }
+    if (value === null) {
+        return '<null>';
+    }
+    if (typeof value === 'string') {
+        return value.length === 0 ? '<empty>' : `'${value}'`;
+    }
+    return JSON.stringify(value);
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+
+
+/***/ },
+
 /***/ "./src/services/module-host-service.ts"
 /*!*********************************************!*\
   !*** ./src/services/module-host-service.ts ***!
@@ -7130,6 +7859,9 @@ class ModuleHostService {
     jobs;
     events;
     modules = new Map();
+    records = [];
+    primaryRecordByModuleId = new Map();
+    recordsByOwner = new Map();
     constructor(permissions, audit, trivium, storage, files, jobs, events) {
         this.permissions = permissions;
         this.audit = audit;
@@ -7163,29 +7895,113 @@ class ModuleHostService {
             }
             handlerMap.set(name, handler);
         }
-        this.modules.set(manifest.id, {
+        const registered = {
             manifest,
             handlers: handlerMap,
             resolvers: options.requiredResourceResolvers ?? {},
-        });
+            ...(options.ownerExtensionId !== undefined ? { ownerExtensionId: options.ownerExtensionId } : {}),
+            ...(options.source !== undefined ? { source: options.source } : {}),
+        };
+        this.modules.set(manifest.id, registered);
+        // Reflect the executable module as a `loaded` record so /modules can
+        // surface one consistent picture across built-in and discovered modules.
+        this.upsertRecord(this.buildLoadedRecord(registered));
+    }
+    /**
+     * Register (or replace) a discovery record that is not (yet) backed by an
+     * executable handler. Used by {@link ModuleDiscoveryService} and admin
+     * shims. Records with `loaded` status are kept in sync with executable
+     * registrations through {@link register} and should not normally be
+     * registered here.
+     *
+     * Duplicate handling: if a primary record (`available`/`loaded`) already
+     * exists for the same moduleId from a different owner extension, the
+     * incoming record is stored as a `duplicate_id` record alongside the
+     * original rather than overwriting it. The first valid record wins.
+     */
+    registerDiscoveredRecord(record) {
+        const existingIndex = this.primaryRecordByModuleId.get(record.moduleId);
+        const existing = existingIndex !== undefined ? this.records[existingIndex] : undefined;
+        // Preserve any already-loaded executable record: a discovered
+        // `available` record for an id that is currently loaded must not
+        // overwrite the loaded status.
+        if (existing?.status === 'loaded' && record.status !== 'loaded') {
+            this.appendDuplicateRecord(record, existing);
+            return;
+        }
+        // Duplicate handling: when an existing record is already present with
+        // a primary status (available/loaded) and the incoming record also
+        // claims the same moduleId with a primary status from a different
+        // owner, treat the incoming one as a duplicate_id rather than
+        // silently overwriting the winner.
+        if (existing
+            && (existing.status === 'available' || existing.status === 'loaded')
+            && (record.status === 'available' || record.status === 'loaded')
+            && existing.source.extensionId !== record.source.extensionId) {
+            this.appendDuplicateRecord(record, existing);
+            return;
+        }
+        this.upsertRecord(record);
+    }
+    /**
+     * Bulk-register discovery records. Deterministic: first valid record for
+     * a module id wins; later duplicates become `duplicate_id` records.
+     */
+    registerDiscoveredRecords(records) {
+        for (const record of records) {
+            this.registerDiscoveredRecord(record);
+        }
+    }
+    /** Returns all discovery records (loaded + discovered + error statuses). */
+    listRecords() {
+        return [...this.records];
+    }
+    /** Returns the primary discovery record for a module id, if any. */
+    getRecord(moduleId) {
+        const index = this.primaryRecordByModuleId.get(moduleId);
+        return index !== undefined ? this.records[index] ?? null : null;
+    }
+    /** Returns the total number of discovery records (visible module count). */
+    recordCount() {
+        return this.records.length;
     }
     listManifests() {
         const modules = [...this.modules.values()].map(entry => entry.manifest);
+        const records = this.listRecords();
         return {
             modules,
             count: modules.length,
+            records,
+            recordCount: records.length,
         };
     }
     getManifest(moduleId) {
         validateModuleId(moduleId);
         const module = this.modules.get(moduleId);
+        const record = this.getRecord(moduleId);
         if (!module) {
+            if (record && record.manifest) {
+                return { module: record.manifest, record };
+            }
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
         }
-        return { module: module.manifest };
+        return {
+            module: module.manifest,
+            ...(record ? { record } : {}),
+        };
     }
     count() {
         return this.modules.size;
+    }
+    /**
+     * Returns the visible module count for probe/session features. Phase 1
+     * prefers discovery record count (loaded + available + error statuses)
+     * so that installed companion modules surface even before their handlers
+     * are loaded. Falls back to executable count when no records exist.
+     */
+    visibleCount() {
+        const recordCount = this.records.length;
+        return recordCount > 0 ? recordCount : this.modules.size;
     }
     async execute(user, session, moduleId, transactionName, request) {
         validateModuleId(moduleId);
@@ -7195,6 +8011,13 @@ class ModuleHostService {
         }
         const module = this.modules.get(moduleId);
         if (!module) {
+            const record = this.getRecord(moduleId);
+            if (record && record.manifest) {
+                // Discovered-but-not-loaded module: structured error so the
+                // frontend can distinguish "missing" from "available but
+                // not activated yet".
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not loaded: ${moduleId}`, 409, 'validation_error', 'validation', { code: 'module_not_loaded', moduleId, status: record.status });
+            }
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
         }
         const transaction = assertTransactionManifest(module, transactionName);
@@ -7291,6 +8114,71 @@ class ModuleHostService {
             return await resolver(input);
         }
         return transaction.requiredResources;
+    }
+    upsertRecord(record) {
+        const existingIndex = this.primaryRecordByModuleId.get(record.moduleId);
+        if (existingIndex !== undefined) {
+            const existing = this.records[existingIndex];
+            if (existing) {
+                // Preserve diagnostics across upserts so callers can see why a
+                // record was originally marked unavailable.
+                const mergedDiagnostics = [
+                    ...(existing.diagnostics ?? []),
+                    ...(record.diagnostics ?? []),
+                ];
+                const merged = {
+                    ...record,
+                    ...(mergedDiagnostics.length > 0 ? { diagnostics: mergedDiagnostics } : {}),
+                };
+                this.records[existingIndex] = merged;
+            }
+            else {
+                this.records.push(record);
+                this.primaryRecordByModuleId.set(record.moduleId, this.records.length - 1);
+            }
+        }
+        else {
+            this.records.push(record);
+            this.primaryRecordByModuleId.set(record.moduleId, this.records.length - 1);
+        }
+        const ownerSet = this.recordsByOwner.get(record.ownerExtensionId) ?? new Set();
+        ownerSet.add(record.moduleId);
+        this.recordsByOwner.set(record.ownerExtensionId, ownerSet);
+    }
+    /**
+     * Append a `duplicate_id` record to the records list without disturbing
+     * the primary record for this module id. The duplicate is stored as a
+     * separate entry so `/modules` can show both the winner and the
+     * rejected duplicate for diagnostics.
+     */
+    appendDuplicateRecord(record, winner) {
+        const duplicate = {
+            ...record,
+            status: 'duplicate_id',
+            diagnostics: [
+                ...(record.diagnostics ?? []),
+                {
+                    code: 'duplicate_module_id',
+                    message: `Module id '${record.moduleId}' already registered from ${winner.source.extensionId}.`,
+                    severity: 'warning',
+                },
+            ],
+        };
+        this.records.push(duplicate);
+        const ownerSet = this.recordsByOwner.get(duplicate.ownerExtensionId) ?? new Set();
+        ownerSet.add(duplicate.moduleId);
+        this.recordsByOwner.set(duplicate.ownerExtensionId, ownerSet);
+    }
+    buildLoadedRecord(module) {
+        const ownerExtensionId = module.ownerExtensionId ?? 'builtin';
+        const source = module.source ?? { extensionId: ownerExtensionId };
+        return {
+            moduleId: module.manifest.id,
+            ownerExtensionId,
+            status: 'loaded',
+            manifest: module.manifest,
+            source,
+        };
     }
 }
 
@@ -12483,6 +13371,22 @@ async function init(router) {
     runtime ??= (0,_runtime_js__WEBPACK_IMPORTED_MODULE_1__.createAuthorityRuntime)();
     (0,_routes_js__WEBPACK_IMPORTED_MODULE_2__.registerRoutes)(router, runtime);
     await runtime.install.bootstrap();
+    // Phase 1: discover companion module manifests without loading any
+    // server.cjs. Discovery failures must never block DOA startup; they are
+    // recorded as diagnostics on the affected records and surfaced through
+    // /modules for admin/debug inspection.
+    try {
+        const result = runtime.moduleDiscovery.discover();
+        runtime.modules.registerDiscoveredRecords(result.records);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        runtime.install.getStatus();
+        // There is no public logger on AuthorityRuntime; rely on the install
+        // service's logger indirectly via console for now. Phase 2 will route
+        // this through a dedicated runtime logger.
+        console.warn(`[authority] Module discovery failed: ${message}`);
+    }
     void runtime.core.start();
 }
 async function exit() {
