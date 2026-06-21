@@ -1,9 +1,9 @@
 {
   "managedBy": "authority",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "platform": "android",
   "arch": "arm64",
   "binaryName": "authority-core",
-  "binarySha256": "b7644741838b4a9efa626d624728bb82dab370c613e51e5d3b4fac6a91f28325",
-  "builtAt": "2026-06-21T15:58:03.082Z"
+  "binarySha256": "b0d3257de4cce5cb51b5ff7cfc106e1878014f769f404c05d51558e25757a164",
+  "builtAt": "2026-06-21T16:59:22.347Z"
 }
