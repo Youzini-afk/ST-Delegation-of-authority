@@ -55,6 +55,7 @@ export interface AgentLlmProfile {
     model: string;
     apiKeyConfigured: boolean;
     apiKeyMasked: string | null;
+    apiKeyFingerprint: string | null;
     temperature: number | null;
     maxOutputTokens: number | null;
     timeoutMs: number;
@@ -110,6 +111,7 @@ export type AgentRunEventType =
     | 'assistant.message'
     | 'tool.requested'
     | 'tool.waiting_approval'
+    | 'tool.approval_resolved'
     | 'tool.started'
     | 'tool.completed'
     | 'tool.failed'
@@ -125,6 +127,27 @@ export interface AgentRunEvent {
     type: AgentRunEventType;
     timestamp: string;
     payload?: unknown;
+}
+
+export interface AgentRunMessage {
+    role: 'system' | 'user' | 'assistant' | 'tool';
+    content: string | null;
+    toolCallId?: string;
+    toolCalls?: Array<{
+        id: string;
+        name: string;
+        arguments: string;
+    }>;
+}
+
+export interface AgentRunDetail {
+    run: AgentRunRecord;
+    messages: AgentRunMessage[];
+    events: AgentRunEvent[];
+    invocations: AgentToolInvocation[];
+    approvals: AgentApprovalRecord[];
+    context?: unknown;
+    instructions?: string;
 }
 
 export type AgentToolInvocationStatus =

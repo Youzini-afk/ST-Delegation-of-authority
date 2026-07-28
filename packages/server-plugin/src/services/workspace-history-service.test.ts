@@ -15,6 +15,65 @@ afterEach(() => {
 });
 
 describe('WorkspaceHistoryService', () => {
+    it('keeps mutation checkpoints and the mutation under one workspace lock', async () => {
+        const fixture = await createFixture();
+        write(fixture.root, 'state.txt', 'before');
+        let releaseMutation!: () => void;
+        const mutationGate = new Promise<void>(resolve => { releaseMutation = resolve; });
+        let mutationStarted!: () => void;
+        const started = new Promise<void>(resolve => { mutationStarted = resolve; });
+
+        const mutation = fixture.service.runMutation('test', {
+            beforeMessage: 'before tool',
+            afterMessage: 'after tool',
+            paths: ['state.txt'],
+            toolCallId: 'tool-1',
+        }, { kind: 'agent', id: 'run-1' }, async () => {
+            write(fixture.root, 'state.txt', 'mutated');
+            mutationStarted();
+            await mutationGate;
+            return 'ok';
+        });
+        await started;
+
+        let concurrentFinished = false;
+        const concurrent = fixture.service.checkpoint('test', {
+            message: 'concurrent',
+            paths: ['state.txt'],
+        }, { kind: 'user' }).then(result => {
+            concurrentFinished = true;
+            return result;
+        });
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(concurrentFinished).toBe(false);
+
+        releaseMutation();
+        const result = await mutation;
+        const concurrentResult = await concurrent;
+        expect(result.value).toBe('ok');
+        expect(result.after.commit.parents).toEqual([result.before.commit.id]);
+        expect(concurrentResult.commit.parents).toEqual([result.after.commit.id]);
+    });
+
+    it('captures partial workspace changes when a mutation fails', async () => {
+        const fixture = await createFixture();
+        write(fixture.root, 'state.txt', 'before');
+
+        await expect(fixture.service.runMutation('test', {
+            beforeMessage: 'before failing tool',
+            afterMessage: 'after failing tool',
+            paths: ['state.txt'],
+        }, { kind: 'agent' }, () => {
+            write(fixture.root, 'state.txt', 'partial');
+            throw new Error('tool failed');
+        })).rejects.toThrow('tool failed');
+
+        const commits = fixture.service.listCommits('test');
+        expect(commits[0]?.message).toBe('after failing tool (failed)');
+        expect(commits[0]?.metadata).toMatchObject({ mutationFailed: true });
+        expect((await fixture.service.status('test')).dirty).toBe(false);
+    });
+
     it('tracks only requested paths and builds deduplicated history', async () => {
         const fixture = await createFixture();
         write(fixture.root, 'tracked.txt', 'one');
@@ -89,6 +148,29 @@ describe('WorkspaceHistoryService', () => {
             targetCommitId: safetyCommitId!,
         }, { kind: 'user' });
         expect(read(fixture.root, 'config/settings.json')).toBe('{"version":3,"dirty":true}');
+    });
+
+    it('restores a deleted workspace root from history without recreating it before force', async () => {
+        const fixture = await createFixture();
+        write(fixture.root, 'state.txt', 'recover me');
+        const baseline = await fixture.service.checkpoint('test', {
+            message: 'baseline',
+            paths: ['.'],
+        }, { kind: 'user' });
+
+        fs.rmSync(fixture.root, { recursive: true });
+        expect(await fixture.service.status('test')).toMatchObject({ dirty: true });
+        await expect(fixture.service.rollback('test', {
+            targetCommitId: baseline.commit.id,
+        }, { kind: 'rescue' })).rejects.toMatchObject({ name: 'WorkspaceConflictError', status: 409 });
+        expect(fs.existsSync(fixture.root)).toBe(false);
+
+        await fixture.service.rollback('test', {
+            targetCommitId: baseline.commit.id,
+            force: true,
+        }, { kind: 'rescue' });
+        expect(read(fixture.root, 'state.txt')).toBe('recover me');
+        expect((await fixture.service.status('test')).dirty).toBe(false);
     });
 
     it('restores nested creations, edits, and deletions without touching excluded trees', async () => {

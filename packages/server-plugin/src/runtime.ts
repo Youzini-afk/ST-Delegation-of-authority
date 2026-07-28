@@ -1,5 +1,8 @@
 import { SseBroker } from './events/sse-broker.js';
 import { AdminPackageService } from './services/admin-package-service.js';
+import { AgentHostToolService } from './services/agent-host-tools.js';
+import { AgentService } from './services/agent-service.js';
+import { AgentStoreService } from './services/agent-store-service.js';
 import { AuditService } from './services/audit-service.js';
 import { CompanionModuleLoaderService } from './services/companion-module-loader-service.js';
 import { CoreService } from './services/core-service.js';
@@ -70,6 +73,7 @@ export interface AuthorityRuntime {
      */
     companionLoader: CompanionModuleLoaderService;
     workspaceHistory: WorkspaceHistoryService;
+    agent: AgentService;
 }
 
 export function createAuthorityRuntime(): AuthorityRuntime {
@@ -96,7 +100,13 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const locks = new LockService();
     const idempotency = new IdempotencyService(storage);
     const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
-    const workspaceHistory = new WorkspaceHistoryService(getGlobalAuthorityPaths().agentWorkspacesDir);
+    const globalPaths = getGlobalAuthorityPaths();
+    const workspaceHistory = new WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
+    const agent = new AgentService(
+        new AgentStoreService(globalPaths.agentStateDir),
+        workspaceHistory,
+        new AgentHostToolService(workspaceHistory),
+    );
 
     return {
         adminPackages,
@@ -123,5 +133,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         idempotency,
         companionLoader,
         workspaceHistory,
+        agent,
     };
 }

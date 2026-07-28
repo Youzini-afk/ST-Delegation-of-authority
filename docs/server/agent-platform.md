@@ -40,6 +40,8 @@ queued -> running
 
 ST 或 DOA 重启后，仍处于执行状态的 Run 标记为 `interrupted`。只读步骤可以重新发起；包含修改的任务必须先核对版本树和未完成工具调用，不能盲目续跑。
 
+Run、消息、事件、工具调用和审批分别按 Run 原子落盘到 `<DATA_ROOT>/_authority-global/authority/state/agent/runs`。OpenAI-compatible LLM profile 保存在同一状态目录；API key 因服务端重启后仍需发起请求而由本机账户权限保护持久化，POSIX 下目录/文件收紧为 `0700/0600`。它不返回客户端，面向客户端的 profile 只包含是否已配置、mask 和 fingerprint。模型调用使用非流式 Chat Completions tool-call 协议，单次 Run 有明确步数上限，DOA 同时执行的 Run 也有固定上限。
+
 ## 工具模型
 
 工具统一为 `AgentToolDescriptor`：稳定 ID、自然语言说明、JSON Schema、执行位置、风险等级、审批策略和是否改变工作区。
@@ -49,6 +51,8 @@ ST 或 DOA 重启后，仍处于执行状态的 Run 标记为 `interrupted`。�
 - `browser`：由前端插件按 session/browser instance 注册，服务端创建持久 invocation，浏览器认领后回传结果。
 
 SSE 只负责通知。浏览器调用、结果和终态必须持久保存，并可由 HTTP 查询恢复，不能把 SSE 连接本身当作事实源。
+
+第一批 host 工具保持为 IDE 原语：列目录、读文件、文本搜索、原子写文件、精确文本替换、工作区终端、状态、历史和 diff。文件工具不跟随 symlink，读取、搜索和命令输出都有上限；终端只继承运行所需的最小环境变量集，不继承服务端密钥。`plan` 不向模型暴露写工具；`ask` 在写入前持久化审批并暂停；`auto` 可直接执行普通工作区写入，但终端具备工作区外副作用，始终单独审批并为整个工作区建立检查点。
 
 ## 工作区版本树
 
@@ -64,6 +68,8 @@ workspaces.json        工作区注册表
 tree entry 按名称排序后以 canonical JSON 计算 SHA-256；blob 以原始字节计算 SHA-256；commit 引用 tree 与 parent commit。ref 更新采用 generation compare-and-swap，并先写 journal，再以临时文件 rename 发布。
 
 Agent 的每次写工具调用和可能修改文件的终端命令都必须先建立检查点。回退不会直接移动旧 ref：它先持久化回退 journal 和当前状态，再把目标 tree 物化到工作区，最后创建新的 rollback commit，因此进程在任一步中断都能由 `resume` 继续，历史也保持可追踪。回退请求可携带稳定 `operationId`；完成记录先于 journal 清理落盘，同一操作重试不会重复生成历史。
+
+单次 Agent 写工具把“变更前检查点、工具执行、变更后检查点”放在同一个跨进程工作区锁内。这样独立恢复器或另一个 Agent 不能插入两次检查点之间；工具失败时仍追加失败检查点，保留已经发生的部分改动，供用户检查或回退。
 
 检查点默认可以是稀疏的：只把即将被工具修改的路径加入版本树，之后持续跟踪这些路径。这样不会因为改一个插件文件就复制整个 ST、`data` 或依赖目录；需要完整基线时可显式检查点 `.`。`.git`、`node_modules` 和版本树自身始终排除。
 

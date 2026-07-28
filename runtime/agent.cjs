@@ -340,6 +340,33 @@ class WorkspaceHistoryService {
             return this.checkpointLocked(workspace, request, actor);
         });
     }
+    async runMutation(workspaceId, request, actor, mutate) {
+        return await this.withLock(`workspace-${workspaceId}`, async () => {
+            this.assertNoPendingRollback(workspaceId);
+            const workspace = this.getStoredWorkspace(workspaceId);
+            this.recoverRefJournal(workspace);
+            const { beforeMessage, afterMessage, failureMessage, ...checkpoint } = request;
+            const before = this.checkpointLocked(workspace, { ...checkpoint, message: beforeMessage }, actor);
+            try {
+                const value = await mutate();
+                const after = this.checkpointLocked(workspace, { ...checkpoint, message: afterMessage }, actor);
+                return { value, before, after };
+            }
+            catch (error) {
+                try {
+                    this.checkpointLocked(workspace, {
+                        ...checkpoint,
+                        message: failureMessage ?? `${afterMessage} (failed)`,
+                        metadata: { ...checkpoint.metadata, mutationFailed: true },
+                    }, actor);
+                }
+                catch (checkpointError) {
+                    throw new AggregateError([error, checkpointError], 'Workspace mutation and failure checkpoint both failed');
+                }
+                throw error;
+            }
+        });
+    }
     listCommits(workspaceId, limit = 100) {
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
             throw validationError('Workspace commit limit must be an integer between 1 and 500');
@@ -533,6 +560,7 @@ class WorkspaceHistoryService {
             throw workspaceConflict('Workspace kept changing while preparing rollback; retry recovery when writes are idle');
         }
         const restorePaths = trackedPathsFromCommit(target);
+        this.ensureWorkspaceRootForRollback(workspace);
         const currentTree = this.captureTrackedWorkspace(workspace, restorePaths, createObjectStats());
         const targetTree = scopeTree(this.loadCommitTree(target), restorePaths);
         const warnings = this.applyTree(workspace, currentTree, targetTree);
@@ -666,7 +694,15 @@ class WorkspaceHistoryService {
         };
     }
     captureTrackedWorkspace(workspace, trackedPaths, stats) {
-        this.assertWorkspaceRoot(workspace);
+        try {
+            this.assertWorkspaceRoot(workspace);
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOENT')) {
+                return emptyTree();
+            }
+            throw error;
+        }
         let tree = emptyTree();
         for (const relativePath of trackedPaths) {
             const captured = this.captureScopedPath(workspace, relativePath, stats);
@@ -983,6 +1019,31 @@ class WorkspaceHistoryService {
         if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(workspace.rootPath), workspace.rootPath)) {
             throw new Error(`Workspace root changed or is no longer a real directory: ${workspace.rootPath}`);
         }
+    }
+    ensureWorkspaceRootForRollback(workspace) {
+        try {
+            this.assertWorkspaceRoot(workspace);
+            return;
+        }
+        catch (error) {
+            if (!isFsError(error, 'ENOENT')) {
+                throw error;
+            }
+        }
+        const parent = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(workspace.rootPath);
+        const parentStat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(parent);
+        if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || !samePath(node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(parent), parent)) {
+            throw workspaceConflict(`Cannot recreate workspace root because its parent changed: ${parent}`);
+        }
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(workspace.rootPath);
+        }
+        catch (error) {
+            if (!isFsError(error, 'EEXIST')) {
+                throw error;
+            }
+        }
+        this.assertWorkspaceRoot(workspace);
     }
     isExcluded(workspace, relativePath, absolutePath) {
         const segments = relativePath === '.' ? [] : relativePath.split('/');

@@ -1,0 +1,93 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { StoredAgentLlmProfile } from './agent-store-service.js';
+import { AgentLlmClient } from './agent-llm-client.js';
+
+describe('AgentLlmClient', () => {
+    it('sends OpenAI-compatible tools and parses tool calls', async () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'tool_calls',
+                message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [{
+                        id: 'call-1',
+                        type: 'function',
+                        function: { name: 'host_read_file', arguments: '{"path":"a.txt"}' },
+                    }],
+                },
+            }],
+            usage: { total_tokens: 12 },
+        }), { status: 200 })) as unknown as typeof fetch;
+        const client = new AgentLlmClient(fetchMock);
+        const result = await client.complete(profile(), {
+            messages: [{ role: 'user', content: 'read it' }],
+            tools: [{
+                type: 'function',
+                function: {
+                    name: 'host_read_file',
+                    description: 'Read a file',
+                    parameters: { type: 'object' },
+                },
+            }],
+            signal: new AbortController().signal,
+        });
+
+        expect(result.message.toolCalls).toEqual([{
+            id: 'call-1',
+            name: 'host_read_file',
+            arguments: '{"path":"a.txt"}',
+        }]);
+        expect(fetchMock).toHaveBeenCalledWith('http://localhost:1234/v1/chat/completions', expect.objectContaining({
+            method: 'POST',
+            headers: expect.objectContaining({ Authorization: 'Bearer secret' }),
+        }));
+        const body = JSON.parse(String((fetchMock as any).mock.calls[0][1].body));
+        expect(body).toMatchObject({ model: 'test', stream: false, tool_choice: 'auto' });
+    });
+
+    it('rejects duplicate tool call ids at the provider boundary', async () => {
+        const call = { id: 'duplicate', type: 'function', function: { name: 'host_read_file', arguments: '{}' } };
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+            choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [call, call] } }],
+        }), { status: 200 })) as unknown as typeof fetch;
+        const client = new AgentLlmClient(fetchMock);
+        await expect(client.complete(profile(), {
+            messages: [{ role: 'user', content: 'test' }],
+            tools: [],
+            signal: new AbortController().signal,
+        })).rejects.toThrow(/invalid tool call/);
+    });
+
+    it('does not start a request when the run is already cancelled', async () => {
+        const fetchMock = vi.fn() as unknown as typeof fetch;
+        const controller = new AbortController();
+        controller.abort(new Error('cancelled'));
+        const client = new AgentLlmClient(fetchMock);
+        await expect(client.complete(profile(), {
+            messages: [{ role: 'user', content: 'test' }],
+            tools: [],
+            signal: controller.signal,
+        })).rejects.toThrow('cancelled');
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+});
+
+function profile(): StoredAgentLlmProfile {
+    return {
+        id: 'profile',
+        displayName: 'Profile',
+        provider: 'openai-compatible',
+        baseUrl: 'http://localhost:1234/v1',
+        model: 'test',
+        apiKey: 'secret',
+        apiKeyConfigured: true,
+        apiKeyMasked: '********',
+        apiKeyFingerprint: 'abc',
+        temperature: null,
+        maxOutputTokens: null,
+        timeoutMs: 1_000,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+}

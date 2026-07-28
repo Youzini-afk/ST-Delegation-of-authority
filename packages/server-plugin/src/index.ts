@@ -40,6 +40,9 @@ export async function init(router: any): Promise<void> {
         // service's logger indirectly via console for now.
         console.warn(`[authority] Companion module discovery/load failed: ${message}`);
     }
+    void runtime.agent.start().catch(error => {
+        console.warn(`[authority] Agent service startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     void runtime.core.start();
 }
 
@@ -48,6 +51,14 @@ export async function exit(): Promise<void> {
         return;
     }
 
-    await runtime.core.stop();
-    runtime = null;
+    const current = runtime;
+    try {
+        await current.agent.stop();
+    } finally {
+        try {
+            await current.core.stop();
+        } finally {
+            runtime = null;
+        }
+    }
 }

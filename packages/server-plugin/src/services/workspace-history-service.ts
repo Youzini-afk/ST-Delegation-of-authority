@@ -113,6 +113,18 @@ export interface WorkspaceHistoryServiceOptions {
     staleLockMs?: number;
 }
 
+export interface WorkspaceMutationRequest extends Omit<WorkspaceCheckpointRequest, 'message'> {
+    beforeMessage: string;
+    afterMessage: string;
+    failureMessage?: string;
+}
+
+export interface WorkspaceMutationResult<T> {
+    value: T;
+    before: WorkspaceCheckpointResponse;
+    after: WorkspaceCheckpointResponse;
+}
+
 export function resolveWorkspaceHistoryStore(dataRoot: string): string {
     return path.resolve(dataRoot, '_authority-global', 'authority', 'state', 'agent-workspaces');
 }
@@ -208,6 +220,37 @@ export class WorkspaceHistoryService {
             const workspace = this.getStoredWorkspace(workspaceId);
             this.recoverRefJournal(workspace);
             return this.checkpointLocked(workspace, request, actor);
+        });
+    }
+
+    async runMutation<T>(
+        workspaceId: string,
+        request: WorkspaceMutationRequest,
+        actor: WorkspaceCommitActor,
+        mutate: () => Promise<T> | T,
+    ): Promise<WorkspaceMutationResult<T>> {
+        return await this.withLock(`workspace-${workspaceId}`, async () => {
+            this.assertNoPendingRollback(workspaceId);
+            const workspace = this.getStoredWorkspace(workspaceId);
+            this.recoverRefJournal(workspace);
+            const { beforeMessage, afterMessage, failureMessage, ...checkpoint } = request;
+            const before = this.checkpointLocked(workspace, { ...checkpoint, message: beforeMessage }, actor);
+            try {
+                const value = await mutate();
+                const after = this.checkpointLocked(workspace, { ...checkpoint, message: afterMessage }, actor);
+                return { value, before, after };
+            } catch (error) {
+                try {
+                    this.checkpointLocked(workspace, {
+                        ...checkpoint,
+                        message: failureMessage ?? `${afterMessage} (failed)`,
+                        metadata: { ...checkpoint.metadata, mutationFailed: true },
+                    }, actor);
+                } catch (checkpointError) {
+                    throw new AggregateError([error, checkpointError], 'Workspace mutation and failure checkpoint both failed');
+                }
+                throw error;
+            }
         });
     }
 
@@ -423,6 +466,7 @@ export class WorkspaceHistoryService {
         }
 
         const restorePaths = trackedPathsFromCommit(target);
+        this.ensureWorkspaceRootForRollback(workspace);
         const currentTree = this.captureTrackedWorkspace(workspace, restorePaths, createObjectStats());
         const targetTree = scopeTree(this.loadCommitTree(target), restorePaths);
         const warnings = this.applyTree(workspace, currentTree, targetTree);
@@ -582,7 +626,14 @@ export class WorkspaceHistoryService {
         trackedPaths: string[],
         stats: ObjectStats,
     ): TreeNode {
-        this.assertWorkspaceRoot(workspace);
+        try {
+            this.assertWorkspaceRoot(workspace);
+        } catch (error) {
+            if (isFsError(error, 'ENOENT')) {
+                return emptyTree();
+            }
+            throw error;
+        }
         let tree = emptyTree();
         for (const relativePath of trackedPaths) {
             const captured = this.captureScopedPath(workspace, relativePath, stats);
@@ -942,6 +993,31 @@ export class WorkspaceHistoryService {
         if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(fs.realpathSync.native(workspace.rootPath), workspace.rootPath)) {
             throw new Error(`Workspace root changed or is no longer a real directory: ${workspace.rootPath}`);
         }
+    }
+
+    private ensureWorkspaceRootForRollback(workspace: AgentWorkspaceRecord): void {
+        try {
+            this.assertWorkspaceRoot(workspace);
+            return;
+        } catch (error) {
+            if (!isFsError(error, 'ENOENT')) {
+                throw error;
+            }
+        }
+
+        const parent = path.dirname(workspace.rootPath);
+        const parentStat = fs.lstatSync(parent);
+        if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || !samePath(fs.realpathSync.native(parent), parent)) {
+            throw workspaceConflict(`Cannot recreate workspace root because its parent changed: ${parent}`);
+        }
+        try {
+            fs.mkdirSync(workspace.rootPath);
+        } catch (error) {
+            if (!isFsError(error, 'EEXIST')) {
+                throw error;
+            }
+        }
+        this.assertWorkspaceRoot(workspace);
     }
 
     private isExcluded(workspace: AgentWorkspaceRecord, relativePath: string, absolutePath: string): boolean {

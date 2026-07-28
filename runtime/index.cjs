@@ -3549,29 +3549,35 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
 /* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
-/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
-/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
-/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
-/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
-/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
-/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/agent-host-tools.js */ "./src/services/agent-host-tools.ts");
+/* harmony import */ var _services_agent_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/agent-service.js */ "./src/services/agent-service.ts");
+/* harmony import */ var _services_agent_store_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/agent-store-service.js */ "./src/services/agent-store-service.ts");
+/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
+/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
+/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
+/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
+/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+
+
+
 
 
 
@@ -3598,30 +3604,32 @@ __webpack_require__.r(__webpack_exports__);
 
 
 function createAuthorityRuntime() {
-    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_4__.CoreService();
+    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_7__.CoreService();
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
-    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__.AuditService(core);
-    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__.DataTransferService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_9__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_16__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_15__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_18__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_19__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_20__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_21__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_17__.PrivateFsService(core);
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_10__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_22__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_14__.NativeMigrationService();
+    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_5__.AuditService(core);
+    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_8__.DataTransferService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_9__.ExtensionService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_12__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_19__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_18__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_21__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_22__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_23__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_24__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_20__.PrivateFsService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_10__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_13__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_25__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_17__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_13__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
-    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_12__.ModuleDiscoveryService(install);
-    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_11__.LockService();
-    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_8__.IdempotencyService(storage);
-    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
-    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_23__.WorkspaceHistoryService((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_24__.getGlobalAuthorityPaths)().agentWorkspacesDir);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_16__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_15__.ModuleDiscoveryService(install);
+    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_14__.LockService();
+    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_11__.IdempotencyService(storage);
+    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_6__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
+    const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_27__.getGlobalAuthorityPaths)();
+    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_26__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
+    const agent = new _services_agent_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentService(new _services_agent_store_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentStoreService(globalPaths.agentStateDir), workspaceHistory, new _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__.AgentHostToolService(workspaceHistory));
     return {
         adminPackages,
         events,
@@ -3647,6 +3655,7 @@ function createAuthorityRuntime() {
         idempotency,
         companionLoader,
         workspaceHistory,
+        agent,
     };
 }
 
@@ -4774,6 +4783,2005 @@ class AdminPackageService {
     }
     resolvePrivateTriviumMappingPath(user, extensionId, databaseName) {
         return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.resolveContainedPath)(this.resolvePrivateTriviumDatabaseDir(user, extensionId), '__mapping__', `${(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.sanitizeFileSegment)(databaseName)}.sqlite`);
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-host-tools.ts"
+/*!******************************************!*\
+  !*** ./src/services/agent-host-tools.ts ***!
+  \******************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentHostToolService: () => (/* binding */ AgentHostToolService)
+/* harmony export */ });
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_TOOL_TEXT = 256 * 1024;
+const MAX_LIST_ENTRIES = 1_000;
+const MAX_SEARCH_FILES = 5_000;
+const MAX_SEARCH_RESULTS = 200;
+const MAX_SEARCH_BYTES = 32 * 1024 * 1024;
+const MAX_SEARCH_MS = 2_000;
+const SKIPPED_SEARCH_DIRS = new Set(['.git', 'node_modules']);
+class AgentHostToolService {
+    history;
+    descriptors = createDescriptors();
+    constructor(history) {
+        this.history = history;
+    }
+    list() {
+        return this.descriptors.map(descriptor => structuredClone(descriptor));
+    }
+    get(toolId) {
+        const descriptor = this.descriptors.find(tool => tool.id === toolId);
+        return descriptor ? structuredClone(descriptor) : undefined;
+    }
+    checkpointPaths(toolId, input) {
+        const args = objectInput(input);
+        if (toolId === 'host_write_file' || toolId === 'host_replace_text') {
+            return [requiredString(args.path, 'path', 2_000)];
+        }
+        if (toolId === 'host_shell') {
+            return ['.'];
+        }
+        return [];
+    }
+    approvalSummary(toolId, input) {
+        const args = objectInput(input);
+        if (toolId === 'host_write_file') {
+            return `Write ${requiredString(args.path, 'path', 2_000)}`;
+        }
+        if (toolId === 'host_replace_text') {
+            return `Replace text in ${requiredString(args.path, 'path', 2_000)}`;
+        }
+        if (toolId === 'host_shell') {
+            return `Full host command; effects outside the workspace and changes under .git or node_modules cannot be rolled back: ${requiredString(args.command, 'command', 32_000).slice(0, 500)}`;
+        }
+        return this.get(toolId)?.title ?? toolId;
+    }
+    async execute(toolId, input, context) {
+        if (context.signal.aborted) {
+            throw abortError(context.signal);
+        }
+        const args = objectInput(input);
+        switch (toolId) {
+            case 'host_list_files':
+                return listFiles(context.workspace.rootPath, args);
+            case 'host_read_file':
+                return readFile(context.workspace.rootPath, args);
+            case 'host_search_text':
+                return searchText(context.workspace.rootPath, args);
+            case 'host_write_file':
+                return writeFile(context.workspace.rootPath, args, context.signal);
+            case 'host_replace_text':
+                return replaceText(context.workspace.rootPath, args, context.signal);
+            case 'host_shell':
+                return await runShell(context.workspace.rootPath, args, context.runId, context.signal);
+            case 'host_workspace_status':
+                return await this.history.status(context.workspace.id);
+            case 'host_workspace_history':
+                return this.history.listCommits(context.workspace.id, optionalInteger(args.limit, 'limit', 1, 100) ?? 20);
+            case 'host_workspace_diff': {
+                const from = optionalCommitId(args.fromCommitId, 'fromCommitId');
+                const to = optionalCommitId(args.toCommitId, 'toCommitId');
+                if (from !== undefined || to !== undefined) {
+                    return this.history.diff(context.workspace.id, from ?? null, to ?? null);
+                }
+                const commits = this.history.listCommits(context.workspace.id, 2);
+                return this.history.diff(context.workspace.id, commits[1]?.id ?? null, commits[0]?.id ?? null);
+            }
+            default:
+                throw new Error(`Unknown host tool: ${toolId}`);
+        }
+    }
+}
+function createDescriptors() {
+    const host = (input) => ({
+        ...input,
+        execution: 'host',
+        source: { kind: 'host', handler: input.id },
+    });
+    return [
+        host({
+            id: 'host_list_files',
+            title: 'List workspace files',
+            description: 'List files and directories without following symbolic links.',
+            inputSchema: objectSchema({
+                path: { type: 'string', description: 'Workspace-relative path; defaults to .' },
+                maxDepth: { type: 'integer', minimum: 0, maximum: 10 },
+            }),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
+        }),
+        host({
+            id: 'host_read_file',
+            title: 'Read workspace file',
+            description: 'Read a UTF-8 text file, optionally limited to a 1-based line range.',
+            inputSchema: objectSchema({
+                path: { type: 'string' },
+                startLine: { type: 'integer', minimum: 1 },
+                endLine: { type: 'integer', minimum: 1 },
+            }, ['path']),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
+        }),
+        host({
+            id: 'host_search_text',
+            title: 'Search workspace text',
+            description: 'Search text files for a literal string without following symbolic links.',
+            inputSchema: objectSchema({
+                query: { type: 'string' },
+                path: { type: 'string', description: 'Workspace-relative path; defaults to .' },
+                caseSensitive: { type: 'boolean' },
+                maxDepth: { type: 'integer', minimum: 0, maximum: 20 },
+            }, ['query']),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
+        }),
+        host({
+            id: 'host_write_file',
+            title: 'Write workspace file',
+            description: 'Atomically create or replace a UTF-8 file. Parent directories are created safely.',
+            inputSchema: objectSchema({ path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
+            riskLevel: 'medium',
+            approvalPolicy: 'on-mutation',
+            mutatesWorkspace: true,
+        }),
+        host({
+            id: 'host_replace_text',
+            title: 'Replace workspace text',
+            description: 'Atomically replace one or all exact text occurrences in a UTF-8 file.',
+            inputSchema: objectSchema({
+                path: { type: 'string' },
+                find: { type: 'string' },
+                replace: { type: 'string' },
+                all: { type: 'boolean' },
+                expectedMatches: { type: 'integer', minimum: 1 },
+            }, ['path', 'find', 'replace']),
+            riskLevel: 'medium',
+            approvalPolicy: 'on-mutation',
+            mutatesWorkspace: true,
+        }),
+        host({
+            id: 'host_shell',
+            title: 'Run workspace command',
+            description: 'Run an unrestricted host shell command with the workspace as cwd. The workspace is checkpointed except .git and node_modules; those paths and effects outside it cannot be rolled back, so approval is always required.',
+            inputSchema: objectSchema({
+                command: { type: 'string' },
+                timeoutMs: { type: 'integer', minimum: 1_000, maximum: 600_000 },
+            }, ['command']),
+            riskLevel: 'high',
+            approvalPolicy: 'always',
+            mutatesWorkspace: true,
+        }),
+        host({
+            id: 'host_workspace_status',
+            title: 'Inspect workspace status',
+            description: 'Compare tracked workspace files with the current Authority history head.',
+            inputSchema: objectSchema({}),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
+        }),
+        host({
+            id: 'host_workspace_history',
+            title: 'Inspect workspace history',
+            description: 'List recent recoverable Authority workspace commits.',
+            inputSchema: objectSchema({ limit: { type: 'integer', minimum: 1, maximum: 100 } }),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
+        }),
+        host({
+            id: 'host_workspace_diff',
+            title: 'Inspect workspace diff',
+            description: 'Diff two Authority history commits; with no ids, diff the newest two commits.',
+            inputSchema: objectSchema({
+                fromCommitId: { type: ['string', 'null'] },
+                toCommitId: { type: ['string', 'null'] },
+            }),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
+        }),
+    ];
+}
+function listFiles(root, args) {
+    const relativePath = optionalString(args.path, 'path', 2_000) ?? '.';
+    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0, 10) ?? 2;
+    const start = resolveSafePath(root, relativePath, true);
+    const entries = [];
+    let outputBytes = 0;
+    let truncated = false;
+    const visit = (absolutePath, logicalPath, depth) => {
+        if (entries.length >= MAX_LIST_ENTRIES) {
+            truncated = true;
+            return;
+        }
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        const kind = stat.isSymbolicLink() ? 'symlink' : stat.isDirectory() ? 'directory' : 'file';
+        outputBytes += Buffer.byteLength(logicalPath) + 64;
+        if (outputBytes > MAX_TOOL_TEXT) {
+            truncated = true;
+            return;
+        }
+        entries.push({ path: logicalPath, kind, ...(stat.isFile() ? { sizeBytes: stat.size } : {}) });
+        if (kind !== 'directory' || depth >= maxDepth) {
+            return;
+        }
+        assertContainedDirectory(root, absolutePath);
+        const directory = node_fs__WEBPACK_IMPORTED_MODULE_1___default().opendirSync(absolutePath);
+        try {
+            let entry;
+            while (!truncated && (entry = directory.readSync()) !== null) {
+                visit(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(absolutePath, entry.name), joinLogical(logicalPath, entry.name), depth + 1);
+            }
+        }
+        finally {
+            directory.closeSync();
+        }
+    };
+    visit(start.absolutePath, start.relativePath, 0);
+    return { entries, truncated };
+}
+function readFile(root, args) {
+    const relativePath = requiredString(args.path, 'path', 2_000);
+    const resolved = resolveSafePath(root, relativePath, false);
+    const content = readTextFile(root, resolved.absolutePath, relativePath);
+    if (content.includes('\0')) {
+        throw new Error(`File is not UTF-8 text: ${relativePath}`);
+    }
+    const lines = content.split(/\r?\n/);
+    const startLine = optionalInteger(args.startLine, 'startLine', 1, Math.max(1, lines.length)) ?? 1;
+    const endLine = optionalInteger(args.endLine, 'endLine', startLine, Math.max(startLine, lines.length)) ?? lines.length;
+    const selected = lines.slice(startLine - 1, endLine).join('\n');
+    return {
+        path: resolved.relativePath,
+        startLine,
+        endLine: Math.min(endLine, lines.length),
+        totalLines: lines.length,
+        content: selected.slice(0, MAX_TOOL_TEXT),
+        truncated: selected.length > MAX_TOOL_TEXT,
+    };
+}
+function searchText(root, args) {
+    const query = requiredString(args.query, 'query', 500, false);
+    if (!query) {
+        throw new Error('query must not be empty');
+    }
+    const relativePath = optionalString(args.path, 'path', 2_000) ?? '.';
+    const caseSensitive = optionalBoolean(args.caseSensitive, 'caseSensitive') ?? false;
+    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0, 20) ?? 8;
+    const start = resolveSafePath(root, relativePath, true);
+    const needle = caseSensitive ? query : query.toLocaleLowerCase();
+    const results = [];
+    let filesScanned = 0;
+    let bytesScanned = 0;
+    let truncated = false;
+    const deadline = Date.now() + MAX_SEARCH_MS;
+    const visit = (absolutePath, logicalPath, depth) => {
+        if (truncated || Date.now() >= deadline) {
+            truncated = true;
+            return;
+        }
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        if (stat.isSymbolicLink()) {
+            return;
+        }
+        if (stat.isDirectory()) {
+            if (depth >= maxDepth) {
+                return;
+            }
+            assertContainedDirectory(root, absolutePath);
+            const directory = node_fs__WEBPACK_IMPORTED_MODULE_1___default().opendirSync(absolutePath);
+            try {
+                let entry;
+                while (!truncated && (entry = directory.readSync()) !== null) {
+                    if (entry.isDirectory() && SKIPPED_SEARCH_DIRS.has(entry.name)) {
+                        continue;
+                    }
+                    visit(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(absolutePath, entry.name), joinLogical(logicalPath, entry.name), depth + 1);
+                }
+            }
+            finally {
+                directory.closeSync();
+            }
+            return;
+        }
+        if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
+            return;
+        }
+        filesScanned += 1;
+        bytesScanned += stat.size;
+        if (filesScanned > MAX_SEARCH_FILES || bytesScanned > MAX_SEARCH_BYTES) {
+            truncated = true;
+            return;
+        }
+        const content = readTextFile(root, absolutePath, logicalPath);
+        if (content.includes('\0')) {
+            return;
+        }
+        const lines = content.split(/\r?\n/);
+        for (let index = 0; index < lines.length; index += 1) {
+            const line = lines[index] ?? '';
+            const haystack = caseSensitive ? line : line.toLocaleLowerCase();
+            if (haystack.includes(needle)) {
+                results.push({ path: logicalPath, line: index + 1, text: line.slice(0, 500) });
+                if (results.length >= MAX_SEARCH_RESULTS) {
+                    truncated = true;
+                    return;
+                }
+            }
+        }
+    };
+    visit(start.absolutePath, start.relativePath, 0);
+    return { query, results, filesScanned: Math.min(filesScanned, MAX_SEARCH_FILES), bytesScanned: Math.min(bytesScanned, MAX_SEARCH_BYTES), truncated };
+}
+function writeFile(root, args, signal) {
+    const relativePath = requiredString(args.path, 'path', 2_000);
+    const content = requiredString(args.content, 'content', MAX_FILE_BYTES, false);
+    if (Buffer.byteLength(content) > MAX_FILE_BYTES) {
+        throw new Error(`content exceeds the ${MAX_FILE_BYTES} byte file limit`);
+    }
+    const resolved = resolveSafeWritePath(root, relativePath);
+    if (signal.aborted) {
+        throw abortError(signal);
+    }
+    // ponytail: Node has no portable dirfd-relative atomic rename; repeated realpath/lstat checks cover ordinary races.
+    // Move writes into a native openat/handle layer if hostile same-account filesystem races enter the threat model.
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteFile)(resolved.absolutePath, content);
+    return { path: resolved.relativePath, bytesWritten: Buffer.byteLength(content) };
+}
+function replaceText(root, args, signal) {
+    const relativePath = requiredString(args.path, 'path', 2_000);
+    const find = requiredString(args.find, 'find', MAX_FILE_BYTES, false);
+    const replacement = requiredString(args.replace, 'replace', MAX_FILE_BYTES, false);
+    if (!find) {
+        throw new Error('find must not be empty');
+    }
+    const replaceAll = optionalBoolean(args.all, 'all') ?? false;
+    const resolved = resolveSafePath(root, relativePath, false);
+    const content = readTextFile(root, resolved.absolutePath, relativePath);
+    const matches = countOccurrences(content, find);
+    const expectedMatches = optionalInteger(args.expectedMatches, 'expectedMatches', 1, Number.MAX_SAFE_INTEGER);
+    if (matches === 0 || (expectedMatches !== null && matches !== expectedMatches)) {
+        throw new Error(expectedMatches === null
+            ? `Text was not found in ${relativePath}`
+            : `Expected ${expectedMatches} matches in ${relativePath}, found ${matches}`);
+    }
+    const next = replaceAll ? content.split(find).join(replacement) : content.replace(find, replacement);
+    if (Buffer.byteLength(next) > MAX_FILE_BYTES) {
+        throw new Error(`Replacement exceeds the ${MAX_FILE_BYTES} byte file limit`);
+    }
+    const writeTarget = resolveSafeWritePath(root, relativePath);
+    if (readTextFile(root, writeTarget.absolutePath, relativePath) !== content) {
+        throw new Error(`Workspace file changed before replacement: ${relativePath}`);
+    }
+    if (signal.aborted) {
+        throw abortError(signal);
+    }
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteFile)(writeTarget.absolutePath, next);
+    return { path: resolved.relativePath, replacements: replaceAll ? matches : 1 };
+}
+async function runShell(root, args, runId, signal) {
+    assertWorkspaceRoot(root);
+    const command = requiredString(args.command, 'command', 32_000);
+    const timeoutMs = optionalInteger(args.timeoutMs, 'timeoutMs', 1_000, 600_000) ?? 120_000;
+    if (signal.aborted) {
+        throw abortError(signal);
+    }
+    const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_0__.spawn)(command, {
+        cwd: root,
+        env: sanitizedEnvironment(runId),
+        shell: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+    });
+    const stdout = new CappedOutput(MAX_TOOL_TEXT);
+    const stderr = new CappedOutput(MAX_TOOL_TEXT);
+    child.stdout?.on('data', chunk => stdout.push(Buffer.from(chunk)));
+    child.stderr?.on('data', chunk => stderr.push(Buffer.from(chunk)));
+    let timedOut = false;
+    let aborted = false;
+    let forceKillTimer = null;
+    const onAbort = () => {
+        aborted = true;
+        forceKillTimer ??= terminateProcessTree(child);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => {
+        timedOut = true;
+        forceKillTimer ??= terminateProcessTree(child);
+    }, timeoutMs);
+    try {
+        const exit = await new Promise((resolve, reject) => {
+            child.once('error', reject);
+            child.once('close', (code, exitSignal) => resolve({ code, signal: exitSignal }));
+        });
+        if (aborted) {
+            throw abortError(signal);
+        }
+        return {
+            command,
+            exitCode: exit.code,
+            signal: exit.signal,
+            timedOut,
+            stdout: stdout.text(),
+            stderr: stderr.text(),
+            stdoutTruncated: stdout.truncated,
+            stderrTruncated: stderr.truncated,
+        };
+    }
+    finally {
+        clearTimeout(timer);
+        if (forceKillTimer) {
+            clearTimeout(forceKillTimer);
+        }
+        signal.removeEventListener('abort', onAbort);
+    }
+}
+class CappedOutput {
+    limit;
+    chunks = [];
+    length = 0;
+    truncated = false;
+    constructor(limit) {
+        this.limit = limit;
+    }
+    push(chunk) {
+        const remaining = this.limit - this.length;
+        if (remaining > 0) {
+            const kept = chunk.subarray(0, remaining);
+            this.chunks.push(kept);
+            this.length += kept.length;
+        }
+        if (chunk.length > remaining) {
+            this.truncated = true;
+        }
+    }
+    text() {
+        return Buffer.concat(this.chunks).toString('utf8');
+    }
+}
+function terminateProcessTree(child) {
+    if (!child.pid || child.exitCode !== null) {
+        return null;
+    }
+    if (process.platform === 'win32') {
+        const killer = (0,node_child_process__WEBPACK_IMPORTED_MODULE_0__.spawn)('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+        });
+        killer.once('error', () => child.kill());
+        killer.once('close', code => {
+            if (code !== 0) {
+                child.kill();
+            }
+        });
+        killer.unref();
+        return null;
+    }
+    try {
+        process.kill(-child.pid, 'SIGTERM');
+    }
+    catch {
+        child.kill();
+    }
+    const timer = setTimeout(() => {
+        try {
+            process.kill(-child.pid, 'SIGKILL');
+        }
+        catch {
+            child.kill('SIGKILL');
+        }
+    }, 1_000);
+    timer.unref();
+    return timer;
+}
+function sanitizedEnvironment(runId) {
+    const allowed = process.platform === 'win32'
+        ? new Set(['path', 'pathext', 'systemroot', 'comspec', 'temp', 'tmp', 'userprofile', 'localappdata', 'appdata', 'programdata'])
+        : new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM']);
+    const environment = {};
+    for (const [name, value] of Object.entries(process.env)) {
+        if (allowed.has(process.platform === 'win32' ? name.toLowerCase() : name)) {
+            environment[name] = value;
+        }
+    }
+    environment.DOA_AGENT_RUN_ID = runId;
+    return environment;
+}
+function resolveSafeWritePath(root, input) {
+    const relativePath = normalizeRelativePath(input, false);
+    const segments = relativePath.split('/');
+    const realRoot = assertWorkspaceRoot(root);
+    let current = realRoot;
+    for (const segment of segments.slice(0, -1)) {
+        current = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, segment);
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(current);
+        }
+        catch (error) {
+            if (!isFsError(error, 'EEXIST')) {
+                throw error;
+            }
+        }
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(current);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) {
+            throw new Error(`Workspace path traverses a non-directory: ${relativePath}`);
+        }
+        assertContainedDirectory(realRoot, current);
+    }
+    const absolutePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(realRoot, ...segments);
+    try {
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+            throw new Error(`Workspace write target is not a regular file: ${relativePath}`);
+        }
+        const realTarget = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(realRoot, realTarget) || !samePath(absolutePath, realTarget)) {
+            throw new Error(`Workspace write target escapes its root: ${relativePath}`);
+        }
+    }
+    catch (error) {
+        if (!isFsError(error, 'ENOENT')) {
+            throw error;
+        }
+    }
+    return { absolutePath, relativePath };
+}
+function readTextFile(root, absolutePath, logicalPath) {
+    const before = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+    if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_FILE_BYTES) {
+        throw new Error(`Not a readable text file: ${logicalPath}`);
+    }
+    const realRoot = assertWorkspaceRoot(root);
+    const realTarget = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
+    if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(realRoot, realTarget) || !samePath(absolutePath, realTarget)) {
+        throw new Error(`Workspace file escapes its root: ${logicalPath}`);
+    }
+    const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(absolutePath, (node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_RDONLY | ((node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_NOFOLLOW ?? 0));
+    try {
+        const opened = node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor);
+        assertSameFile(before, opened, logicalPath);
+        const content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(descriptor, 'utf8');
+        assertSameFile(opened, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), logicalPath);
+        if (content.includes('\0')) {
+            throw new Error(`File is not UTF-8 text: ${logicalPath}`);
+        }
+        return content;
+    }
+    finally {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+    }
+}
+function assertContainedDirectory(root, absolutePath) {
+    const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+    const real = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(root, real) || !samePath(absolutePath, real)) {
+        throw new Error(`Workspace directory escapes its root: ${absolutePath}`);
+    }
+}
+function assertSameFile(before, after, logicalPath) {
+    if (!after.isFile()
+        || before.dev !== after.dev
+        || before.ino !== after.ino
+        || before.size !== after.size
+        || before.mtimeMs !== after.mtimeMs) {
+        throw new Error(`Workspace file changed while it was being read: ${logicalPath}`);
+    }
+}
+function resolveSafePath(root, input, allowRoot) {
+    const relativePath = normalizeRelativePath(input, allowRoot);
+    const realRoot = assertWorkspaceRoot(root);
+    const absolutePath = relativePath === '.' ? realRoot : node_path__WEBPACK_IMPORTED_MODULE_2___default().join(realRoot, ...relativePath.split('/'));
+    let current = realRoot;
+    if (relativePath !== '.') {
+        for (const segment of relativePath.split('/')) {
+            current = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, segment);
+            const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(current);
+            if (stat.isSymbolicLink()) {
+                throw new Error(`Workspace path traverses a symbolic link: ${relativePath}`);
+            }
+        }
+    }
+    const real = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
+    if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(realRoot, real) || !samePath(absolutePath, real)) {
+        throw new Error(`Workspace path escapes its root: ${relativePath}`);
+    }
+    return { absolutePath: real, relativePath };
+}
+function assertWorkspaceRoot(root) {
+    const absolute = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(root);
+    const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolute);
+    const real = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolute);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(absolute, real)) {
+        throw new Error(`Workspace root is not a real directory: ${root}`);
+    }
+    return real;
+}
+function normalizeRelativePath(input, allowRoot) {
+    const raw = requiredString(input, 'path', 2_000).replace(/\\/g, '/');
+    if (raw.includes('\0') || node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.isAbsolute(raw) || node_path__WEBPACK_IMPORTED_MODULE_2___default().win32.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw)) {
+        throw new Error(`Invalid workspace path: ${input}`);
+    }
+    const normalized = node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.normalize(raw).replace(/^\.\//, '').replace(/\/$/, '');
+    if (!normalized || normalized === '.') {
+        if (allowRoot) {
+            return '.';
+        }
+        throw new Error('Workspace file path must not be empty');
+    }
+    if (normalized === '..' || normalized.startsWith('../')) {
+        throw new Error(`Workspace path escapes its root: ${input}`);
+    }
+    return normalized;
+}
+function objectInput(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        throw new Error('Tool arguments must be a JSON object');
+    }
+    return input;
+}
+function requiredString(value, label, maxLength, trim = true) {
+    if (typeof value !== 'string') {
+        throw new Error(`${label} must be a string`);
+    }
+    const result = trim ? value.trim() : value;
+    if ((trim && !result) || result.length > maxLength) {
+        throw new Error(`${label} must contain between ${trim ? 1 : 0} and ${maxLength} characters`);
+    }
+    return result;
+}
+function optionalString(value, label, maxLength) {
+    return value === undefined || value === null ? null : requiredString(value, label, maxLength);
+}
+function optionalBoolean(value, label) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+    if (typeof value !== 'boolean') {
+        throw new Error(`${label} must be a boolean`);
+    }
+    return value;
+}
+function optionalInteger(value, label, minimum, maximum) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+    if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+        throw new Error(`${label} must be an integer between ${minimum} and ${maximum}`);
+    }
+    return value;
+}
+function optionalCommitId(value, label) {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (value === null) {
+        return null;
+    }
+    const result = requiredString(value, label, 64);
+    if (!/^[a-f0-9]{64}$/.test(result)) {
+        throw new Error(`${label} must be a SHA-256 commit id or null`);
+    }
+    return result;
+}
+function countOccurrences(content, find) {
+    let count = 0;
+    let offset = 0;
+    while ((offset = content.indexOf(find, offset)) !== -1) {
+        count += 1;
+        offset += find.length;
+    }
+    return count;
+}
+function joinLogical(parent, child) {
+    return parent === '.' ? child : `${parent}/${child}`;
+}
+function samePath(left, right) {
+    return process.platform === 'win32'
+        ? node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(left).toLowerCase() === node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(right).toLowerCase()
+        : node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(left) === node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(right);
+}
+function isFsError(error, code) {
+    return error instanceof Error && error.code === code;
+}
+function abortError(signal) {
+    return signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Agent run cancelled'), { name: 'AbortError' });
+}
+function objectSchema(properties, required = []) {
+    return { type: 'object', properties, required, additionalProperties: false };
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-llm-client.ts"
+/*!******************************************!*\
+  !*** ./src/services/agent-llm-client.ts ***!
+  \******************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentLlmClient: () => (/* binding */ AgentLlmClient)
+/* harmony export */ });
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+class AgentLlmClient {
+    fetchImpl;
+    constructor(fetchImpl = fetch) {
+        this.fetchImpl = fetchImpl;
+    }
+    async complete(profile, request) {
+        const controller = new AbortController();
+        const forwardAbort = () => controller.abort(request.signal.reason);
+        if (request.signal.aborted) {
+            forwardAbort();
+        }
+        else {
+            request.signal.addEventListener('abort', forwardAbort, { once: true });
+        }
+        const timer = setTimeout(() => controller.abort(new Error(`LLM request timed out after ${profile.timeoutMs} ms`)), profile.timeoutMs);
+        try {
+            throwIfAborted(controller.signal);
+            const response = await this.fetchImpl(completionUrl(profile.baseUrl), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {}),
+                },
+                body: JSON.stringify({
+                    model: profile.model,
+                    messages: request.messages.map(toOpenAiMessage),
+                    stream: false,
+                    ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: 'auto' } : {}),
+                    ...(profile.temperature === null ? {} : { temperature: profile.temperature }),
+                    ...(profile.maxOutputTokens === null ? {} : { max_tokens: profile.maxOutputTokens }),
+                }),
+                signal: controller.signal,
+            });
+            const text = await readLimitedText(response);
+            throwIfAborted(controller.signal);
+            if (!response.ok) {
+                throw new Error(`LLM request failed (${response.status}): ${redact(text.slice(0, 4_000), profile.apiKey)}`);
+            }
+            return parseCompletion(text);
+        }
+        catch (error) {
+            if (controller.signal.aborted && !request.signal.aborted) {
+                throw controller.signal.reason instanceof Error
+                    ? controller.signal.reason
+                    : new Error(`LLM request timed out after ${profile.timeoutMs} ms`);
+            }
+            throw error;
+        }
+        finally {
+            clearTimeout(timer);
+            request.signal.removeEventListener('abort', forwardAbort);
+        }
+    }
+}
+async function readLimitedText(response) {
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+        throw new Error('LLM response exceeded the 10 MB limit');
+    }
+    if (!response.body) {
+        return '';
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let total = 0;
+    let text = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            return text + decoder.decode();
+        }
+        total += value.byteLength;
+        if (total > MAX_RESPONSE_BYTES) {
+            await reader.cancel();
+            throw new Error('LLM response exceeded the 10 MB limit');
+        }
+        text += decoder.decode(value, { stream: true });
+    }
+}
+function redact(value, secret) {
+    return secret ? value.split(secret).join('[redacted]') : value;
+}
+function throwIfAborted(signal) {
+    if (signal.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error('LLM request aborted'), { name: 'AbortError' });
+    }
+}
+function completionUrl(baseUrl) {
+    return baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+}
+function toOpenAiMessage(message) {
+    if (message.role === 'tool') {
+        return {
+            role: 'tool',
+            content: message.content ?? '',
+            tool_call_id: message.toolCallId,
+        };
+    }
+    if (message.role === 'assistant' && message.toolCalls?.length) {
+        return {
+            role: 'assistant',
+            content: message.content,
+            tool_calls: message.toolCalls.map(call => ({
+                id: call.id,
+                type: 'function',
+                function: { name: call.name, arguments: call.arguments },
+            })),
+        };
+    }
+    return { role: message.role, content: message.content ?? '' };
+}
+function parseCompletion(text) {
+    let payload;
+    try {
+        payload = JSON.parse(text);
+    }
+    catch (error) {
+        throw new Error(`LLM returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const choice = payload?.choices?.[0];
+    const message = choice?.message;
+    if (!message || message.role !== 'assistant') {
+        throw new Error('LLM response did not include an assistant message');
+    }
+    const content = message.content === null || typeof message.content === 'string' ? message.content : null;
+    const toolCalls = message.tool_calls === undefined ? undefined : parseToolCalls(message.tool_calls);
+    if ((content === null || !content.trim()) && !toolCalls?.length) {
+        throw new Error('LLM assistant message was empty');
+    }
+    return {
+        message: {
+            role: 'assistant',
+            content,
+            ...(toolCalls?.length ? { toolCalls } : {}),
+        },
+        finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
+        ...(payload.usage === undefined ? {} : { usage: payload.usage }),
+    };
+}
+function parseToolCalls(value) {
+    if (!Array.isArray(value) || value.length > 32) {
+        throw new Error('LLM response contained invalid tool calls');
+    }
+    const ids = new Set();
+    return value.map((call, index) => {
+        const id = call?.id;
+        const name = call?.function?.name;
+        const args = call?.function?.arguments;
+        if (call?.type !== 'function'
+            || typeof id !== 'string'
+            || id.length < 1
+            || id.length > 256
+            || ids.has(id)
+            || typeof name !== 'string'
+            || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)
+            || typeof args !== 'string'
+            || args.length > 128 * 1024) {
+            throw new Error(`LLM response contained an invalid tool call at index ${index}`);
+        }
+        ids.add(id);
+        return { id, name, arguments: args };
+    });
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-service.ts"
+/*!***************************************!*\
+  !*** ./src/services/agent-service.ts ***!
+  \***************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentService: () => (/* binding */ AgentService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-llm-client.js */ "./src/services/agent-llm-client.ts");
+
+
+const DEFAULT_MAX_STEPS = 24;
+const HARD_MAX_STEPS = 64;
+const MAX_CONTEXT_CHARS = 64 * 1024;
+const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
+const MAX_TOOL_RESULT_CHARS = 256 * 1024;
+const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+class AgentService {
+    store;
+    history;
+    hostTools;
+    requestCompletion;
+    maxConcurrentRuns;
+    approvalTimeoutMs;
+    shutdownTimeoutMs;
+    queue = [];
+    tasks = new Map();
+    controllers = new Map();
+    approvalWaiters = new Map();
+    startPromise = null;
+    started = false;
+    stopping = false;
+    stopped = false;
+    constructor(store, history, hostTools, options = {}) {
+        this.store = store;
+        this.history = history;
+        this.hostTools = hostTools;
+        const client = new _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__.AgentLlmClient();
+        this.requestCompletion = options.requestCompletion ?? client.complete.bind(client);
+        this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
+        this.approvalTimeoutMs = options.approvalTimeoutMs ?? 10 * 60_000;
+        this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
+        if (!Number.isSafeInteger(this.maxConcurrentRuns) || this.maxConcurrentRuns < 1 || this.maxConcurrentRuns > 16) {
+            throw new Error('maxConcurrentRuns must be an integer between 1 and 16');
+        }
+        if (!Number.isSafeInteger(this.approvalTimeoutMs) || this.approvalTimeoutMs < 1 || this.approvalTimeoutMs > 24 * 60 * 60_000) {
+            throw new Error('approvalTimeoutMs must be an integer between 1 ms and 24 hours');
+        }
+        if (!Number.isSafeInteger(this.shutdownTimeoutMs) || this.shutdownTimeoutMs < 1 || this.shutdownTimeoutMs > 60_000) {
+            throw new Error('shutdownTimeoutMs must be an integer between 1 and 60000 ms');
+        }
+    }
+    start() {
+        if (this.stopped) {
+            return Promise.reject(new Error('Agent service cannot restart after it has stopped'));
+        }
+        if (this.started) {
+            return Promise.resolve([]);
+        }
+        if (this.startPromise) {
+            return this.startPromise;
+        }
+        this.stopping = false;
+        this.startPromise = (async () => {
+            await new Promise(resolve => setImmediate(resolve));
+            try {
+                if (this.stopping) {
+                    return [];
+                }
+                const interrupted = this.store.start();
+                this.started = true;
+                return interrupted;
+            }
+            finally {
+                this.startPromise = null;
+            }
+        })();
+        return this.startPromise;
+    }
+    async stop() {
+        this.stopping = true;
+        this.stopped = true;
+        await this.startPromise?.catch(() => []);
+        for (const runId of this.queue.splice(0)) {
+            this.interruptRun(runId, 'Agent host stopped before the run started');
+        }
+        for (const [runId, controller] of this.controllers) {
+            this.interruptRun(runId, 'Agent host stopped while the run was active');
+            controller.abort(new Error('Agent host stopped'));
+        }
+        for (const resolve of this.approvalWaiters.values()) {
+            resolve('cancelled');
+        }
+        const settled = Promise.allSettled([...this.tasks.values()]);
+        const completed = await Promise.race([settled.then(() => true), delay(this.shutdownTimeoutMs).then(() => false)]);
+        if (!completed) {
+            console.warn(`[authority] ${this.tasks.size} Agent run(s) did not stop within ${this.shutdownTimeoutMs} ms`);
+        }
+        this.started = false;
+    }
+    upsertProfile(input) {
+        return this.store.upsertProfile(input);
+    }
+    listProfiles() {
+        return this.store.listProfiles();
+    }
+    getProfile(profileId) {
+        return this.store.getProfile(profileId);
+    }
+    deleteProfile(profileId) {
+        if (this.store.listRuns().some(run => run.profileId === profileId && !TERMINAL_RUNS.has(run.status))) {
+            throw new Error(`LLM profile is in use by an active Agent run: ${profileId}`);
+        }
+        return this.store.deleteProfile(profileId);
+    }
+    listTools() {
+        return this.hostTools.list();
+    }
+    listRuns() {
+        return this.store.listRuns();
+    }
+    getRun(runId) {
+        return this.store.getRun(runId);
+    }
+    createRun(request, callerExtensionId = 'authority') {
+        if (!this.started || this.stopping) {
+            throw new Error('Agent service is not running');
+        }
+        const goal = requiredText(request.goal, 'Agent goal', 20_000);
+        const caller = requiredText(callerExtensionId, 'Agent caller extension id', 128);
+        const instructions = request.instructions === undefined
+            ? undefined
+            : requiredText(request.instructions, 'Agent instructions', 20_000);
+        const contextText = serializeContext(request.context);
+        const mode = normalizeMode(request.mode);
+        const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
+        if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > HARD_MAX_STEPS) {
+            throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
+        }
+        const workspace = selectOne(request.workspaceId, this.history.listWorkspaces(), item => item.id, 'workspace');
+        const profile = selectOne(request.profileId, this.store.listProfiles(), item => item.id, 'LLM profile');
+        const availableTools = this.hostTools.list();
+        const allowedTools = normalizeAllowedTools(request.allowedTools, availableTools);
+        const timestamp = this.store.nowIso();
+        const id = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const run = {
+            id,
+            callerExtensionId: caller,
+            workspaceId: workspace.id,
+            profileId: profile.id,
+            goal,
+            mode,
+            status: 'queued',
+            allowedTools,
+            stepCount: 0,
+            maxSteps,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            ...(workspace.headCommitId ? { headCommitId: workspace.headCommitId } : {}),
+        };
+        const detail = {
+            run,
+            messages: [
+                { role: 'system', content: systemPrompt(workspace.rootPath, mode) },
+                { role: 'user', content: userPrompt(goal, instructions, contextText) },
+            ],
+            events: [{ sequence: 1, runId: id, type: 'run.created', timestamp, payload: { mode, allowedTools } }],
+            invocations: [],
+            approvals: [],
+            ...(request.context === undefined ? {} : { context: structuredClone(request.context) }),
+            ...(instructions ? { instructions } : {}),
+        };
+        this.store.createRun(detail);
+        this.queue.push(id);
+        this.drainQueue();
+        return structuredClone(run);
+    }
+    cancelRun(runId) {
+        const current = this.store.getRun(runId);
+        if (TERMINAL_RUNS.has(current.run.status)) {
+            return current.run;
+        }
+        const timestamp = this.store.nowIso();
+        const detail = this.store.updateRun(runId, run => {
+            run.run.status = 'cancelled';
+            run.run.finishedAt = timestamp;
+            run.run.error = 'Cancelled by user';
+            delete run.run.pendingApprovalId;
+            cancelPendingRecords(run, timestamp, 'Cancelled by user');
+            appendEvent(run, 'run.cancelled', timestamp);
+        });
+        const queueIndex = this.queue.indexOf(runId);
+        if (queueIndex !== -1) {
+            this.queue.splice(queueIndex, 1);
+        }
+        this.controllers.get(runId)?.abort(new Error('Agent run cancelled'));
+        for (const [key, resolve] of this.approvalWaiters) {
+            if (key.startsWith(`${runId}:`)) {
+                resolve('cancelled');
+            }
+        }
+        return detail.run;
+    }
+    resolveApproval(runId, approvalId, request) {
+        if (request.decision !== 'approve' && request.decision !== 'deny') {
+            throw new Error('Approval decision must be approve or deny');
+        }
+        const waiter = this.approvalWaiters.get(`${runId}:${approvalId}`);
+        if (!waiter) {
+            throw new Error(`Agent approval waiter is unavailable: ${approvalId}`);
+        }
+        const timestamp = this.store.nowIso();
+        let resolved;
+        this.store.updateRun(runId, detail => {
+            const approval = detail.approvals.find(item => item.id === approvalId);
+            if (!approval) {
+                throw new Error(`Agent approval not found: ${approvalId}`);
+            }
+            if (approval.status !== 'pending' || detail.run.pendingApprovalId !== approvalId) {
+                throw new Error(`Agent approval is no longer pending: ${approvalId}`);
+            }
+            approval.status = request.decision === 'approve' ? 'approved' : 'denied';
+            approval.updatedAt = timestamp;
+            approval.resolvedAt = timestamp;
+            detail.run.status = 'running';
+            delete detail.run.pendingApprovalId;
+            appendEvent(detail, 'tool.approval_resolved', timestamp, {
+                approvalId,
+                callId: approval.callId,
+                decision: request.decision,
+            });
+            resolved = structuredClone(approval);
+        });
+        waiter(request.decision === 'approve' ? 'approved' : 'denied');
+        return resolved;
+    }
+    drainQueue() {
+        if (this.stopping) {
+            return;
+        }
+        while (this.tasks.size < this.maxConcurrentRuns && this.queue.length > 0) {
+            const runId = this.queue.shift();
+            const task = this.executeRun(runId)
+                .catch(error => console.warn(`[authority] Agent run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`))
+                .finally(() => {
+                this.tasks.delete(runId);
+                this.controllers.delete(runId);
+                this.drainQueue();
+            });
+            this.tasks.set(runId, task);
+        }
+    }
+    async executeRun(runId) {
+        const controller = new AbortController();
+        this.controllers.set(runId, controller);
+        const startedAt = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            if (detail.run.status !== 'queued') {
+                throw new Error(`Agent run is not queued: ${runId}`);
+            }
+            detail.run.status = 'running';
+            detail.run.startedAt = startedAt;
+            appendEvent(detail, 'run.started', startedAt);
+        });
+        try {
+            while (!controller.signal.aborted) {
+                const detail = this.store.getRun(runId);
+                if (TERMINAL_RUNS.has(detail.run.status)) {
+                    return;
+                }
+                if (detail.run.stepCount >= detail.run.maxSteps) {
+                    throw new Error(`Agent reached the ${detail.run.maxSteps} step limit`);
+                }
+                const descriptors = this.allowedDescriptors(detail.run);
+                const llmTools = mapLlmTools(descriptors);
+                const profile = this.store.getProfileForRequest(detail.run.profileId);
+                const completion = await this.requestCompletion(profile, {
+                    messages: detail.messages,
+                    tools: llmTools.definitions,
+                    signal: controller.signal,
+                });
+                this.assertRunActive(runId, controller.signal);
+                const messageAt = this.store.nowIso();
+                this.store.updateRun(runId, run => {
+                    run.run.stepCount += 1;
+                    run.messages.push(completion.message);
+                    appendEvent(run, 'assistant.message', messageAt, {
+                        content: completion.message.content,
+                        toolCalls: completion.message.toolCalls,
+                        finishReason: completion.finishReason,
+                        usage: completion.usage,
+                    });
+                });
+                const calls = completion.message.toolCalls ?? [];
+                if (calls.length === 0) {
+                    this.completeRun(runId, completion.message.content ?? '');
+                    return;
+                }
+                for (const call of calls) {
+                    if (controller.signal.aborted) {
+                        throw abortError(controller.signal);
+                    }
+                    const toolId = llmTools.nameToId.get(call.name);
+                    if (!toolId) {
+                        this.appendToolProtocolError(runId, call.id, `Unknown tool requested by model: ${call.name}`);
+                        continue;
+                    }
+                    const descriptor = descriptors.find(tool => tool.id === toolId);
+                    let input;
+                    try {
+                        input = parseToolArguments(call.arguments);
+                    }
+                    catch (error) {
+                        this.appendToolProtocolError(runId, call.id, errorMessage(error));
+                        continue;
+                    }
+                    await this.executeTool(runId, call.id, descriptor, input, controller.signal);
+                }
+            }
+            throw abortError(controller.signal);
+        }
+        catch (error) {
+            const current = this.store.getRun(runId).run;
+            if (TERMINAL_RUNS.has(current.status)) {
+                return;
+            }
+            if (this.stopping) {
+                this.interruptRun(runId, 'Agent host stopped while the run was active');
+            }
+            else if (controller.signal.aborted) {
+                this.cancelRun(runId);
+            }
+            else {
+                this.failRun(runId, errorMessage(error));
+            }
+        }
+    }
+    async executeTool(runId, callId, descriptor, input, signal) {
+        const current = this.store.getRun(runId);
+        if (current.invocations.some(invocation => invocation.callId === callId)) {
+            this.appendToolProtocolError(runId, callId, `Duplicate tool call id: ${callId}`);
+            return;
+        }
+        if (current.run.mode === 'plan' && descriptor.mutatesWorkspace) {
+            this.appendToolProtocolError(runId, callId, `Tool is unavailable in plan mode: ${descriptor.id}`);
+            return;
+        }
+        const timestamp = this.store.nowIso();
+        const invocation = {
+            callId,
+            runId,
+            toolId: descriptor.id,
+            arguments: structuredClone(input),
+            status: 'pending',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            deadlineAt: new Date(Date.parse(timestamp) + 10 * 60_000).toISOString(),
+        };
+        this.store.updateRun(runId, detail => {
+            detail.invocations.push(invocation);
+            appendEvent(detail, 'tool.requested', timestamp, { callId, toolId: descriptor.id, arguments: input });
+        });
+        const requiresApproval = descriptor.approvalPolicy === 'always'
+            || (current.run.mode === 'ask' && descriptor.approvalPolicy === 'on-mutation' && descriptor.mutatesWorkspace);
+        if (requiresApproval) {
+            const decision = await this.waitForApproval(runId, invocation, descriptor, input);
+            if (decision === 'cancelled') {
+                throw abortError(signal);
+            }
+            if (decision === 'denied') {
+                this.failTool(runId, callId, 'Tool execution was denied by the user', 'cancelled');
+                return;
+            }
+            if (decision === 'expired') {
+                this.failTool(runId, callId, 'Tool approval expired before the user responded', 'timed_out');
+                return;
+            }
+        }
+        this.assertRunActive(runId, signal);
+        const startedAt = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            const stored = findInvocation(detail, callId);
+            stored.status = 'claimed';
+            stored.updatedAt = startedAt;
+            appendEvent(detail, 'tool.started', startedAt, { callId, toolId: descriptor.id });
+        });
+        try {
+            const detail = this.store.getRun(runId);
+            const workspace = this.history.getWorkspace(detail.run.workspaceId);
+            let result;
+            if (descriptor.mutatesWorkspace) {
+                const paths = this.hostTools.checkpointPaths(descriptor.id, input);
+                const mutation = await this.history.runMutation(workspace.id, {
+                    beforeMessage: `Before ${descriptor.title}`,
+                    afterMessage: `After ${descriptor.title}`,
+                    failureMessage: `Partial changes from failed ${descriptor.title}`,
+                    paths,
+                    runId,
+                    toolCallId: callId,
+                    metadata: { agentToolId: descriptor.id },
+                }, { kind: 'agent', id: runId }, () => this.hostTools.execute(descriptor.id, input, {
+                    workspace,
+                    runId,
+                    signal,
+                }));
+                result = mutation.value;
+                const checkpointAt = this.store.nowIso();
+                this.store.updateRun(runId, run => {
+                    run.run.headCommitId = mutation.after.commit.id;
+                    appendEvent(run, 'workspace.checkpoint', checkpointAt, {
+                        callId,
+                        beforeCommitId: mutation.before.commit.id,
+                        afterCommitId: mutation.after.commit.id,
+                        changedPaths: mutation.after.changedPaths,
+                        paths,
+                    });
+                });
+            }
+            else {
+                result = await this.hostTools.execute(descriptor.id, input, { workspace, runId, signal });
+            }
+            this.assertRunActive(runId, signal);
+            this.completeTool(runId, callId, result);
+        }
+        catch (error) {
+            const failedHead = this.history.getWorkspace(current.run.workspaceId).headCommitId;
+            if (failedHead && failedHead !== this.store.getRun(runId).run.headCommitId) {
+                const checkpointAt = this.store.nowIso();
+                this.store.updateRun(runId, run => {
+                    run.run.headCommitId = failedHead;
+                    appendEvent(run, 'workspace.checkpoint', checkpointAt, {
+                        callId,
+                        afterCommitId: failedHead,
+                        failed: true,
+                    });
+                });
+            }
+            if (signal.aborted || TERMINAL_RUNS.has(this.store.getRun(runId).run.status)) {
+                throw error;
+            }
+            this.failTool(runId, callId, errorMessage(error), 'failed');
+        }
+    }
+    async waitForApproval(runId, invocation, descriptor, input) {
+        const approvalId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const timestamp = this.store.nowIso();
+        const approval = {
+            id: approvalId,
+            runId,
+            callId: invocation.callId,
+            toolId: descriptor.id,
+            title: descriptor.title,
+            summary: this.hostTools.approvalSummary(descriptor.id, input),
+            arguments: structuredClone(input),
+            riskLevel: descriptor.riskLevel,
+            status: 'pending',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            expiresAt: new Date(Date.parse(timestamp) + this.approvalTimeoutMs).toISOString(),
+        };
+        const key = `${runId}:${approvalId}`;
+        let resolveDecision;
+        const decision = new Promise(resolve => {
+            resolveDecision = resolve;
+            this.approvalWaiters.set(key, resolve);
+        });
+        this.store.updateRun(runId, detail => {
+            findInvocation(detail, invocation.callId).status = 'waiting_approval';
+            findInvocation(detail, invocation.callId).updatedAt = timestamp;
+            detail.approvals.push(approval);
+            detail.run.status = 'waiting_approval';
+            detail.run.pendingApprovalId = approvalId;
+            appendEvent(detail, 'tool.waiting_approval', timestamp, {
+                approvalId,
+                callId: invocation.callId,
+                toolId: descriptor.id,
+            });
+        });
+        const timer = setTimeout(() => {
+            const expiredAt = this.store.nowIso();
+            try {
+                this.store.updateRun(runId, detail => {
+                    const storedApproval = detail.approvals.find(item => item.id === approvalId);
+                    if (!storedApproval || storedApproval.status !== 'pending') {
+                        return;
+                    }
+                    storedApproval.status = 'expired';
+                    storedApproval.updatedAt = expiredAt;
+                    storedApproval.resolvedAt = expiredAt;
+                    const storedInvocation = findInvocation(detail, invocation.callId);
+                    storedInvocation.status = 'timed_out';
+                    storedInvocation.updatedAt = expiredAt;
+                    detail.run.status = 'running';
+                    delete detail.run.pendingApprovalId;
+                    appendEvent(detail, 'tool.approval_resolved', expiredAt, {
+                        approvalId,
+                        callId: invocation.callId,
+                        decision: 'expired',
+                    });
+                });
+                resolveDecision('expired');
+            }
+            catch (error) {
+                console.warn(`[authority] Unable to expire Agent approval ${approvalId}: ${errorMessage(error)}`);
+                resolveDecision('cancelled');
+            }
+        }, this.approvalTimeoutMs);
+        timer.unref();
+        try {
+            return await decision;
+        }
+        finally {
+            clearTimeout(timer);
+            this.approvalWaiters.delete(key);
+        }
+    }
+    completeTool(runId, callId, result) {
+        const timestamp = this.store.nowIso();
+        const bounded = boundedToolValue(result);
+        this.store.updateRun(runId, detail => {
+            const invocation = findInvocation(detail, callId);
+            invocation.status = 'completed';
+            invocation.updatedAt = timestamp;
+            invocation.result = structuredClone(bounded);
+            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: true, result: bounded }) });
+            appendEvent(detail, 'tool.completed', timestamp, { callId, toolId: invocation.toolId, result: bounded });
+        });
+    }
+    failTool(runId, callId, message, status) {
+        const timestamp = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            const invocation = findInvocation(detail, callId);
+            invocation.status = status;
+            invocation.updatedAt = timestamp;
+            invocation.error = message;
+            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
+            appendEvent(detail, 'tool.failed', timestamp, { callId, toolId: invocation.toolId, error: message });
+        });
+    }
+    appendToolProtocolError(runId, callId, message) {
+        const timestamp = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
+            appendEvent(detail, 'tool.failed', timestamp, { callId, error: message });
+        });
+    }
+    allowedDescriptors(run) {
+        const allowed = new Set(run.allowedTools);
+        return this.hostTools.list().filter(tool => allowed.has(tool.id) && (run.mode !== 'plan' || !tool.mutatesWorkspace));
+    }
+    assertRunActive(runId, signal) {
+        if (signal.aborted) {
+            throw abortError(signal);
+        }
+        const status = this.store.getRun(runId).run.status;
+        if (status !== 'running') {
+            throw new Error(`Agent run is no longer active: ${status}`);
+        }
+    }
+    completeRun(runId, finalText) {
+        const timestamp = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            detail.run.status = 'completed';
+            detail.run.finalText = finalText;
+            detail.run.finishedAt = timestamp;
+            delete detail.run.error;
+            appendEvent(detail, 'run.completed', timestamp, { finalText });
+        });
+    }
+    failRun(runId, message) {
+        const timestamp = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            detail.run.status = 'failed';
+            detail.run.error = message;
+            detail.run.finishedAt = timestamp;
+            delete detail.run.pendingApprovalId;
+            cancelPendingRecords(detail, timestamp, message);
+            appendEvent(detail, 'run.failed', timestamp, { error: message });
+        });
+    }
+    interruptRun(runId, message) {
+        const current = this.store.getRun(runId);
+        if (TERMINAL_RUNS.has(current.run.status)) {
+            return;
+        }
+        const timestamp = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            detail.run.status = 'interrupted';
+            detail.run.error = message;
+            detail.run.finishedAt = timestamp;
+            delete detail.run.pendingApprovalId;
+            cancelPendingRecords(detail, timestamp, message);
+            appendEvent(detail, 'run.interrupted', timestamp, { reason: message });
+        });
+    }
+}
+function appendEvent(detail, type, timestamp, payload) {
+    detail.events.push({
+        sequence: (detail.events.at(-1)?.sequence ?? 0) + 1,
+        runId: detail.run.id,
+        type,
+        timestamp,
+        ...(payload === undefined ? {} : { payload }),
+    });
+}
+function findInvocation(detail, callId) {
+    const invocation = detail.invocations.find(item => item.callId === callId);
+    if (!invocation) {
+        throw new Error(`Agent tool invocation not found: ${callId}`);
+    }
+    return invocation;
+}
+function cancelPendingRecords(detail, timestamp, message) {
+    for (const approval of detail.approvals) {
+        if (approval.status === 'pending') {
+            approval.status = 'cancelled';
+            approval.updatedAt = timestamp;
+            approval.resolvedAt = timestamp;
+        }
+    }
+    for (const invocation of detail.invocations) {
+        if (invocation.status === 'pending' || invocation.status === 'waiting_approval' || invocation.status === 'claimed') {
+            invocation.status = 'cancelled';
+            invocation.updatedAt = timestamp;
+            invocation.error = message;
+        }
+    }
+}
+function mapLlmTools(descriptors) {
+    const nameToId = new Map();
+    const definitions = descriptors.map(descriptor => {
+        const name = llmToolName(descriptor.id);
+        if (nameToId.has(name)) {
+            throw new Error(`Agent tool name collision: ${descriptor.id}`);
+        }
+        nameToId.set(name, descriptor.id);
+        return {
+            type: 'function',
+            function: {
+                name,
+                description: descriptor.description,
+                parameters: descriptor.inputSchema,
+            },
+        };
+    });
+    return { definitions, nameToId };
+}
+function llmToolName(toolId) {
+    const normalized = toolId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (normalized === toolId && normalized.length <= 64) {
+        return normalized;
+    }
+    return `${normalized.slice(0, 51)}_${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(toolId).digest('hex').slice(0, 12)}`;
+}
+function normalizeMode(value) {
+    if (value === undefined) {
+        return 'ask';
+    }
+    if (value !== 'plan' && value !== 'ask' && value !== 'auto') {
+        throw new Error('Agent mode must be plan, ask, or auto');
+    }
+    return value;
+}
+function normalizeAllowedTools(value, available) {
+    const ids = new Set(available.map(tool => tool.id));
+    if (value === undefined) {
+        return [...ids];
+    }
+    if (!Array.isArray(value) || value.length > 128 || value.some(item => typeof item !== 'string')) {
+        throw new Error('allowedTools must be an array of at most 128 tool ids');
+    }
+    const result = [...new Set(value)];
+    for (const id of result) {
+        if (!ids.has(id)) {
+            throw new Error(`Unknown Agent tool: ${id}`);
+        }
+    }
+    return result;
+}
+function selectOne(requestedId, items, id, label) {
+    if (requestedId !== undefined) {
+        const selected = items.find(item => id(item) === requestedId);
+        if (!selected) {
+            throw new Error(`Agent ${label} not found: ${requestedId}`);
+        }
+        return selected;
+    }
+    if (items.length !== 1) {
+        throw new Error(items.length === 0
+            ? `No Agent ${label} is configured`
+            : `Agent ${label} must be selected because multiple are configured`);
+    }
+    return items[0];
+}
+function parseToolArguments(value) {
+    if (value.length > MAX_TOOL_ARGUMENT_CHARS) {
+        throw new Error('Tool arguments exceed the 128 KB limit');
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(value);
+    }
+    catch (error) {
+        throw new Error(`Tool arguments are invalid JSON: ${errorMessage(error)}`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Tool arguments must be a JSON object');
+    }
+    return parsed;
+}
+function serializeContext(context) {
+    if (context === undefined) {
+        return undefined;
+    }
+    let value;
+    try {
+        value = JSON.stringify(context);
+    }
+    catch (error) {
+        throw new Error(`Agent context must be JSON serializable: ${errorMessage(error)}`);
+    }
+    if (value.length > MAX_CONTEXT_CHARS) {
+        throw new Error('Agent context exceeds the 64 KB limit');
+    }
+    return value;
+}
+function boundedToolValue(value) {
+    const normalized = value === undefined ? null : value;
+    const serialized = JSON.stringify(normalized);
+    if (serialized.length <= MAX_TOOL_RESULT_CHARS) {
+        return normalized;
+    }
+    return {
+        truncated: true,
+        originalChars: serialized.length,
+        preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS - 1_000),
+    };
+}
+function requiredText(value, label, maxLength) {
+    if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(`${label} is required`);
+    }
+    const result = value.trim();
+    if (result.length > maxLength) {
+        throw new Error(`${label} exceeds ${maxLength} characters`);
+    }
+    return result;
+}
+function systemPrompt(workspaceRoot, mode) {
+    return [
+        'You are Authority Agent, an IDE-grade operator for a registered SillyTavern workspace.',
+        `Workspace root: ${workspaceRoot}`,
+        `Execution mode: ${mode}.`,
+        'Inspect relevant files before changing them. Use registered tools for every action and rely on their returned results.',
+        'Keep writes narrow. Shell commands checkpoint the workspace except .git and node_modules, and always require approval because those paths and effects outside the workspace cannot be rolled back.',
+        mode === 'plan'
+            ? 'Plan mode is read-only: analyze and return a concrete plan without modifying files or running mutating commands.'
+            : mode === 'ask'
+                ? 'Ask mode pauses before each workspace mutation so the user can approve or deny it.'
+                : 'Auto mode may execute workspace mutations without pausing; every mutation is still checkpointed for rollback.',
+        'When the goal is complete, return a concise final result and verification status.',
+    ].join('\n');
+}
+function userPrompt(goal, instructions, context) {
+    return [
+        `Goal:\n${goal}`,
+        ...(instructions ? [`Additional instructions:\n${instructions}`] : []),
+        ...(context ? [`Caller context (JSON):\n${context}`] : []),
+    ].join('\n\n');
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function abortError(signal) {
+    return signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Agent run cancelled'), { name: 'AbortError' });
+}
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-store-service.ts"
+/*!*********************************************!*\
+  !*** ./src/services/agent-store-service.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentStoreService: () => (/* binding */ AgentStoreService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+const PROFILE_FORMAT = 'authority-agent-profiles/v1';
+const RUN_FORMAT = 'authority-agent-run/v1';
+const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
+const ACTIVE_RUNS = new Set(['queued', 'running', 'waiting_approval', 'waiting_browser_tool']);
+class AgentStoreService {
+    stateDir;
+    now;
+    constructor(stateDir, options = {}) {
+        this.stateDir = stateDir;
+        this.stateDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(stateDir);
+        this.now = options.now ?? (() => new Date().toISOString());
+    }
+    start() {
+        protectDirectory(this.stateDir);
+        protectDirectory(this.runsDir());
+        const interrupted = [];
+        for (const run of this.readAllRuns()) {
+            if (!ACTIVE_RUNS.has(run.run.status)) {
+                continue;
+            }
+            const timestamp = this.now();
+            run.run.status = 'interrupted';
+            run.run.updatedAt = timestamp;
+            run.run.finishedAt = timestamp;
+            run.run.error = 'Agent host restarted before the run reached a terminal state';
+            delete run.run.pendingApprovalId;
+            for (const approval of run.approvals) {
+                if (approval.status === 'pending') {
+                    approval.status = 'cancelled';
+                    approval.updatedAt = timestamp;
+                    approval.resolvedAt = timestamp;
+                }
+            }
+            for (const invocation of run.invocations) {
+                if (invocation.status === 'pending' || invocation.status === 'waiting_approval' || invocation.status === 'claimed') {
+                    invocation.status = 'cancelled';
+                    invocation.updatedAt = timestamp;
+                    invocation.error = 'Agent host restarted';
+                }
+            }
+            run.events.push(this.event(run, 'run.interrupted', timestamp, { reason: run.run.error }));
+            this.writeRun(run);
+            interrupted.push(structuredClone(run.run));
+        }
+        return interrupted;
+    }
+    upsertProfile(input) {
+        const profiles = this.readProfiles();
+        const requestedId = input.id?.trim();
+        if (requestedId !== undefined) {
+            assertSafeId(requestedId, 'LLM profile id');
+        }
+        if (input.provider !== 'openai-compatible') {
+            throw new Error('Only openai-compatible LLM profiles are supported');
+        }
+        const displayName = requiredText(input.displayName, 'LLM profile displayName', 100);
+        const model = requiredText(input.model, 'LLM profile model', 200);
+        const baseUrl = normalizeBaseUrl(input.baseUrl);
+        const temperature = optionalNumber(input.temperature, 'LLM profile temperature', 0, 2);
+        const maxOutputTokens = optionalInteger(input.maxOutputTokens, 'LLM profile maxOutputTokens', 1, 1_000_000);
+        const timeoutMs = optionalInteger(input.timeoutMs, 'LLM profile timeoutMs', 1_000, 600_000) ?? 120_000;
+        const existing = requestedId ? profiles.profiles.find(profile => profile.id === requestedId) : undefined;
+        const timestamp = this.now();
+        const apiKey = input.apiKey === undefined
+            ? existing?.apiKey ?? null
+            : input.apiKey.trim() || null;
+        const stored = {
+            id: existing?.id ?? requestedId ?? node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            displayName,
+            provider: 'openai-compatible',
+            baseUrl,
+            model,
+            apiKey,
+            apiKeyConfigured: Boolean(apiKey),
+            apiKeyMasked: maskSecret(apiKey),
+            apiKeyFingerprint: fingerprintSecret(apiKey),
+            temperature,
+            maxOutputTokens,
+            timeoutMs,
+            createdAt: existing?.createdAt ?? timestamp,
+            updatedAt: timestamp,
+        };
+        const index = profiles.profiles.findIndex(profile => profile.id === stored.id);
+        if (index === -1) {
+            profiles.profiles.push(stored);
+        }
+        else {
+            profiles.profiles[index] = stored;
+        }
+        profiles.profiles.sort((left, right) => left.id.localeCompare(right.id));
+        protectDirectory(this.stateDir);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.profilesPath(), profiles);
+        protectFile(this.profilesPath());
+        return publicProfile(stored);
+    }
+    listProfiles() {
+        return this.readProfiles().profiles.map(publicProfile);
+    }
+    getProfile(profileId) {
+        return publicProfile(this.getStoredProfile(profileId));
+    }
+    getProfileForRequest(profileId) {
+        return structuredClone(this.getStoredProfile(profileId));
+    }
+    deleteProfile(profileId) {
+        assertSafeId(profileId, 'LLM profile id');
+        const profiles = this.readProfiles();
+        const next = profiles.profiles.filter(profile => profile.id !== profileId);
+        if (next.length === profiles.profiles.length) {
+            return false;
+        }
+        profiles.profiles = next;
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.profilesPath(), profiles);
+        protectFile(this.profilesPath());
+        return true;
+    }
+    createRun(detail) {
+        assertSafeId(detail.run.id, 'Agent run id');
+        const filePath = this.runPath(detail.run.id);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            throw new Error(`Agent run already exists: ${detail.run.id}`);
+        }
+        this.writeRun({ format: RUN_FORMAT, ...structuredClone(detail) });
+        return structuredClone(detail);
+    }
+    getRun(runId) {
+        const { format: _format, ...detail } = this.readRun(runId);
+        return structuredClone(detail);
+    }
+    listRuns() {
+        return this.readAllRuns()
+            .map(run => structuredClone(run.run))
+            .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    }
+    updateRun(runId, update) {
+        const stored = this.readRun(runId);
+        update(stored);
+        stored.run.updatedAt = this.now();
+        this.writeRun(stored);
+        const { format: _format, ...detail } = stored;
+        return structuredClone(detail);
+    }
+    nowIso() {
+        return this.now();
+    }
+    event(run, type, timestamp, payload) {
+        return {
+            sequence: (run.events.at(-1)?.sequence ?? 0) + 1,
+            runId: run.run.id,
+            type,
+            timestamp,
+            ...(payload === undefined ? {} : { payload }),
+        };
+    }
+    readProfiles() {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(this.profilesPath())) {
+            return { format: PROFILE_FORMAT, profiles: [] };
+        }
+        const value = readJson(this.profilesPath(), 'Agent LLM profiles');
+        if (value.format !== PROFILE_FORMAT || !Array.isArray(value.profiles)) {
+            throw new Error('Invalid Agent LLM profile store');
+        }
+        return value;
+    }
+    getStoredProfile(profileId) {
+        assertSafeId(profileId, 'LLM profile id');
+        const profile = this.readProfiles().profiles.find(item => item.id === profileId);
+        if (!profile) {
+            throw new Error(`Agent LLM profile not found: ${profileId}`);
+        }
+        return profile;
+    }
+    readAllRuns() {
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(this.runsDir());
+        const runs = [];
+        for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(this.runsDir(), { withFileTypes: true })) {
+            if (!entry.isFile() || !entry.name.endsWith('.json')) {
+                continue;
+            }
+            try {
+                runs.push(this.readRun(entry.name.slice(0, -5)));
+            }
+            catch (error) {
+                console.warn(`[authority] Ignoring unreadable Agent run ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+        return runs;
+    }
+    readRun(runId) {
+        const value = readJson(this.runPath(runId), `Agent run ${runId}`);
+        if (value.format !== RUN_FORMAT || value.run?.id !== runId || !Array.isArray(value.events)) {
+            throw new Error(`Invalid Agent run: ${runId}`);
+        }
+        return value;
+    }
+    writeRun(run) {
+        protectDirectory(this.runsDir());
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.runPath(run.run.id), run);
+        protectFile(this.runPath(run.run.id));
+    }
+    profilesPath() {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.stateDir, 'profiles.json');
+    }
+    runsDir() {
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.stateDir, 'runs');
+    }
+    runPath(runId) {
+        assertSafeId(runId, 'Agent run id');
+        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.runsDir(), `${runId}.json`);
+    }
+}
+function publicProfile(profile) {
+    const { apiKey: _apiKey, ...value } = profile;
+    return structuredClone(value);
+}
+function normalizeBaseUrl(value) {
+    const raw = requiredText(value, 'LLM profile baseUrl', 2_000);
+    const url = new URL(raw);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash) {
+        throw new Error('LLM profile baseUrl must be an http(s) URL without credentials, query, or fragment');
+    }
+    return url.toString().replace(/\/$/, '');
+}
+function requiredText(value, label, maxLength) {
+    if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(`${label} is required`);
+    }
+    const result = value.trim();
+    if (result.length > maxLength) {
+        throw new Error(`${label} exceeds ${maxLength} characters`);
+    }
+    return result;
+}
+function optionalNumber(value, label, minimum, maximum) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) {
+        throw new Error(`${label} must be between ${minimum} and ${maximum}`);
+    }
+    return value;
+}
+function optionalInteger(value, label, minimum, maximum) {
+    const result = optionalNumber(value, label, minimum, maximum);
+    if (result !== null && !Number.isSafeInteger(result)) {
+        throw new Error(`${label} must be an integer`);
+    }
+    return result;
+}
+function maskSecret(secret) {
+    if (!secret) {
+        return null;
+    }
+    return secret.length <= 8 ? '********' : `${secret.slice(0, 3)}…${secret.slice(-4)}`;
+}
+function fingerprintSecret(secret) {
+    return secret ? node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(secret).digest('hex').slice(0, 12) : null;
+}
+function assertSafeId(value, label) {
+    if (!value || value.length > 128 || !SAFE_ID.test(value) || value === '.' || value === '..') {
+        throw new Error(`${label} contains invalid characters`);
+    }
+}
+function readJson(filePath, label) {
+    try {
+        return JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'));
+    }
+    catch (error) {
+        throw new Error(`Unable to read ${label}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+function protectDirectory(dirPath) {
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
+    if (process.platform !== 'win32') {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
+    }
+}
+function protectFile(filePath) {
+    if (process.platform !== 'win32') {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(filePath, 0o600);
     }
 }
 
@@ -15026,6 +17034,33 @@ class WorkspaceHistoryService {
             return this.checkpointLocked(workspace, request, actor);
         });
     }
+    async runMutation(workspaceId, request, actor, mutate) {
+        return await this.withLock(`workspace-${workspaceId}`, async () => {
+            this.assertNoPendingRollback(workspaceId);
+            const workspace = this.getStoredWorkspace(workspaceId);
+            this.recoverRefJournal(workspace);
+            const { beforeMessage, afterMessage, failureMessage, ...checkpoint } = request;
+            const before = this.checkpointLocked(workspace, { ...checkpoint, message: beforeMessage }, actor);
+            try {
+                const value = await mutate();
+                const after = this.checkpointLocked(workspace, { ...checkpoint, message: afterMessage }, actor);
+                return { value, before, after };
+            }
+            catch (error) {
+                try {
+                    this.checkpointLocked(workspace, {
+                        ...checkpoint,
+                        message: failureMessage ?? `${afterMessage} (failed)`,
+                        metadata: { ...checkpoint.metadata, mutationFailed: true },
+                    }, actor);
+                }
+                catch (checkpointError) {
+                    throw new AggregateError([error, checkpointError], 'Workspace mutation and failure checkpoint both failed');
+                }
+                throw error;
+            }
+        });
+    }
     listCommits(workspaceId, limit = 100) {
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
             throw validationError('Workspace commit limit must be an integer between 1 and 500');
@@ -15219,6 +17254,7 @@ class WorkspaceHistoryService {
             throw workspaceConflict('Workspace kept changing while preparing rollback; retry recovery when writes are idle');
         }
         const restorePaths = trackedPathsFromCommit(target);
+        this.ensureWorkspaceRootForRollback(workspace);
         const currentTree = this.captureTrackedWorkspace(workspace, restorePaths, createObjectStats());
         const targetTree = scopeTree(this.loadCommitTree(target), restorePaths);
         const warnings = this.applyTree(workspace, currentTree, targetTree);
@@ -15352,7 +17388,15 @@ class WorkspaceHistoryService {
         };
     }
     captureTrackedWorkspace(workspace, trackedPaths, stats) {
-        this.assertWorkspaceRoot(workspace);
+        try {
+            this.assertWorkspaceRoot(workspace);
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOENT')) {
+                return emptyTree();
+            }
+            throw error;
+        }
         let tree = emptyTree();
         for (const relativePath of trackedPaths) {
             const captured = this.captureScopedPath(workspace, relativePath, stats);
@@ -15669,6 +17713,31 @@ class WorkspaceHistoryService {
         if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(workspace.rootPath), workspace.rootPath)) {
             throw new Error(`Workspace root changed or is no longer a real directory: ${workspace.rootPath}`);
         }
+    }
+    ensureWorkspaceRootForRollback(workspace) {
+        try {
+            this.assertWorkspaceRoot(workspace);
+            return;
+        }
+        catch (error) {
+            if (!isFsError(error, 'ENOENT')) {
+                throw error;
+            }
+        }
+        const parent = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(workspace.rootPath);
+        const parentStat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(parent);
+        if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || !samePath(node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(parent), parent)) {
+            throw workspaceConflict(`Cannot recreate workspace root because its parent changed: ${parent}`);
+        }
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(workspace.rootPath);
+        }
+        catch (error) {
+            if (!isFsError(error, 'EEXIST')) {
+                throw error;
+            }
+        }
+        this.assertWorkspaceRoot(workspace);
     }
     isExcluded(workspace, relativePath, absolutePath) {
         const segments = relativePath === '.' ? [] : relativePath.split('/');
@@ -16804,6 +18873,7 @@ function getGlobalAuthorityPaths() {
     return {
         controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
         agentWorkspacesDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'agent-workspaces'),
+        agentStateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'agent'),
     };
 }
 
@@ -17354,14 +19424,27 @@ async function init(router) {
         // service's logger indirectly via console for now.
         console.warn(`[authority] Companion module discovery/load failed: ${message}`);
     }
+    void runtime.agent.start().catch(error => {
+        console.warn(`[authority] Agent service startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     void runtime.core.start();
 }
 async function exit() {
     if (!runtime) {
         return;
     }
-    await runtime.core.stop();
-    runtime = null;
+    const current = runtime;
+    try {
+        await current.agent.stop();
+    }
+    finally {
+        try {
+            await current.core.stop();
+        }
+        finally {
+            runtime = null;
+        }
+    }
 }
 
 })();
