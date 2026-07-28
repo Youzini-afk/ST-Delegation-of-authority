@@ -233,6 +233,12 @@ export function getDeclaredPermissionLabels(declaredPermissions) {
         labels.push(Array.isArray(declaredPermissions.jobs.background) ? `后台任务（${declaredPermissions.jobs.background.join('、')}）` : '后台任务');
     if (declaredPermissions.events?.channels)
         labels.push(Array.isArray(declaredPermissions.events.channels) ? `消息通道（${declaredPermissions.events.channels.join('、')}）` : '消息通道');
+    if (declaredPermissions.modules?.execute)
+        labels.push(Array.isArray(declaredPermissions.modules.execute) ? `模块事务（${declaredPermissions.modules.execute.join('、')}）` : '模块事务');
+    if (declaredPermissions.agent?.run)
+        labels.push(Array.isArray(declaredPermissions.agent.run) ? `Agent 运行（${declaredPermissions.agent.run.join('、')}）` : 'Agent 运行');
+    if (declaredPermissions.agent?.browser)
+        labels.push(Array.isArray(declaredPermissions.agent.browser) ? `Agent 浏览器工具（${declaredPermissions.agent.browser.join('、')}）` : 'Agent 浏览器工具');
     return labels;
 }
 export function getResourceLabel(resource) {
@@ -245,6 +251,9 @@ export function getResourceLabel(resource) {
         case 'http.fetch': return 'HTTP 访问';
         case 'jobs.background': return '后台任务';
         case 'events.stream': return '消息通道';
+        case 'module.execute': return '模块事务';
+        case 'agent.run': return 'Agent 运行';
+        case 'agent.browser': return 'Agent 浏览器工具';
         default: return '未分类能力';
     }
 }
@@ -278,19 +287,26 @@ export function getRiskLevel(resource) {
         case 'jobs.background':
             return 'medium';
         case 'trivium.private':
+        case 'agent.run':
+        case 'agent.browser':
             return 'high';
+        case 'module.execute':
+            return 'medium';
         default:
             return 'high';
     }
 }
 export function getExtensionRiskLevel(extension) {
-    if (extension.declaredPermissions.trivium?.private) {
+    if (extension.declaredPermissions.trivium?.private
+        || extension.declaredPermissions.agent?.run
+        || extension.declaredPermissions.agent?.browser) {
         return 'high';
     }
     if (extension.declaredPermissions.sql?.private
         || extension.declaredPermissions.http?.allow?.length
         || extension.declaredPermissions.jobs?.background
-        || extension.declaredPermissions.fs?.private) {
+        || extension.declaredPermissions.fs?.private
+        || extension.declaredPermissions.modules?.execute) {
         return 'medium';
     }
     return 'low';

@@ -59,6 +59,12 @@ function getResourceLabel(resource) {
             return '后台任务';
         case 'events.stream':
             return '消息通道';
+        case 'module.execute':
+            return '模块事务';
+        case 'agent.run':
+            return 'Agent 运行';
+        case 'agent.browser':
+            return 'Agent 浏览器工具';
         default:
             return '未分类能力';
     }
@@ -81,6 +87,15 @@ function getDefaultReason(resource) {
     }
     if (resource === 'jobs.background') {
         return '该扩展请求在服务端创建后台任务，用于异步执行较慢或批量的工作流。';
+    }
+    if (resource === 'module.execute') {
+        return '该扩展请求执行已安装的 Authority 模块事务；事务还会按其声明继续检查所需权限。';
+    }
+    if (resource === 'agent.run') {
+        return '该扩展请求启动或接入 Authority Agent；Agent 只能使用本次运行获准的工作区和工具。';
+    }
+    if (resource === 'agent.browser') {
+        return '该扩展请求向 Authority Agent 注册当前浏览器中的工具。';
     }
     return '该扩展请求使用一项受治理的服务端能力。';
 }

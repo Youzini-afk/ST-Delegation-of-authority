@@ -72,6 +72,8 @@ const SUPPORTED_RESOURCES = [
     'jobs.background',
     'events.stream',
     'module.execute',
+    'agent.run',
+    'agent.browser',
 ];
 const RESOURCE_RISK = {
     'storage.kv': 'low',
@@ -83,6 +85,8 @@ const RESOURCE_RISK = {
     'jobs.background': 'medium',
     'events.stream': 'low',
     'module.execute': 'medium',
+    'agent.run': 'high',
+    'agent.browser': 'high',
 };
 const DEFAULT_POLICY_STATUS = {
     'storage.kv': 'granted',
@@ -94,6 +98,8 @@ const DEFAULT_POLICY_STATUS = {
     'jobs.background': 'granted',
     'events.stream': 'granted',
     'module.execute': 'granted',
+    'agent.run': 'prompt',
+    'agent.browser': 'prompt',
 };
 /** Authority module host protocol version. Bump when manifest/handler contract changes. */
 const AUTHORITY_MODULE_PROTOCOL_VERSION = 1;
@@ -320,8 +326,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
 /* harmony import */ var _routes_module_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/module-routes.js */ "./src/routes/module-routes.ts");
 /* harmony import */ var _routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./routes/agent-history-routes.js */ "./src/routes/agent-history-routes.ts");
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+/* harmony import */ var _routes_agent_routes_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./routes/agent-routes.js */ "./src/routes/agent-routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+
 
 
 
@@ -342,7 +350,7 @@ function ok(res, data) {
 function fail(runtime, req, res, extensionId, error) {
     const normalized = normalizeAuthorityError(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
         if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
                 ...normalized.payload.details,
@@ -367,7 +375,7 @@ function buildPermissionErrorPayload(message) {
         return null;
     }
     const target = match[2]?.trim();
-    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.buildPermissionDescriptor)(resource, target);
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.buildPermissionDescriptor)(resource, target);
     return {
         error: message,
         code: 'permission_not_granted',
@@ -389,7 +397,9 @@ function isPermissionResource(value) {
         || value === 'http.fetch'
         || value === 'jobs.background'
         || value === 'events.stream'
-        || value === 'module.execute';
+        || value === 'module.execute'
+        || value === 'agent.run'
+        || value === 'agent.browser';
 }
 function isPermissionErrorDetails(value) {
     return typeof value === 'object'
@@ -400,13 +410,13 @@ function isPermissionErrorDetails(value) {
         && 'riskLevel' in value;
 }
 function normalizeAuthorityError(error) {
-    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.isAuthorityServiceError)(error)) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.isAuthorityServiceError)(error)) {
         return {
             status: error.status,
             payload: error.toPayload(),
         };
     }
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.asErrorMessage)(error);
     const permissionErrorPayload = buildPermissionErrorPayload(message);
     if (permissionErrorPayload) {
         return {
@@ -786,15 +796,15 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_11__.createAuthorityRuntime)()) {
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_12__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
     });
     (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
     router.post('/session/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             const config = (req.body ?? {});
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
@@ -809,8 +819,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/session/current', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits, runtime.modules.visibleCount()));
         }
@@ -820,8 +830,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
             const evaluation = await runtime.permissions.evaluate(user, session, req.body);
             if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
                 await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
@@ -839,11 +849,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate-batch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_12__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_13__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
             }
             const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
             const response = { results };
@@ -855,8 +865,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/resolve', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
             await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
@@ -873,7 +883,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
@@ -893,7 +903,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
@@ -921,7 +931,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/extensions/:id/grants/reset', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
             await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
@@ -945,9 +955,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
     (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
     (0,_routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_10__.registerAgentHistoryRoutes)(router, runtime, fail);
+    (0,_routes_agent_routes_js__WEBPACK_IMPORTED_MODULE_11__.registerAgentRoutes)(router, runtime, fail);
     router.get('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -959,7 +970,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
@@ -970,7 +981,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/usage-summary', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
         }
@@ -980,7 +991,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/import-export/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.adminPackages.listOperations(user),
@@ -992,7 +1003,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/export', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
@@ -1007,7 +1018,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import-transfer/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
                 resource: 'fs.private',
@@ -1020,7 +1031,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1039,7 +1050,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
@@ -1054,7 +1065,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
@@ -1069,7 +1080,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/native-migration/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.nativeMigrations.listOperations(),
@@ -1081,7 +1092,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/upload/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
@@ -1095,7 +1106,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/preview', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1118,7 +1129,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
@@ -1138,7 +1149,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
@@ -1153,7 +1164,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
         }
@@ -1163,7 +1174,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
@@ -1178,7 +1189,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/update', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1231,9 +1242,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                         : `更新失败后后台服务状态为 ${recovery.state}。`;
                 }
                 catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(recoveryError)}`;
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.asErrorMessage)(recoveryError)}`;
                 }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
             }
         }
         catch (error) {
@@ -1273,7 +1284,11 @@ function registerAgentHistoryRoutes(router, runtime, fail) {
     router.post('/admin/agent/workspaces', async (req, res) => {
         try {
             const user = assertAdmin(req);
-            const workspace = await runtime.workspaceHistory.registerWorkspace((req.body ?? {}));
+            const request = (req.body ?? {});
+            const workspace = await runtime.workspaceHistory.registerWorkspace({
+                ...request,
+                allowedUserHandles: request.allowedUserHandles ?? [user.handle],
+            });
             void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace registered', {
                 workspaceId: workspace.id,
             }).catch(() => undefined);
@@ -1398,6 +1413,327 @@ function resolveCommit(value, head) {
         return head;
     }
     return normalized === 'empty' ? null : normalized;
+}
+
+
+/***/ },
+
+/***/ "./src/routes/agent-routes.ts"
+/*!************************************!*\
+  !*** ./src/routes/agent-routes.ts ***!
+  \************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerAgentRoutes: () => (/* binding */ registerAgentRoutes)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+function registerAgentRoutes(router, runtime, fail) {
+    router.get('/agent/tools', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            res.json({ tools: runtime.agent.listTools(extensionId, user.handle) });
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/agent/runs', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agent.start();
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            res.json(runtime.agent.listRunsPage({}, extensionId, user.handle));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/runs/list', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agent.start();
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            res.json(runtime.agent.listRunsPage((req.body ?? {}), extensionId, user.handle));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/runs', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const request = (req.body ?? {});
+            const workspaceId = request.workspaceId?.trim();
+            if (!workspaceId) {
+                throw new Error('Agent workspaceId is required');
+            }
+            await runtime.agent.start();
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            runtime.workspaceHistory.assertWorkspaceAccess(workspaceId, context.user.handle, context.user.isAdmin);
+            if (!await runtime.permissions.authorize(context.user, context.session, {
+                resource: 'agent.run',
+                target: workspaceId,
+            })) {
+                throw new Error(`Permission not granted: agent.run for ${workspaceId}`);
+            }
+            const run = runtime.agent.createRun({ ...request, workspaceId }, extensionId, context);
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent run created', {
+                runId: run.id,
+                workspaceId: run.workspaceId,
+                mode: run.mode,
+            }).catch(() => undefined);
+            res.json(run);
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/agent/runs/:runId', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agent.start();
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            res.json(ownedRun(runtime, runId(req), user.handle, extensionId));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/runs/:runId/cancel', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agent.start();
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            const id = runId(req);
+            ownedRun(runtime, id, user.handle, extensionId);
+            const run = runtime.agent.cancelRun(id);
+            void runtime.audit.logUsage(user, extensionId, 'Agent run cancelled', { runId: id }).catch(() => undefined);
+            res.json(run);
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/browser-tools/register', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const request = (req.body ?? {});
+            const browserInstanceId = request.browserInstanceId?.trim();
+            if (!browserInstanceId) {
+                throw new Error('Browser instance id is required');
+            }
+            const { user, session } = await caller(runtime, req, browserInstanceId, 'agent.browser');
+            extensionId = session.extension.id;
+            res.json(runtime.agent.registerBrowserTools(user.handle, extensionId, { ...request, browserInstanceId }));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/browser-tools/claim', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            res.json(runtime.agent.claimBrowserTool(user.handle, extensionId, (req.body ?? {})));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/browser-tools/result', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            res.json(runtime.agent.submitBrowserToolResult(user.handle, extensionId, (req.body ?? {})));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/admin/agent/profiles', (req, res) => {
+        try {
+            assertAdmin(req);
+            res.json({ profiles: runtime.agent.listProfiles() });
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/profiles', (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            const profile = runtime.agent.upsertProfile((req.body ?? {}));
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent LLM profile saved', {
+                profileId: profile.id,
+                baseUrl: profile.baseUrl,
+                model: profile.model,
+            }).catch(() => undefined);
+            res.json(profile);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/agent/profiles/:profileId', (req, res) => {
+        try {
+            assertAdmin(req);
+            res.json(runtime.agent.getProfile(decodeParam(req.params?.profileId, 'profile id')));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/profiles/:profileId/delete', (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            const profileId = decodeParam(req.params?.profileId, 'profile id');
+            const deleted = runtime.agent.deleteProfile(profileId);
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent LLM profile deleted', {
+                profileId,
+                deleted,
+            }).catch(() => undefined);
+            res.json({ deleted });
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/agent/runs', async (req, res) => {
+        try {
+            assertAdmin(req);
+            await runtime.agent.start();
+            res.json(runtime.agent.listRunsPage());
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/runs/list', async (req, res) => {
+        try {
+            assertAdmin(req);
+            await runtime.agent.start();
+            res.json(runtime.agent.listRunsPage((req.body ?? {})));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/runs/prune', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            await runtime.agent.start();
+            const request = (req.body ?? {});
+            const result = runtime.agent.pruneTerminalRuns(request.retainLatest);
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Terminal Agent runs pruned', {
+                deletedRuns: result.deletedRuns,
+                reclaimedBytes: result.reclaimedBytes,
+                retainLatest: request.retainLatest,
+            }).catch(() => undefined);
+            res.json(result);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/agent/runs/:runId', async (req, res) => {
+        try {
+            assertAdmin(req);
+            await runtime.agent.start();
+            res.json(runtime.agent.getRun(runId(req)));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/runs/:runId/cancel', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            await runtime.agent.start();
+            const id = runId(req);
+            const run = runtime.agent.cancelRun(id);
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent run cancelled by admin', {
+                runId: id,
+            }).catch(() => undefined);
+            res.json(run);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/runs/:runId/approvals/:approvalId/resolve', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            await runtime.agent.start();
+            const id = runId(req);
+            const approvalId = decodeParam(req.params?.approvalId, 'approval id');
+            const request = (req.body ?? {});
+            const approval = runtime.agent.resolveApproval(id, approvalId, request, user.handle);
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent approval resolved', {
+                runId: id,
+                approvalId,
+                decision: request.decision,
+            }).catch(() => undefined);
+            res.json(approval);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+}
+async function caller(runtime, req, permissionTarget, permissionResource = 'agent.run') {
+    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+    const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+    if (permissionTarget !== undefined
+        && !await runtime.permissions.authorize(user, session, { resource: permissionResource, target: permissionTarget })) {
+        throw new Error(`Permission not granted: ${permissionResource} for ${permissionTarget}`);
+    }
+    return { user, session };
+}
+function assertAdmin(req) {
+    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+    if (!user.isAdmin) {
+        throw new Error('Forbidden');
+    }
+    return user;
+}
+function ownedRun(runtime, id, userHandle, extensionId) {
+    const detail = runtime.agent.getRun(id);
+    if (detail.run.callerUserHandle !== userHandle || detail.run.callerExtensionId !== extensionId) {
+        throw new Error(`Agent run not found: ${id}`);
+    }
+    const result = structuredClone(detail);
+    for (const invocation of result.invocations) {
+        delete invocation.claimId;
+    }
+    return result;
+}
+function runId(req) {
+    return decodeParam(req.params?.runId, 'run id');
+}
+function decodeParam(value, label) {
+    try {
+        const result = decodeURIComponent(value ?? '');
+        if (!result)
+            throw new Error();
+        return result;
+    }
+    catch {
+        throw new Error(`Invalid ${label}`);
+    }
 }
 
 
@@ -3629,7 +3965,7 @@ function createAuthorityRuntime() {
     const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_6__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
     const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_27__.getGlobalAuthorityPaths)();
     const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_26__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
-    const agent = new _services_agent_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentService(new _services_agent_store_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentStoreService(globalPaths.agentStateDir), workspaceHistory, new _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__.AgentHostToolService(workspaceHistory));
+    const agent = new _services_agent_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentService(new _services_agent_store_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentStoreService(globalPaths.agentStateDir), workspaceHistory, new _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__.AgentHostToolService(workspaceHistory), { moduleHost: modules });
     return {
         adminPackages,
         events,
@@ -5527,6 +5863,11 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   AgentLlmClient: () => (/* binding */ AgentLlmClient)
 /* harmony export */ });
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+const MAX_ASSISTANT_CONTENT_CHARS = 256 * 1024;
+const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
+const MAX_TOTAL_TOOL_ARGUMENT_CHARS = 1024 * 1024;
+const MAX_USAGE_CHARS = 16 * 1024;
 class AgentLlmClient {
     fetchImpl;
     constructor(fetchImpl = fetch) {
@@ -5544,20 +5885,24 @@ class AgentLlmClient {
         const timer = setTimeout(() => controller.abort(new Error(`LLM request timed out after ${profile.timeoutMs} ms`)), profile.timeoutMs);
         try {
             throwIfAborted(controller.signal);
+            const body = JSON.stringify({
+                model: profile.model,
+                messages: request.messages.map(toOpenAiMessage),
+                stream: false,
+                ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: 'auto' } : {}),
+                ...(profile.temperature === null ? {} : { temperature: profile.temperature }),
+                ...(profile.maxOutputTokens === null ? {} : { max_tokens: profile.maxOutputTokens }),
+            });
+            if (Buffer.byteLength(body, 'utf8') > MAX_REQUEST_BYTES) {
+                throw new Error('LLM request exceeded the 8 MB limit');
+            }
             const response = await this.fetchImpl(completionUrl(profile.baseUrl), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     ...(profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {}),
                 },
-                body: JSON.stringify({
-                    model: profile.model,
-                    messages: request.messages.map(toOpenAiMessage),
-                    stream: false,
-                    ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: 'auto' } : {}),
-                    ...(profile.temperature === null ? {} : { temperature: profile.temperature }),
-                    ...(profile.maxOutputTokens === null ? {} : { max_tokens: profile.maxOutputTokens }),
-                }),
+                body,
                 signal: controller.signal,
             });
             const text = await readLimitedText(response);
@@ -5652,6 +5997,9 @@ function parseCompletion(text) {
         throw new Error('LLM response did not include an assistant message');
     }
     const content = message.content === null || typeof message.content === 'string' ? message.content : null;
+    if (content !== null && content.length > MAX_ASSISTANT_CONTENT_CHARS) {
+        throw new Error('LLM assistant content exceeded the 256 KB limit');
+    }
     const toolCalls = message.tool_calls === undefined ? undefined : parseToolCalls(message.tool_calls);
     if ((content === null || !content.trim()) && !toolCalls?.length) {
         throw new Error('LLM assistant message was empty');
@@ -5663,7 +6011,7 @@ function parseCompletion(text) {
             ...(toolCalls?.length ? { toolCalls } : {}),
         },
         finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
-        ...(payload.usage === undefined ? {} : { usage: payload.usage }),
+        ...(payload.usage === undefined ? {} : { usage: boundedUsage(payload.usage) }),
     };
 }
 function parseToolCalls(value) {
@@ -5671,6 +6019,7 @@ function parseToolCalls(value) {
         throw new Error('LLM response contained invalid tool calls');
     }
     const ids = new Set();
+    let totalArgumentChars = 0;
     return value.map((call, index) => {
         const id = call?.id;
         const name = call?.function?.name;
@@ -5683,12 +6032,23 @@ function parseToolCalls(value) {
             || typeof name !== 'string'
             || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)
             || typeof args !== 'string'
-            || args.length > 128 * 1024) {
+            || args.length > MAX_TOOL_ARGUMENT_CHARS) {
             throw new Error(`LLM response contained an invalid tool call at index ${index}`);
+        }
+        totalArgumentChars += args.length;
+        if (totalArgumentChars > MAX_TOTAL_TOOL_ARGUMENT_CHARS) {
+            throw new Error('LLM response tool arguments exceeded the 1 MB combined limit');
         }
         ids.add(id);
         return { id, name, arguments: args };
     });
+}
+function boundedUsage(value) {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === 'string' && serialized.length <= MAX_USAGE_CHARS) {
+        return value;
+    }
+    return { truncated: true };
 }
 
 
@@ -5706,7 +6066,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-llm-client.js */ "./src/services/agent-llm-client.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./agent-llm-client.js */ "./src/services/agent-llm-client.ts");
+
 
 
 const DEFAULT_MAX_STEPS = 24;
@@ -5714,19 +6076,45 @@ const HARD_MAX_STEPS = 64;
 const MAX_CONTEXT_CHARS = 64 * 1024;
 const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
 const MAX_TOOL_RESULT_CHARS = 256 * 1024;
+const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 2 * 60_000;
+const DEFAULT_BROWSER_LEASE_MS = 60_000;
+const MIN_BROWSER_LEASE_MS = 5_000;
+const MAX_BROWSER_LEASE_MS = 5 * 60_000;
+const MAX_BROWSER_TOOLS = 64;
+const MAX_BROWSER_INSTANCES_PER_CALLER = 16;
+const MAX_BROWSER_TOOLS_PER_CALLER = 128;
+const MAX_BROWSER_REGISTRATION_BYTES = 256 * 1024;
+const MAX_TOOL_CALL_ID_CHARS = 256;
+const MAX_ACTIVE_RUNS = 100;
+const MAX_ACTIVE_RUNS_PER_USER = 32;
+const MAX_ACTIVE_RUNS_PER_CALLER = 16;
+const MAX_RUN_STARTS_PER_USER_PER_MINUTE = 30;
+const RUN_START_WINDOW_MS = 60_000;
+const DEFAULT_RUN_PAGE_LIMIT = 50;
+const MAX_RUN_PAGE_LIMIT = 200;
+const MAX_RETAINED_TERMINAL_RUNS = 1_000;
+const BROWSER_TOOL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/;
 const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+const RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'waiting_browser_tool', ...TERMINAL_RUNS]);
 class AgentService {
     store;
     history;
     hostTools;
     requestCompletion;
     maxConcurrentRuns;
+    maxConcurrentRunsPerUser;
     approvalTimeoutMs;
+    browserToolTimeoutMs;
     shutdownTimeoutMs;
+    moduleHost;
     queue = [];
     tasks = new Map();
     controllers = new Map();
     approvalWaiters = new Map();
+    browserWaiters = new Map();
+    browserRegistrations = new Map();
+    runContexts = new Map();
+    runStartsByUser = new Map();
     startPromise = null;
     started = false;
     stopping = false;
@@ -5735,16 +6123,22 @@ class AgentService {
         this.store = store;
         this.history = history;
         this.hostTools = hostTools;
-        const client = new _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__.AgentLlmClient();
+        const client = new _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_2__.AgentLlmClient();
         this.requestCompletion = options.requestCompletion ?? client.complete.bind(client);
+        this.moduleHost = options.moduleHost;
         this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
         this.approvalTimeoutMs = options.approvalTimeoutMs ?? 10 * 60_000;
+        this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? DEFAULT_BROWSER_TOOL_TIMEOUT_MS;
         this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
         if (!Number.isSafeInteger(this.maxConcurrentRuns) || this.maxConcurrentRuns < 1 || this.maxConcurrentRuns > 16) {
             throw new Error('maxConcurrentRuns must be an integer between 1 and 16');
         }
+        this.maxConcurrentRunsPerUser = Math.max(1, this.maxConcurrentRuns - 1);
         if (!Number.isSafeInteger(this.approvalTimeoutMs) || this.approvalTimeoutMs < 1 || this.approvalTimeoutMs > 24 * 60 * 60_000) {
             throw new Error('approvalTimeoutMs must be an integer between 1 ms and 24 hours');
+        }
+        if (!Number.isSafeInteger(this.browserToolTimeoutMs) || this.browserToolTimeoutMs < 1_000 || this.browserToolTimeoutMs > 10 * 60_000) {
+            throw new Error('browserToolTimeoutMs must be an integer between 1000 and 600000 ms');
         }
         if (!Number.isSafeInteger(this.shutdownTimeoutMs) || this.shutdownTimeoutMs < 1 || this.shutdownTimeoutMs > 60_000) {
             throw new Error('shutdownTimeoutMs must be an integer between 1 and 60000 ms');
@@ -5783,6 +6177,7 @@ class AgentService {
         await this.startPromise?.catch(() => []);
         for (const runId of this.queue.splice(0)) {
             this.interruptRun(runId, 'Agent host stopped before the run started');
+            this.runContexts.delete(runId);
         }
         for (const [runId, controller] of this.controllers) {
             this.interruptRun(runId, 'Agent host stopped while the run was active');
@@ -5791,11 +6186,15 @@ class AgentService {
         for (const resolve of this.approvalWaiters.values()) {
             resolve('cancelled');
         }
+        for (const waiter of this.browserWaiters.values()) {
+            waiter.resolve('cancelled');
+        }
         const settled = Promise.allSettled([...this.tasks.values()]);
         const completed = await Promise.race([settled.then(() => true), delay(this.shutdownTimeoutMs).then(() => false)]);
         if (!completed) {
             console.warn(`[authority] ${this.tasks.size} Agent run(s) did not stop within ${this.shutdownTimeoutMs} ms`);
         }
+        this.pruneRunStore();
         this.started = false;
     }
     upsertProfile(input) {
@@ -5813,21 +6212,73 @@ class AgentService {
         }
         return this.store.deleteProfile(profileId);
     }
-    listTools() {
-        return this.hostTools.list();
+    listTools(callerExtensionId = 'authority', callerUserHandle = 'authority') {
+        const tools = [
+            ...this.hostTools.list(),
+            ...moduleToolDescriptors(this.moduleHost),
+            ...this.browserTools(callerUserHandle, callerExtensionId),
+        ];
+        const ids = new Set();
+        for (const tool of tools) {
+            if (ids.has(tool.id)) {
+                throw new Error(`Agent tool id collision: ${tool.id}`);
+            }
+            ids.add(tool.id);
+        }
+        return structuredClone(tools);
     }
-    listRuns() {
-        return this.store.listRuns();
+    listRuns(callerExtensionId, callerUserHandle) {
+        const runs = this.store.listRuns();
+        if (callerExtensionId === undefined && callerUserHandle === undefined) {
+            return runs;
+        }
+        if (!callerExtensionId || !callerUserHandle) {
+            throw new Error('Agent run owner requires both user and extension identity');
+        }
+        return runs.filter(run => run.callerExtensionId === callerExtensionId && run.callerUserHandle === callerUserHandle);
+    }
+    listRunsPage(request = {}, callerExtensionId, callerUserHandle) {
+        const { cursor, limit } = normalizeRunPage(request);
+        const runs = this.listRuns(callerExtensionId, callerUserHandle)
+            .filter(run => request.status === undefined || run.status === request.status);
+        const firstIndex = cursor
+            ? runs.findIndex(run => isAfterRunCursor(run, cursor))
+            : 0;
+        const startIndex = firstIndex === -1 ? runs.length : firstIndex;
+        const pageRuns = runs.slice(startIndex, startIndex + limit);
+        const hasMore = startIndex + pageRuns.length < runs.length;
+        return {
+            runs: pageRuns,
+            page: {
+                nextCursor: hasMore ? encodeRunCursor(pageRuns.at(-1), request.status) : null,
+                limit,
+                hasMore,
+                totalCount: runs.length,
+            },
+        };
+    }
+    pruneTerminalRuns(retainLatest) {
+        if (retainLatest !== undefined
+            && (!Number.isSafeInteger(retainLatest) || retainLatest < 0 || retainLatest > MAX_RETAINED_TERMINAL_RUNS)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Agent retainLatest must be an integer between 0 and ${MAX_RETAINED_TERMINAL_RUNS}`, 400, 'validation_error', 'validation');
+        }
+        return this.store.pruneTerminalRuns(retainLatest, this.executingRunIds());
     }
     getRun(runId) {
         return this.store.getRun(runId);
     }
-    createRun(request, callerExtensionId = 'authority') {
+    createRun(request, callerExtensionId = 'authority', callerContext) {
         if (!this.started || this.stopping) {
             throw new Error('Agent service is not running');
         }
         const goal = requiredText(request.goal, 'Agent goal', 20_000);
         const caller = requiredText(callerExtensionId, 'Agent caller extension id', 128);
+        if (callerContext && callerContext.session.extension.id !== caller) {
+            throw new Error('Agent caller context does not match the caller extension');
+        }
+        const callerUserHandle = requiredText(callerContext?.user.handle ?? 'authority', 'Agent caller user handle', 200);
+        const activeRuns = this.store.listRuns().filter(run => !TERMINAL_RUNS.has(run.status));
+        assertRunCapacity(activeRuns, callerUserHandle, caller);
         const instructions = request.instructions === undefined
             ? undefined
             : requiredText(request.instructions, 'Agent instructions', 20_000);
@@ -5838,13 +6289,17 @@ class AgentService {
             throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
         }
         const workspace = selectOne(request.workspaceId, this.history.listWorkspaces(), item => item.id, 'workspace');
+        if (callerContext) {
+            this.history.assertWorkspaceAccess(workspace.id, callerUserHandle, callerContext.user.isAdmin);
+        }
         const profile = selectOne(request.profileId, this.store.listProfiles(), item => item.id, 'LLM profile');
-        const availableTools = this.hostTools.list();
+        const availableTools = this.listTools(caller, callerUserHandle);
         const allowedTools = normalizeAllowedTools(request.allowedTools, availableTools);
         const timestamp = this.store.nowIso();
         const id = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         const run = {
             id,
+            callerUserHandle,
             callerExtensionId: caller,
             workspaceId: workspace.id,
             profileId: profile.id,
@@ -5861,7 +6316,7 @@ class AgentService {
         const detail = {
             run,
             messages: [
-                { role: 'system', content: systemPrompt(workspace.rootPath, mode) },
+                { role: 'system', content: systemPrompt(workspace.id, mode) },
                 { role: 'user', content: userPrompt(goal, instructions, contextText) },
             ],
             events: [{ sequence: 1, runId: id, type: 'run.created', timestamp, payload: { mode, allowedTools } }],
@@ -5870,7 +6325,11 @@ class AgentService {
             ...(request.context === undefined ? {} : { context: structuredClone(request.context) }),
             ...(instructions ? { instructions } : {}),
         };
+        this.recordRunStart(callerUserHandle);
         this.store.createRun(detail);
+        if (callerContext) {
+            this.runContexts.set(id, callerContext);
+        }
         this.queue.push(id);
         this.drainQueue();
         return structuredClone(run);
@@ -5892,6 +6351,7 @@ class AgentService {
         const queueIndex = this.queue.indexOf(runId);
         if (queueIndex !== -1) {
             this.queue.splice(queueIndex, 1);
+            this.runContexts.delete(runId);
         }
         this.controllers.get(runId)?.abort(new Error('Agent run cancelled'));
         for (const [key, resolve] of this.approvalWaiters) {
@@ -5899,9 +6359,184 @@ class AgentService {
                 resolve('cancelled');
             }
         }
+        for (const [key, waiter] of this.browserWaiters) {
+            if (key.startsWith(`${runId}:`)) {
+                waiter.resolve('cancelled');
+            }
+        }
+        this.pruneRunStore();
         return detail.run;
     }
-    resolveApproval(runId, approvalId, request) {
+    registerBrowserTools(userHandle, extensionId, request) {
+        const user = requiredText(userHandle, 'Browser tool user handle', 200);
+        const owner = requiredText(extensionId, 'Browser tool extension id', 128);
+        const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
+        const leaseDurationMs = request.leaseDurationMs ?? DEFAULT_BROWSER_LEASE_MS;
+        if (!Number.isSafeInteger(leaseDurationMs) || leaseDurationMs < MIN_BROWSER_LEASE_MS || leaseDurationMs > MAX_BROWSER_LEASE_MS) {
+            throw new Error(`Browser tool leaseDurationMs must be between ${MIN_BROWSER_LEASE_MS} and ${MAX_BROWSER_LEASE_MS}`);
+        }
+        if (!Array.isArray(request.tools) || request.tools.length === 0 || request.tools.length > MAX_BROWSER_TOOLS) {
+            throw new Error(`Browser tool registration must contain between 1 and ${MAX_BROWSER_TOOLS} tools`);
+        }
+        let serializedTools;
+        try {
+            serializedTools = JSON.stringify(request.tools);
+        }
+        catch {
+            throw new Error('Browser tool registration must be JSON serializable');
+        }
+        if (Buffer.byteLength(serializedTools, 'utf8') > MAX_BROWSER_REGISTRATION_BYTES) {
+            throw new Error(`Browser tool registration exceeds ${MAX_BROWSER_REGISTRATION_BYTES} bytes`);
+        }
+        this.pruneBrowserRegistrations();
+        const registrationKey = browserRegistrationKey(user, owner, browserInstanceId);
+        const callerRegistrations = [...this.browserRegistrations.entries()]
+            .filter(([, registration]) => registration.userHandle === user && registration.extensionId === owner);
+        if (!this.browserRegistrations.has(registrationKey) && callerRegistrations.length >= MAX_BROWSER_INSTANCES_PER_CALLER) {
+            throw new Error(`Browser tool registration limit reached for ${owner}`);
+        }
+        const existingTools = callerRegistrations
+            .filter(([key]) => key !== registrationKey)
+            .reduce((total, [, registration]) => total + registration.tools.length, 0);
+        if (existingTools + request.tools.length > MAX_BROWSER_TOOLS_PER_CALLER) {
+            throw new Error(`Browser tool limit reached for ${owner}`);
+        }
+        const localIds = new Set();
+        const normalizedTools = request.tools.map(input => {
+            const normalized = normalizeBrowserTool(input);
+            const localId = normalized.id;
+            if (localIds.has(localId)) {
+                throw new Error(`Duplicate browser tool id: ${localId}`);
+            }
+            localIds.add(localId);
+            return normalized;
+        });
+        const registrationId = hashValue(JSON.stringify(normalizedTools));
+        const prefix = `browser_${shortHash(`${user}\0${owner}\0${browserInstanceId}\0${registrationId}`)}_`;
+        const tools = normalizedTools.map(normalized => {
+            const localId = normalized.id;
+            return {
+                ...normalized,
+                id: `${prefix}${localId}`,
+                execution: 'browser',
+                source: {
+                    kind: 'browser',
+                    userHandle: user,
+                    extensionId: owner,
+                    browserInstanceId,
+                    registrationId,
+                },
+            };
+        });
+        const leaseExpiresAt = new Date(Date.now() + leaseDurationMs).toISOString();
+        this.browserRegistrations.set(registrationKey, {
+            userHandle: user,
+            extensionId: owner,
+            browserInstanceId,
+            registrationId,
+            leaseExpiresAt,
+            tools,
+        });
+        return { browserInstanceId, registrationId, leaseExpiresAt, tools: structuredClone(tools) };
+    }
+    claimBrowserTool(userHandle, extensionId, request) {
+        const user = requiredText(userHandle, 'Browser tool user handle', 200);
+        const owner = requiredText(extensionId, 'Browser tool extension id', 128);
+        const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
+        const claimId = requiredText(request.claimId, 'Browser tool claim id', 128);
+        const registration = this.activeBrowserRegistration(user, owner, browserInstanceId);
+        const requestedCallId = request.callId === undefined
+            ? undefined
+            : requiredText(request.callId, 'Browser tool call id', MAX_TOOL_CALL_ID_CHARS);
+        const toolIds = new Set(registration.tools.map(tool => tool.id));
+        for (const waiter of this.browserWaiters.values()) {
+            if (requestedCallId && waiter.callId !== requestedCallId)
+                continue;
+            if (waiter.descriptor.source.kind !== 'browser'
+                || waiter.descriptor.source.userHandle !== user
+                || waiter.descriptor.source.extensionId !== owner
+                || waiter.descriptor.source.browserInstanceId !== browserInstanceId
+                || !toolIds.has(waiter.descriptor.id))
+                continue;
+            const detail = this.store.getRun(waiter.runId);
+            const invocation = findInvocation(detail, waiter.callId);
+            if (invocation.status === 'claimed'
+                && invocation.browserInstanceId === browserInstanceId
+                && invocation.claimId === claimId) {
+                return { invocation: structuredClone(invocation) };
+            }
+            if (invocation.status !== 'pending')
+                continue;
+            const timestamp = this.store.nowIso();
+            let claimed;
+            this.store.updateRun(waiter.runId, run => {
+                const stored = findInvocation(run, waiter.callId);
+                if (stored.status !== 'pending') {
+                    throw new Error(`Browser tool invocation is no longer pending: ${waiter.callId}`);
+                }
+                stored.status = 'claimed';
+                stored.browserInstanceId = browserInstanceId;
+                stored.claimId = claimId;
+                stored.updatedAt = timestamp;
+                appendEvent(run, 'tool.started', timestamp, { callId: waiter.callId, toolId: stored.toolId, browserInstanceId });
+                claimed = structuredClone(stored);
+            });
+            return { invocation: claimed };
+        }
+        if (requestedCallId) {
+            throw new Error(`Browser tool invocation is unavailable: ${requestedCallId}`);
+        }
+        return { invocation: null };
+    }
+    submitBrowserToolResult(userHandle, extensionId, request) {
+        const user = requiredText(userHandle, 'Browser tool user handle', 200);
+        const owner = requiredText(extensionId, 'Browser tool extension id', 128);
+        const runId = requiredText(request.runId, 'Agent run id', 128);
+        const callId = requiredText(request.callId, 'Browser tool call id', MAX_TOOL_CALL_ID_CHARS);
+        const claimId = requiredText(request.claimId, 'Browser tool claim id', 128);
+        const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
+        if (request.status !== 'completed' && request.status !== 'failed' && request.status !== 'cancelled') {
+            throw new Error('Browser tool result status must be completed, failed, or cancelled');
+        }
+        const waiter = this.browserWaiters.get(browserWaiterKey(runId, callId));
+        if (!waiter || waiter.descriptor.source.kind !== 'browser'
+            || waiter.descriptor.source.userHandle !== user
+            || waiter.descriptor.source.extensionId !== owner
+            || waiter.descriptor.source.browserInstanceId !== browserInstanceId) {
+            throw new Error(`Browser tool invocation is unavailable: ${callId}`);
+        }
+        const timestamp = this.store.nowIso();
+        const bounded = request.status === 'completed' ? boundedToolValue(request.result) : undefined;
+        const message = request.status === 'completed'
+            ? undefined
+            : requiredText(request.error ?? `Browser tool ${request.status}`, 'Browser tool error', 10_000);
+        let result;
+        this.store.updateRun(runId, detail => {
+            const invocation = findInvocation(detail, callId);
+            if (invocation.status !== 'claimed'
+                || invocation.browserInstanceId !== browserInstanceId
+                || invocation.claimId !== claimId) {
+                throw new Error(`Browser tool invocation is not claimed by this browser: ${callId}`);
+            }
+            invocation.status = request.status === 'completed' ? 'completed' : request.status;
+            invocation.updatedAt = timestamp;
+            if (request.status === 'completed') {
+                invocation.result = structuredClone(bounded);
+                detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: true, result: bounded }) });
+                appendEvent(detail, 'tool.completed', timestamp, { callId, toolId: invocation.toolId, result: bounded });
+            }
+            else {
+                invocation.error = message;
+                detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
+                appendEvent(detail, 'tool.failed', timestamp, { callId, toolId: invocation.toolId, error: message });
+            }
+            detail.run.status = 'running';
+            result = structuredClone(invocation);
+        });
+        waiter.resolve(request.status);
+        return result;
+    }
+    resolveApproval(runId, approvalId, request, resolvedByUserHandle) {
         if (request.decision !== 'approve' && request.decision !== 'deny') {
             throw new Error('Approval decision must be approve or deny');
         }
@@ -5910,6 +6545,9 @@ class AgentService {
             throw new Error(`Agent approval waiter is unavailable: ${approvalId}`);
         }
         const timestamp = this.store.nowIso();
+        const resolver = resolvedByUserHandle === undefined
+            ? undefined
+            : requiredText(resolvedByUserHandle, 'Approval resolver user handle', 200);
         let resolved;
         this.store.updateRun(runId, detail => {
             const approval = detail.approvals.find(item => item.id === approvalId);
@@ -5922,12 +6560,16 @@ class AgentService {
             approval.status = request.decision === 'approve' ? 'approved' : 'denied';
             approval.updatedAt = timestamp;
             approval.resolvedAt = timestamp;
+            if (resolver) {
+                approval.resolvedByUserHandle = resolver;
+            }
             detail.run.status = 'running';
             delete detail.run.pendingApprovalId;
             appendEvent(detail, 'tool.approval_resolved', timestamp, {
                 approvalId,
                 callId: approval.callId,
                 decision: request.decision,
+                ...(resolver ? { resolvedByUserHandle: resolver } : {}),
             });
             resolved = structuredClone(approval);
         });
@@ -5939,16 +6581,46 @@ class AgentService {
             return;
         }
         while (this.tasks.size < this.maxConcurrentRuns && this.queue.length > 0) {
-            const runId = this.queue.shift();
+            const queueIndex = this.nextRunnableQueueIndex();
+            if (queueIndex === -1) {
+                return;
+            }
+            const runId = this.queue.splice(queueIndex, 1)[0];
             const task = this.executeRun(runId)
                 .catch(error => console.warn(`[authority] Agent run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`))
                 .finally(() => {
                 this.tasks.delete(runId);
                 this.controllers.delete(runId);
+                this.runContexts.delete(runId);
+                this.pruneRunStore();
                 this.drainQueue();
             });
             this.tasks.set(runId, task);
         }
+    }
+    nextRunnableQueueIndex() {
+        const activeByUser = new Map();
+        for (const runId of this.tasks.keys()) {
+            const userHandle = this.store.getRun(runId).run.callerUserHandle;
+            activeByUser.set(userHandle, (activeByUser.get(userHandle) ?? 0) + 1);
+        }
+        return this.queue.findIndex(runId => {
+            const userHandle = this.store.getRun(runId).run.callerUserHandle;
+            return (activeByUser.get(userHandle) ?? 0) < this.maxConcurrentRunsPerUser;
+        });
+    }
+    recordRunStart(userHandle) {
+        const now = Date.now();
+        const recent = (this.runStartsByUser.get(userHandle) ?? []).filter(timestamp => now - timestamp < RUN_START_WINDOW_MS);
+        if (recent.length >= MAX_RUN_STARTS_PER_USER_PER_MINUTE) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Agent run rate limit reached', 429, 'limit_exceeded', 'limit', {
+                userHandle,
+                startsInWindow: recent.length,
+                windowMs: RUN_START_WINDOW_MS,
+            });
+        }
+        recent.push(now);
+        this.runStartsByUser.set(userHandle, recent);
     }
     async executeRun(runId) {
         const controller = new AbortController();
@@ -5985,8 +6657,8 @@ class AgentService {
                     run.run.stepCount += 1;
                     run.messages.push(completion.message);
                     appendEvent(run, 'assistant.message', messageAt, {
-                        content: completion.message.content,
-                        toolCalls: completion.message.toolCalls,
+                        contentChars: completion.message.content?.length ?? 0,
+                        toolCallCount: completion.message.toolCalls?.length ?? 0,
                         finishReason: completion.finishReason,
                         usage: completion.usage,
                     });
@@ -6041,7 +6713,7 @@ class AgentService {
             this.appendToolProtocolError(runId, callId, `Duplicate tool call id: ${callId}`);
             return;
         }
-        if (current.run.mode === 'plan' && descriptor.mutatesWorkspace) {
+        if (current.run.mode === 'plan' && !isPlanSafeTool(descriptor)) {
             this.appendToolProtocolError(runId, callId, `Tool is unavailable in plan mode: ${descriptor.id}`);
             return;
         }
@@ -6050,6 +6722,7 @@ class AgentService {
             callId,
             runId,
             toolId: descriptor.id,
+            execution: descriptor.execution,
             arguments: structuredClone(input),
             status: 'pending',
             createdAt: timestamp,
@@ -6061,7 +6734,7 @@ class AgentService {
             appendEvent(detail, 'tool.requested', timestamp, { callId, toolId: descriptor.id, arguments: input });
         });
         const requiresApproval = descriptor.approvalPolicy === 'always'
-            || (current.run.mode === 'ask' && descriptor.approvalPolicy === 'on-mutation' && descriptor.mutatesWorkspace);
+            || (current.run.mode === 'ask' && descriptor.approvalPolicy === 'on-mutation');
         if (requiresApproval) {
             const decision = await this.waitForApproval(runId, invocation, descriptor, input);
             if (decision === 'cancelled') {
@@ -6077,6 +6750,22 @@ class AgentService {
             }
         }
         this.assertRunActive(runId, signal);
+        if (descriptor.execution === 'browser') {
+            try {
+                await this.waitForBrowserTool(runId, invocation, descriptor);
+                this.assertRunActive(runId, signal);
+            }
+            catch (error) {
+                if (signal.aborted || TERMINAL_RUNS.has(this.store.getRun(runId).run.status)) {
+                    throw error;
+                }
+                const status = findInvocation(this.store.getRun(runId), callId).status;
+                if (status === 'pending' || status === 'claimed') {
+                    this.failTool(runId, callId, errorMessage(error), 'failed');
+                }
+            }
+            return;
+        }
         const startedAt = this.store.nowIso();
         this.store.updateRun(runId, detail => {
             const stored = findInvocation(detail, callId);
@@ -6089,6 +6778,9 @@ class AgentService {
             const workspace = this.history.getWorkspace(detail.run.workspaceId);
             let result;
             if (descriptor.mutatesWorkspace) {
+                if (descriptor.execution !== 'host') {
+                    throw new Error(`Only host tools may declare workspace mutations: ${descriptor.id}`);
+                }
                 const paths = this.hostTools.checkpointPaths(descriptor.id, input);
                 const mutation = await this.history.runMutation(workspace.id, {
                     beforeMessage: `Before ${descriptor.title}`,
@@ -6116,8 +6808,18 @@ class AgentService {
                     });
                 });
             }
-            else {
+            else if (descriptor.execution === 'host') {
                 result = await this.hostTools.execute(descriptor.id, input, { workspace, runId, signal });
+            }
+            else if (descriptor.execution === 'module' && descriptor.source.kind === 'module') {
+                const context = this.runContexts.get(runId);
+                if (!context || !this.moduleHost) {
+                    throw new Error(`Agent module execution context is unavailable: ${descriptor.id}`);
+                }
+                result = await this.moduleHost.execute(context.user, context.session, descriptor.source.moduleId, descriptor.source.transactionName, input, signal);
+            }
+            else {
+                throw new Error(`Unsupported Agent tool execution: ${descriptor.id}`);
             }
             this.assertRunActive(runId, signal);
             this.completeTool(runId, callId, result);
@@ -6138,6 +6840,10 @@ class AgentService {
             if (signal.aborted || TERMINAL_RUNS.has(this.store.getRun(runId).run.status)) {
                 throw error;
             }
+            if (descriptor.execution === 'module' && isModuleTimeout(error)) {
+                this.interruptUnknownToolOutcome(runId, callId, 'Module transaction timed out after execution started; its side effects are unknown');
+                throw error;
+            }
             this.failTool(runId, callId, errorMessage(error), 'failed');
         }
     }
@@ -6150,7 +6856,7 @@ class AgentService {
             callId: invocation.callId,
             toolId: descriptor.id,
             title: descriptor.title,
-            summary: this.hostTools.approvalSummary(descriptor.id, input),
+            summary: this.approvalSummary(descriptor, input),
             arguments: structuredClone(input),
             riskLevel: descriptor.riskLevel,
             status: 'pending',
@@ -6226,6 +6932,88 @@ class AgentService {
             appendEvent(detail, 'tool.completed', timestamp, { callId, toolId: invocation.toolId, result: bounded });
         });
     }
+    async waitForBrowserTool(runId, invocation, descriptor) {
+        if (descriptor.source.kind !== 'browser') {
+            throw new Error(`Browser tool source is invalid: ${descriptor.id}`);
+        }
+        const browserInstanceId = descriptor.source.browserInstanceId;
+        const registration = this.activeBrowserRegistration(descriptor.source.userHandle, descriptor.source.extensionId, browserInstanceId);
+        if (registration.registrationId !== descriptor.source.registrationId
+            || !registration.tools.some(tool => tool.id === descriptor.id)) {
+            throw new Error(`Browser tool registration changed before execution: ${descriptor.id}`);
+        }
+        const key = browserWaiterKey(runId, invocation.callId);
+        let resolveDecision;
+        const decision = new Promise(resolve => { resolveDecision = resolve; });
+        const timestamp = this.store.nowIso();
+        const deadlineAt = new Date(Date.parse(timestamp) + this.browserToolTimeoutMs).toISOString();
+        this.store.updateRun(runId, detail => {
+            const stored = findInvocation(detail, invocation.callId);
+            stored.status = 'pending';
+            stored.browserInstanceId = browserInstanceId;
+            stored.deadlineAt = deadlineAt;
+            stored.updatedAt = timestamp;
+            detail.run.status = 'waiting_browser_tool';
+            appendEvent(detail, 'tool.waiting_browser', timestamp, {
+                callId: invocation.callId,
+                toolId: descriptor.id,
+                browserInstanceId: stored.browserInstanceId,
+                deadlineAt,
+            });
+        });
+        this.browserWaiters.set(key, { runId, callId: invocation.callId, descriptor, resolve: resolveDecision });
+        const timer = setTimeout(() => {
+            const expiredAt = this.store.nowIso();
+            try {
+                this.store.updateRun(runId, detail => {
+                    const stored = findInvocation(detail, invocation.callId);
+                    if (stored.status !== 'pending' && stored.status !== 'claimed') {
+                        return;
+                    }
+                    const claimed = stored.status === 'claimed';
+                    const message = claimed
+                        ? 'Browser tool timed out after it was claimed; its side effects are unknown'
+                        : 'Browser tool timed out before it was claimed';
+                    if (claimed) {
+                        stored.status = 'outcome_unknown';
+                        stored.updatedAt = expiredAt;
+                        stored.error = message;
+                        detail.run.status = 'interrupted';
+                        detail.run.updatedAt = expiredAt;
+                        detail.run.finishedAt = expiredAt;
+                        detail.run.error = message;
+                        detail.messages.push({ role: 'tool', toolCallId: invocation.callId, content: JSON.stringify({ ok: false, error: message }) });
+                        appendEvent(detail, 'tool.failed', expiredAt, { callId: invocation.callId, toolId: descriptor.id, error: message, outcomeUnknown: true });
+                        appendEvent(detail, 'run.interrupted', expiredAt, { reason: message, callId: invocation.callId });
+                    }
+                    else {
+                        stored.status = 'timed_out';
+                        stored.updatedAt = expiredAt;
+                        stored.error = message;
+                        detail.run.status = 'running';
+                        detail.messages.push({ role: 'tool', toolCallId: invocation.callId, content: JSON.stringify({ ok: false, error: message }) });
+                        appendEvent(detail, 'tool.failed', expiredAt, { callId: invocation.callId, toolId: descriptor.id, error: message });
+                    }
+                });
+                resolveDecision('timed_out');
+            }
+            catch (error) {
+                console.warn(`[authority] Unable to expire browser tool ${invocation.callId}: ${errorMessage(error)}`);
+                resolveDecision('cancelled');
+            }
+        }, this.browserToolTimeoutMs);
+        timer.unref();
+        try {
+            const outcome = await decision;
+            if (outcome === 'cancelled' && TERMINAL_RUNS.has(this.store.getRun(runId).run.status)) {
+                throw new Error('Agent run ended before the browser tool completed');
+            }
+        }
+        finally {
+            clearTimeout(timer);
+            this.browserWaiters.delete(key);
+        }
+    }
     failTool(runId, callId, message, status) {
         const timestamp = this.store.nowIso();
         this.store.updateRun(runId, detail => {
@@ -6237,6 +7025,22 @@ class AgentService {
             appendEvent(detail, 'tool.failed', timestamp, { callId, toolId: invocation.toolId, error: message });
         });
     }
+    interruptUnknownToolOutcome(runId, callId, message) {
+        const timestamp = this.store.nowIso();
+        this.store.updateRun(runId, detail => {
+            const invocation = findInvocation(detail, callId);
+            invocation.status = 'outcome_unknown';
+            invocation.updatedAt = timestamp;
+            invocation.error = message;
+            detail.run.status = 'interrupted';
+            detail.run.updatedAt = timestamp;
+            detail.run.finishedAt = timestamp;
+            detail.run.error = message;
+            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
+            appendEvent(detail, 'tool.failed', timestamp, { callId, toolId: invocation.toolId, error: message, outcomeUnknown: true });
+            appendEvent(detail, 'run.interrupted', timestamp, { reason: message, callId });
+        });
+    }
     appendToolProtocolError(runId, callId, message) {
         const timestamp = this.store.nowIso();
         this.store.updateRun(runId, detail => {
@@ -6246,7 +7050,36 @@ class AgentService {
     }
     allowedDescriptors(run) {
         const allowed = new Set(run.allowedTools);
-        return this.hostTools.list().filter(tool => allowed.has(tool.id) && (run.mode !== 'plan' || !tool.mutatesWorkspace));
+        return this.listTools(run.callerExtensionId, run.callerUserHandle).filter(tool => allowed.has(tool.id) && (run.mode !== 'plan' || isPlanSafeTool(tool)));
+    }
+    approvalSummary(descriptor, input) {
+        if (descriptor.execution === 'host') {
+            return this.hostTools.approvalSummary(descriptor.id, input);
+        }
+        const preview = JSON.stringify(input);
+        return `${descriptor.title}; effects are outside workspace rollback: ${preview.slice(0, 500)}`;
+    }
+    browserTools(userHandle, extensionId) {
+        this.pruneBrowserRegistrations();
+        return [...this.browserRegistrations.values()]
+            .filter(registration => registration.userHandle === userHandle && registration.extensionId === extensionId)
+            .flatMap(registration => registration.tools);
+    }
+    activeBrowserRegistration(userHandle, extensionId, browserInstanceId) {
+        this.pruneBrowserRegistrations();
+        const registration = this.browserRegistrations.get(browserRegistrationKey(userHandle, extensionId, browserInstanceId));
+        if (!registration) {
+            throw new Error(`Browser tool registration is unavailable: ${browserInstanceId}`);
+        }
+        return registration;
+    }
+    pruneBrowserRegistrations() {
+        const now = Date.now();
+        for (const [key, registration] of this.browserRegistrations) {
+            if (Date.parse(registration.leaseExpiresAt) <= now) {
+                this.browserRegistrations.delete(key);
+            }
+        }
     }
     assertRunActive(runId, signal) {
         if (signal.aborted) {
@@ -6293,6 +7126,147 @@ class AgentService {
             appendEvent(detail, 'run.interrupted', timestamp, { reason: message });
         });
     }
+    executingRunIds() {
+        return new Set([...this.tasks.keys(), ...this.controllers.keys()]);
+    }
+    pruneRunStore() {
+        try {
+            this.store.pruneTerminalRuns(undefined, this.executingRunIds());
+        }
+        catch (error) {
+            console.warn(`[authority] Unable to prune terminal Agent runs: ${errorMessage(error)}`);
+        }
+    }
+}
+function normalizeRunPage(request) {
+    if (request.status !== undefined && !RUN_STATUSES.has(request.status)) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Invalid Agent run status', 400, 'validation_error', 'validation');
+    }
+    const limit = request.page?.limit ?? DEFAULT_RUN_PAGE_LIMIT;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RUN_PAGE_LIMIT) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Agent run page limit must be an integer between 1 and ${MAX_RUN_PAGE_LIMIT}`, 400, 'validation_error', 'validation');
+    }
+    const cursor = request.page?.cursor;
+    if (cursor === undefined) {
+        return { cursor: null, limit };
+    }
+    try {
+        if (typeof cursor !== 'string' || cursor.length > 512 || !/^[a-zA-Z0-9_-]+$/.test(cursor)) {
+            throw new Error('invalid cursor encoding');
+        }
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+        if (!Array.isArray(decoded)
+            || decoded.length !== 4
+            || decoded[0] !== 1
+            || typeof decoded[1] !== 'string'
+            || !Number.isFinite(Date.parse(decoded[1]))
+            || typeof decoded[2] !== 'string'
+            || !decoded[2]
+            || decoded[2].length > 128
+            || decoded[3] !== (request.status ?? null)) {
+            throw new Error('invalid cursor payload');
+        }
+        return { cursor: { createdAt: decoded[1], id: decoded[2] }, limit };
+    }
+    catch {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Invalid Agent run page cursor', 400, 'validation_error', 'validation');
+    }
+}
+function encodeRunCursor(run, status) {
+    return Buffer.from(JSON.stringify([1, run.createdAt, run.id, status ?? null]), 'utf8').toString('base64url');
+}
+function isAfterRunCursor(run, cursor) {
+    return run.createdAt < cursor.createdAt || (run.createdAt === cursor.createdAt && run.id < cursor.id);
+}
+function moduleToolDescriptors(moduleHost) {
+    if (!moduleHost) {
+        return [];
+    }
+    return moduleHost.listManifests().modules.flatMap(module => Object.entries(module.transactions).map(([name, transaction]) => ({
+        id: `module:${module.id}:${name}`,
+        title: `${module.displayName}: ${transaction.title}`,
+        description: `${transaction.description || transaction.title} This Authority module transaction may have effects outside workspace rollback.`,
+        inputSchema: moduleTransactionSchema(transaction),
+        ...(transaction.outputSchema ? { outputSchema: structuredClone(transaction.outputSchema) } : {}),
+        execution: 'module',
+        riskLevel: transaction.riskLevel,
+        approvalPolicy: transaction.riskLevel === 'high'
+            ? 'always'
+            : transaction.riskLevel === 'medium' ? 'on-mutation' : 'never',
+        mutatesWorkspace: false,
+        source: { kind: 'module', moduleId: module.id, transactionName: name },
+    })));
+}
+function isPlanSafeTool(tool) {
+    return tool.execution === 'host' && !tool.mutatesWorkspace && tool.approvalPolicy === 'never';
+}
+function moduleTransactionSchema(transaction) {
+    return {
+        type: 'object',
+        properties: {
+            input: transaction.inputSchema ?? { type: 'object' },
+            idempotencyKey: { type: 'string' },
+            options: {
+                type: 'object',
+                properties: { timeoutMs: { type: 'integer', minimum: 1, maximum: 600_000 } },
+                additionalProperties: false,
+            },
+        },
+        ...(transaction.idempotency === 'required' ? { required: ['idempotencyKey'] } : {}),
+        additionalProperties: false,
+    };
+}
+function normalizeBrowserTool(input) {
+    if (!input || typeof input !== 'object') {
+        throw new Error('Browser tool descriptor must be an object');
+    }
+    const id = requiredText(input.id, 'Browser tool id', 64);
+    if (!BROWSER_TOOL_ID_PATTERN.test(id)) {
+        throw new Error(`Browser tool id is invalid: ${id}`);
+    }
+    const title = requiredText(input.title, 'Browser tool title', 200);
+    const description = requiredText(input.description, 'Browser tool description', 2_000);
+    if (!isSchema(input.inputSchema) || (input.outputSchema !== undefined && !isSchema(input.outputSchema))) {
+        throw new Error(`Browser tool schema is invalid: ${id}`);
+    }
+    if (input.riskLevel !== 'low' && input.riskLevel !== 'medium' && input.riskLevel !== 'high') {
+        throw new Error(`Browser tool risk level is invalid: ${id}`);
+    }
+    if (input.approvalPolicy !== 'never' && input.approvalPolicy !== 'on-mutation' && input.approvalPolicy !== 'always') {
+        throw new Error(`Browser tool approval policy is invalid: ${id}`);
+    }
+    if (input.mutatesWorkspace !== false) {
+        throw new Error(`Browser tools cannot declare workspace mutations: ${id}`);
+    }
+    const riskLevel = input.riskLevel === 'high' ? 'high' : 'medium';
+    const approvalPolicy = riskLevel === 'high' || input.approvalPolicy === 'always'
+        ? 'always'
+        : 'on-mutation';
+    return {
+        id,
+        title,
+        description,
+        inputSchema: structuredClone(input.inputSchema),
+        ...(input.outputSchema ? { outputSchema: structuredClone(input.outputSchema) } : {}),
+        riskLevel,
+        approvalPolicy,
+        mutatesWorkspace: false,
+    };
+}
+function isSchema(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+function browserRegistrationKey(userHandle, extensionId, browserInstanceId) {
+    return `${userHandle}\0${extensionId}\0${browserInstanceId}`;
+}
+function browserWaiterKey(runId, callId) {
+    return `${runId}:${callId}`;
+}
+function shortHash(value) {
+    return hashValue(value).slice(0, 24);
+}
+function hashValue(value) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value).digest('hex');
 }
 function appendEvent(detail, type, timestamp, payload) {
     detail.events.push({
@@ -6319,10 +7293,15 @@ function cancelPendingRecords(detail, timestamp, message) {
         }
     }
     for (const invocation of detail.invocations) {
-        if (invocation.status === 'pending' || invocation.status === 'waiting_approval' || invocation.status === 'claimed') {
+        if (invocation.status === 'pending' || invocation.status === 'waiting_approval') {
             invocation.status = 'cancelled';
             invocation.updatedAt = timestamp;
             invocation.error = message;
+        }
+        else if (invocation.status === 'claimed') {
+            invocation.status = 'outcome_unknown';
+            invocation.updatedAt = timestamp;
+            invocation.error = `${message}; the claimed tool may still have produced side effects`;
         }
     }
 }
@@ -6376,6 +7355,19 @@ function normalizeAllowedTools(value, available) {
         }
     }
     return result;
+}
+function assertRunCapacity(activeRuns, userHandle, extensionId) {
+    const userRuns = activeRuns.filter(run => run.callerUserHandle === userHandle);
+    const callerRuns = userRuns.filter(run => run.callerExtensionId === extensionId);
+    if (activeRuns.length >= MAX_ACTIVE_RUNS
+        || userRuns.length >= MAX_ACTIVE_RUNS_PER_USER
+        || callerRuns.length >= MAX_ACTIVE_RUNS_PER_CALLER) {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Agent run queue limit reached', 429, 'limit_exceeded', 'limit', {
+            activeRuns: activeRuns.length,
+            userActiveRuns: userRuns.length,
+            callerActiveRuns: callerRuns.length,
+        });
+    }
 }
 function selectOne(requestedId, items, id, label) {
     if (requestedId !== undefined) {
@@ -6446,15 +7438,15 @@ function requiredText(value, label, maxLength) {
     }
     return result;
 }
-function systemPrompt(workspaceRoot, mode) {
+function systemPrompt(workspaceId, mode) {
     return [
         'You are Authority Agent, an IDE-grade operator for a registered SillyTavern workspace.',
-        `Workspace root: ${workspaceRoot}`,
+        `Registered workspace: ${workspaceId}. All tool paths are relative to its private root.`,
         `Execution mode: ${mode}.`,
         'Inspect relevant files before changing them. Use registered tools for every action and rely on their returned results.',
         'Keep writes narrow. Shell commands checkpoint the workspace except .git and node_modules, and always require approval because those paths and effects outside the workspace cannot be rolled back.',
         mode === 'plan'
-            ? 'Plan mode is read-only: analyze and return a concrete plan without modifying files or running mutating commands.'
+            ? 'Plan mode is read-only: only Authority host inspection tools are available; browser and module tools are excluded because their external side effects cannot be verified or rolled back.'
             : mode === 'ask'
                 ? 'Ask mode pauses before each workspace mutation so the user can approve or deny it.'
                 : 'Auto mode may execute workspace mutations without pausing; every mutation is still checkpointed for rollback.',
@@ -6470,6 +7462,12 @@ function userPrompt(goal, instructions, context) {
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
+}
+function isModuleTimeout(error) {
+    if (!(error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError) || !error.details || typeof error.details !== 'object') {
+        return false;
+    }
+    return error.details.code === 'transaction_timeout';
 }
 function abortError(signal) {
     return signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Agent run cancelled'), { name: 'AbortError' });
@@ -6506,9 +7504,16 @@ const PROFILE_FORMAT = 'authority-agent-profiles/v1';
 const RUN_FORMAT = 'authority-agent-run/v1';
 const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
 const ACTIVE_RUNS = new Set(['queued', 'running', 'waiting_approval', 'waiting_browser_tool']);
+const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+const MAX_STORED_RUN_BYTES = 16 * 1024 * 1024;
+const MAX_RETAINED_TERMINAL_RUNS = 1_000;
+const MAX_RETAINED_TERMINAL_BYTES = 512 * 1024 * 1024;
 class AgentStoreService {
     stateDir;
     now;
+    runSummaries = new Map();
+    runSizes = new Map();
+    runIndexLoaded = false;
     constructor(stateDir, options = {}) {
         this.stateDir = stateDir;
         this.stateDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(stateDir);
@@ -6518,10 +7523,11 @@ class AgentStoreService {
         protectDirectory(this.stateDir);
         protectDirectory(this.runsDir());
         const interrupted = [];
-        for (const run of this.readAllRuns()) {
-            if (!ACTIVE_RUNS.has(run.run.status)) {
+        for (const summary of this.listRuns()) {
+            if (!ACTIVE_RUNS.has(summary.status)) {
                 continue;
             }
+            const run = this.readRun(summary.id);
             const timestamp = this.now();
             run.run.status = 'interrupted';
             run.run.updatedAt = timestamp;
@@ -6536,16 +7542,22 @@ class AgentStoreService {
                 }
             }
             for (const invocation of run.invocations) {
-                if (invocation.status === 'pending' || invocation.status === 'waiting_approval' || invocation.status === 'claimed') {
+                if (invocation.status === 'pending' || invocation.status === 'waiting_approval') {
                     invocation.status = 'cancelled';
                     invocation.updatedAt = timestamp;
                     invocation.error = 'Agent host restarted';
+                }
+                else if (invocation.status === 'claimed') {
+                    invocation.status = 'outcome_unknown';
+                    invocation.updatedAt = timestamp;
+                    invocation.error = 'Agent host restarted while the tool was executing; its side effects are unknown';
                 }
             }
             run.events.push(this.event(run, 'run.interrupted', timestamp, { reason: run.run.error }));
             this.writeRun(run);
             interrupted.push(structuredClone(run.run));
         }
+        this.pruneAutomatically();
         return interrupted;
     }
     upsertProfile(input) {
@@ -6564,6 +7576,9 @@ class AgentStoreService {
         const maxOutputTokens = optionalInteger(input.maxOutputTokens, 'LLM profile maxOutputTokens', 1, 1_000_000);
         const timeoutMs = optionalInteger(input.timeoutMs, 'LLM profile timeoutMs', 1_000, 600_000) ?? 120_000;
         const existing = requestedId ? profiles.profiles.find(profile => profile.id === requestedId) : undefined;
+        if (existing && input.apiKey === undefined && new URL(existing.baseUrl).origin !== new URL(baseUrl).origin) {
+            throw new Error('LLM profile apiKey must be supplied or explicitly cleared when baseUrl origin changes');
+        }
         const timestamp = this.now();
         const apiKey = input.apiKey === undefined
             ? existing?.apiKey ?? null
@@ -6632,9 +7647,10 @@ class AgentStoreService {
         return structuredClone(detail);
     }
     listRuns() {
-        return this.readAllRuns()
-            .map(run => structuredClone(run.run))
-            .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        this.loadRunIndex();
+        return [...this.runSummaries.values()]
+            .map(run => structuredClone(run))
+            .sort(compareRunsNewestFirst);
     }
     updateRun(runId, update) {
         const stored = this.readRun(runId);
@@ -6643,6 +7659,36 @@ class AgentStoreService {
         this.writeRun(stored);
         const { format: _format, ...detail } = stored;
         return structuredClone(detail);
+    }
+    pruneTerminalRuns(retainLatest = MAX_RETAINED_TERMINAL_RUNS, protectedRunIds = []) {
+        if (!Number.isSafeInteger(retainLatest) || retainLatest < 0 || retainLatest > MAX_RETAINED_TERMINAL_RUNS) {
+            throw new Error(`Agent retainLatest must be an integer between 0 and ${MAX_RETAINED_TERMINAL_RUNS}`);
+        }
+        this.loadRunIndex();
+        const protectedIds = new Set(protectedRunIds);
+        const activeRuns = [...this.runSummaries.values()].filter(run => ACTIVE_RUNS.has(run.status)).length;
+        const terminalRuns = [...this.runSummaries.values()]
+            .filter(run => TERMINAL_RUNS.has(run.status))
+            .sort((left, right) => compareNewestFirst(left.updatedAt, left.id, right.updatedAt, right.id));
+        let deletedRuns = 0;
+        let reclaimedBytes = 0;
+        let retainedBytes = 0;
+        let retainedTerminalRuns = 0;
+        for (const run of terminalRuns) {
+            const size = this.runSizes.get(run.id) ?? node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(this.runPath(run.id)).size;
+            if (protectedIds.has(run.id)
+                || (retainedTerminalRuns < retainLatest && retainedBytes + size <= MAX_RETAINED_TERMINAL_BYTES)) {
+                retainedTerminalRuns += 1;
+                retainedBytes += size;
+                continue;
+            }
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().unlinkSync(this.runPath(run.id));
+            this.runSummaries.delete(run.id);
+            this.runSizes.delete(run.id);
+            deletedRuns += 1;
+            reclaimedBytes += size;
+        }
+        return { deletedRuns, reclaimedBytes, retainedTerminalRuns, activeRuns };
     }
     nowIso() {
         return this.now();
@@ -6674,24 +7720,34 @@ class AgentStoreService {
         }
         return profile;
     }
-    readAllRuns() {
+    loadRunIndex() {
+        if (this.runIndexLoaded) {
+            return;
+        }
         (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(this.runsDir());
-        const runs = [];
+        this.runSummaries.clear();
+        this.runSizes.clear();
         for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(this.runsDir(), { withFileTypes: true })) {
             if (!entry.isFile() || !entry.name.endsWith('.json')) {
                 continue;
             }
             try {
-                runs.push(this.readRun(entry.name.slice(0, -5)));
+                const run = this.readRun(entry.name.slice(0, -5));
+                this.runSummaries.set(run.run.id, structuredClone(run.run));
+                this.runSizes.set(run.run.id, node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(this.runPath(run.run.id)).size);
             }
             catch (error) {
                 console.warn(`[authority] Ignoring unreadable Agent run ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
-        return runs;
+        this.runIndexLoaded = true;
     }
     readRun(runId) {
-        const value = readJson(this.runPath(runId), `Agent run ${runId}`);
+        const filePath = this.runPath(runId);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(filePath).size > MAX_STORED_RUN_BYTES) {
+            throw new Error(`Agent run exceeds the ${MAX_STORED_RUN_BYTES} byte limit: ${runId}`);
+        }
+        const value = readJson(filePath, `Agent run ${runId}`);
         if (value.format !== RUN_FORMAT || value.run?.id !== runId || !Array.isArray(value.events)) {
             throw new Error(`Invalid Agent run: ${runId}`);
         }
@@ -6699,8 +7755,22 @@ class AgentStoreService {
     }
     writeRun(run) {
         protectDirectory(this.runsDir());
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.runPath(run.run.id), run);
+        const serialized = `${JSON.stringify(run, null, 2)}\n`;
+        if (Buffer.byteLength(serialized, 'utf8') > MAX_STORED_RUN_BYTES) {
+            throw new Error(`Agent run exceeds the ${MAX_STORED_RUN_BYTES} byte limit: ${run.run.id}`);
+        }
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteFile)(this.runPath(run.run.id), serialized);
         protectFile(this.runPath(run.run.id));
+        this.runSummaries.set(run.run.id, structuredClone(run.run));
+        this.runSizes.set(run.run.id, Buffer.byteLength(serialized, 'utf8'));
+    }
+    pruneAutomatically() {
+        try {
+            this.pruneTerminalRuns();
+        }
+        catch (error) {
+            console.warn(`[authority] Unable to prune terminal Agent runs: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
     profilesPath() {
         return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.stateDir, 'profiles.json');
@@ -6713,6 +7783,16 @@ class AgentStoreService {
         return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.runsDir(), `${runId}.json`);
     }
 }
+function compareRunsNewestFirst(left, right) {
+    return compareNewestFirst(left.createdAt, left.id, right.createdAt, right.id);
+}
+function compareNewestFirst(leftTime, leftId, rightTime, rightId) {
+    if (leftTime !== rightTime)
+        return leftTime > rightTime ? -1 : 1;
+    if (leftId !== rightId)
+        return leftId > rightId ? -1 : 1;
+    return 0;
+}
 function publicProfile(profile) {
     const { apiKey: _apiKey, ...value } = profile;
     return structuredClone(value);
@@ -6723,7 +7803,18 @@ function normalizeBaseUrl(value) {
     if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash) {
         throw new Error('LLM profile baseUrl must be an http(s) URL without credentials, query, or fragment');
     }
+    if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) {
+        throw new Error('LLM profile baseUrl must use HTTPS unless it targets localhost or a loopback address');
+    }
     return url.toString().replace(/\/$/, '');
+}
+function isLoopbackHostname(hostname) {
+    const normalized = hostname.toLowerCase();
+    return normalized === 'localhost'
+        || normalized.endsWith('.localhost')
+        || normalized === '::1'
+        || normalized === '[::1]'
+        || /^127(?:\.\d{1,3}){3}$/.test(normalized);
 }
 function requiredText(value, label, maxLength) {
     if (typeof value !== 'string' || !value.trim()) {
@@ -11594,6 +12685,12 @@ function resolveLimit(isCompanion, manifestValue, hostDefault, hardMax) {
     }
     return isCompanion ? hostDefault : Infinity;
 }
+function limitSource(manifestValue, hardMax) {
+    if (manifestValue === undefined) {
+        return 'host_default';
+    }
+    return manifestValue > hardMax ? 'hard_cap' : 'manifest';
+}
 /**
  * Measure the byte size of a transaction request payload. Phase 3 measures
  * the WHOLE `ModuleTransactionRequest` (input + idempotencyKey + options +
@@ -12076,11 +13173,16 @@ class ModuleHostService {
         const recordCount = this.records.length;
         return recordCount > 0 ? recordCount : this.modules.size;
     }
-    async execute(user, session, moduleId, transactionName, request) {
+    async execute(user, session, moduleId, transactionName, request, externalSignal) {
         validateModuleId(moduleId);
         validateTransactionName(transactionName);
         if (request.options?.dryRun === true) {
             throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Dry-run execution is not supported: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation', { code: 'dry_run_unsupported', moduleId, transaction: transactionName });
+        }
+        const requestedTimeoutMs = request.options?.timeoutMs;
+        if (requestedTimeoutMs !== undefined
+            && (!Number.isSafeInteger(requestedTimeoutMs) || requestedTimeoutMs < 1 || requestedTimeoutMs > _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction timeoutMs must be an integer between 1 and ${_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS}`, 400, 'validation_error', 'validation', { code: 'validation_error', moduleId, transaction: transactionName, timeoutMs: requestedTimeoutMs });
         }
         const module = this.modules.get(moduleId);
         if (!module) {
@@ -12123,7 +13225,7 @@ class ModuleHostService {
         // built-ins that have no byte/timeout expectations. Companion
         // modules always get host defaults (source: 'host_default' or
         // 'hard_cap') because they are untrusted external code.
-        const limits = this.resolveEffectiveLimits(module, transaction);
+        const limits = this.resolveEffectiveLimits(module, transaction, requestedTimeoutMs);
         // Phase 3: enforce request size centrally before dispatching to the
         // handler. Measure the WHOLE request payload (input + idempotencyKey
         // + options + future fields), not just `request.input`, so a
@@ -12138,7 +13240,7 @@ class ModuleHostService {
                 transaction: transactionName,
                 requestBytes,
                 maxRequestBytes: limits.maxRequestBytes,
-                limitSource: limits.source,
+                limitSource: limits.requestSource,
             });
         }
         const permissionTarget = this.resolvePermissionTarget(transaction, moduleId, transactionName);
@@ -12213,7 +13315,7 @@ class ModuleHostService {
         // timeout IS enforced, the host aborts `abortController` when the
         // timer fires so cooperative handlers (built-in and companion) see
         // `signal.aborted === true`.
-        const handlerResult = await this.invokeHandlerWithLimits(handler, ctx, input, request, module, transaction, limits, abortController);
+        const handlerResult = await this.invokeHandlerWithLimits(handler, ctx, input, request, module, transaction, limits, abortController, externalSignal);
         // Phase 3: serialize the response to detect non-serializable results
         // before returning to the HTTP route. JSON.stringify throws on
         // circular references, BigInt, functions, etc.
@@ -12274,7 +13376,7 @@ class ModuleHostService {
                 transaction: transactionName,
                 responseBytes: serializedResponseBytes,
                 maxResponseBytes: limits.maxResponseBytes,
-                limitSource: limits.source,
+                limitSource: limits.responseSource,
             });
         }
         await this.audit.logUsage(user, session.extension.id, `Module transaction executed: ${moduleId}/${transactionName}`, {
@@ -12293,17 +13395,21 @@ class ModuleHostService {
      * get host defaults (64 MiB / 120 s) capped by the hard max (256 MiB /
      * 10 min) because they are untrusted external code.
      */
-    resolveEffectiveLimits(module, transaction) {
+    resolveEffectiveLimits(module, transaction, requestedTimeoutMs) {
         const isCompanion = module.contextMode === 'companion';
         const maxRequestBytes = resolveLimit(isCompanion, transaction.maxRequestBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_DEFAULT_REQUEST_BYTES, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_REQUEST_BYTES);
         const maxResponseBytes = resolveLimit(isCompanion, transaction.maxResponseBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_DEFAULT_RESPONSE_BYTES, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_RESPONSE_BYTES);
-        const timeoutMs = resolveLimit(isCompanion, transaction.timeoutMs, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_DEFAULT_TIMEOUT_MS, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS);
-        const source = (transaction.maxRequestBytes !== undefined
-            || transaction.maxResponseBytes !== undefined
-            || transaction.timeoutMs !== undefined)
-            ? 'manifest'
-            : isCompanion ? 'host_default' : 'host_default';
-        return { maxRequestBytes, maxResponseBytes, timeoutMs, source };
+        const configuredTimeoutMs = resolveLimit(isCompanion, transaction.timeoutMs, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_DEFAULT_TIMEOUT_MS, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS);
+        const requestSource = limitSource(transaction.maxRequestBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_REQUEST_BYTES);
+        const responseSource = limitSource(transaction.maxResponseBytes, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_RESPONSE_BYTES);
+        let timeoutSource = limitSource(transaction.timeoutMs, _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS);
+        const timeoutMs = requestedTimeoutMs === undefined
+            ? configuredTimeoutMs
+            : Math.min(configuredTimeoutMs, requestedTimeoutMs);
+        if (requestedTimeoutMs !== undefined && requestedTimeoutMs <= configuredTimeoutMs) {
+            timeoutSource = 'request';
+        }
+        return { maxRequestBytes, maxResponseBytes, timeoutMs, requestSource, responseSource, timeoutSource };
     }
     /**
      * Invoke the handler with a timeout race. Phase 3 owns timeout
@@ -12324,47 +13430,57 @@ class ModuleHostService {
      * may have retained for post-processing (e.g. a companion handler that
      * stored the signal on a long-lived object).
      */
-    async invokeHandlerWithLimits(handler, ctx, input, request, module, transaction, limits, abortController) {
-        if (limits.timeoutMs === Infinity) {
-            // No timeout: invoke directly. The signal on ctx is never
-            // aborted. Handler failures still surface as
-            // transaction_handler_failed with a sanitized message.
-            try {
-                return await handler(ctx, input, request);
-            }
-            catch (error) {
-                throw this.wrapHandlerError(error, module.manifest.id, transaction.name);
-            }
+    async invokeHandlerWithLimits(handler, ctx, input, request, module, transaction, limits, abortController, externalSignal) {
+        if (externalSignal?.aborted) {
+            throw abortSignalError(externalSignal);
         }
         let timer;
-        const timeoutPromise = new Promise((_, reject) => {
-            timer = setTimeout(() => {
-                // Abort the controller FIRST so cooperative handlers
-                // observing `signal.aborted` see the abort event before
-                // the host rejects the race.
-                abortController.abort();
-                reject(new ModuleHandlerTimeoutError(module.manifest.id, transaction.name, limits.timeoutMs));
-            }, limits.timeoutMs);
-            if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
-                timer.unref();
-            }
-        });
+        let abortListener;
+        let timedOut = false;
+        const contenders = [
+            Promise.resolve().then(() => handler(ctx, input, request)),
+        ];
+        if (limits.timeoutMs !== Infinity) {
+            contenders.push(new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    timedOut = true;
+                    const timeoutError = new ModuleHandlerTimeoutError(module.manifest.id, transaction.name, limits.timeoutMs);
+                    abortController.abort(timeoutError);
+                    reject(timeoutError);
+                }, limits.timeoutMs);
+                if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+                    timer.unref();
+                }
+            }));
+        }
+        if (externalSignal) {
+            contenders.push(new Promise((_, reject) => {
+                abortListener = () => {
+                    abortController.abort(externalSignal.reason);
+                    reject(abortSignalError(externalSignal));
+                };
+                externalSignal.addEventListener('abort', abortListener, { once: true });
+                if (externalSignal.aborted) {
+                    abortListener();
+                }
+            }));
+        }
         try {
-            const result = await Promise.race([
-                handler(ctx, input, request),
-                timeoutPromise,
-            ]);
+            const result = await Promise.race(contenders);
             return result;
         }
         catch (error) {
-            if (error instanceof ModuleHandlerTimeoutError) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(error.message, 504, 'timeout', 'timeout', {
+            if (timedOut || error instanceof ModuleHandlerTimeoutError) {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module transaction timed out: ${module.manifest.id}/${transaction.name}`, 504, 'timeout', 'timeout', {
                     code: 'transaction_timeout',
                     moduleId: module.manifest.id,
                     transaction: transaction.name,
                     timeoutMs: limits.timeoutMs,
-                    limitSource: limits.source,
+                    limitSource: limits.timeoutSource,
                 });
+            }
+            if (externalSignal?.aborted) {
+                throw abortSignalError(externalSignal);
             }
             throw this.wrapHandlerError(error, module.manifest.id, transaction.name);
         }
@@ -12376,6 +13492,9 @@ class ModuleHostService {
             // downstream code that did not expect an abort.
             if (timer !== undefined) {
                 clearTimeout(timer);
+            }
+            if (abortListener) {
+                externalSignal?.removeEventListener('abort', abortListener);
             }
         }
     }
@@ -12485,6 +13604,12 @@ class ModuleHostService {
             source,
         };
     }
+}
+function abortSignalError(signal) {
+    if (signal.reason instanceof Error) {
+        return signal.reason;
+    }
+    return Object.assign(new Error('Module transaction cancelled'), { name: 'AbortError' });
 }
 
 
@@ -13284,7 +14409,9 @@ class PermissionService {
             || declaredPermissions.http?.allow?.length
             || declaredPermissions.jobs?.background
             || declaredPermissions.events?.channels
-            || declaredPermissions.modules?.execute);
+            || declaredPermissions.modules?.execute
+            || declaredPermissions.agent?.run
+            || declaredPermissions.agent?.browser);
     }
     isDeclaredPermissionAllowed(declaredPermissions, resource, target) {
         switch (resource) {
@@ -13306,6 +14433,10 @@ class PermissionService {
                 return this.matchesDeclaredTarget(declaredPermissions.events?.channels, resource, target);
             case 'module.execute':
                 return this.matchesDeclaredTarget(declaredPermissions.modules?.execute, resource, target);
+            case 'agent.run':
+                return this.matchesDeclaredTarget(declaredPermissions.agent?.run, resource, target);
+            case 'agent.browser':
+                return this.matchesDeclaredTarget(declaredPermissions.agent?.browser, resource, target);
             default:
                 return false;
         }
@@ -16979,10 +18110,16 @@ class WorkspaceHistoryService {
             if (input.defaultRef !== undefined && typeof input.defaultRef !== 'string') {
                 throw validationError('Workspace defaultRef must be a string');
             }
+            const allowedUserHandles = normalizeAllowedUserHandles(input.allowedUserHandles);
             const rootPath = this.resolveWorkspaceRoot(input.rootPath);
             const registry = this.readRegistry();
             const existingByRoot = registry.workspaces.find(workspace => samePath(workspace.rootPath, rootPath));
             if (existingByRoot) {
+                if (input.allowedUserHandles !== undefined) {
+                    existingByRoot.allowedUserHandles = allowedUserHandles;
+                    existingByRoot.updatedAt = this.now();
+                    this.writeRegistry(registry);
+                }
                 return this.withCurrentHead(existingByRoot);
             }
             const id = input.id?.trim() || node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
@@ -17001,6 +18138,7 @@ class WorkspaceHistoryService {
                 id,
                 displayName: input.displayName?.trim() || node_path__WEBPACK_IMPORTED_MODULE_3___default().basename(rootPath),
                 rootPath,
+                allowedUserHandles,
                 defaultRef,
                 headCommitId: null,
                 createdAt: timestamp,
@@ -17025,6 +18163,14 @@ class WorkspaceHistoryService {
     }
     getWorkspace(workspaceId) {
         return this.withCurrentHead(this.getStoredWorkspace(workspaceId));
+    }
+    assertWorkspaceAccess(workspaceId, userHandle, isAdmin) {
+        const workspace = this.getWorkspace(workspaceId);
+        const normalizedUserHandle = userHandle.trim();
+        if (!isAdmin && !workspace.allowedUserHandles.includes(normalizedUserHandle)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`Workspace not found: ${workspaceId}`, 404, 'validation_error', 'validation');
+        }
+        return workspace;
     }
     async checkpoint(workspaceId, request, actor) {
         return await this.withLock(`workspace-${workspaceId}`, async () => {
@@ -17902,6 +19048,9 @@ class WorkspaceHistoryService {
             throw new Error('Invalid workspace registry');
         }
         for (const workspace of registry.workspaces) {
+            if (workspace.allowedUserHandles === undefined) {
+                workspace.allowedUserHandles = [];
+            }
             validateWorkspaceRecord(workspace);
         }
         return registry;
@@ -18451,11 +19600,29 @@ function validateWorkspaceRecord(workspace) {
         || !workspace.displayName.trim()
         || typeof workspace.rootPath !== 'string'
         || !node_path__WEBPACK_IMPORTED_MODULE_3___default().isAbsolute(workspace.rootPath)
+        || !Array.isArray(workspace.allowedUserHandles)
+        || workspace.allowedUserHandles.length > 256
+        || workspace.allowedUserHandles.some(userHandle => typeof userHandle !== 'string' || !userHandle.trim() || userHandle.length > 200)
         || (workspace.headCommitId !== null && !OID_PATTERN.test(workspace.headCommitId))
         || typeof workspace.createdAt !== 'string'
         || typeof workspace.updatedAt !== 'string') {
         throw new Error(`Invalid workspace registry entry: ${workspace.id}`);
     }
+}
+function normalizeAllowedUserHandles(value) {
+    if (value === undefined) {
+        return [];
+    }
+    if (!Array.isArray(value) || value.length > 256) {
+        throw validationError('Workspace allowedUserHandles must be an array of at most 256 user handles');
+    }
+    const handles = value.map(userHandle => {
+        if (typeof userHandle !== 'string' || !userHandle.trim() || userHandle.trim().length > 200) {
+            throw validationError('Workspace allowedUserHandles contains an invalid user handle');
+        }
+        return userHandle.trim();
+    });
+    return [...new Set(handles)].sort((left, right) => left.localeCompare(right));
 }
 function isTreeKind(value) {
     return value === 'blob' || value === 'tree' || value === 'symlink';

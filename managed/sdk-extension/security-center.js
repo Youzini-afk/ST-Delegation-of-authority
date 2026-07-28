@@ -2,6 +2,7 @@ import { authorityRequest } from './api.js';
 import { clearChildren, escapeHtml, formatDate } from './dom.js';
 import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseAssetSections, renderDatabaseGroupTable, renderGrantSettingsRows, renderJobTable, renderMetricTile, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
 import { RESOURCE_OPTIONS, SECURITY_CENTER_CONFIG, STATUS_OPTIONS, } from './security-center/constants.js';
+import { isActiveAgentRun, renderAgentRunDetail, renderAgentWorkbench, } from './security-center/agent-workbench.js';
 import { formatBytes, getCoreStateLabel, getDeclaredPermissionLabels, getExtensionRiskLevel, getInstallStatusLabel, getInstallTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, sortByTimestampDesc, } from './security-center/formatters.js';
 import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, renderStManagerBridgeSection, ST_MANAGER_RESOURCE_OPTIONS, } from './security-center/st-manager-bridge.js';
 import { buildStManagerControlPayload, normalizeStManagerControlConfig, renderStManagerControlSection, } from './security-center/st-manager-control.js';
@@ -15,7 +16,7 @@ const DEFAULT_OVERVIEW_SECTION_STATE = {
     capabilityMatrix: true,
     recentActivity: true,
 };
-const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'policies', 'updates'];
+const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates'];
 function isValidCenterTab(value) {
     return typeof value === 'string' && PRIMARY_TAB_NAMES.includes(value);
 }
@@ -32,6 +33,9 @@ class SecurityCenterView {
     root;
     focusExtensionId;
     state;
+    agentClientPromise = null;
+    agentPollTimer = null;
+    agentRefreshGeneration = 0;
     constructor(root, focusExtensionId) {
         this.root = root;
         this.focusExtensionId = focusExtensionId;
@@ -49,6 +53,26 @@ class SecurityCenterView {
             overviewSectionState: { ...DEFAULT_OVERVIEW_SECTION_STATE },
             extensionFilter: '',
             policies: null,
+            agent: {
+                loaded: false,
+                loading: false,
+                busy: false,
+                error: null,
+                profiles: [],
+                tools: [],
+                workspaces: [],
+                runs: {
+                    runs: [],
+                    page: { nextCursor: null, limit: 50, hasMore: false, totalCount: 0 },
+                },
+                selectedProfileId: null,
+                selectedWorkspaceId: null,
+                selectedRun: null,
+                workspaceStatus: null,
+                workspaceCommits: [],
+                workspaceDiff: null,
+                runStatus: '',
+            },
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
             packageActionInProgress: false,
@@ -102,6 +126,11 @@ class SecurityCenterView {
             const refreshButton = target.closest('[data-action="refresh"]');
             if (refreshButton) {
                 void this.refresh();
+                return;
+            }
+            const agentAction = target.closest('[data-action^="agent-"]');
+            if (agentAction) {
+                this.handleAgentAction(agentAction);
                 return;
             }
             const extensionButton = target.closest('.authority-extension-item[data-extension-id]');
@@ -310,6 +339,16 @@ class SecurityCenterView {
             if (target.matches('[data-policy-editor-extension]')) {
                 this.state.policyEditorExtensionId = target.value || null;
                 void this.renderPoliciesSection();
+                return;
+            }
+            if (target.matches('[data-role="agent-workspace-select"]')) {
+                this.state.agent.selectedWorkspaceId = target.value || null;
+                void this.refreshSelectedAgentWorkspace();
+                return;
+            }
+            if (target.matches('[data-role="agent-run-status"]')) {
+                this.state.agent.runStatus = target.value;
+                void this.refreshAgentWorkbench();
             }
         });
     }
@@ -362,8 +401,11 @@ class SecurityCenterView {
                 this.state.stManagerControlConfig = null;
                 this.state.stManagerControlBackups = [];
             }
-            if (!this.state.isAdmin && (this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
+            if (!this.state.isAdmin && (this.state.selectedTab === 'agent' || this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
                 this.state.selectedTab = 'overview';
+            }
+            if (this.state.isAdmin && this.state.selectedTab === 'agent') {
+                await this.refreshAgentWorkbench();
             }
         }
         catch (error) {
@@ -373,6 +415,420 @@ class SecurityCenterView {
             this.state.loading = false;
             void this.render();
         }
+    }
+    handleAgentAction(element) {
+        switch (element.dataset.action) {
+            case 'agent-refresh':
+                void this.refreshAgentWorkbench();
+                return;
+            case 'agent-create-run':
+                void this.createAgentRun();
+                return;
+            case 'agent-select-run':
+                if (element.dataset.runId)
+                    void this.selectAgentRun(element.dataset.runId);
+                return;
+            case 'agent-cancel-run':
+                if (element.dataset.runId)
+                    void this.cancelAgentRun(element.dataset.runId);
+                return;
+            case 'agent-resolve-approval':
+                if (element.dataset.runId && element.dataset.approvalId) {
+                    void this.resolveAgentApproval(element.dataset.runId, element.dataset.approvalId, element.dataset.decision === 'approve' ? 'approve' : 'deny');
+                }
+                return;
+            case 'agent-load-more-runs':
+                void this.loadMoreAgentRuns();
+                return;
+            case 'agent-prune-runs':
+                void this.pruneAgentRuns();
+                return;
+            case 'agent-edit-profile':
+                this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
+                void this.renderAgentSection();
+                return;
+            case 'agent-new-profile':
+                this.state.agent.selectedProfileId = null;
+                void this.renderAgentSection();
+                return;
+            case 'agent-save-profile':
+                void this.saveAgentProfile();
+                return;
+            case 'agent-delete-profile':
+                if (element.dataset.profileId)
+                    void this.deleteAgentProfile(element.dataset.profileId);
+                return;
+            case 'agent-register-workspace':
+                void this.registerAgentWorkspace();
+                return;
+            case 'agent-workspace-refresh':
+                void this.refreshSelectedAgentWorkspace();
+                return;
+            case 'agent-workspace-checkpoint':
+                void this.checkpointAgentWorkspace();
+                return;
+            case 'agent-workspace-rollback':
+                if (element.dataset.commitId)
+                    void this.rollbackAgentWorkspace(element.dataset.commitId);
+                return;
+            case 'agent-workspace-resume':
+                void this.resumeAgentWorkspaceRollback();
+        }
+    }
+    async getAgentClient() {
+        this.agentClientPromise ??= import('./sdk.js')
+            .then(async ({ AuthoritySDK }) => await AuthoritySDK.init(SECURITY_CENTER_CONFIG))
+            .catch(error => {
+            this.agentClientPromise = null;
+            throw error;
+        });
+        return await this.agentClientPromise;
+    }
+    async refreshAgentWorkbench(options = {}) {
+        if (!this.state.isAdmin) {
+            return;
+        }
+        const generation = ++this.agentRefreshGeneration;
+        const runStatus = this.state.agent.runStatus;
+        this.state.agent.loading = true;
+        this.state.agent.error = null;
+        void this.renderAgentSection();
+        try {
+            const client = await this.getAgentClient();
+            const runRequest = {
+                page: { ...(options.cursor ? { cursor: options.cursor } : {}), limit: 50 },
+                ...(runStatus ? { status: runStatus } : {}),
+            };
+            const [profiles, tools, workspaces, runs] = await Promise.all([
+                client.agent.admin.profiles.list(),
+                client.agent.listTools(),
+                client.agent.admin.workspaces.list(),
+                client.agent.admin.runs.listPage(runRequest),
+            ]);
+            if (generation !== this.agentRefreshGeneration)
+                return;
+            const selectedProfileId = profiles.some(profile => profile.id === this.state.agent.selectedProfileId)
+                ? this.state.agent.selectedProfileId
+                : null;
+            const selectedWorkspaceId = workspaces.some(workspace => workspace.id === this.state.agent.selectedWorkspaceId)
+                ? this.state.agent.selectedWorkspaceId
+                : workspaces[0]?.id ?? null;
+            const selectedRunId = this.state.agent.selectedRun?.run.id;
+            const [workspaceResult, selectedRun] = await Promise.all([
+                selectedWorkspaceId
+                    ? this.fetchAgentWorkspace(client, selectedWorkspaceId)
+                        .then(value => ({ value, error: null }))
+                        .catch(error => ({ value: null, error }))
+                    : Promise.resolve({ value: null, error: null }),
+                selectedRunId
+                    ? client.agent.admin.runs.get(selectedRunId).catch(() => null)
+                    : Promise.resolve(null),
+            ]);
+            if (generation !== this.agentRefreshGeneration)
+                return;
+            this.state.agent.profiles = profiles;
+            this.state.agent.tools = tools;
+            this.state.agent.workspaces = workspaces;
+            this.state.agent.runs = options.append
+                ? { runs: mergeAgentRuns(this.state.agent.runs.runs, runs.runs), page: runs.page }
+                : runs;
+            this.state.agent.selectedProfileId = selectedProfileId;
+            this.state.agent.selectedWorkspaceId = selectedWorkspaceId;
+            this.state.agent.workspaceStatus = workspaceResult.value?.status ?? null;
+            this.state.agent.workspaceCommits = workspaceResult.value?.commits ?? [];
+            this.state.agent.workspaceDiff = workspaceResult.value?.diff ?? null;
+            this.state.agent.selectedRun = selectedRun;
+            this.state.agent.error = workspaceResult.error
+                ? `工作区状态读取失败：${workspaceResult.error instanceof Error ? workspaceResult.error.message : String(workspaceResult.error)}`
+                : null;
+            this.state.agent.loaded = true;
+        }
+        catch (error) {
+            if (generation === this.agentRefreshGeneration) {
+                this.state.agent.error = error instanceof Error ? error.message : String(error);
+            }
+        }
+        finally {
+            if (generation !== this.agentRefreshGeneration)
+                return;
+            this.state.agent.loading = false;
+            void this.renderAgentSection();
+            this.scheduleAgentPoll();
+        }
+    }
+    async fetchAgentWorkspace(client, workspaceId) {
+        const [status, history] = await Promise.all([
+            client.agent.admin.workspaces.status(workspaceId),
+            client.agent.admin.workspaces.commits(workspaceId, 100),
+        ]);
+        const diff = history.commits.length > 1
+            ? await client.agent.admin.workspaces.diff(workspaceId, {
+                from: history.commits[1].id,
+                to: history.commits[0].id,
+            })
+            : null;
+        return { status, commits: history.commits, diff };
+    }
+    async refreshSelectedAgentWorkspace() {
+        if (!this.state.isAdmin || this.state.agent.busy) {
+            return;
+        }
+        this.state.agent.busy = true;
+        void this.renderAgentSection();
+        try {
+            const workspaceId = this.state.agent.selectedWorkspaceId;
+            const snapshot = workspaceId
+                ? await this.fetchAgentWorkspace(await this.getAgentClient(), workspaceId)
+                : null;
+            this.state.agent.workspaceStatus = snapshot?.status ?? null;
+            this.state.agent.workspaceCommits = snapshot?.commits ?? [];
+            this.state.agent.workspaceDiff = snapshot?.diff ?? null;
+            this.state.agent.error = null;
+        }
+        catch (error) {
+            this.reportAgentError(error);
+        }
+        finally {
+            this.state.agent.busy = false;
+            void this.renderAgentSection();
+        }
+    }
+    scheduleAgentPoll() {
+        if (this.agentPollTimer !== null) {
+            window.clearTimeout(this.agentPollTimer);
+            this.agentPollTimer = null;
+        }
+        const selected = this.state.agent.selectedRun;
+        if (!selected || !isActiveAgentRun(selected.run.status) || this.state.selectedTab !== 'agent' || !this.root.isConnected) {
+            return;
+        }
+        this.agentPollTimer = window.setTimeout(() => void this.pollSelectedAgentRun(), 1_500);
+    }
+    async pollSelectedAgentRun() {
+        this.agentPollTimer = null;
+        const selected = this.state.agent.selectedRun;
+        if (!selected || !this.root.isConnected || this.state.agent.busy) {
+            this.scheduleAgentPoll();
+            return;
+        }
+        const runId = selected.run.id;
+        try {
+            const detail = await (await this.getAgentClient()).agent.admin.runs.get(runId);
+            if (this.state.agent.selectedRun?.run.id !== runId)
+                return;
+            this.state.agent.selectedRun = detail;
+            this.state.agent.runs.runs = mergeAgentRuns(this.state.agent.runs.runs, [detail.run]);
+            this.renderSelectedAgentRunDetail();
+        }
+        catch {
+        }
+        finally {
+            this.scheduleAgentPoll();
+        }
+    }
+    renderSelectedAgentRunDetail() {
+        const container = this.root.querySelector('[data-role="agent-run-detail"]');
+        if (container) {
+            container.innerHTML = renderAgentRunDetail(this.state.agent.selectedRun, this.state.agent.busy);
+        }
+    }
+    async performAgentMutation(action, refresh = true) {
+        if (!this.state.isAdmin || this.state.agent.busy) {
+            return;
+        }
+        this.state.agent.busy = true;
+        this.state.agent.error = null;
+        void this.renderAgentSection();
+        try {
+            const message = await action(await this.getAgentClient());
+            if (refresh) {
+                await this.refreshAgentWorkbench();
+            }
+            if (message) {
+                toastr.success(message, TOAST_TITLE);
+            }
+        }
+        catch (error) {
+            this.reportAgentError(error);
+        }
+        finally {
+            this.state.agent.busy = false;
+            void this.renderAgentSection();
+            this.scheduleAgentPoll();
+        }
+    }
+    async createAgentRun() {
+        const goal = this.agentFieldValue('agent-run-goal');
+        const instructions = this.agentFieldValue('agent-run-instructions');
+        const workspaceId = this.agentFieldValue('agent-run-workspace');
+        const profileId = this.agentFieldValue('agent-run-profile');
+        const mode = this.agentFieldValue('agent-run-mode');
+        const maxSteps = Number(this.agentFieldValue('agent-run-max-steps'));
+        const request = {
+            goal,
+            workspaceId,
+            ...(profileId ? { profileId } : {}),
+            mode,
+            maxSteps,
+            ...(instructions ? { instructions } : {}),
+        };
+        await this.performAgentMutation(async (client) => {
+            const run = await client.agent.createRun(request);
+            this.state.agent.selectedRun = await client.agent.admin.runs.get(run.id);
+            this.clearAgentFields('agent-run-goal', 'agent-run-instructions');
+            return 'Agent 已启动';
+        });
+    }
+    async selectAgentRun(runId) {
+        if (this.state.agent.busy) {
+            return;
+        }
+        this.state.agent.busy = true;
+        void this.renderAgentSection();
+        try {
+            this.state.agent.selectedRun = await (await this.getAgentClient()).agent.admin.runs.get(runId);
+            this.state.agent.error = null;
+        }
+        catch (error) {
+            this.reportAgentError(error);
+        }
+        finally {
+            this.state.agent.busy = false;
+            void this.renderAgentSection();
+            this.scheduleAgentPoll();
+        }
+    }
+    async cancelAgentRun(runId) {
+        if (!window.confirm('取消这次 Agent 运行？已完成的工具副作用不会自动撤销；需要时请使用工作区回退。')) {
+            return;
+        }
+        await this.performAgentMutation(async (client) => {
+            await client.agent.admin.runs.cancel(runId);
+            return 'Agent 运行已取消';
+        });
+    }
+    async resolveAgentApproval(runId, approvalId, decision) {
+        await this.performAgentMutation(async (client) => {
+            await client.agent.admin.runs.resolveApproval(runId, approvalId, { decision });
+            return decision === 'approve' ? '已批准工具调用' : '已拒绝工具调用';
+        });
+    }
+    async loadMoreAgentRuns() {
+        const cursor = this.state.agent.runs.page.nextCursor;
+        if (!cursor || this.state.agent.loading) {
+            return;
+        }
+        await this.refreshAgentWorkbench({ cursor, append: true });
+    }
+    async pruneAgentRuns() {
+        if (!window.confirm('删除较旧的终态 Agent 记录，只保留最近 200 条？进行中的 Run 与工作区版本历史不会被删除。')) {
+            return;
+        }
+        await this.performAgentMutation(async (client) => {
+            const result = await client.agent.admin.runs.prune({ retainLatest: 200 });
+            return `已删除 ${result.deletedRuns} 条记录，回收 ${formatBytes(result.reclaimedBytes)}`;
+        });
+    }
+    async saveAgentProfile() {
+        const id = this.agentFieldValue('agent-profile-id');
+        const apiKey = this.agentFieldValue('agent-profile-api-key');
+        const input = {
+            ...(id ? { id } : {}),
+            displayName: this.agentFieldValue('agent-profile-name'),
+            provider: 'openai-compatible',
+            baseUrl: this.agentFieldValue('agent-profile-base-url'),
+            model: this.agentFieldValue('agent-profile-model'),
+            ...(apiKey ? { apiKey } : {}),
+            temperature: Number(this.agentFieldValue('agent-profile-temperature')),
+            maxOutputTokens: Number(this.agentFieldValue('agent-profile-max-tokens')),
+            timeoutMs: Number(this.agentFieldValue('agent-profile-timeout')),
+        };
+        await this.performAgentMutation(async (client) => {
+            const profile = await client.agent.admin.profiles.upsert(input);
+            this.state.agent.selectedProfileId = profile.id;
+            this.clearAgentFields('agent-profile-api-key');
+            return 'LLM 配置已保存';
+        });
+    }
+    async deleteAgentProfile(profileId) {
+        if (!window.confirm('删除这项 LLM 配置？正在使用它的 Agent Run 会阻止删除。')) {
+            return;
+        }
+        await this.performAgentMutation(async (client) => {
+            await client.agent.admin.profiles.delete(profileId);
+            if (this.state.agent.selectedProfileId === profileId) {
+                this.state.agent.selectedProfileId = null;
+            }
+            return 'LLM 配置已删除';
+        });
+    }
+    async registerAgentWorkspace() {
+        const users = this.agentFieldValue('agent-workspace-users')
+            .split(',')
+            .map(value => value.trim())
+            .filter(Boolean);
+        const id = this.agentFieldValue('agent-workspace-id');
+        const displayName = this.agentFieldValue('agent-workspace-name');
+        const request = {
+            ...(id ? { id } : {}),
+            ...(displayName ? { displayName } : {}),
+            rootPath: this.agentFieldValue('agent-workspace-root'),
+            ...(users.length > 0 ? { allowedUserHandles: users } : {}),
+        };
+        await this.performAgentMutation(async (client) => {
+            const workspace = await client.agent.admin.workspaces.register(request);
+            this.state.agent.selectedWorkspaceId = workspace.id;
+            this.clearAgentFields('agent-workspace-name', 'agent-workspace-root', 'agent-workspace-id', 'agent-workspace-users');
+            return 'Agent 工作区已注册';
+        });
+    }
+    async checkpointAgentWorkspace() {
+        const workspaceId = this.state.agent.selectedWorkspaceId;
+        if (!workspaceId)
+            return;
+        const message = this.agentFieldValue('agent-checkpoint-message') || 'Manual checkpoint from Agent Studio';
+        await this.performAgentMutation(async (client) => {
+            const result = await client.agent.admin.workspaces.checkpoint(workspaceId, { message });
+            return `检查点已建立，记录 ${result.changedPaths} 个路径`;
+        });
+    }
+    async rollbackAgentWorkspace(commitId) {
+        const workspaceId = this.state.agent.selectedWorkspaceId;
+        if (!workspaceId || !window.confirm(`将工作区回退到 ${commitId.slice(0, 12)}？如果当前有未提交变更，操作会停止并显示冲突。`)) {
+            return;
+        }
+        await this.performAgentMutation(async (client) => {
+            const result = await client.agent.admin.workspaces.rollback(workspaceId, {
+                targetCommitId: commitId,
+                operationId: globalThis.crypto.randomUUID(),
+            });
+            return `工作区已回退，恢复 ${result.changedPaths} 个路径`;
+        });
+    }
+    async resumeAgentWorkspaceRollback() {
+        const workspaceId = this.state.agent.selectedWorkspaceId;
+        if (!workspaceId || !window.confirm('继续上次中断的工作区回退？')) {
+            return;
+        }
+        await this.performAgentMutation(async (client) => {
+            const result = await client.agent.admin.workspaces.resumeRollback(workspaceId);
+            return `中断的回退已完成，恢复 ${result.changedPaths} 个路径`;
+        });
+    }
+    agentFieldValue(role) {
+        return this.root.querySelector(`[data-role="${role}"]`)?.value.trim() ?? '';
+    }
+    clearAgentFields(...roles) {
+        for (const role of roles) {
+            const field = this.root.querySelector(`[data-role="${role}"]`);
+            if (field)
+                field.value = '';
+        }
+    }
+    reportAgentError(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.state.agent.error = message;
+        toastr.error(getSystemMessageLabel(message), TOAST_TITLE);
     }
     async updateStManagerBridgeConfig(options = {}) {
         if (!this.state.isAdmin || this.state.stManagerBridgeActionInProgress) {
@@ -979,7 +1435,7 @@ class SecurityCenterView {
         if (!PRIMARY_TAB_NAMES.includes(tab)) {
             return;
         }
-        if ((tab === 'policies' || tab === 'updates') && !this.state.isAdmin) {
+        if ((tab === 'agent' || tab === 'policies' || tab === 'updates') && !this.state.isAdmin) {
             return;
         }
         if (this.state.selectedTab === tab) {
@@ -988,6 +1444,18 @@ class SecurityCenterView {
         this.state.selectedTab = tab;
         this.renderTabs();
         this.toggleSections();
+        if (tab === 'agent') {
+            if (!this.state.agent.loaded) {
+                void this.refreshAgentWorkbench();
+            }
+            else {
+                this.scheduleAgentPoll();
+            }
+        }
+        else if (this.agentPollTimer !== null) {
+            window.clearTimeout(this.agentPollTimer);
+            this.agentPollTimer = null;
+        }
     }
     async render() {
         this.renderHeader();
@@ -997,6 +1465,7 @@ class SecurityCenterView {
         await this.renderDetailSection();
         await this.renderDatabasesSection();
         await this.renderActivitySection();
+        await this.renderAgentSection();
         await this.renderPoliciesSection();
         await this.renderUpdatesSection();
         this.toggleSections();
@@ -1055,7 +1524,7 @@ class SecurityCenterView {
             }
             const isActive = tabName === this.state.selectedTab;
             tab.classList.toggle('authority-tab--active', isActive);
-            tab.hidden = (tabName === 'policies' || tabName === 'updates') && !this.state.isAdmin;
+            tab.hidden = (tabName === 'agent' || tabName === 'policies' || tabName === 'updates') && !this.state.isAdmin;
             tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
             tab.setAttribute('tabindex', isActive ? '0' : '-1');
         }
@@ -1502,6 +1971,37 @@ class SecurityCenterView {
                 </div>
             </div>
         `;
+    }
+    async renderAgentSection() {
+        const container = this.root.querySelector('[data-role="agent-view"]');
+        if (!container) {
+            return;
+        }
+        const draft = this.captureAgentFormDraft(container);
+        container.innerHTML = this.state.isAdmin
+            ? renderAgentWorkbench(this.state.agent)
+            : '<div class="authority-empty">只有管理员可以使用 Agent 工作台。</div>';
+        this.restoreAgentFormDraft(container, draft);
+    }
+    captureAgentFormDraft(container) {
+        const values = new Map();
+        for (const field of container.querySelectorAll('[data-role^="agent-"]')) {
+            if (field.dataset.role)
+                values.set(field.dataset.role, field.value);
+        }
+        return { profileId: values.get('agent-profile-id') ?? '', values };
+    }
+    restoreAgentFormDraft(container, draft) {
+        const selectedProfileId = this.state.agent.selectedProfileId ?? '';
+        for (const field of container.querySelectorAll('[data-role^="agent-"]')) {
+            const role = field.dataset.role;
+            const value = role ? draft.values.get(role) : undefined;
+            if (value === undefined || (role.startsWith('agent-profile-') && draft.profileId !== selectedProfileId))
+                continue;
+            if (field instanceof HTMLSelectElement && !Array.from(field.options).some(option => option.value === value))
+                continue;
+            field.value = value;
+        }
     }
     async renderPoliciesSection() {
         const container = this.root.querySelector('[data-role="policies-view"]');
@@ -2158,6 +2658,13 @@ class SecurityCenterView {
         }
         return this.state.details.get(this.state.selectedExtensionId) ?? null;
     }
+}
+function mergeAgentRuns(existing, incoming) {
+    const runs = new Map(existing.map(run => [run.id, run]));
+    for (const run of incoming) {
+        runs.set(run.id, run);
+    }
+    return [...runs.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 function base64ToBytes(content) {
     const binary = atob(content);

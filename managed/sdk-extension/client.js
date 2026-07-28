@@ -32,6 +32,9 @@ export function isAuthorityPermissionError(error) {
 function isTerminalJobStatus(status) {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
+function isTerminalAgentRunStatus(status) {
+    return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
+}
 function isJobRecord(value) {
     return typeof value === 'object'
         && value !== null
@@ -41,23 +44,23 @@ function isJobRecord(value) {
 function getJobSubscriptionSnapshot(job) {
     return JSON.stringify(job);
 }
-function getJobWaitPollInterval(value) {
+function getWaitPollInterval(value, subject) {
     if (value == null) {
         return 1000;
     }
     if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
         return value;
     }
-    throw new Error('Authority job pollIntervalMs must be a positive safe integer');
+    throw new Error(`Authority ${subject} pollIntervalMs must be a positive safe integer`);
 }
-function getOptionalJobWaitTimeout(value) {
+function getOptionalWaitTimeout(value, subject) {
     if (value == null) {
         return null;
     }
     if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
         return value;
     }
-    throw new Error('Authority job timeoutMs must be a positive safe integer');
+    throw new Error(`Authority ${subject} timeoutMs must be a positive safe integer`);
 }
 function getSqlPageAllPageSize(value) {
     if (value == null) {
@@ -77,15 +80,15 @@ function getOptionalMaxPages(value) {
     }
     throw new Error('Authority sql.pageAll maxPages must be a positive safe integer');
 }
-function throwIfAborted(signal) {
+function throwIfAborted(signal, subject) {
     if (signal?.aborted) {
-        throw new Error('Authority job wait aborted');
+        throw new Error(`Authority ${subject} wait aborted`);
     }
 }
-function waitForDelay(ms, signal) {
+function waitForDelay(ms, signal, subject) {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) {
-            reject(new Error('Authority job wait aborted'));
+            reject(new Error(`Authority ${subject} wait aborted`));
             return;
         }
         const timer = setTimeout(() => {
@@ -95,12 +98,25 @@ function waitForDelay(ms, signal) {
         const onAbort = () => {
             clearTimeout(timer);
             cleanup();
-            reject(new Error('Authority job wait aborted'));
+            reject(new Error(`Authority ${subject} wait aborted`));
         };
         const cleanup = () => {
             signal?.removeEventListener('abort', onAbort);
         };
         signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+function waitForSignal(promise, signal) {
+    if (!signal) {
+        return promise;
+    }
+    if (signal.aborted) {
+        return Promise.reject(signal.reason ?? new Error('Authority request aborted'));
+    }
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(signal.reason ?? new Error('Authority request aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
     });
 }
 function stringifyJsonValue(value, label, space) {
@@ -123,11 +139,13 @@ export class AuthorityClient {
     jobs;
     events;
     modules;
+    agent;
     session = null;
     sessionPromise = null;
     probeSnapshot = null;
     probePromise = null;
     runtimeGrants = new Map();
+    moduleManifests = new Map();
     constructor(config) {
         this.config = config;
         this.storage = {
@@ -1097,11 +1115,11 @@ export class AuthorityClient {
                 });
             },
             waitForCompletion: async (id, options = {}) => {
-                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
-                const timeoutMs = getOptionalJobWaitTimeout(options.timeoutMs);
+                const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'job');
+                const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'job');
                 const startedAt = Date.now();
                 while (true) {
-                    throwIfAborted(options.signal);
+                    throwIfAborted(options.signal, 'job');
                     const job = await this.jobs.get(id);
                     await options.onProgress?.(job);
                     if (isTerminalJobStatus(job.status)) {
@@ -1110,11 +1128,11 @@ export class AuthorityClient {
                     if (timeoutMs != null && Date.now() - startedAt >= timeoutMs) {
                         throw new Error(`Authority job ${id} did not complete within ${timeoutMs}ms`);
                     }
-                    await waitForDelay(pollIntervalMs, options.signal);
+                    await waitForDelay(pollIntervalMs, options.signal, 'job');
                 }
             },
             subscribe: async (id, options = {}) => {
-                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
+                const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'job');
                 let closed = false;
                 let pollTimer = null;
                 let lastSnapshot = null;
@@ -1225,12 +1243,21 @@ export class AuthorityClient {
         this.modules = {
             list: async () => {
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
-                return await this.requestWithSession('/modules');
+                const response = await this.requestWithSession('/modules');
+                for (const manifest of response.modules) {
+                    this.moduleManifests.set(manifest.id, structuredClone(manifest));
+                }
+                return response;
             },
             get: async (moduleId) => {
                 const trimmedModuleId = trimModuleIdentifier(moduleId);
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
+                const cached = this.moduleManifests.get(trimmedModuleId);
+                if (cached) {
+                    return structuredClone(cached);
+                }
                 const response = await this.requestWithSession(`/modules/${encodeURIComponent(trimmedModuleId)}`);
+                this.moduleManifests.set(trimmedModuleId, structuredClone(response.module));
                 return response.module;
             },
             execute: async (moduleId, transactionName, input, options) => {
@@ -1241,8 +1268,8 @@ export class AuthorityClient {
                 // user-facing permission request.
                 const trimmedIdempotencyKey = options?.idempotencyKey?.trim();
                 const timeoutMs = options?.timeoutMs;
-                if (timeoutMs !== undefined && !(typeof timeoutMs === 'number' && Number.isSafeInteger(timeoutMs) && timeoutMs > 0)) {
-                    throw new Error('Authority modules.execute timeoutMs must be a positive safe integer');
+                if (timeoutMs !== undefined && !(typeof timeoutMs === 'number' && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 600_000)) {
+                    throw new Error('Authority modules.execute timeoutMs must be an integer between 1 and 600000');
                 }
                 const body = {
                     ...(input !== undefined ? { input } : {}),
@@ -1250,15 +1277,224 @@ export class AuthorityClient {
                     ...(timeoutMs !== undefined ? { options: { timeoutMs } } : {}),
                 };
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
+                const manifest = await this.modules.get(trimmedModuleId);
+                const transaction = manifest.transactions[trimmedTransactionName];
+                if (!transaction) {
+                    throw new Error(`Authority module transaction not found: ${trimmedModuleId}:${trimmedTransactionName}`);
+                }
                 await this.ensurePermission({
                     resource: 'module.execute',
-                    target: `${trimmedModuleId}:${trimmedTransactionName}`,
+                    target: modulePermissionTarget(trimmedModuleId, trimmedTransactionName, transaction),
                     reason: `执行模块事务 ${trimmedModuleId}:${trimmedTransactionName}`,
                 });
+                for (const required of transaction.requiredResources) {
+                    await this.ensurePermission({
+                        resource: required.resource,
+                        ...(required.target === undefined ? {} : { target: required.target }),
+                        reason: required.reason ?? `模块事务 ${trimmedModuleId}:${trimmedTransactionName} 需要此能力`,
+                    });
+                }
                 return await this.requestWithSession(`/modules/${encodeURIComponent(trimmedModuleId)}/transactions/${encodeURIComponent(trimmedTransactionName)}`, {
                     method: 'POST',
                     body,
                 });
+            },
+        };
+        this.agent = {
+            listTools: async () => {
+                const response = await this.requestWithSession('/agent/tools');
+                return response.tools;
+            },
+            createRun: async (request) => {
+                const workspaceId = request.workspaceId?.trim();
+                if (!workspaceId) {
+                    throw new Error('Agent workspaceId is required');
+                }
+                await this.ensurePermission({
+                    resource: 'agent.run',
+                    target: workspaceId,
+                    reason: `在工作区 ${workspaceId} 启动 Agent`,
+                });
+                return await this.requestWithSession('/agent/runs', {
+                    method: 'POST',
+                    body: { ...request, workspaceId },
+                });
+            },
+            listRuns: async () => {
+                const response = await this.requestWithSession('/agent/runs');
+                return response.runs;
+            },
+            listRunsPage: async (request = {}) => {
+                return await this.requestWithSession('/agent/runs/list', {
+                    method: 'POST',
+                    body: request,
+                });
+            },
+            getRun: async (runId) => {
+                return await this.requestWithSession(`/agent/runs/${agentPathId(runId, 'runId')}`);
+            },
+            cancelRun: async (runId) => {
+                return await this.requestWithSession(`/agent/runs/${agentPathId(runId, 'runId')}/cancel`, {
+                    method: 'POST',
+                });
+            },
+            waitForCompletion: async (runId, options = {}) => {
+                const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'agent run');
+                const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'agent run');
+                const startedAt = Date.now();
+                while (true) {
+                    throwIfAborted(options.signal, 'agent run');
+                    const elapsedMs = Date.now() - startedAt;
+                    if (timeoutMs != null && elapsedMs >= timeoutMs) {
+                        throw new Error(`Authority agent run ${runId} did not complete within ${timeoutMs}ms`);
+                    }
+                    const timeoutSignal = timeoutMs == null
+                        ? undefined
+                        : AbortSignal.timeout(Math.max(1, timeoutMs - elapsedMs));
+                    const signal = options.signal && timeoutSignal
+                        ? AbortSignal.any([options.signal, timeoutSignal])
+                        : options.signal ?? timeoutSignal;
+                    let detail;
+                    try {
+                        detail = await this.requestWithSession(`/agent/runs/${agentPathId(runId, 'runId')}`, signal ? { signal } : {});
+                    }
+                    catch (error) {
+                        if (options.signal?.aborted) {
+                            throw new Error('Authority agent run wait aborted');
+                        }
+                        if (timeoutSignal?.aborted && !options.signal?.aborted) {
+                            throw new Error(`Authority agent run ${runId} did not complete within ${timeoutMs}ms`);
+                        }
+                        throw error;
+                    }
+                    await options.onProgress?.(detail);
+                    if (isTerminalAgentRunStatus(detail.run.status)) {
+                        return detail;
+                    }
+                    const remainingMs = timeoutMs == null ? pollIntervalMs : timeoutMs - (Date.now() - startedAt);
+                    await waitForDelay(Math.max(1, Math.min(pollIntervalMs, remainingMs)), options.signal, 'agent run');
+                }
+            },
+            browser: {
+                registerTools: async (request) => {
+                    const browserInstanceId = request.browserInstanceId?.trim();
+                    if (!browserInstanceId) {
+                        throw new Error('Browser instance id is required');
+                    }
+                    await this.ensurePermission({
+                        resource: 'agent.browser',
+                        target: browserInstanceId,
+                        reason: '向 Agent 注册浏览器工具',
+                    });
+                    return await this.requestWithSession('/agent/browser-tools/register', {
+                        method: 'POST',
+                        body: { ...request, browserInstanceId },
+                    });
+                },
+                claim: async (request) => {
+                    return await this.requestWithSession('/agent/browser-tools/claim', {
+                        method: 'POST',
+                        body: request,
+                    });
+                },
+                submitResult: async (request) => {
+                    return await this.requestWithSession('/agent/browser-tools/result', {
+                        method: 'POST',
+                        body: request,
+                    });
+                },
+            },
+            admin: {
+                profiles: {
+                    list: async () => {
+                        const response = await this.requestWithSession('/admin/agent/profiles');
+                        return response.profiles;
+                    },
+                    get: async (profileId) => {
+                        return await this.requestWithSession(`/admin/agent/profiles/${agentPathId(profileId, 'profileId')}`);
+                    },
+                    upsert: async (profile) => {
+                        return await this.requestWithSession('/admin/agent/profiles', {
+                            method: 'POST',
+                            body: profile,
+                        });
+                    },
+                    delete: async (profileId) => {
+                        const response = await this.requestWithSession(`/admin/agent/profiles/${agentPathId(profileId, 'profileId')}/delete`, { method: 'POST' });
+                        return response.deleted;
+                    },
+                },
+                runs: {
+                    list: async () => {
+                        const response = await this.requestWithSession('/admin/agent/runs');
+                        return response.runs;
+                    },
+                    listPage: async (request = {}) => {
+                        return await this.requestWithSession('/admin/agent/runs/list', {
+                            method: 'POST',
+                            body: request,
+                        });
+                    },
+                    get: async (runId) => {
+                        return await this.requestWithSession(`/admin/agent/runs/${agentPathId(runId, 'runId')}`);
+                    },
+                    cancel: async (runId) => {
+                        return await this.requestWithSession(`/admin/agent/runs/${agentPathId(runId, 'runId')}/cancel`, {
+                            method: 'POST',
+                        });
+                    },
+                    resolveApproval: async (runId, approvalId, request) => {
+                        return await this.requestWithSession(`/admin/agent/runs/${agentPathId(runId, 'runId')}/approvals/${agentPathId(approvalId, 'approvalId')}/resolve`, { method: 'POST', body: request });
+                    },
+                    prune: async (request = {}) => {
+                        return await this.requestWithSession('/admin/agent/runs/prune', {
+                            method: 'POST',
+                            body: request,
+                        });
+                    },
+                },
+                workspaces: {
+                    list: async () => {
+                        const response = await this.requestWithSession('/admin/agent/workspaces');
+                        return response.workspaces;
+                    },
+                    register: async (request) => {
+                        return await this.requestWithSession('/admin/agent/workspaces', {
+                            method: 'POST',
+                            body: request,
+                        });
+                    },
+                    get: async (workspaceId) => {
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}`);
+                    },
+                    status: async (workspaceId) => {
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/status`);
+                    },
+                    commits: async (workspaceId, limit = 100) => {
+                        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+                            throw new Error('Authority agent workspace commit limit must be an integer between 1 and 500');
+                        }
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/commits?limit=${limit}`);
+                    },
+                    diff: async (workspaceId, options = {}) => {
+                        const query = new URLSearchParams();
+                        if (options.from !== undefined)
+                            query.set('from', options.from === null ? 'empty' : options.from);
+                        if (options.to !== undefined)
+                            query.set('to', options.to === null ? 'empty' : options.to);
+                        const suffix = query.size > 0 ? `?${query.toString()}` : '';
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/diff${suffix}`);
+                    },
+                    checkpoint: async (workspaceId, request) => {
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/checkpoints`, { method: 'POST', body: request });
+                    },
+                    rollback: async (workspaceId, request) => {
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/rollback`, { method: 'POST', body: request });
+                    },
+                    resumeRollback: async (workspaceId) => {
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/rollback/resume`, { method: 'POST' });
+                    },
+                },
             },
         };
     }
@@ -1701,11 +1937,12 @@ export class AuthorityClient {
         };
     }
     async requestWithSession(path, options = {}, retried = false) {
-        const session = await this.ensureInitialized();
+        const session = await waitForSignal(this.ensureInitialized(), options.signal);
         try {
             const requestOptions = {
                 body: options.body,
                 sessionToken: session.sessionToken,
+                ...(options.signal ? { signal: options.signal } : {}),
             };
             if (options.method) {
                 return await authorityRequest(path, {
@@ -1717,7 +1954,7 @@ export class AuthorityClient {
         }
         catch (error) {
             if (!retried && isInvalidSessionError(error)) {
-                await this.init(true);
+                await waitForSignal(this.init(true), options.signal);
                 return await this.requestWithSession(path, options, true);
             }
             throw error;
@@ -2008,6 +2245,8 @@ function groupByResource(items) {
         'jobs.background': [],
         'events.stream': [],
         'module.execute': [],
+        'agent.run': [],
+        'agent.browser': [],
     };
     for (const item of items) {
         result[item.resource].push(item);
@@ -2021,6 +2260,12 @@ function safeParse(value) {
     catch {
         return value;
     }
+}
+function agentPathId(value, label) {
+    if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(`Authority agent ${label} must be a non-empty string`);
+    }
+    return encodeURIComponent(value.trim());
 }
 function getSqlDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';
@@ -2071,5 +2316,15 @@ function trimModuleTransactionName(value) {
         throw new Error('Authority modules transactionName must be a non-empty string');
     }
     return trimmed;
+}
+function modulePermissionTarget(moduleId, transactionName, transaction) {
+    switch (transaction.permissionTarget.kind) {
+        case 'module':
+            return moduleId;
+        case 'transaction':
+            return `${moduleId}:${transactionName}`;
+        case 'custom':
+            return transaction.permissionTarget.target;
+    }
 }
 //# sourceMappingURL=client.js.map

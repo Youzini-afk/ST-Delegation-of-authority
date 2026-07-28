@@ -1921,6 +1921,79 @@
   width: 100%;
 }
 
+.authority-agent-studio-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+}
+
+.authority-agent-sidebar,
+.authority-agent-main {
+  min-width: 0;
+}
+
+.authority-agent-workbench label,
+.authority-form-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.authority-form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.authority-agent-workbench textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.authority-agent-run-list,
+.authority-agent-profile-list,
+.authority-agent-transcript {
+  display: grid;
+  gap: 8px;
+}
+
+.authority-agent-run-list {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.authority-agent-run-list .authority-extension-item {
+  width: 100%;
+}
+
+.authority-agent-run-list .authority-extension-item > span:first-child,
+.authority-agent-profile-list .authority-list-card > span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  text-align: left;
+}
+
+.authority-agent-run-detail h3,
+.authority-agent-run-detail pre,
+.authority-agent-profile-list small {
+  overflow-wrap: anywhere;
+}
+
+.authority-agent-transcript,
+.authority-agent-run-detail details > .authority-stack {
+  margin-top: 10px;
+  max-height: 640px;
+  overflow: auto;
+}
+
+.authority-agent-approval {
+  border: 1px solid var(--authority-warning);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
 @container (max-width: 460px) {
   .authority-diagnostics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1970,7 +2043,8 @@
 
     .authority-panel--drawer .authority-overview-layout,
     .authority-governance-layout,
-    .authority-maintenance-secondary {
+    .authority-maintenance-secondary,
+    .authority-agent-studio-layout {
       grid-template-columns: 1fr;
     }
 
@@ -2086,7 +2160,8 @@
   .authority-inspector,
   .authority-detail-grid,
   .authority-log-layout,
-  .authority-governance-grid {
+  .authority-governance-grid,
+  .authority-form-grid {
     grid-template-columns: 1fr;
   }
 

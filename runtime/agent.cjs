@@ -72,6 +72,8 @@ const SUPPORTED_RESOURCES = [
     'jobs.background',
     'events.stream',
     'module.execute',
+    'agent.run',
+    'agent.browser',
 ];
 const RESOURCE_RISK = {
     'storage.kv': 'low',
@@ -83,6 +85,8 @@ const RESOURCE_RISK = {
     'jobs.background': 'medium',
     'events.stream': 'low',
     'module.execute': 'medium',
+    'agent.run': 'high',
+    'agent.browser': 'high',
 };
 const DEFAULT_POLICY_STATUS = {
     'storage.kv': 'granted',
@@ -94,6 +98,8 @@ const DEFAULT_POLICY_STATUS = {
     'jobs.background': 'granted',
     'events.stream': 'granted',
     'module.execute': 'granted',
+    'agent.run': 'prompt',
+    'agent.browser': 'prompt',
 };
 /** Authority module host protocol version. Bump when manifest/handler contract changes. */
 const AUTHORITY_MODULE_PROTOCOL_VERSION = 1;
@@ -285,10 +291,16 @@ class WorkspaceHistoryService {
             if (input.defaultRef !== undefined && typeof input.defaultRef !== 'string') {
                 throw validationError('Workspace defaultRef must be a string');
             }
+            const allowedUserHandles = normalizeAllowedUserHandles(input.allowedUserHandles);
             const rootPath = this.resolveWorkspaceRoot(input.rootPath);
             const registry = this.readRegistry();
             const existingByRoot = registry.workspaces.find(workspace => samePath(workspace.rootPath, rootPath));
             if (existingByRoot) {
+                if (input.allowedUserHandles !== undefined) {
+                    existingByRoot.allowedUserHandles = allowedUserHandles;
+                    existingByRoot.updatedAt = this.now();
+                    this.writeRegistry(registry);
+                }
                 return this.withCurrentHead(existingByRoot);
             }
             const id = input.id?.trim() || node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
@@ -307,6 +319,7 @@ class WorkspaceHistoryService {
                 id,
                 displayName: input.displayName?.trim() || node_path__WEBPACK_IMPORTED_MODULE_3___default().basename(rootPath),
                 rootPath,
+                allowedUserHandles,
                 defaultRef,
                 headCommitId: null,
                 createdAt: timestamp,
@@ -331,6 +344,14 @@ class WorkspaceHistoryService {
     }
     getWorkspace(workspaceId) {
         return this.withCurrentHead(this.getStoredWorkspace(workspaceId));
+    }
+    assertWorkspaceAccess(workspaceId, userHandle, isAdmin) {
+        const workspace = this.getWorkspace(workspaceId);
+        const normalizedUserHandle = userHandle.trim();
+        if (!isAdmin && !workspace.allowedUserHandles.includes(normalizedUserHandle)) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`Workspace not found: ${workspaceId}`, 404, 'validation_error', 'validation');
+        }
+        return workspace;
     }
     async checkpoint(workspaceId, request, actor) {
         return await this.withLock(`workspace-${workspaceId}`, async () => {
@@ -1208,6 +1229,9 @@ class WorkspaceHistoryService {
             throw new Error('Invalid workspace registry');
         }
         for (const workspace of registry.workspaces) {
+            if (workspace.allowedUserHandles === undefined) {
+                workspace.allowedUserHandles = [];
+            }
             validateWorkspaceRecord(workspace);
         }
         return registry;
@@ -1757,11 +1781,29 @@ function validateWorkspaceRecord(workspace) {
         || !workspace.displayName.trim()
         || typeof workspace.rootPath !== 'string'
         || !node_path__WEBPACK_IMPORTED_MODULE_3___default().isAbsolute(workspace.rootPath)
+        || !Array.isArray(workspace.allowedUserHandles)
+        || workspace.allowedUserHandles.length > 256
+        || workspace.allowedUserHandles.some(userHandle => typeof userHandle !== 'string' || !userHandle.trim() || userHandle.length > 200)
         || (workspace.headCommitId !== null && !OID_PATTERN.test(workspace.headCommitId))
         || typeof workspace.createdAt !== 'string'
         || typeof workspace.updatedAt !== 'string') {
         throw new Error(`Invalid workspace registry entry: ${workspace.id}`);
     }
+}
+function normalizeAllowedUserHandles(value) {
+    if (value === undefined) {
+        return [];
+    }
+    if (!Array.isArray(value) || value.length > 256) {
+        throw validationError('Workspace allowedUserHandles must be an array of at most 256 user handles');
+    }
+    const handles = value.map(userHandle => {
+        if (typeof userHandle !== 'string' || !userHandle.trim() || userHandle.trim().length > 200) {
+            throw validationError('Workspace allowedUserHandles contains an invalid user handle');
+        }
+        return userHandle.trim();
+    });
+    return [...new Set(handles)].sort((left, right) => left.localeCompare(right));
 }
 function isTreeKind(value) {
     return value === 'blob' || value === 'tree' || value === 'symlink';

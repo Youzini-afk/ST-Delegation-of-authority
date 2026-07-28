@@ -4,10 +4,10 @@ export const SECURITY_CENTER_CONFIG = {
     displayName: AUTHORITY_EXTENSION_DISPLAY_NAME,
     version: AUTHORITY_EXTENSION_VERSION,
     installType: 'local',
-    declaredPermissions: {},
+    declaredPermissions: { agent: { run: true } },
     uiLabel: '扩展权限中心',
 };
-export const RESOURCE_OPTIONS = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'trivium.private', 'http.fetch', 'jobs.background', 'events.stream'];
+export const RESOURCE_OPTIONS = ['storage.kv', 'storage.blob', 'fs.private', 'sql.private', 'trivium.private', 'http.fetch', 'jobs.background', 'events.stream', 'module.execute', 'agent.run', 'agent.browser'];
 export const STATUS_OPTIONS = ['prompt', 'granted', 'denied', 'blocked'];
 export const TOP_BAR_DRAWER_ID = 'authority-security-center-drawer';
 export const TOP_BAR_ICON_ID = 'authority-security-center-drawer-icon';
