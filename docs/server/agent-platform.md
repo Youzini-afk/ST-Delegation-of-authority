@@ -63,20 +63,27 @@ workspaces.json        工作区注册表
 
 tree entry 按名称排序后以 canonical JSON 计算 SHA-256；blob 以原始字节计算 SHA-256；commit 引用 tree 与 parent commit。ref 更新采用 generation compare-and-swap，并先写 journal，再以临时文件 rename 发布。
 
-Agent 的每次写工具调用和可能修改文件的终端命令都必须先建立检查点。回退不会直接移动旧 ref：它先保存当前状态，再把目标 tree 物化到工作区，最后创建新的 rollback commit，因此历史保持可追踪。
+Agent 的每次写工具调用和可能修改文件的终端命令都必须先建立检查点。回退不会直接移动旧 ref：它先持久化回退 journal 和当前状态，再把目标 tree 物化到工作区，最后创建新的 rollback commit，因此进程在任一步中断都能由 `resume` 继续，历史也保持可追踪。回退请求可携带稳定 `operationId`；完成记录先于 journal 清理落盘，同一操作重试不会重复生成历史。
 
-若当前文件已经偏离预期 head，普通回退拒绝覆盖并返回冲突；只有显式 `force` 或独立 rescue 操作才允许强制恢复。
+检查点默认可以是稀疏的：只把即将被工具修改的路径加入版本树，之后持续跟踪这些路径。这样不会因为改一个插件文件就复制整个 ST、`data` 或依赖目录；需要完整基线时可显式检查点 `.`。`.git`、`node_modules` 和版本树自身始终排除。
+
+稀疏回退只物化目标 commit 当时跟踪的路径；当前 head 独有的路径仅进入回退前安全快照，不会被误判为目标中已删除。若当前文件已经偏离预期 head，普通回退拒绝覆盖并返回冲突；只有显式 `force` 才允许强制恢复。恢复开始后若又出现写入，`resume` 会先追加新的安全快照，而不是覆盖历史外状态。
 
 ## 独立恢复
 
 ```bash
 node plugins/authority/runtime/agent.cjs rescue status
+node plugins/authority/runtime/agent.cjs rescue workspaces
 node plugins/authority/runtime/agent.cjs rescue log
 node plugins/authority/runtime/agent.cjs rescue diff <from> <to>
-node plugins/authority/runtime/agent.cjs rescue rollback <commit>
+node plugins/authority/runtime/agent.cjs rescue checkpoint [paths...]
+node plugins/authority/runtime/agent.cjs rescue rollback <commit> --operation-id <stable-id>
+node plugins/authority/runtime/agent.cjs rescue resume
 ```
 
 恢复入口只依赖 Node 标准库和版本树公开格式。恢复数据位于 `<DATA_ROOT>/_authority-global/authority/state/agent-workspaces`，不会随插件 `git pull` 或 installable 同步被删除。
+
+installable 安装使用上面的 `plugins/authority/runtime/agent.cjs`；`npm run dev:link` 会把构建目录直接链接为插件根，因此开发模式入口是 `plugins/authority/agent.cjs`。若不从 ST 根目录启动 CLI，需传 `--data-root <path>` 或 `--store <path>`。
 
 ## 不变量
 
@@ -87,3 +94,4 @@ node plugins/authority/runtime/agent.cjs rescue rollback <commit>
 5. API key 不返回前端明文；读取配置只返回 mask 与 fingerprint。
 6. 工作区工具不跟随 symlink 越出工作区。显式增加其他根目录属于新的管理员授权。
 7. 网络发送等外部副作用无法由文件版本树撤销，工具必须标记为不可回退并按策略审批。
+8. 工作区注册属于本机管理员信任边界。版本树会拒绝或重新暂存普通并发写入，但纯 Node 恢复器不是针对同一系统账户恶意竞态的文件系统沙箱；若未来纳入该威胁模型，物化层必须改用各平台原生的目录句柄相对操作。

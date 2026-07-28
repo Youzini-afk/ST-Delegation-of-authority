@@ -125,6 +125,7 @@ function stageInstallable() {
     const coreDist = path.join(repoRoot, 'managed', 'core');
 
     assertExists(path.join(serverDist, 'index.cjs'), 'Run `npm run build` before staging installable outputs.');
+    assertExists(path.join(serverDist, 'agent.cjs'), 'Run `npm run build` before staging installable outputs.');
     assertExists(path.join(sdkDist, 'manifest.json'), 'Run `npm run build` before staging installable outputs.');
     assertExists(coreDist, 'Run `npm run build:core` before staging installable outputs.');
 
@@ -137,6 +138,8 @@ function stageInstallable() {
 
     copyFile(path.join(serverDist, 'index.cjs'), path.join(runtimeDir, 'index.cjs'));
     copyOptionalFile(path.join(serverDist, 'index.cjs.map'), path.join(runtimeDir, 'index.cjs.map'));
+    copyFile(path.join(serverDist, 'agent.cjs'), path.join(runtimeDir, 'agent.cjs'));
+    copyOptionalFile(path.join(serverDist, 'agent.cjs.map'), path.join(runtimeDir, 'agent.cjs.map'));
 
     copySdkRuntime(sdkDist, managedSdkDir);
     patchSdkManifest(path.join(managedSdkDir, 'manifest.json'));

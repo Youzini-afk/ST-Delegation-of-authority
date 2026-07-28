@@ -21,6 +21,8 @@ import { StorageService } from './services/storage-service.js';
 import { StManagerBridgeService } from './services/st-manager-bridge-service.js';
 import { StManagerControlService } from './services/st-manager-control-service.js';
 import { TriviumService } from './services/trivium-service.js';
+import { WorkspaceHistoryService } from './services/workspace-history-service.js';
+import { getGlobalAuthorityPaths } from './store/authority-paths.js';
 
 export interface AuthorityRuntime {
     adminPackages: AdminPackageService;
@@ -67,6 +69,7 @@ export interface AuthorityRuntime {
      * registration path so handlers receive a minimal safe ctx.
      */
     companionLoader: CompanionModuleLoaderService;
+    workspaceHistory: WorkspaceHistoryService;
 }
 
 export function createAuthorityRuntime(): AuthorityRuntime {
@@ -93,6 +96,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const locks = new LockService();
     const idempotency = new IdempotencyService(storage);
     const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
+    const workspaceHistory = new WorkspaceHistoryService(getGlobalAuthorityPaths().agentWorkspacesDir);
 
     return {
         adminPackages,
@@ -118,5 +122,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         locks,
         idempotency,
         companionLoader,
+        workspaceHistory,
     };
 }

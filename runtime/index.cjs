@@ -319,8 +319,10 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
 /* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
 /* harmony import */ var _routes_module_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/module-routes.js */ "./src/routes/module-routes.ts");
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+/* harmony import */ var _routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./routes/agent-history-routes.js */ "./src/routes/agent-history-routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+
 
 
 
@@ -340,7 +342,7 @@ function ok(res, data) {
 function fail(runtime, req, res, extensionId, error) {
     const normalized = normalizeAuthorityError(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
         if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
                 ...normalized.payload.details,
@@ -365,7 +367,7 @@ function buildPermissionErrorPayload(message) {
         return null;
     }
     const target = match[2]?.trim();
-    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.buildPermissionDescriptor)(resource, target);
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.buildPermissionDescriptor)(resource, target);
     return {
         error: message,
         code: 'permission_not_granted',
@@ -398,13 +400,13 @@ function isPermissionErrorDetails(value) {
         && 'riskLevel' in value;
 }
 function normalizeAuthorityError(error) {
-    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.isAuthorityServiceError)(error)) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.isAuthorityServiceError)(error)) {
         return {
             status: error.status,
             payload: error.toPayload(),
         };
     }
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error);
     const permissionErrorPayload = buildPermissionErrorPayload(message);
     if (permissionErrorPayload) {
         return {
@@ -439,6 +441,16 @@ function normalizeAuthorityError(error) {
                 error: message,
                 code: 'session_user_mismatch',
                 category: 'session',
+            },
+        };
+    }
+    if (message === 'Forbidden') {
+        return {
+            status: 403,
+            payload: {
+                error: message,
+                code: 'permission_denied',
+                category: 'permission',
             },
         };
     }
@@ -774,15 +786,15 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_10__.createAuthorityRuntime)()) {
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_11__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
     });
     (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
     router.post('/session/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const config = (req.body ?? {});
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
@@ -797,8 +809,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/session/current', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits, runtime.modules.visibleCount()));
         }
@@ -808,8 +820,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const evaluation = await runtime.permissions.evaluate(user, session, req.body);
             if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
                 await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
@@ -827,11 +839,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate-batch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_11__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_12__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
             }
             const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
             const response = { results };
@@ -843,8 +855,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/resolve', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
             await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
@@ -861,7 +873,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
@@ -881,7 +893,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
@@ -909,7 +921,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/extensions/:id/grants/reset', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
             await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
@@ -932,9 +944,10 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     (0,_routes_module_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerModuleRoutes)(router, runtime, fail);
     (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
     (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
+    (0,_routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_10__.registerAgentHistoryRoutes)(router, runtime, fail);
     router.get('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -946,7 +959,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
@@ -957,7 +970,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/usage-summary', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
         }
@@ -967,7 +980,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/import-export/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.adminPackages.listOperations(user),
@@ -979,7 +992,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/export', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
@@ -994,7 +1007,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import-transfer/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
                 resource: 'fs.private',
@@ -1007,7 +1020,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1026,7 +1039,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
@@ -1041,7 +1054,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
@@ -1056,7 +1069,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/native-migration/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.nativeMigrations.listOperations(),
@@ -1068,7 +1081,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/upload/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
@@ -1082,7 +1095,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/preview', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1105,7 +1118,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
@@ -1125,7 +1138,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
@@ -1140,7 +1153,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
         }
@@ -1150,7 +1163,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
@@ -1165,7 +1178,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/update', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1218,9 +1231,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                         : `更新失败后后台服务状态为 ${recovery.state}。`;
                 }
                 catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(recoveryError)}`;
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(recoveryError)}`;
                 }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_11__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_12__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
             }
         }
         catch (error) {
@@ -1228,6 +1241,163 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
         }
     });
     return runtime;
+}
+
+
+/***/ },
+
+/***/ "./src/routes/agent-history-routes.ts"
+/*!********************************************!*\
+  !*** ./src/routes/agent-history-routes.ts ***!
+  \********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerAgentHistoryRoutes: () => (/* binding */ registerAgentHistoryRoutes)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+function registerAgentHistoryRoutes(router, runtime, fail) {
+    router.get('/admin/agent/workspaces', (req, res) => {
+        try {
+            assertAdmin(req);
+            res.json({ workspaces: runtime.workspaceHistory.listWorkspaces() });
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/workspaces', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            const workspace = await runtime.workspaceHistory.registerWorkspace((req.body ?? {}));
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace registered', {
+                workspaceId: workspace.id,
+            }).catch(() => undefined);
+            res.json(workspace);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/agent/workspaces/:workspaceId', (req, res) => {
+        try {
+            assertAdmin(req);
+            res.json(runtime.workspaceHistory.getWorkspace(workspaceId(req)));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/agent/workspaces/:workspaceId/status', async (req, res) => {
+        try {
+            assertAdmin(req);
+            res.json(await runtime.workspaceHistory.status(workspaceId(req)));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/agent/workspaces/:workspaceId/commits', (req, res) => {
+        try {
+            assertAdmin(req);
+            const id = workspaceId(req);
+            const limit = Number(req.query?.limit ?? 100);
+            if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+                throw new Error('limit must be an integer between 1 and 500');
+            }
+            const response = {
+                workspace: runtime.workspaceHistory.getWorkspace(id),
+                commits: runtime.workspaceHistory.listCommits(id, limit),
+            };
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.get('/admin/agent/workspaces/:workspaceId/diff', (req, res) => {
+        try {
+            assertAdmin(req);
+            const id = workspaceId(req);
+            const workspace = runtime.workspaceHistory.getWorkspace(id);
+            res.json(runtime.workspaceHistory.diff(id, resolveCommit(req.query?.from, workspace.headCommitId), resolveCommit(req.query?.to, workspace.headCommitId)));
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/workspaces/:workspaceId/checkpoints', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            const response = await runtime.workspaceHistory.checkpoint(workspaceId(req), (req.body ?? {}), { kind: 'user', id: user.handle });
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace checkpoint created', {
+                workspaceId: response.workspace.id,
+                commitId: response.commit.id,
+                changedPaths: response.changedPaths,
+            }).catch(() => undefined);
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/workspaces/:workspaceId/rollback', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            const response = await runtime.workspaceHistory.rollback(workspaceId(req), (req.body ?? {}), { kind: 'user', id: user.handle });
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace rolled back', {
+                workspaceId: response.workspace.id,
+                operationId: response.operationId,
+                targetCommitId: response.restoredCommitId,
+                rollbackCommitId: response.rollbackCommit.id,
+            }).catch(() => undefined);
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+    router.post('/admin/agent/workspaces/:workspaceId/rollback/resume', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            const response = await runtime.workspaceHistory.resumeRollback(workspaceId(req));
+            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace rollback resumed', {
+                workspaceId: response.workspace.id,
+                operationId: response.operationId,
+                rollbackCommitId: response.rollbackCommit.id,
+            }).catch(() => undefined);
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+}
+function assertAdmin(req) {
+    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+    if (!user.isAdmin) {
+        throw new Error('Forbidden');
+    }
+    return user;
+}
+function workspaceId(req) {
+    try {
+        return decodeURIComponent(req.params?.workspaceId ?? '');
+    }
+    catch {
+        throw new Error('Invalid workspace id encoding');
+    }
+}
+function resolveCommit(value, head) {
+    const normalized = value?.trim();
+    if (!normalized || normalized === 'head') {
+        return head;
+    }
+    return normalized === 'empty' ? null : normalized;
 }
 
 
@@ -3385,19 +3555,27 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
 /* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
 /* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
+/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+
+
+
+
 
 
 
@@ -3425,22 +3603,25 @@ function createAuthorityRuntime() {
     const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_2__.AuditService(core);
     const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_5__.DataTransferService();
     const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_6__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_8__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_14__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_13__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_16__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_17__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_18__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_19__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_15__.PrivateFsService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_9__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_16__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_15__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_18__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_19__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_20__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_21__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_17__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_7__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_9__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_20__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_12__.NativeMigrationService();
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_10__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_22__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_14__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_11__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
-    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_10__.ModuleDiscoveryService(install);
-    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_13__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_12__.ModuleDiscoveryService(install);
+    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_11__.LockService();
+    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_8__.IdempotencyService(storage);
+    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
+    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_23__.WorkspaceHistoryService((0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_24__.getGlobalAuthorityPaths)().agentWorkspacesDir);
     return {
         adminPackages,
         events,
@@ -3462,7 +3643,10 @@ function createAuthorityRuntime() {
         nativeMigrations,
         modules,
         moduleDiscovery,
+        locks,
+        idempotency,
         companionLoader,
+        workspaceHistory,
     };
 }
 
@@ -4690,6 +4874,8 @@ class AuditService {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   buildCompanionIdempotencyCapability: () => (/* binding */ buildCompanionIdempotencyCapability),
+/* harmony export */   buildCompanionLocksCapability: () => (/* binding */ buildCompanionLocksCapability),
 /* harmony export */   buildCompanionSqlCapability: () => (/* binding */ buildCompanionSqlCapability),
 /* harmony export */   buildCompanionTriviumCapability: () => (/* binding */ buildCompanionTriviumCapability)
 /* harmony export */ });
@@ -4943,6 +5129,144 @@ function clampSqlPage(page) {
 }
 /** Server-side cap on `query` page.limit. Matches the route-layer cap. */
 const MAX_COMPANION_SQL_QUERY_PAGE_LIMIT = 1000;
+/**
+ * Default `withLock` timeout (30 s) when the caller does not supply one.
+ * Prevents a companion module from holding a lock forever due to a logic
+ * bug or unhandled hang; the timeout throws `lock_timeout` so the caller
+ * can surface a structured error and the next waiter can proceed.
+ */
+const DEFAULT_COMPANION_LOCK_TIMEOUT_MS = 30_000;
+/**
+ * Hard upper bound on `withLock` timeout (5 min). Companion modules
+ * cannot request a longer timeout; values above this cap are clamped
+ * down so a buggy or hostile module cannot block the lock for the
+ * entire server lifetime.
+ */
+const MAX_COMPANION_LOCK_TIMEOUT_MS = 5 * 60_000;
+/**
+ * Build a {@link CompanionLocksCapability} bound to a specific companion
+ * module's owner extension id. The wrapper captures `ownerExtensionId`
+ * at build time so companion code cannot override the auto-prefixing or
+ * acquire locks in another extension's namespace.
+ *
+ * @param lockService      The host's LockService. NOT exposed on the
+ *                         returned wrapper; only `withLock` delegates
+ *                         to it.
+ * @param ownerExtensionId The companion module's owner extension id.
+ *                         This is the extension that shipped the
+ *                         `.authority/server.cjs` being activated, NOT
+ *                         the caller extension id from
+ *                         `session.extension.id`. The wrapper uses this
+ *                         id to prefix lock scopeKeys so two companion
+ *                         modules cannot interfere with each other.
+ */
+function buildCompanionLocksCapability(lockService, ownerExtensionId) {
+    return {
+        async withLock(scope, options, fn) {
+            // Validate scope is a non-empty string. An empty scopeKey
+            // would collide across all callers within the same owner;
+            // reject up front rather than silently allowing the collision.
+            if (typeof scope !== 'string' || scope.trim() === '') {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`companion ctx.locks.withLock requires a non-empty scope string`, 400, 'validation_error', 'validation', { ownerExtensionId, scope });
+            }
+            // Auto-prefix with ownerExtensionId so two companion modules
+            // that pick the same scope string do not interfere. The full
+            // scopeKey passed to the underlying LockService is
+            // `${ownerExtensionId}:${scope}`.
+            const scopeKey = `${ownerExtensionId}:${scope}`;
+            // Default to 30 s; clamp any caller-supplied value to the
+            // 5 min hard cap. A non-positive caller-supplied timeout is
+            // treated as "use the default" rather than "no timeout" so a
+            // buggy module cannot accidentally disable the safety net.
+            const callerTimeout = options.timeoutMs;
+            const effectiveTimeoutMs = typeof callerTimeout === 'number'
+                && Number.isFinite(callerTimeout)
+                && callerTimeout > 0
+                ? Math.min(callerTimeout, MAX_COMPANION_LOCK_TIMEOUT_MS)
+                : DEFAULT_COMPANION_LOCK_TIMEOUT_MS;
+            return await lockService.withLock(scopeKey, { timeoutMs: effectiveTimeoutMs }, fn);
+        },
+    };
+}
+/**
+ * Default `ttlMs` for cached idempotency records (24 h). Prevents the KV
+ * store from growing unboundedly with stale success caches: a record that
+ * has not been retried within 24 h is treated as expired and a future
+ * retry re-executes `fn`. Generous enough to cover caller-side retry
+ * storms; tight enough that the cache does not retain data indefinitely.
+ */
+const DEFAULT_COMPANION_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Hard upper bound on `ttlMs` (7 d). Companion modules cannot request a
+ * longer TTL; values above this cap are clamped down so a buggy or
+ * hostile module cannot pin a cache entry for the entire server lifetime.
+ */
+const MAX_COMPANION_IDEMPOTENCY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Build a {@link CompanionIdempotencyCapability} bound to a specific
+ * companion module's owner extension id and calling user. The wrapper
+ * captures `user` and `ownerExtensionId` at build time so companion code
+ * cannot override the extension scoping or write idempotency records
+ * under another user's KV namespace.
+ *
+ * @param idempotencyService The host's IdempotencyService. NOT exposed
+ *                           on the returned wrapper; only `run`,
+ *                           `lookup`, `record` delegate to it.
+ * @param user               The calling user context (from the host's
+ *                           execute ctx). The underlying
+ *                           {@link StorageService.getKv}/{@link StorageService.setKv}
+ *                           require a `UserContext` to resolve the
+ *                           per-user kvDir, so the wrapper captures it
+ *                           at build time (same pattern as the trivium,
+ *                           sql, and audit wrappers).
+ * @param ownerExtensionId   The companion module's owner extension id.
+ *                           This is the extension that shipped the
+ *                           `.authority/server.cjs` being activated,
+ *                           NOT the caller extension id from
+ *                           `session.extension.id`. The wrapper uses
+ *                           this id to prefix the idempotency key so
+ *                           two companion modules cannot collide.
+ */
+function buildCompanionIdempotencyCapability(idempotencyService, user, ownerExtensionId) {
+    const resolveTtl = (options) => {
+        const callerTtl = options?.ttlMs;
+        return typeof callerTtl === 'number'
+            && Number.isFinite(callerTtl)
+            && callerTtl > 0
+            ? Math.min(callerTtl, MAX_COMPANION_IDEMPOTENCY_TTL_MS)
+            : DEFAULT_COMPANION_IDEMPOTENCY_TTL_MS;
+    };
+    return {
+        async run(key, fingerprint, fn, options) {
+            const normalizedKey = normalizeIdempotencyKey(key, ownerExtensionId);
+            const ttlMs = resolveTtl(options);
+            return await idempotencyService.run(user, ownerExtensionId, normalizedKey, fingerprint, fn, ttlMs);
+        },
+        async lookup(key) {
+            const normalizedKey = normalizeIdempotencyKey(key, ownerExtensionId);
+            return await idempotencyService.getRecord(user, ownerExtensionId, normalizedKey);
+        },
+        async record(key, fingerprint, response, options) {
+            const normalizedKey = normalizeIdempotencyKey(key, ownerExtensionId);
+            const ttlMs = resolveTtl(options);
+            await idempotencyService.record(user, ownerExtensionId, normalizedKey, fingerprint, response, ttlMs);
+        },
+    };
+}
+/**
+ * Validate `key` is a non-empty string and auto-prefix it with
+ * `ownerExtensionId` so two companion modules that pick the same
+ * idempotency key do NOT collide. The full key passed to the underlying
+ * {@link IdempotencyService} is `${ownerExtensionId}:${key}`; the
+ * service then prefixes with `idempotency:` and `${ownerExtensionId}`
+ * again (defense-in-depth on top of the per-extension sqlite scoping).
+ */
+function normalizeIdempotencyKey(key, ownerExtensionId) {
+    if (typeof key !== 'string' || key.trim() === '') {
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`companion ctx.idempotency requires a non-empty key string`, 400, 'validation_error', 'validation', { ownerExtensionId, key });
+    }
+    return `${ownerExtensionId}:${key}`;
+}
 // Suppress unused-import warnings for type-only imports preserved for the
 // public API surface of this module.
 void undefined;
@@ -5034,6 +5358,8 @@ class CompanionModuleLoaderService {
     audit;
     trivium;
     core;
+    lockService;
+    idempotencyService;
     /**
      * Lazy accessor for the runtime CommonJS `require` function. Webpack
      * replaces top-level `require` calls with `__webpack_require__`, which
@@ -5045,12 +5371,14 @@ class CompanionModuleLoaderService {
     runtimeRequire;
     logger;
     activationTimeoutMs;
-    constructor(modules, permissions, audit, trivium, core, options = {}) {
+    constructor(modules, permissions, audit, trivium, core, lockService, idempotencyService, options = {}) {
         this.modules = modules;
         this.permissions = permissions;
         this.audit = audit;
         this.trivium = trivium;
         this.core = core;
+        this.lockService = lockService;
+        this.idempotencyService = idempotencyService;
         this.runtimeRequire = resolveRuntimeRequire();
         this.logger = options.logger ?? console;
         this.activationTimeoutMs = options.activationTimeoutMs ?? DEFAULT_ACTIVATION_TIMEOUT_MS;
@@ -5201,7 +5529,7 @@ class CompanionModuleLoaderService {
                     severity: 'error',
                 });
             }
-            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.logger);
+            handlers[name] = buildCompanionHandler(candidate, name, registration, this.permissions, this.audit, this.trivium, this.core, this.lockService, this.idempotencyService, this.logger);
         }
         try {
             this.modules.registerCompanion(candidate.manifest, handlers, {
@@ -5318,7 +5646,7 @@ function registerCompanionTransaction(registrations, undeclared, manifest, modul
  * also rejects with `transaction_timeout` independently — the abort is a
  * cooperative hint, not a force-stop.
  */
-function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, trivium, core, logger) {
+function buildCompanionHandler(candidate, transactionName, registration, permissions, audit, trivium, core, lockService, idempotencyService, logger) {
     const companionHandler = registration.definition.handler;
     const transaction = candidate.manifest.transactions[transactionName];
     const moduleVersion = candidate.manifest.version;
@@ -5362,6 +5690,25 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
         // read or write each other's databases. The wrapper authorizes
         // `sql.private` before each call. No raw CoreService is exposed.
         const sqlCapability = (0,_companion_capabilities_js__WEBPACK_IMPORTED_MODULE_2__.buildCompanionSqlCapability)(core, permissions, audit, user, session, candidate.ownerExtensionId);
+        // Phase B: build the generic in-process locks wrapper bound to the
+        // companion module's owner extension id. The wrapper auto-prefixes
+        // lock scope with `ownerExtensionId` so two companion modules that
+        // pick the same scope string do not interfere. The wrapper applies
+        // a default 30 s timeout and clamps to a 5 min hard cap. No raw
+        // LockService is exposed; companion code cannot reach the
+        // underlying `locks` Map or any other LockService internals.
+        const locksCapability = (0,_companion_capabilities_js__WEBPACK_IMPORTED_MODULE_2__.buildCompanionLocksCapability)(lockService, candidate.ownerExtensionId);
+        // Phase C: build the durable-ish idempotency replay wrapper bound
+        // to the companion module's owner extension id and the calling
+        // user. The wrapper auto-prefixes the caller-supplied key with
+        // `ownerExtensionId` so two companion modules that pick the same
+        // idempotency key do not collide. The wrapper applies a 24 h
+        // default TTL and clamps to a 7 d hard cap. Only successful results
+        // are cached; errors propagate without caching. No raw
+        // IdempotencyService is exposed; companion code cannot reach the
+        // underlying `storage` handle or the un-prefixed `getRecord`/`record`
+        // methods.
+        const idempotencyCapability = (0,_companion_capabilities_js__WEBPACK_IMPORTED_MODULE_2__.buildCompanionIdempotencyCapability)(idempotencyService, user, candidate.ownerExtensionId);
         const companionCtx = {
             moduleId: candidate.moduleId,
             ownerExtensionId: candidate.ownerExtensionId,
@@ -5377,6 +5724,8 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
             signal,
             trivium: triviumCapability,
             sql: sqlCapability,
+            locks: locksCapability,
+            idempotency: idempotencyCapability,
         };
         // Phase 3: the host's execute() owns timeout enforcement and the
         // AbortController. The signal on companionCtx IS the host's signal,
@@ -7163,6 +7512,298 @@ class HttpService {
 
 /***/ },
 
+/***/ "./src/services/idempotency-service.ts"
+/*!*********************************************!*\
+  !*** ./src/services/idempotency-service.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   IdempotencyService: () => (/* binding */ IdempotencyService)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+/**
+ * Phase C durable-ish idempotency replay for companion transactions.
+ *
+ * The service is backed by {@link StorageService} KV (per-extension sqlite
+ * via the host's core). When a transaction succeeds, the wrapper caches the
+ * response keyed by the companion-supplied idempotency key + a request
+ * fingerprint. On retry with the same key + matching fingerprint, the
+ * cached response is returned instead of re-executing the transaction. This
+ * prevents duplicate side effects when a caller retries a successful request
+ * that the caller believes may not have committed (e.g. process crash
+ * between the server committing and the client receiving the response).
+ *
+ * Boundary contract (non-negotiable):
+ *
+ * - ONLY successful results are cached. If `fn` throws, the error is
+ *   propagated and NOTHING is cached. Errors, CAS conflicts, and timeouts
+ *   are never cached. A retry after an error re-executes `fn`.
+ * - Records are scoped to `ownerExtensionId` in two layers: (1) the KV
+ *   sqlite file is selected by `ownerExtensionId` (StorageService already
+ *   isolates per-extension), and (2) the KV key is prefixed with
+ *   `idempotency:${ownerExtensionId}:` so two extensions picking the same
+ *   idempotency key cannot collide even within the same per-extension
+ *   database. The companion `ctx.idempotency` wrapper additionally
+ *   prefixes the caller-supplied key with `ownerExtensionId:` so two
+ *   companion modules with the same owner cannot collide either.
+ * - The cached value is capped at {@link MAX_KV_VALUE_BYTES} (128 KiB).
+ *   Responses whose serialized JSON exceeds this cap are NOT cached; the
+ *   service logs a warning and the wrapper proceeds without caching.
+ *   A retry after such a response re-executes `fn`.
+ * - TTL: default 24 h, hard cap 7 d. The wrapper clamps caller-supplied
+ *   `ttlMs` to the 7 d cap; the service stores `expiresAt = createdAt +
+ *   ttlMs` and treats expired records as not found on lookup.
+ * - "Lost success cache" window: if the process crashes between `fn`
+ *   resolving successfully and the KV write landing, the retry re-executes
+ *   `fn` and may hit a CAS conflict (e.g. an upstream unique constraint
+ *   violation). This is acceptable for v1; the alternative would be a
+ *   two-phase commit (write a pending record before `fn`, flip to
+ *   committed after) which is out of scope. Document as a known limitation.
+ * - NO in-process singleflight. Two concurrent `run(...)` calls with the
+ *   same key both execute `fn` and both attempt to cache; the second
+ *   `record(...)` overwrites the first. In-process serialization is the
+ *   responsibility of the `ctx.locks` wrapper (Phase B); the idempotency
+ *   wrapper is for cross-restart replay, not in-process concurrency.
+ *
+ * The service methods take `user` as the first parameter because the
+ * underlying {@link StorageService.getKv}/{@link StorageService.setKv}
+ * require a {@link UserContext} to resolve the per-user kvDir. The
+ * companion `ctx.idempotency` wrapper captures `user` at build time (the
+ * same pattern used by the trivium, sql, and audit wrappers) and passes
+ * it through.
+ */
+class IdempotencyService {
+    storage;
+    constructor(storage) {
+        this.storage = storage;
+    }
+    /**
+     * Look up an idempotency record by owner extension + key. Returns `null`
+     * when the record is absent, when the stored value fails to parse, or
+     * when the record has expired (treated as not found). An expired record
+     * is NOT deleted here; the next `record(...)` call for the same key
+     * overwrites it in place.
+     */
+    async getRecord(user, ownerExtensionId, key) {
+        const stored = await this.storage.getKv(user, ownerExtensionId, buildKvKey(ownerExtensionId, key));
+        if (!isIdempotencyRecord(stored)) {
+            return null;
+        }
+        if (stored.expiresAt < Date.now()) {
+            // Treat expired as not found so the caller re-executes fn.
+            return null;
+        }
+        return stored;
+    }
+    /**
+     * Cache a successful response keyed by owner extension + key + fingerprint.
+     * Serializes the FULL record `{ responseJson, fingerprint, expiresAt,
+     * createdAt }` to JSON; if the full serialized form exceeds
+     * {@link MAX_KV_VALUE_BYTES} (128 KiB) the call is a no-op and a warning
+     * is logged so a future retry re-executes `fn` instead of returning an
+     * over-cap cached value. The full-record check (not just `responseJson`)
+     * matters because production KV enforcement rejects values larger than
+     * the cap and the stored object adds `fingerprint` / `expiresAt` /
+     * `createdAt` overhead on top of `responseJson`; a response whose
+     * `responseJson` is just under the cap can still push the full record
+     * over.
+     */
+    async record(user, ownerExtensionId, key, fingerprint, response, ttlMs) {
+        const responseJson = serializeResponse(response);
+        if (responseJson === null) {
+            // Serialization failed (e.g. circular references), the
+            // response was `undefined`/a function/a symbol (so
+            // `JSON.stringify` returned `undefined`), or the
+            // `responseJson` itself was non-finite. Skip caching; a
+            // future retry re-executes fn. The warning was already
+            // logged inside serializeResponse.
+            return;
+        }
+        const now = Date.now();
+        const record = {
+            responseJson,
+            fingerprint,
+            expiresAt: now + ttlMs,
+            createdAt: now,
+        };
+        // Serialize the FULL record and check its byte size against
+        // the cap. The stored KV value is this object (not just
+        // `responseJson`), so production KV enforcement measures the
+        // full record. A `responseJson` just under the cap can push
+        // the full record over once `fingerprint` / `expiresAt` /
+        // `createdAt` overhead is added; skip caching and log a
+        // warning so a future retry re-executes fn.
+        const recordJson = serializeRecord(record);
+        if (recordJson === null) {
+            // Record serialization failed OR returned `undefined`.
+            // Skip caching; the warning was already logged inside
+            // serializeRecord.
+            return;
+        }
+        if (Buffer.byteLength(recordJson, 'utf8') > _constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_KV_VALUE_BYTES) {
+            // The full record exceeds the cap. We do NOT truncate or
+            // compress; a future retry re-executes fn.
+            console.warn(`[authority] IdempotencyService.record: full record ${Buffer.byteLength(recordJson, 'utf8')} bytes exceeds ${_constants_js__WEBPACK_IMPORTED_MODULE_0__.MAX_KV_VALUE_BYTES} byte cap; caching skipped.`);
+            return;
+        }
+        await this.storage.setKv(user, ownerExtensionId, buildKvKey(ownerExtensionId, key), record);
+    }
+    /**
+     * Idempotent execution with cached replay.
+     *
+     * 1. Look up the record by `ownerExtensionId` + `key`.
+     * 2. If a non-expired record exists with a MATCHING fingerprint,
+     *    return `JSON.parse(record.responseJson)` so the caller sees the
+     *    same response the original successful call produced. `fn` is NOT
+     *    called.
+     * 3. If a non-expired record exists with a MISMATCHED fingerprint,
+     *    throw `AuthorityServiceError(409, 'idempotency_conflict',
+     *    'concurrency', { key, expectedFingerprint, actualFingerprint })`.
+     *    The fingerprint mismatch means the caller retried with a different
+     *    request body under the same idempotency key; this is a concurrency
+     *    violation, not a recoverable retry.
+     * 4. If no record exists (or the record is expired), execute `fn`. If
+     *    `fn` resolves successfully, cache the result via `record(...)`
+     *    and return it. If `fn` rejects, propagate the error WITHOUT
+     *    caching — a retry after an error re-executes `fn`.
+     *
+     * Note: `run` does NOT take a `user` argument because the wrapper-level
+     * callers always have a user; the underlying `getRecord`/`record`
+     * methods take `user` and the wrapper passes it through.
+     */
+    async run(user, ownerExtensionId, key, fingerprint, fn, ttlMs) {
+        const existing = await this.getRecord(user, ownerExtensionId, key);
+        if (existing) {
+            if (existing.fingerprint === fingerprint) {
+                // Cache hit: replay the cached response. JSON.parse is
+                // safe here because `record(...)` only stores successfully
+                // serialized JSON.
+                return JSON.parse(existing.responseJson);
+            }
+            // Fingerprint mismatch: the caller retried with a different
+            // request body under the same idempotency key. Surface a
+            // structured concurrency conflict so the caller can decide
+            // whether to retry with a fresh key.
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Idempotency fingerprint mismatch for key '${key}'`, 409, 'idempotency_conflict', 'concurrency', {
+                key,
+                expectedFingerprint: fingerprint,
+                actualFingerprint: existing.fingerprint,
+            });
+        }
+        // Cache miss or expired: execute fn. Errors propagate; the cache
+        // is left untouched so a retry after an error re-executes fn.
+        const result = await fn();
+        // Best-effort cache. If the response is too large or fails to
+        // serialize, `record(...)` logs a warning and returns without
+        // storing; the next retry re-executes fn. This is the documented
+        // "lost success cache" window for v1.
+        await this.record(user, ownerExtensionId, key, fingerprint, result, ttlMs);
+        return result;
+    }
+}
+/**
+ * Build the KV key for an idempotency record. The key is prefixed with
+ * `idempotency:` (namespace) and `ownerExtensionId` (defense-in-depth on
+ * top of the per-extension sqlite scoping) so two extensions picking the
+ * same idempotency key cannot collide within the same per-extension
+ * database.
+ */
+function buildKvKey(ownerExtensionId, key) {
+    return `idempotency:${ownerExtensionId}:${key}`;
+}
+/**
+ * Serialize a response for KV storage. Returns `null` when:
+ * - `JSON.stringify(response)` throws (e.g. circular references, BigInt), or
+ * - `JSON.stringify(response)` returns `undefined` (when `response` is
+ *   `undefined`, a function, or a symbol — `JSON.stringify` returns
+ *   `undefined` for these top-level values rather than throwing).
+ *
+ * Both cases log a warning so the operator can see why a response was not
+ * cached; the caller (`record`) treats `null` as "skip caching". The size
+ * cap is NOT checked here; the caller checks the FULL serialized record
+ * (including `fingerprint` / `expiresAt` / `createdAt` overhead) after
+ * assembling the record.
+ */
+function serializeResponse(response) {
+    let responseJson;
+    try {
+        responseJson = JSON.stringify(response);
+    }
+    catch (error) {
+        // The companion handler ctx has already validated response
+        // serializability at the host boundary (module_response_not_serializable),
+        // but a defensive try/catch here protects against edge cases like
+        // BigInt or recursive structures that pass JSON.stringify's first
+        // pass but fail on the second.
+        console.warn(`[authority] IdempotencyService.record: failed to serialize response; caching skipped. Error: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+    }
+    if (responseJson === undefined) {
+        // JSON.stringify returns `undefined` (not a string, and without
+        // throwing) when the top-level value is `undefined`, a function,
+        // or a symbol. The host boundary validation should catch these
+        // before they reach the wrapper, but we check defensively so
+        // `Buffer.byteLength` never receives a non-string argument
+        // downstream.
+        console.warn(`[authority] IdempotencyService.record: response serialized to undefined (undefined/function/symbol); caching skipped.`);
+        return null;
+    }
+    return responseJson;
+}
+/**
+ * Serialize the full {@link IdempotencyRecord} for the KV value size
+ * check. Returns `null` when:
+ * - `JSON.stringify(record)` throws, or
+ * - `JSON.stringify(record)` returns `undefined`.
+ *
+ * The record is a plain object with primitive fields, so this should never
+ * fire in practice, but the check is defensive: if a future field type
+ * changes introduce a non-serializable value, we skip caching rather than
+ * crashing on `Buffer.byteLength(undefined, 'utf8')`. The size cap itself
+ * is enforced by the caller (`record`), not here.
+ */
+function serializeRecord(record) {
+    let recordJson;
+    try {
+        recordJson = JSON.stringify(record);
+    }
+    catch (error) {
+        console.warn(`[authority] IdempotencyService.record: failed to serialize record; caching skipped. Error: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+    }
+    if (recordJson === undefined) {
+        // Should not happen for a plain record object, but check
+        // defensively so `Buffer.byteLength` never receives a
+        // non-string argument.
+        console.warn(`[authority] IdempotencyService.record: record serialized to undefined; caching skipped.`);
+        return null;
+    }
+    return recordJson;
+}
+/**
+ * Type guard for {@link IdempotencyRecord}. Defensive: if the stored value
+ * was written by a future version with extra fields or a different shape,
+ * treat it as not found so the caller re-executes fn.
+ */
+function isIdempotencyRecord(value) {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+    const record = value;
+    return (typeof record.responseJson === 'string'
+        && typeof record.fingerprint === 'string'
+        && typeof record.expiresAt === 'number'
+        && typeof record.createdAt === 'number');
+}
+
+
+/***/ },
+
 /***/ "./src/services/install-service.ts"
 /*!*****************************************!*\
   !*** ./src/services/install-service.ts ***!
@@ -7901,6 +8542,199 @@ class JobService {
             extensionId,
             jobId,
         });
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/lock-service.ts"
+/*!**************************************!*\
+  !*** ./src/services/lock-service.ts ***!
+  \**************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   LockService: () => (/* binding */ LockService)
+/* harmony export */ });
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+/**
+ * Per-process in-memory lock service for serializing work keyed by an
+ * arbitrary `scopeKey`.
+ *
+ * Phase B scope: companion modules call `ctx.locks.withLock(...)` to
+ * serialize per-resource work (e.g. per-chat graph commits) so two
+ * concurrent transactions targeting the same resource cannot interleave
+ * their reads and writes. Locks are per-process only: they are NOT
+ * crash-durable and NOT cross-process. The ST server is a single
+ * process; that invariant is what makes this safe. Idempotency (Phase C)
+ * provides durability across crashes; this service provides in-process
+ * concurrency safety only.
+ *
+ * Boundary contract (non-negotiable):
+ *
+ * - Per-process only. NOT crash-durable. NOT cross-process. Single-process
+ *   ST server invariant.
+ * - Locks are held in a single in-memory `Map<string, Promise<unknown>>`
+ *   keyed by `scopeKey`. No persistence, no IPC, no file-based locking.
+ * - Locks are released in a `finally` block when the holder's `fn`
+ *   settles (success or failure). A throwing `fn` still releases the
+ *   lock; the error propagates to the caller.
+ * - Timeout: when `options.timeoutMs` is provided and positive, lock
+ *   acquisition races against a timer. If the timer fires before the
+ *   lock is acquired, the service throws
+ *   `AuthorityServiceError(408, 'lock_timeout', 'concurrency', { scopeKey, timeoutMs })`.
+ *   The timed-out waiter never acquired the lock, so it does NOT
+ *   unblock later waiters: the chain tail it published stays pending
+ *   until the current holder releases. A new caller arriving after the
+ *   timeout chains on that pending tail and waits for the holder.
+ * - No nested acquisition detection for v1. Acquiring the same scopeKey
+ *   nestedly from the same async context WILL deadlock because the
+ *   second call waits on the first's promise. Companion modules must
+ *   not do this. Document as a known limitation; future work could add
+ *   re-entrancy tracking if a real use case emerges.
+ * - No fairness guarantees beyond FIFO ordering through the promise
+ *   chain. Waiters are served in the order they called `withLock`.
+ *
+ * Implementation note: each `withLock` call chains on the current
+ * promise for `scopeKey` and stores its own chained promise
+ * (`previous.then(() => ourRelease)`) as the new latest. The chained
+ * promise settles only when BOTH the previous holder has released AND
+ * this caller has called `releaseOurs()` — so a timed-out waiter's
+ * chained promise stays pending until the current holder releases,
+ * preventing later waiters from bypassing the holder. Map entry
+ * cleanup is deferred until the chained promise actually settles, and
+ * gated on an identity check (`map.get(scopeKey) === chained`) so a
+ * later waiter's entry is never deleted by an earlier one. This keeps
+ * the map from growing unboundedly with stale Promise references
+ * without risking deletion while a holder is still active.
+ */
+class LockService {
+    locks = new Map();
+    /**
+     * Serialize `fn` against all other `withLock` calls for the same
+     * `scopeKey`. The lock is acquired after all prior waiters for this
+     * scopeKey finish (success or failure), held while `fn` runs, and
+     * released in a `finally` block when `fn` settles.
+     *
+     * @param scopeKey Arbitrary non-empty string identifying the lock
+     *                 scope. Callers are responsible for prefixing
+     *                 scopeKeys to avoid cross-module interference; the
+     *                 companion `ctx.locks` wrapper does this
+     *                 automatically using the owner extension id.
+     * @param options  Optional `{ timeoutMs }`. When positive, lock
+     *                 acquisition races against a timer; if the timer
+     *                 fires first, throws
+     *                 `AuthorityServiceError(408, 'lock_timeout', 'concurrency', { scopeKey, timeoutMs })`.
+     * @param fn       Async function to run while holding the lock. Its
+     *                 return value is returned to the caller. If it
+     *                 throws, the error propagates to the caller; the
+     *                 lock is still released.
+     * @returns        Whatever `fn` returns.
+     */
+    async withLock(scopeKey, options, fn) {
+        // Capture the current chain tail. Each waiter chains on the
+        // previous tail so FIFO ordering is preserved through the
+        // promise chain: a later caller cannot skip the waiters that
+        // registered before it.
+        const previous = this.locks.get(scopeKey) ?? Promise.resolve();
+        let releaseOurs;
+        const ourRelease = new Promise((resolve) => {
+            releaseOurs = resolve;
+        });
+        // `chained` settles only when BOTH `previous` has settled AND
+        // we have called `releaseOurs()`. The next waiter captures
+        // `chained` as their `previous`, so they wait for our turn to
+        // end — not merely for us to register. This is what preserves
+        // FIFO ordering under contention.
+        const chained = previous.then(() => ourRelease);
+        this.locks.set(scopeKey, chained);
+        // Acquisition waits only for `previous` to settle (the prior
+        // holder to release). It does NOT wait for `ourRelease`.
+        const acquire = previous.then(() => undefined);
+        // Track whether we actually acquired the lock. A timed-out
+        // waiter never acquired and must NOT delete the map entry
+        // synchronously (the current holder is still running).
+        let acquired = false;
+        let timer;
+        try {
+            if (options.timeoutMs && options.timeoutMs > 0) {
+                const timeoutMs = options.timeoutMs;
+                const timeoutPromise = new Promise((_, reject) => {
+                    timer = setTimeout(() => {
+                        reject(new _utils_js__WEBPACK_IMPORTED_MODULE_0__.AuthorityServiceError(`Lock acquisition timed out after ${timeoutMs} ms for scope '${scopeKey}'`, 408, 'lock_timeout', 'concurrency', { scopeKey, timeoutMs }));
+                    }, timeoutMs);
+                    // Allow the Node process to exit even if the timer is
+                    // still pending (companion modules should not hang the
+                    // process, but the timeout is the safety net).
+                    if (timer
+                        && typeof timer === 'object'
+                        && 'unref' in timer
+                        && typeof timer.unref === 'function') {
+                        timer.unref();
+                    }
+                });
+                try {
+                    await Promise.race([acquire, timeoutPromise]);
+                }
+                finally {
+                    if (timer) {
+                        clearTimeout(timer);
+                    }
+                }
+            }
+            else {
+                await acquire;
+            }
+            acquired = true;
+            return await fn();
+        }
+        finally {
+            // Always resolve `ourRelease`. If we acquired and ran fn,
+            // this unblocks the next waiter once `previous` has also
+            // settled. If we timed out before acquiring, this is
+            // harmless: `chained` is still gated on `previous` (the
+            // current holder's release), so later waiters do NOT skip
+            // the current holder. This is the crux of the Phase B fix
+            // — a timed-out waiter must not let later waiters bypass
+            // the current holder.
+            releaseOurs();
+            if (acquired) {
+                // Synchronous cleanup: we acquired, so `previous` has
+                // settled and we just resolved `ourRelease`. If our
+                // `chained` is still the latest map entry (no later
+                // waiter registered), delete it now so the map does
+                // not retain a stale Promise reference. If a later
+                // waiter registered, the map points to their chained
+                // promise and we leave it alone; they will clean it
+                // up themselves when they settle.
+                if (this.locks.get(scopeKey) === chained) {
+                    this.locks.delete(scopeKey);
+                }
+            }
+            else {
+                // We timed out before acquiring. The current holder
+                // is still running, so `chained` is still pending
+                // (gated on `previous`). Synchronous cleanup here
+                // would delete the map entry while the holder is
+                // still active — allowing a new caller to see an
+                // empty map and acquire immediately, running
+                // concurrently with the holder (the Phase B
+                // blocker). Defer cleanup until `chained` actually
+                // settles (i.e., the current holder releases AND
+                // `ourRelease` has been resolved, which we just
+                // did). The identity check ensures we only delete
+                // our own entry; a later waiter's entry is left for
+                // them to clean up.
+                chained.then(() => {
+                    if (this.locks.get(scopeKey) === chained) {
+                        this.locks.delete(scopeKey);
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -8908,7 +9742,7 @@ function sanitizeErrorMessage(message) {
  * intentionally requires a path separator after the first segment so that
  * URL-like single-segment paths (`/api`, `/modules`) are preserved.
  */
-const ABSOLUTE_PATH_PATTERN = /\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)+/g;
+const ABSOLUTE_PATH_PATTERN = /(?:\b[a-zA-Z]:[\\/][^\r\n"'<>|]*|\\\\[^\\/\s]+[\\/][^\r\n"'<>|]*|\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)+)/g;
 /**
  * Sanitize discovery/load diagnostics for inclusion in public error details.
  * Strips absolute paths, stack traces, and raw thrown objects from
@@ -14072,6 +14906,1585 @@ class TriviumService {
 
 /***/ },
 
+/***/ "./src/services/workspace-history-service.ts"
+/*!***************************************************!*\
+  !*** ./src/services/workspace-history-service.ts ***!
+  \***************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   WorkspaceHistoryService: () => (/* binding */ WorkspaceHistoryService),
+/* harmony export */   resolveWorkspaceHistoryStore: () => (/* binding */ resolveWorkspaceHistoryStore)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:os */ "node:os");
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_os__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+const STORE_FORMAT = 'authority-workspaces/v1';
+const REF_JOURNAL_FORMAT = 'authority-workspace-ref-journal/v1';
+const ROLLBACK_JOURNAL_FORMAT = 'authority-workspace-rollback-journal/v1';
+const COMPLETED_ROLLBACK_FORMAT = 'authority-workspace-rollback-completed/v1';
+const SYMLINK_FORMAT = 'authority-workspace-symlink/v1';
+const OID_PATTERN = /^[a-f0-9]{64}$/;
+const SAFE_NAME_PATTERN = /^[a-zA-Z0-9._-]+$/;
+const DEFAULT_REF = 'main';
+const DEFAULT_LOCK_TIMEOUT_MS = 15_000;
+const DEFAULT_STALE_LOCK_MS = 30 * 60_000;
+const EXCLUDED_SEGMENTS = new Set(['.git', 'node_modules']);
+function resolveWorkspaceHistoryStore(dataRoot) {
+    return node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(dataRoot, '_authority-global', 'authority', 'state', 'agent-workspaces');
+}
+class WorkspaceHistoryService {
+    storeDir;
+    now;
+    lockTimeoutMs;
+    staleLockMs;
+    constructor(storeDir, options = {}) {
+        this.storeDir = storeDir;
+        this.storeDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(storeDir);
+        this.now = options.now ?? (() => new Date().toISOString());
+        this.lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+        this.staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
+    }
+    async registerWorkspace(input) {
+        return await this.withLock('registry', async () => {
+            if (typeof input.rootPath !== 'string' || !input.rootPath.trim()) {
+                throw validationError('Workspace rootPath is required');
+            }
+            if (input.id !== undefined && typeof input.id !== 'string') {
+                throw validationError('Workspace id must be a string');
+            }
+            if (input.displayName !== undefined && typeof input.displayName !== 'string') {
+                throw validationError('Workspace displayName must be a string');
+            }
+            if (input.defaultRef !== undefined && typeof input.defaultRef !== 'string') {
+                throw validationError('Workspace defaultRef must be a string');
+            }
+            const rootPath = this.resolveWorkspaceRoot(input.rootPath);
+            const registry = this.readRegistry();
+            const existingByRoot = registry.workspaces.find(workspace => samePath(workspace.rootPath, rootPath));
+            if (existingByRoot) {
+                return this.withCurrentHead(existingByRoot);
+            }
+            const id = input.id?.trim() || node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+            if (id.length > 128 || !isSafeName(id)) {
+                throw validationError('Workspace id contains invalid characters');
+            }
+            if (registry.workspaces.some(workspace => workspace.id === id)) {
+                throw workspaceConflict(`Workspace already exists: ${id}`);
+            }
+            const defaultRef = input.defaultRef?.trim() || DEFAULT_REF;
+            if (defaultRef.length > 128 || !isSafeName(defaultRef)) {
+                throw validationError('Workspace ref contains invalid characters');
+            }
+            const timestamp = this.now();
+            const workspace = {
+                id,
+                displayName: input.displayName?.trim() || node_path__WEBPACK_IMPORTED_MODULE_3___default().basename(rootPath),
+                rootPath,
+                defaultRef,
+                headCommitId: null,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+            };
+            this.writeRef({
+                format: 'authority-workspace-ref/v1',
+                workspaceId: id,
+                name: defaultRef,
+                head: null,
+                generation: 0,
+                updatedAt: timestamp,
+            });
+            registry.workspaces.push(workspace);
+            registry.workspaces.sort((left, right) => left.id.localeCompare(right.id));
+            this.writeRegistry(registry);
+            return workspace;
+        });
+    }
+    listWorkspaces() {
+        return this.readRegistry().workspaces.map(workspace => this.withCurrentHead(workspace));
+    }
+    getWorkspace(workspaceId) {
+        return this.withCurrentHead(this.getStoredWorkspace(workspaceId));
+    }
+    async checkpoint(workspaceId, request, actor) {
+        return await this.withLock(`workspace-${workspaceId}`, async () => {
+            this.assertNoPendingRollback(workspaceId);
+            const workspace = this.getStoredWorkspace(workspaceId);
+            this.recoverRefJournal(workspace);
+            return this.checkpointLocked(workspace, request, actor);
+        });
+    }
+    listCommits(workspaceId, limit = 100) {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+            throw validationError('Workspace commit limit must be an integer between 1 and 500');
+        }
+        const workspace = this.getStoredWorkspace(workspaceId);
+        const ref = this.readRef(workspace);
+        const commits = [];
+        let nextId = ref.head;
+        while (nextId && commits.length < limit) {
+            const commit = this.readCommit(nextId, workspace.id);
+            commits.push(commit);
+            nextId = commit.parents[0] ?? null;
+        }
+        return commits;
+    }
+    diff(workspaceId, fromCommitId, toCommitId) {
+        const workspace = this.getStoredWorkspace(workspaceId);
+        if ((fromCommitId !== null && !OID_PATTERN.test(fromCommitId)) || (toCommitId !== null && !OID_PATTERN.test(toCommitId))) {
+            throw validationError('Workspace diff commit ids must be SHA-256 commit ids');
+        }
+        const before = fromCommitId ? this.loadCommitTree(this.readCommit(fromCommitId, workspace.id)) : emptyTree();
+        const after = toCommitId ? this.loadCommitTree(this.readCommit(toCommitId, workspace.id)) : emptyTree();
+        return {
+            workspaceId,
+            fromCommitId,
+            toCommitId,
+            entries: diffNodes(before, after),
+        };
+    }
+    async status(workspaceId) {
+        return await this.withLock(`workspace-${workspaceId}`, async () => {
+            const workspace = this.getStoredWorkspace(workspaceId);
+            this.recoverRefJournal(workspace);
+            const ref = this.readRef(workspace);
+            const head = ref.head ? this.readCommit(ref.head, workspace.id) : null;
+            const trackedPaths = head ? trackedPathsFromCommit(head) : [];
+            const expected = head ? scopeTree(this.loadCommitTree(head), trackedPaths) : emptyTree();
+            const actual = this.captureTrackedWorkspace(workspace, trackedPaths, createObjectStats());
+            const changes = diffNodes(expected, actual);
+            const pending = this.readRollbackJournal(workspace.id);
+            return {
+                workspace: this.withCurrentHead(workspace),
+                dirty: changes.length > 0,
+                changes,
+                pendingRollback: pending ? {
+                    operationId: pending.operationId,
+                    targetCommitId: pending.targetCommitId,
+                    rollbackCommitId: pending.rollbackCommitId,
+                    startedAt: pending.startedAt,
+                } : null,
+            };
+        });
+    }
+    async rollback(workspaceId, request, actor) {
+        return await this.withLock(`workspace-${workspaceId}`, async () => {
+            if (typeof request.targetCommitId !== 'string' || !OID_PATTERN.test(request.targetCommitId)) {
+                throw validationError('Rollback targetCommitId must be a SHA-256 commit id');
+            }
+            if (request.force !== undefined && typeof request.force !== 'boolean') {
+                throw validationError('Rollback force must be a boolean');
+            }
+            if (request.message !== undefined && typeof request.message !== 'string') {
+                throw validationError('Rollback message must be a string');
+            }
+            if (request.operationId !== undefined && typeof request.operationId !== 'string') {
+                throw validationError('Rollback operationId must be a string');
+            }
+            const operationId = request.operationId || node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+            if (operationId.length > 128 || !isSafeName(operationId)) {
+                throw validationError('Rollback operationId contains invalid characters');
+            }
+            const workspace = this.getStoredWorkspace(workspaceId);
+            this.recoverRefJournal(workspace);
+            const completed = this.readCompletedRollback(workspace.id, operationId);
+            if (completed) {
+                if (completed.targetCommitId !== request.targetCommitId) {
+                    throw workspaceConflict(`Rollback operation id was already used: ${operationId}`);
+                }
+                this.removeMatchingRollbackJournal(workspace.id, operationId);
+                return this.completedRollbackResponse(workspace, completed);
+            }
+            const pending = this.readRollbackJournal(workspace.id);
+            if (pending) {
+                if (pending.operationId !== operationId || pending.targetCommitId !== request.targetCommitId) {
+                    throw workspaceConflict(`Workspace rollback requires recovery: ${workspace.id}`);
+                }
+                return this.resumeRollbackLocked(workspace, pending);
+            }
+            const ref = this.readRef(workspace);
+            const target = this.readCommit(request.targetCommitId, workspace.id);
+            const head = ref.head ? this.readCommit(ref.head, workspace.id) : null;
+            const headPaths = head ? trackedPathsFromCommit(head) : [];
+            const restorePaths = trackedPathsFromCommit(target);
+            const safetyPaths = minimizePaths([
+                ...headPaths,
+                ...restorePaths,
+            ]);
+            const expected = head ? scopeTree(this.loadCommitTree(head), headPaths) : emptyTree();
+            const actualHead = this.captureTrackedWorkspace(workspace, headPaths, createObjectStats());
+            const targetTree = scopeTree(this.loadCommitTree(target), restorePaths);
+            const currentTree = this.captureTrackedWorkspace(workspace, restorePaths, createObjectStats());
+            const dirtyChanges = mergeDiffEntries(diffNodes(expected, actualHead), diffNodes(currentTree, targetTree).filter(change => !isTrackedPath(change.path, headPaths)));
+            if (dirtyChanges.length > 0 && request.force !== true) {
+                throw workspaceConflict('Workspace differs from its current history head', dirtyChanges);
+            }
+            const stats = createObjectStats();
+            const actual = this.captureTrackedWorkspace(workspace, safetyPaths, stats);
+            const safetyCommit = this.createCommit({
+                workspace,
+                tree: this.finalizeTree(actual, stats),
+                parents: ref.head ? [ref.head] : [],
+                message: `Before rollback to ${target.id.slice(0, 12)}`,
+                actor,
+                metadata: { authorityTrackedPaths: safetyPaths, rollbackSafetyFor: target.id, operationId },
+            });
+            this.writeCommit(safetyCommit);
+            const rollbackCommit = this.createCommit({
+                workspace,
+                tree: target.tree,
+                parents: [safetyCommit.id],
+                message: request.message?.trim() || `Rollback to ${target.id.slice(0, 12)}`,
+                actor,
+                metadata: { authorityTrackedPaths: restorePaths, rollbackOf: target.id, operationId },
+            });
+            this.writeCommit(rollbackCommit);
+            const journal = {
+                format: ROLLBACK_JOURNAL_FORMAT,
+                workspaceId: workspace.id,
+                operationId,
+                targetCommitId: target.id,
+                previousHead: ref.head,
+                previousGeneration: ref.generation,
+                safetyCommitId: safetyCommit.id,
+                safetyGeneration: ref.generation + 1,
+                rollbackCommitId: rollbackCommit.id,
+                trackedPaths: safetyPaths,
+                changedPaths: diffNodes(currentTree, targetTree).length,
+                startedAt: this.now(),
+            };
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.rollbackJournalPath(workspace.id), journal);
+            return this.resumeRollbackLocked(workspace, journal);
+        });
+    }
+    async resumeRollback(workspaceId) {
+        return await this.withLock(`workspace-${workspaceId}`, async () => {
+            const workspace = this.getStoredWorkspace(workspaceId);
+            this.recoverRefJournal(workspace);
+            const journal = this.readRollbackJournal(workspace.id);
+            if (!journal) {
+                throw validationError(`Workspace has no pending rollback: ${workspace.id}`);
+            }
+            const completed = this.readCompletedRollback(workspace.id, journal.operationId);
+            if (completed) {
+                this.removeRollbackJournal(workspace.id);
+                return this.completedRollbackResponse(workspace, completed);
+            }
+            return this.resumeRollbackLocked(workspace, journal);
+        });
+    }
+    resumeRollbackLocked(workspace, initialJournal) {
+        let journal = initialJournal;
+        const target = this.readCommit(journal.targetCommitId, workspace.id);
+        let rollbackCommit = this.readCommit(journal.rollbackCommitId, workspace.id);
+        let ref = this.readRef(workspace);
+        if (ref.head === rollbackCommit.id && ref.generation === journal.safetyGeneration + 1) {
+            return this.finishRollback(workspace, journal, rollbackCommit, []);
+        }
+        if (ref.head === journal.previousHead && ref.generation === journal.previousGeneration) {
+            ref = this.publishRef(workspace, ref, journal.safetyCommitId);
+        }
+        else if (ref.head !== journal.safetyCommitId || ref.generation !== journal.safetyGeneration) {
+            throw workspaceConflict('Pending rollback no longer matches the workspace head');
+        }
+        let stable = false;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const safetyCommit = this.readCommit(journal.safetyCommitId, workspace.id);
+            const expectedSafety = scopeTree(this.loadCommitTree(safetyCommit), journal.trackedPaths);
+            const actualSafety = this.captureTrackedWorkspace(workspace, journal.trackedPaths, createObjectStats());
+            if (diffNodes(expectedSafety, actualSafety).length === 0) {
+                stable = true;
+                break;
+            }
+            if (attempt === 2) {
+                break;
+            }
+            journal = this.restageRollbackSafety(workspace, journal, ref, actualSafety);
+            rollbackCommit = this.readCommit(journal.rollbackCommitId, workspace.id);
+            ref = this.publishRef(workspace, ref, journal.safetyCommitId);
+        }
+        if (!stable) {
+            throw workspaceConflict('Workspace kept changing while preparing rollback; retry recovery when writes are idle');
+        }
+        const restorePaths = trackedPathsFromCommit(target);
+        const currentTree = this.captureTrackedWorkspace(workspace, restorePaths, createObjectStats());
+        const targetTree = scopeTree(this.loadCommitTree(target), restorePaths);
+        const warnings = this.applyTree(workspace, currentTree, targetTree);
+        this.publishRef(workspace, ref, rollbackCommit.id);
+        return this.finishRollback(workspace, journal, rollbackCommit, warnings);
+    }
+    restageRollbackSafety(workspace, journal, ref, actual) {
+        const previousSafety = this.readCommit(journal.safetyCommitId, workspace.id);
+        const previousRollback = this.readCommit(journal.rollbackCommitId, workspace.id);
+        const stats = createObjectStats();
+        const safetyCommit = this.createCommit({
+            workspace,
+            tree: this.finalizeTree(actual, stats),
+            parents: ref.head ? [ref.head] : [],
+            message: previousSafety.message,
+            actor: previousSafety.actor,
+            ...(previousSafety.runId ? { runId: previousSafety.runId } : {}),
+            ...(previousSafety.toolCallId ? { toolCallId: previousSafety.toolCallId } : {}),
+            ...(previousSafety.metadata ? { metadata: previousSafety.metadata } : {}),
+        });
+        this.writeCommit(safetyCommit);
+        const rollbackCommit = this.createCommit({
+            workspace,
+            tree: previousRollback.tree,
+            parents: [safetyCommit.id],
+            message: previousRollback.message,
+            actor: previousRollback.actor,
+            ...(previousRollback.runId ? { runId: previousRollback.runId } : {}),
+            ...(previousRollback.toolCallId ? { toolCallId: previousRollback.toolCallId } : {}),
+            ...(previousRollback.metadata ? { metadata: previousRollback.metadata } : {}),
+        });
+        this.writeCommit(rollbackCommit);
+        const next = {
+            ...journal,
+            previousHead: ref.head,
+            previousGeneration: ref.generation,
+            safetyCommitId: safetyCommit.id,
+            safetyGeneration: ref.generation + 1,
+            rollbackCommitId: rollbackCommit.id,
+        };
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.rollbackJournalPath(workspace.id), next);
+        return next;
+    }
+    finishRollback(workspace, journal, rollbackCommit, warnings) {
+        const completed = {
+            format: COMPLETED_ROLLBACK_FORMAT,
+            workspaceId: workspace.id,
+            operationId: journal.operationId,
+            targetCommitId: journal.targetCommitId,
+            rollbackCommitId: rollbackCommit.id,
+            changedPaths: journal.changedPaths,
+            warnings,
+            completedAt: this.now(),
+        };
+        this.writeCompletedRollback(completed);
+        this.removeRollbackJournal(workspace.id);
+        return this.completedRollbackResponse(workspace, completed);
+    }
+    completedRollbackResponse(workspace, completed) {
+        return {
+            operationId: completed.operationId,
+            workspace: this.withCurrentHead(workspace),
+            restoredCommitId: completed.targetCommitId,
+            rollbackCommit: this.readCommit(completed.rollbackCommitId, workspace.id),
+            changedPaths: completed.changedPaths,
+            warnings: completed.warnings,
+        };
+    }
+    checkpointLocked(workspace, request, actor) {
+        if (typeof request.message !== 'string') {
+            throw validationError('Checkpoint message is required');
+        }
+        if (request.paths !== undefined && (!Array.isArray(request.paths) || request.paths.some(entry => typeof entry !== 'string'))) {
+            throw validationError('Checkpoint paths must be an array of strings');
+        }
+        if ((request.paths?.length ?? 0) > 1_000) {
+            throw validationError('Checkpoint paths exceed the 1000 item limit');
+        }
+        if (request.metadata !== undefined && (!request.metadata || typeof request.metadata !== 'object' || Array.isArray(request.metadata))) {
+            throw validationError('Checkpoint metadata must be an object');
+        }
+        if (request.runId !== undefined && typeof request.runId !== 'string') {
+            throw validationError('Checkpoint runId must be a string');
+        }
+        if (request.toolCallId !== undefined && typeof request.toolCallId !== 'string') {
+            throw validationError('Checkpoint toolCallId must be a string');
+        }
+        const message = request.message.trim();
+        if (!message) {
+            throw validationError('Checkpoint message is required');
+        }
+        if (message.length > 1_000) {
+            throw validationError('Checkpoint message exceeds 1000 characters');
+        }
+        const ref = this.readRef(workspace);
+        const parent = ref.head ? this.readCommit(ref.head, workspace.id) : null;
+        let tree = parent ? this.loadCommitTree(parent) : emptyTree();
+        const requestedPaths = normalizeRequestedPaths(request.paths);
+        const trackedPaths = minimizePaths([
+            ...(parent ? trackedPathsFromCommit(parent) : []),
+            ...requestedPaths,
+        ]);
+        const stats = createObjectStats();
+        for (const relativePath of requestedPaths) {
+            const captured = this.capturePath(workspace, relativePath, stats);
+            tree = setTreePath(tree, relativePath, captured);
+        }
+        const treeId = this.finalizeTree(tree, stats);
+        const metadata = {
+            ...(request.metadata ?? {}),
+            authorityTrackedPaths: trackedPaths,
+        };
+        const commit = this.createCommit({
+            workspace,
+            tree: treeId,
+            parents: ref.head ? [ref.head] : [],
+            message,
+            actor,
+            ...(request.runId ? { runId: request.runId } : {}),
+            ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
+            metadata,
+        });
+        this.writeCommit(commit);
+        this.publishRef(workspace, ref, commit.id);
+        return {
+            workspace: this.withCurrentHead(workspace),
+            commit,
+            changedPaths: diffNodes(parent ? this.loadCommitTree(parent) : emptyTree(), tree).length,
+            storedBytes: stats.storedBytes,
+            reusedBytes: stats.reusedBytes,
+        };
+    }
+    captureTrackedWorkspace(workspace, trackedPaths, stats) {
+        this.assertWorkspaceRoot(workspace);
+        let tree = emptyTree();
+        for (const relativePath of trackedPaths) {
+            const captured = this.captureScopedPath(workspace, relativePath, stats);
+            tree = captured.node
+                ? setTreePath(tree, captured.path, captured.node)
+                : ensureTreeAncestors(tree, relativePath);
+        }
+        return tree;
+    }
+    captureScopedPath(workspace, relativePath, stats) {
+        if (relativePath === '.') {
+            return { path: '.', node: this.scanNode(workspace, workspace.rootPath, '.', stats) };
+        }
+        const segments = relativePath.split('/');
+        let absolutePath = workspace.rootPath;
+        for (let index = 0; index < segments.length; index += 1) {
+            absolutePath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(absolutePath, segments[index]);
+            const currentPath = segments.slice(0, index + 1).join('/');
+            if (this.isExcluded(workspace, currentPath, absolutePath)) {
+                throw new Error(`Workspace history excludes path: ${currentPath}`);
+            }
+            let stat;
+            try {
+                stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+            }
+            catch (error) {
+                if (isFsError(error, 'ENOENT') || isFsError(error, 'ENOTDIR')) {
+                    return { path: relativePath };
+                }
+                throw error;
+            }
+            if (index === segments.length - 1 || !stat.isDirectory() || stat.isSymbolicLink()) {
+                return { path: currentPath, node: this.scanNode(workspace, absolutePath, currentPath, stats) };
+            }
+        }
+        return { path: relativePath };
+    }
+    capturePath(workspace, relativePath, stats) {
+        const absolutePath = this.resolveSafeWorkspacePath(workspace, relativePath);
+        if (this.isExcluded(workspace, relativePath, absolutePath)) {
+            throw new Error(`Workspace history excludes path: ${relativePath}`);
+        }
+        try {
+            return this.scanNode(workspace, absolutePath, relativePath, stats);
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOENT')) {
+                return undefined;
+            }
+            throw error;
+        }
+    }
+    scanNode(workspace, absolutePath, relativePath, stats) {
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        const mode = stat.mode & 0o777;
+        if (stat.isSymbolicLink()) {
+            const payload = { format: SYMLINK_FORMAT, target: node_fs__WEBPACK_IMPORTED_MODULE_1___default().readlinkSync(absolutePath) };
+            assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+            const object = Buffer.from(canonicalJson(payload), 'utf8');
+            return { kind: 'symlink', mode, oid: this.writeObject(object, stats), sizeBytes: object.byteLength };
+        }
+        if (stat.isFile()) {
+            const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(absolutePath, (node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_RDONLY | ((node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_NOFOLLOW ?? 0));
+            let content;
+            try {
+                assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), relativePath);
+                content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(descriptor);
+                assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), relativePath);
+            }
+            finally {
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+            }
+            return { kind: 'blob', mode, oid: this.writeObject(content, stats), sizeBytes: content.byteLength };
+        }
+        if (!stat.isDirectory()) {
+            throw new Error(`Unsupported workspace entry: ${relativePath}`);
+        }
+        const children = new Map();
+        const childKeys = new Set();
+        const entries = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(absolutePath, { withFileTypes: true })
+            .sort((left, right) => left.name.localeCompare(right.name));
+        for (const entry of entries) {
+            validateEntryName(entry.name);
+            const childKey = fileNameKey(entry.name);
+            if (childKeys.has(childKey)) {
+                throw new Error(`Workspace contains colliding names: ${relativePath}/${entry.name}`);
+            }
+            childKeys.add(childKey);
+            const childRelative = relativePath === '.' ? entry.name : `${relativePath}/${entry.name}`;
+            const childAbsolute = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(absolutePath, entry.name);
+            if (this.isExcluded(workspace, childRelative, childAbsolute)) {
+                continue;
+            }
+            children.set(entry.name, this.scanNode(workspace, childAbsolute, childRelative, stats));
+        }
+        assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+        return { kind: 'tree', mode, children };
+    }
+    finalizeTree(tree, stats) {
+        return this.finalizeNode(tree, stats);
+    }
+    finalizeNode(node, stats) {
+        if (node.kind !== 'tree') {
+            return node.oid;
+        }
+        if (node.oid) {
+            return node.oid;
+        }
+        const entries = [...node.children.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([name, child]) => ({
+            name,
+            kind: child.kind,
+            oid: this.finalizeNode(child, stats),
+            mode: child.mode,
+            ...(child.kind !== 'tree' && child.sizeBytes !== undefined ? { sizeBytes: child.sizeBytes } : {}),
+        }));
+        const treeObject = { format: 'authority-workspace-tree/v1', entries };
+        node.oid = this.writeObject(Buffer.from(canonicalJson(treeObject), 'utf8'), stats);
+        return node.oid;
+    }
+    loadCommitTree(commit) {
+        return this.loadTree(commit.tree, new Set());
+    }
+    loadTree(oid, ancestors) {
+        if (ancestors.has(oid)) {
+            throw new Error(`Workspace tree cycle detected at ${oid}`);
+        }
+        const nextAncestors = new Set(ancestors);
+        nextAncestors.add(oid);
+        const value = parseJson(this.readObject(oid).toString('utf8'), `tree object ${oid}`);
+        if (value.format !== 'authority-workspace-tree/v1' || !Array.isArray(value.entries)) {
+            throw new Error(`Invalid workspace tree object: ${oid}`);
+        }
+        const children = new Map();
+        const childKeys = new Set();
+        for (const entry of value.entries) {
+            validateTreeEntry(entry);
+            const childKey = fileNameKey(entry.name);
+            if (childKeys.has(childKey)) {
+                throw new Error(`Duplicate workspace tree entry: ${entry.name}`);
+            }
+            childKeys.add(childKey);
+            if (entry.kind === 'tree') {
+                const childTree = this.loadTree(entry.oid, nextAncestors);
+                childTree.mode = entry.mode;
+                children.set(entry.name, childTree);
+            }
+            else {
+                children.set(entry.name, {
+                    kind: entry.kind,
+                    mode: entry.mode,
+                    oid: entry.oid,
+                    ...(entry.sizeBytes === undefined ? {} : { sizeBytes: entry.sizeBytes }),
+                });
+            }
+        }
+        return { kind: 'tree', mode: 0o755, oid, children };
+    }
+    applyTree(workspace, current, target) {
+        // ponytail: Node has no portable openat/renameat; use native dirfd operations if hostile same-account path swaps enter the threat model.
+        const warnings = [];
+        for (const name of childNames(current, target)) {
+            this.applyNode(workspace, name, getTreeChild(current, name), getTreeChild(target, name), warnings);
+        }
+        return warnings;
+    }
+    applyNode(workspace, relativePath, current, target, warnings) {
+        if (nodesEqual(current, target)) {
+            return;
+        }
+        this.assertWorkspaceNodeUnchanged(workspace, relativePath, current);
+        const absolutePath = this.resolveSafeWorkspacePath(workspace, relativePath);
+        if (!target) {
+            this.removeWorkspaceNode(workspace, relativePath, current, warnings);
+            return;
+        }
+        if (current?.kind === 'tree' && target.kind === 'tree') {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
+            this.assertWorkspaceDirectory(workspace, relativePath);
+            for (const name of childNames(current, target)) {
+                this.applyNode(workspace, `${relativePath}/${name}`, getTreeChild(current, name), getTreeChild(target, name), warnings);
+            }
+            if (!target.synthetic) {
+                applyMode(absolutePath, target.mode);
+            }
+            return;
+        }
+        if (current) {
+            this.removeWorkspaceNode(workspace, relativePath, current, warnings);
+        }
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
+        this.resolveSafeWorkspacePath(workspace, relativePath);
+        if (target.kind === 'tree') {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
+            this.assertWorkspaceDirectory(workspace, relativePath);
+            for (const [name, child] of [...target.children.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+                this.applyNode(workspace, `${relativePath}/${name}`, undefined, child, warnings);
+            }
+            if (!target.synthetic) {
+                applyMode(absolutePath, target.mode);
+            }
+            return;
+        }
+        if (target.kind === 'blob') {
+            this.assertWorkspaceNodeUnchanged(workspace, relativePath, undefined);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(absolutePath, this.readObject(target.oid));
+            applyMode(absolutePath, target.mode);
+            return;
+        }
+        const symlink = parseJson(this.readObject(target.oid).toString('utf8'), `symlink object ${target.oid}`);
+        if (symlink.format !== SYMLINK_FORMAT || typeof symlink.target !== 'string' || symlink.target.includes('\0')) {
+            throw new Error(`Invalid workspace symlink object: ${target.oid}`);
+        }
+        try {
+            this.assertWorkspaceNodeUnchanged(workspace, relativePath, undefined);
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().symlinkSync(symlink.target, absolutePath);
+        }
+        catch (error) {
+            warnings.push(`Could not restore symlink ${relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+        }
+    }
+    removeWorkspaceNode(workspace, relativePath, current, warnings) {
+        if (!current) {
+            return;
+        }
+        this.assertWorkspaceNodeUnchanged(workspace, relativePath, current);
+        const absolutePath = this.resolveSafeWorkspacePath(workspace, relativePath);
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.isPathInside)(workspace.rootPath, absolutePath) || samePath(workspace.rootPath, absolutePath)) {
+            throw new Error(`Refusing to remove path outside workspace: ${absolutePath}`);
+        }
+        if (current.kind !== 'tree') {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(absolutePath, { force: true });
+            return;
+        }
+        for (const [name, child] of [...current.children.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+            this.removeWorkspaceNode(workspace, `${relativePath}/${name}`, child, warnings);
+        }
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmdirSync(absolutePath);
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOENT')) {
+                return;
+            }
+            if (isFsError(error, 'ENOTEMPTY') || isFsError(error, 'EEXIST')) {
+                warnings.push(`Preserved non-empty directory outside the tracked snapshot: ${relativePath}`);
+                return;
+            }
+            throw error;
+        }
+    }
+    assertWorkspaceNodeUnchanged(workspace, relativePath, expected) {
+        if (expected?.kind === 'tree') {
+            this.assertWorkspaceDirectory(workspace, relativePath, expected.synthetic ? undefined : expected.mode);
+            return;
+        }
+        let actual;
+        try {
+            actual = this.capturePath(workspace, relativePath, createObjectStats());
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOTDIR')) {
+                actual = undefined;
+            }
+            else {
+                throw error;
+            }
+        }
+        if (!nodesEqual(expected, actual)) {
+            throw workspaceConflict(`Workspace path changed while rollback was applying: ${relativePath}`);
+        }
+    }
+    assertWorkspaceDirectory(workspace, relativePath, expectedMode) {
+        const absolutePath = this.resolveSafeWorkspacePath(workspace, relativePath);
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        if (stat.isSymbolicLink() || !stat.isDirectory() || (expectedMode !== undefined && (stat.mode & 0o777) !== expectedMode)) {
+            throw workspaceConflict(`Workspace directory changed while rollback was applying: ${relativePath}`);
+        }
+    }
+    resolveSafeWorkspacePath(workspace, relativePath) {
+        this.assertWorkspaceRoot(workspace);
+        const normalized = normalizeRelativePath(relativePath);
+        const absolutePath = normalized === '.'
+            ? workspace.rootPath
+            : node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(workspace.rootPath, ...normalized.split('/'));
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.isPathInside)(workspace.rootPath, absolutePath)) {
+            throw new Error(`Path escapes workspace: ${relativePath}`);
+        }
+        if (normalized === '.') {
+            return absolutePath;
+        }
+        let current = workspace.rootPath;
+        const segments = normalized.split('/');
+        for (const segment of segments.slice(0, -1)) {
+            current = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, segment);
+            try {
+                if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(current).isSymbolicLink()) {
+                    throw new Error(`Path traverses a symlink: ${relativePath}`);
+                }
+            }
+            catch (error) {
+                if (isFsError(error, 'ENOENT')) {
+                    break;
+                }
+                throw error;
+            }
+        }
+        return absolutePath;
+    }
+    assertWorkspaceRoot(workspace) {
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(workspace.rootPath);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(workspace.rootPath), workspace.rootPath)) {
+            throw new Error(`Workspace root changed or is no longer a real directory: ${workspace.rootPath}`);
+        }
+    }
+    isExcluded(workspace, relativePath, absolutePath) {
+        const segments = relativePath === '.' ? [] : relativePath.split('/');
+        return segments.some(segment => EXCLUDED_SEGMENTS.has(process.platform === 'win32' ? segment.toLowerCase() : segment))
+            || samePath(absolutePath, this.storeDir)
+            || (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.isPathInside)(this.storeDir, absolutePath);
+    }
+    createCommit(input) {
+        const unsigned = {
+            format: 'authority-workspace-commit/v1',
+            workspaceId: input.workspace.id,
+            tree: input.tree,
+            parents: input.parents,
+            message: input.message,
+            createdAt: this.now(),
+            actor: input.actor,
+            ...(input.runId ? { runId: input.runId } : {}),
+            ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+            ...(input.metadata ? { metadata: input.metadata } : {}),
+        };
+        return { ...unsigned, id: sha256(Buffer.from(canonicalJson(unsigned), 'utf8')) };
+    }
+    writeCommit(commit) {
+        const filePath = this.commitPath(commit.id);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            this.readCommit(commit.id, commit.workspaceId);
+            return;
+        }
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
+    }
+    readCommit(commitId, workspaceId) {
+        assertOid(commitId);
+        const filePath = this.commitPath(commitId);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            throw new Error(`Workspace commit not found: ${commitId}`);
+        }
+        const commit = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), `commit ${commitId}`);
+        if (commit.format !== 'authority-workspace-commit/v1' || commit.id !== commitId || !Array.isArray(commit.parents)) {
+            throw new Error(`Invalid workspace commit: ${commitId}`);
+        }
+        assertOid(commit.tree);
+        for (const parent of commit.parents) {
+            assertOid(parent);
+        }
+        if (workspaceId && commit.workspaceId !== workspaceId) {
+            throw new Error(`Commit ${commitId} belongs to another workspace`);
+        }
+        const { id: _id, ...unsigned } = commit;
+        if (sha256(Buffer.from(canonicalJson(unsigned), 'utf8')) !== commitId) {
+            throw new Error(`Workspace commit hash mismatch: ${commitId}`);
+        }
+        return commit;
+    }
+    writeObject(content, stats) {
+        const oid = sha256(content);
+        const filePath = this.objectPath(oid);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            stats.reusedBytes += content.byteLength;
+            return oid;
+        }
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
+        stats.storedBytes += content.byteLength;
+        return oid;
+    }
+    readObject(oid) {
+        assertOid(oid);
+        const filePath = this.objectPath(oid);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            throw new Error(`Workspace object not found: ${oid}`);
+        }
+        const content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath);
+        if (sha256(content) !== oid) {
+            throw new Error(`Workspace object hash mismatch: ${oid}`);
+        }
+        return content;
+    }
+    publishRef(workspace, expected, head) {
+        const current = this.readRef(workspace);
+        if (current.generation !== expected.generation || current.head !== expected.head) {
+            throw workspaceConflict(`Workspace ref changed while updating ${workspace.id}`);
+        }
+        const next = {
+            ...current,
+            head,
+            generation: current.generation + 1,
+            updatedAt: this.now(),
+        };
+        const journal = {
+            format: REF_JOURNAL_FORMAT,
+            workspaceId: workspace.id,
+            expectedGeneration: current.generation,
+            next,
+            createdAt: this.now(),
+        };
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refJournalPath(workspace.id), journal);
+        this.writeRef(next);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.refJournalPath(workspace.id), { force: true });
+        return next;
+    }
+    recoverRefJournal(workspace) {
+        const filePath = this.refJournalPath(workspace.id);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            return;
+        }
+        const journal = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), `ref journal ${workspace.id}`);
+        if (journal.format !== REF_JOURNAL_FORMAT || journal.workspaceId !== workspace.id) {
+            throw new Error(`Invalid workspace ref journal: ${workspace.id}`);
+        }
+        if (journal.next.format !== 'authority-workspace-ref/v1'
+            || journal.next.workspaceId !== workspace.id
+            || journal.next.name !== workspace.defaultRef
+            || journal.next.generation !== journal.expectedGeneration + 1
+            || !OID_PATTERN.test(journal.next.head ?? '')) {
+            throw new Error(`Invalid workspace ref journal target: ${workspace.id}`);
+        }
+        const current = this.readRef(workspace);
+        if (current.generation === journal.expectedGeneration) {
+            this.writeRef(journal.next);
+        }
+        else if (current.generation === journal.next.generation && current.head !== journal.next.head) {
+            throw workspaceConflict(`Workspace ref journal conflicts with current head: ${workspace.id}`);
+        }
+        else if (current.generation < journal.next.generation) {
+            throw workspaceConflict(`Workspace ref generation moved backwards: ${workspace.id}`);
+        }
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(filePath, { force: true });
+    }
+    readRef(workspace) {
+        const filePath = this.refPath(workspace.id, workspace.defaultRef);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            return {
+                format: 'authority-workspace-ref/v1',
+                workspaceId: workspace.id,
+                name: workspace.defaultRef,
+                head: null,
+                generation: 0,
+                updatedAt: workspace.createdAt,
+            };
+        }
+        const ref = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), `workspace ref ${workspace.id}`);
+        if (ref.format !== 'authority-workspace-ref/v1'
+            || ref.workspaceId !== workspace.id
+            || ref.name !== workspace.defaultRef
+            || !Number.isSafeInteger(ref.generation)
+            || ref.generation < 0
+            || (ref.head !== null && !OID_PATTERN.test(ref.head))) {
+            throw new Error(`Invalid workspace ref: ${workspace.id}`);
+        }
+        return ref;
+    }
+    writeRef(ref) {
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
+    }
+    readRegistry() {
+        this.ensureStore();
+        const filePath = this.registryPath();
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            return { format: STORE_FORMAT, workspaces: [] };
+        }
+        const registry = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), 'workspace registry');
+        if (registry.format !== STORE_FORMAT || !Array.isArray(registry.workspaces)) {
+            throw new Error('Invalid workspace registry');
+        }
+        for (const workspace of registry.workspaces) {
+            validateWorkspaceRecord(workspace);
+        }
+        return registry;
+    }
+    writeRegistry(registry) {
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
+    }
+    getStoredWorkspace(workspaceId) {
+        if (workspaceId.length > 128 || !isSafeName(workspaceId)) {
+            throw validationError('Workspace id contains invalid characters');
+        }
+        const workspace = this.readRegistry().workspaces.find(entry => entry.id === workspaceId);
+        if (!workspace) {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(`Workspace not found: ${workspaceId}`, 404, 'validation_error', 'validation');
+        }
+        return workspace;
+    }
+    withCurrentHead(workspace) {
+        const ref = this.readRef(workspace);
+        return { ...workspace, headCommitId: ref.head, updatedAt: ref.updatedAt };
+    }
+    resolveWorkspaceRoot(rootPath) {
+        const resolved = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(rootPath);
+        let stat;
+        try {
+            stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(resolved);
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOENT')) {
+                throw validationError(`Workspace root does not exist: ${resolved}`);
+            }
+            throw error;
+        }
+        if (!stat.isDirectory()) {
+            throw validationError(`Workspace root is not a directory: ${resolved}`);
+        }
+        return node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(resolved);
+    }
+    readRollbackJournal(workspaceId) {
+        const filePath = this.rollbackJournalPath(workspaceId);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            return null;
+        }
+        const journal = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), `rollback journal ${workspaceId}`);
+        if (journal.format !== ROLLBACK_JOURNAL_FORMAT
+            || journal.workspaceId !== workspaceId
+            || typeof journal.operationId !== 'string'
+            || !OID_PATTERN.test(journal.targetCommitId)
+            || (journal.previousHead !== null && !OID_PATTERN.test(journal.previousHead))
+            || !Number.isSafeInteger(journal.previousGeneration)
+            || journal.previousGeneration < 0
+            || !OID_PATTERN.test(journal.safetyCommitId)
+            || journal.safetyGeneration !== journal.previousGeneration + 1
+            || !OID_PATTERN.test(journal.rollbackCommitId)
+            || !Array.isArray(journal.trackedPaths)
+            || journal.trackedPaths.some(entry => typeof entry !== 'string')
+            || !Number.isSafeInteger(journal.changedPaths)
+            || journal.changedPaths < 0
+            || typeof journal.startedAt !== 'string') {
+            throw new Error(`Invalid workspace rollback journal: ${workspaceId}`);
+        }
+        assertSafeName(journal.operationId, 'rollback operation id');
+        return journal;
+    }
+    readCompletedRollback(workspaceId, operationId) {
+        const filePath = this.completedRollbackPath(workspaceId, operationId);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            return null;
+        }
+        const completed = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(filePath, 'utf8'), `completed rollback ${workspaceId}/${operationId}`);
+        if (completed.format !== COMPLETED_ROLLBACK_FORMAT
+            || completed.workspaceId !== workspaceId
+            || completed.operationId !== operationId
+            || !OID_PATTERN.test(completed.targetCommitId)
+            || !OID_PATTERN.test(completed.rollbackCommitId)
+            || !Number.isSafeInteger(completed.changedPaths)
+            || completed.changedPaths < 0
+            || !Array.isArray(completed.warnings)
+            || completed.warnings.some(entry => typeof entry !== 'string')
+            || typeof completed.completedAt !== 'string') {
+            throw new Error(`Invalid completed rollback: ${workspaceId}/${operationId}`);
+        }
+        return completed;
+    }
+    writeCompletedRollback(completed) {
+        const filePath = this.completedRollbackPath(completed.workspaceId, completed.operationId);
+        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            const existing = this.readCompletedRollback(completed.workspaceId, completed.operationId);
+            if (canonicalJson(existing) !== canonicalJson(completed)) {
+                throw workspaceConflict(`Rollback operation id was already used: ${completed.operationId}`);
+            }
+            return;
+        }
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
+    }
+    removeMatchingRollbackJournal(workspaceId, operationId) {
+        const journal = this.readRollbackJournal(workspaceId);
+        if (journal?.operationId === operationId) {
+            this.removeRollbackJournal(workspaceId);
+        }
+    }
+    assertNoPendingRollback(workspaceId) {
+        if (this.readRollbackJournal(workspaceId)) {
+            throw workspaceConflict(`Workspace rollback requires recovery: ${workspaceId}`);
+        }
+    }
+    removeRollbackJournal(workspaceId) {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(this.rollbackJournalPath(workspaceId), { force: true });
+    }
+    ensureStore() {
+        for (const dir of ['objects', 'commits', 'refs', 'journals', 'rollbacks', 'operations', 'locks']) {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
+        }
+    }
+    registryPath() {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'workspaces.json');
+    }
+    objectPath(oid) {
+        assertOid(oid);
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'objects', oid);
+    }
+    commitPath(commitId) {
+        assertOid(commitId);
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'commits', `${commitId}.json`);
+    }
+    refPath(workspaceId, refName) {
+        assertSafeName(workspaceId, 'workspace id');
+        assertSafeName(refName, 'workspace ref');
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'refs', workspaceId, `${refName}.json`);
+    }
+    refJournalPath(workspaceId) {
+        assertSafeName(workspaceId, 'workspace id');
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'journals', `${workspaceId}.json`);
+    }
+    rollbackJournalPath(workspaceId) {
+        assertSafeName(workspaceId, 'workspace id');
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'rollbacks', `${workspaceId}.json`);
+    }
+    completedRollbackPath(workspaceId, operationId) {
+        assertSafeName(workspaceId, 'workspace id');
+        assertSafeName(operationId, 'rollback operation id');
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'operations', workspaceId, `${operationId}.json`);
+    }
+    async withLock(name, run) {
+        this.ensureStore();
+        assertSafeName(name, 'lock name');
+        const lockPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, 'locks', `${name}.lock`);
+        const token = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const deadline = Date.now() + this.lockTimeoutMs;
+        while (true) {
+            try {
+                const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(lockPath, 'wx');
+                try {
+                    const lock = { token, pid: process.pid, hostname: node_os__WEBPACK_IMPORTED_MODULE_2___default().hostname(), createdAt: Date.now() };
+                    node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(descriptor, JSON.stringify(lock));
+                    node_fs__WEBPACK_IMPORTED_MODULE_1___default().fsyncSync(descriptor);
+                }
+                finally {
+                    node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+                }
+                break;
+            }
+            catch (error) {
+                if (!isFsError(error, 'EEXIST')) {
+                    throw error;
+                }
+                if (this.isStaleLock(lockPath) && this.claimStaleLock(lockPath)) {
+                    continue;
+                }
+                if (Date.now() >= deadline) {
+                    throw new Error(`Timed out waiting for workspace history lock: ${name}`);
+                }
+                await delay(50);
+            }
+        }
+        try {
+            return await run();
+        }
+        finally {
+            this.releaseOwnedLock(lockPath, token);
+        }
+    }
+    isStaleLock(lockPath) {
+        try {
+            const lock = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(lockPath, 'utf8'), 'workspace lock');
+            if (lock.hostname === node_os__WEBPACK_IMPORTED_MODULE_2___default().hostname() && Number.isSafeInteger(lock.pid)) {
+                return !isProcessAlive(lock.pid);
+            }
+            if (typeof lock.hostname === 'string' && lock.hostname) {
+                return false;
+            }
+            return Date.now() - Number(lock.createdAt ?? node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(lockPath).mtimeMs) > this.staleLockMs;
+        }
+        catch {
+            try {
+                return Date.now() - node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(lockPath).mtimeMs > this.staleLockMs;
+            }
+            catch {
+                return false;
+            }
+        }
+    }
+    claimStaleLock(lockPath) {
+        const claimedPath = `${lockPath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.stale`;
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(lockPath, claimedPath);
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(claimedPath, { force: true });
+            return true;
+        }
+        catch (error) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(claimedPath, { force: true });
+            if (isFsError(error, 'ENOENT') || isFsError(error, 'EACCES') || isFsError(error, 'EPERM')) {
+                return false;
+            }
+            throw error;
+        }
+    }
+    releaseOwnedLock(lockPath, token) {
+        try {
+            const lock = parseJson(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(lockPath, 'utf8'), 'workspace lock');
+            if (lock.token === token) {
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(lockPath, { force: true });
+            }
+        }
+        catch (error) {
+            if (!isFsError(error, 'ENOENT')) {
+                throw error;
+            }
+        }
+    }
+}
+function emptyTree(synthetic = false) {
+    return { kind: 'tree', mode: 0o755, ...(synthetic ? { synthetic: true } : {}), children: new Map() };
+}
+function scopeTree(tree, trackedPaths) {
+    if (trackedPaths.includes('.')) {
+        return tree;
+    }
+    let scoped = emptyTree();
+    for (const relativePath of trackedPaths) {
+        const found = findScopedNode(tree, relativePath);
+        scoped = found.node
+            ? setTreePath(scoped, found.path, found.node)
+            : ensureTreeAncestors(scoped, relativePath);
+    }
+    return scoped;
+}
+function findScopedNode(tree, relativePath) {
+    if (relativePath === '.') {
+        return { path: '.', node: tree };
+    }
+    const segments = relativePath.split('/');
+    let current = tree;
+    for (let index = 0; index < segments.length; index += 1) {
+        if (current.kind !== 'tree') {
+            return { path: segments.slice(0, index).join('/'), node: current };
+        }
+        const child = getTreeChild(current, segments[index]);
+        if (!child) {
+            return { path: relativePath };
+        }
+        current = child;
+    }
+    return { path: relativePath, node: current };
+}
+function ensureTreeAncestors(root, relativePath) {
+    if (relativePath === '.') {
+        return root;
+    }
+    let current = root;
+    delete current.oid;
+    for (const segment of relativePath.split('/').slice(0, -1)) {
+        const existing = getTreeChild(current, segment);
+        if (existing?.kind === 'tree') {
+            current = existing;
+        }
+        else if (existing) {
+            return root;
+        }
+        else {
+            const created = emptyTree(true);
+            setTreeChild(current, segment, created);
+            current = created;
+        }
+        delete current.oid;
+    }
+    return root;
+}
+function createObjectStats() {
+    return { storedBytes: 0, reusedBytes: 0 };
+}
+function setTreePath(root, relativePath, value) {
+    if (relativePath === '.') {
+        if (value && value.kind !== 'tree') {
+            throw new Error('Workspace root must be a directory');
+        }
+        return value ?? emptyTree();
+    }
+    const segments = relativePath.split('/');
+    let current = root;
+    delete current.oid;
+    for (const segment of segments.slice(0, -1)) {
+        const existing = getTreeChild(current, segment);
+        if (existing?.kind === 'tree') {
+            current = existing;
+        }
+        else if (!value) {
+            return root;
+        }
+        else {
+            const created = emptyTree(true);
+            setTreeChild(current, segment, created);
+            current = created;
+        }
+        delete current.oid;
+    }
+    const name = segments[segments.length - 1];
+    if (!name) {
+        throw new Error(`Invalid workspace path: ${relativePath}`);
+    }
+    if (value) {
+        setTreeChild(current, name, value);
+    }
+    else {
+        deleteTreeChild(current, name);
+    }
+    return root;
+}
+function normalizeRequestedPaths(paths) {
+    if (!paths || paths.length === 0) {
+        return ['.'];
+    }
+    return minimizePaths(paths.map(normalizeRelativePath));
+}
+function normalizeRelativePath(value) {
+    const input = value.replace(/\\/g, '/');
+    if (!input) {
+        throw validationError('Workspace path must not be empty');
+    }
+    if (input === '.') {
+        return '.';
+    }
+    if (input.includes('\0') || node_path__WEBPACK_IMPORTED_MODULE_3___default().posix.isAbsolute(input) || /^[a-zA-Z]:\//.test(input)) {
+        throw validationError(`Invalid workspace path: ${value}`);
+    }
+    const normalized = node_path__WEBPACK_IMPORTED_MODULE_3___default().posix.normalize(input).replace(/^\.\//, '').replace(/\/$/, '');
+    if (!normalized || normalized === '.') {
+        return '.';
+    }
+    if (normalized === '..' || normalized.startsWith('../')) {
+        throw validationError(`Path escapes workspace: ${value}`);
+    }
+    for (const segment of normalized.split('/')) {
+        try {
+            validateEntryName(segment);
+        }
+        catch {
+            throw validationError(`Invalid workspace path: ${value}`);
+        }
+    }
+    return normalized;
+}
+function minimizePaths(paths) {
+    const unique = [...new Set(paths.map(normalizeRelativePath))].sort((left, right) => {
+        const depth = left.split('/').length - right.split('/').length;
+        return depth || left.localeCompare(right);
+    });
+    const result = [];
+    for (const candidate of unique) {
+        const candidateKey = logicalPathKey(candidate);
+        if (result.some(parent => {
+            const parentKey = logicalPathKey(parent);
+            return parent === '.' || candidateKey === parentKey || candidateKey.startsWith(`${parentKey}/`);
+        })) {
+            continue;
+        }
+        result.push(candidate);
+    }
+    return result.sort();
+}
+function trackedPathsFromCommit(commit) {
+    const value = commit.metadata?.authorityTrackedPaths;
+    if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
+        return [];
+    }
+    return minimizePaths(value);
+}
+function isTrackedPath(relativePath, trackedPaths) {
+    const pathKey = logicalPathKey(relativePath);
+    return trackedPaths.some(trackedPath => {
+        const trackedKey = logicalPathKey(trackedPath);
+        return trackedPath === '.' || pathKey === trackedKey || pathKey.startsWith(`${trackedKey}/`);
+    });
+}
+function mergeDiffEntries(...groups) {
+    const entries = new Map();
+    for (const group of groups) {
+        for (const entry of group) {
+            entries.set(logicalPathKey(entry.path), entry);
+        }
+    }
+    return [...entries.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+function getTreeChild(tree, name) {
+    const key = fileNameKey(name);
+    for (const [candidate, child] of tree.children) {
+        if (fileNameKey(candidate) === key) {
+            return child;
+        }
+    }
+    return undefined;
+}
+function setTreeChild(tree, name, child) {
+    const key = fileNameKey(name);
+    for (const candidate of tree.children.keys()) {
+        if (fileNameKey(candidate) === key) {
+            tree.children.set(candidate, child);
+            return;
+        }
+    }
+    tree.children.set(name, child);
+}
+function deleteTreeChild(tree, name) {
+    const key = fileNameKey(name);
+    for (const candidate of tree.children.keys()) {
+        if (fileNameKey(candidate) === key) {
+            tree.children.delete(candidate);
+            return;
+        }
+    }
+}
+function childNames(...trees) {
+    const names = new Map();
+    for (const tree of trees) {
+        for (const name of tree.children.keys()) {
+            const key = fileNameKey(name);
+            if (!names.has(key)) {
+                names.set(key, name);
+            }
+        }
+    }
+    return [...names.values()].sort((left, right) => left.localeCompare(right));
+}
+function diffNodes(before, after) {
+    const entries = [];
+    diffTreeChildren(before, after, '', entries);
+    return entries.sort((left, right) => left.path.localeCompare(right.path));
+}
+function diffTreeChildren(before, after, prefix, output) {
+    for (const name of childNames(before, after)) {
+        const childPath = prefix ? `${prefix}/${name}` : name;
+        diffNode(getTreeChild(before, name), getTreeChild(after, name), childPath, output);
+    }
+}
+function diffNode(before, after, relativePath, output) {
+    if (nodesEqual(before, after)) {
+        return;
+    }
+    if (before?.kind === 'tree' && after?.kind === 'tree') {
+        if (before.mode !== after.mode) {
+            output.push({
+                path: relativePath,
+                status: 'modified',
+                beforeKind: 'tree',
+                afterKind: 'tree',
+                ...(before.oid ? { beforeOid: before.oid } : {}),
+                ...(after.oid ? { afterOid: after.oid } : {}),
+            });
+        }
+        diffTreeChildren(before, after, relativePath, output);
+        return;
+    }
+    if (!before && after?.kind === 'tree' && after.children.size > 0) {
+        for (const [name, child] of after.children) {
+            diffNode(undefined, child, `${relativePath}/${name}`, output);
+        }
+        return;
+    }
+    if (before?.kind === 'tree' && before.children.size > 0 && !after) {
+        for (const [name, child] of before.children) {
+            diffNode(child, undefined, `${relativePath}/${name}`, output);
+        }
+        return;
+    }
+    output.push({
+        path: relativePath,
+        status: !before ? 'added' : !after ? 'deleted' : before.kind === after.kind ? 'modified' : 'type_changed',
+        ...(before ? { beforeKind: before.kind, beforeOid: before.oid } : {}),
+        ...(after ? { afterKind: after.kind, afterOid: after.oid } : {}),
+        ...(before?.kind !== 'tree' && before?.sizeBytes !== undefined ? { beforeSizeBytes: before.sizeBytes } : {}),
+        ...(after?.kind !== 'tree' && after?.sizeBytes !== undefined ? { afterSizeBytes: after.sizeBytes } : {}),
+    });
+}
+function nodesEqual(left, right) {
+    if (!left || !right || left.kind !== right.kind || left.mode !== right.mode) {
+        return left === right;
+    }
+    if (left.kind !== 'tree' && right.kind !== 'tree') {
+        return left.oid === right.oid;
+    }
+    if (left.kind !== 'tree' || right.kind !== 'tree' || left.children.size !== right.children.size) {
+        return false;
+    }
+    for (const [name, child] of left.children) {
+        if (!nodesEqual(child, getTreeChild(right, name))) {
+            return false;
+        }
+    }
+    return true;
+}
+function validateTreeEntry(entry) {
+    if (!entry
+        || typeof entry.name !== 'string'
+        || !isTreeKind(entry.kind)
+        || !OID_PATTERN.test(entry.oid)
+        || !Number.isSafeInteger(entry.mode)) {
+        throw new Error('Invalid workspace tree entry');
+    }
+    validateEntryName(entry.name);
+}
+function validateEntryName(name) {
+    if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\') || name.includes('\0')) {
+        throw new Error(`Invalid workspace entry name: ${name}`);
+    }
+    if (process.platform === 'win32') {
+        const stem = name.split('.')[0]?.toUpperCase() ?? '';
+        if (/[<>:"|?*]/.test(name)
+            || /[ .]$/.test(name)
+            || /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) {
+            throw new Error(`Invalid Windows workspace entry name: ${name}`);
+        }
+    }
+}
+function fileNameKey(value) {
+    return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+function logicalPathKey(value) {
+    return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+function validateWorkspaceRecord(workspace) {
+    if (!workspace || typeof workspace !== 'object') {
+        throw new Error('Invalid workspace registry entry');
+    }
+    assertSafeName(workspace.id, 'workspace id');
+    assertSafeName(workspace.defaultRef, 'workspace ref');
+    if (typeof workspace.displayName !== 'string'
+        || !workspace.displayName.trim()
+        || typeof workspace.rootPath !== 'string'
+        || !node_path__WEBPACK_IMPORTED_MODULE_3___default().isAbsolute(workspace.rootPath)
+        || (workspace.headCommitId !== null && !OID_PATTERN.test(workspace.headCommitId))
+        || typeof workspace.createdAt !== 'string'
+        || typeof workspace.updatedAt !== 'string') {
+        throw new Error(`Invalid workspace registry entry: ${workspace.id}`);
+    }
+}
+function isTreeKind(value) {
+    return value === 'blob' || value === 'tree' || value === 'symlink';
+}
+function canonicalJson(value) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+        return JSON.stringify(value);
+    }
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value)) {
+            throw new Error('Workspace history values must be finite numbers');
+        }
+        return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map(item => canonicalJson(item)).join(',')}]`;
+    }
+    if (typeof value === 'object') {
+        const entries = Object.entries(value)
+            .filter(([, item]) => item !== undefined)
+            .sort(([left], [right]) => left.localeCompare(right));
+        return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+    }
+    throw new Error(`Unsupported workspace history value: ${typeof value}`);
+}
+function parseJson(value, label) {
+    try {
+        return JSON.parse(value);
+    }
+    catch (error) {
+        throw new Error(`Invalid ${label}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+function sha256(content) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(content).digest('hex');
+}
+function assertOid(value) {
+    if (!OID_PATTERN.test(value)) {
+        throw new Error(`Invalid workspace object id: ${value}`);
+    }
+}
+function assertSafeName(value, label) {
+    if (!isSafeName(value)) {
+        throw new Error(`Invalid ${label}: ${value}`);
+    }
+}
+function isSafeName(value) {
+    return SAFE_NAME_PATTERN.test(value) && value !== '.' && value !== '..';
+}
+function workspaceConflict(message, changes = []) {
+    const error = new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(message, 409, 'workspace_conflict', 'concurrency', {
+        changes: changes.slice(0, 100),
+        totalChanges: changes.length,
+    });
+    error.name = 'WorkspaceConflictError';
+    return error;
+}
+function validationError(message) {
+    return new _utils_js__WEBPACK_IMPORTED_MODULE_4__.AuthorityServiceError(message, 400, 'validation_error', 'validation');
+}
+function samePath(left, right) {
+    const normalize = (value) => process.platform === 'win32' ? node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(value).toLowerCase() : node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(value);
+    return normalize(left) === normalize(right);
+}
+function isFsError(error, code) {
+    return error instanceof Error && error.code === code;
+}
+function assertSameFile(before, after, relativePath) {
+    const sameKind = before.isFile() === after.isFile()
+        && before.isDirectory() === after.isDirectory()
+        && before.isSymbolicLink() === after.isSymbolicLink();
+    const unchangedFile = !before.isFile()
+        || (before.size === after.size && before.mtimeMs === after.mtimeMs);
+    if (before.dev !== after.dev || before.ino !== after.ino || !sameKind || !unchangedFile) {
+        throw workspaceConflict(`Workspace path changed while it was being captured: ${relativePath}`);
+    }
+}
+function isProcessAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        return !isFsError(error, 'ESRCH');
+    }
+}
+function applyMode(filePath, mode) {
+    if (process.platform !== 'win32') {
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(filePath, mode);
+    }
+}
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+
+/***/ },
+
 /***/ "./src/services/zip-archive.ts"
 /*!*************************************!*\
   !*** ./src/services/zip-archive.ts ***!
@@ -14390,6 +16803,7 @@ function getGlobalAuthorityPaths() {
     const stateDir = node_path__WEBPACK_IMPORTED_MODULE_0___default().join(baseDir, 'state');
     return {
         controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
+        agentWorkspacesDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'agent-workspaces'),
     };
 }
 
@@ -14406,6 +16820,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   AuthorityServiceError: () => (/* binding */ AuthorityServiceError),
 /* harmony export */   asErrorMessage: () => (/* binding */ asErrorMessage),
+/* harmony export */   atomicWriteFile: () => (/* binding */ atomicWriteFile),
 /* harmony export */   atomicWriteJson: () => (/* binding */ atomicWriteJson),
 /* harmony export */   buildPermissionDescriptor: () => (/* binding */ buildPermissionDescriptor),
 /* harmony export */   ensureDir: () => (/* binding */ ensureDir),
@@ -14483,10 +16898,28 @@ function ensureDir(dirPath) {
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(dirPath, { recursive: true });
 }
 function atomicWriteJson(filePath, value) {
-    ensureDir(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
+    atomicWriteFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+function atomicWriteFile(filePath, value) {
+    const parentDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath);
+    ensureDir(parentDir);
     const tempPath = `${filePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
-    node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf8');
-    node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
+    let fileDescriptor = null;
+    try {
+        fileDescriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(tempPath, 'wx');
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(fileDescriptor, value);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().fsyncSync(fileDescriptor);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(fileDescriptor);
+        fileDescriptor = null;
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
+        fsyncDirectory(parentDir);
+    }
+    finally {
+        if (fileDescriptor !== null) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(fileDescriptor);
+        }
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(tempPath, { force: true });
+    }
 }
 function readJsonFile(filePath, fallback) {
     if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
@@ -14654,6 +17087,24 @@ function stripTrailingDot(value) {
 }
 function looksLikeAbsoluteUrl(value) {
     return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
+}
+function fsyncDirectory(dirPath) {
+    let fileDescriptor = null;
+    try {
+        fileDescriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(dirPath, 'r');
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().fsyncSync(fileDescriptor);
+    }
+    catch (error) {
+        // Windows does not consistently allow directory handles to be fsynced.
+        if (process.platform !== 'win32') {
+            throw error;
+        }
+    }
+    finally {
+        if (fileDescriptor !== null) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(fileDescriptor);
+        }
+    }
 }
 function resolveUserDirectories(directories) {
     const resolved = {

@@ -52,6 +52,7 @@ import { listPrivateTriviumDatabases, registerTriviumRoutes } from './routes/tri
 import { listPrivateSqlDatabases, registerSqlRoutes } from './routes/sql-routes.js';
 import { registerHttpRoutes } from './routes/http-routes.js';
 import { registerModuleRoutes } from './routes/module-routes.js';
+import { registerAgentHistoryRoutes } from './routes/agent-history-routes.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
 import { asErrorMessage, AuthorityServiceError, buildPermissionDescriptor, getSessionToken, getUserContext, isAuthorityServiceError } from './utils.js';
@@ -187,6 +188,17 @@ function normalizeAuthorityError(error: unknown): NormalizedAuthorityError {
                 error: message,
                 code: 'session_user_mismatch',
                 category: 'session',
+            },
+        };
+    }
+
+    if (message === 'Forbidden') {
+        return {
+            status: 403,
+            payload: {
+                error: message,
+                code: 'permission_denied',
+                category: 'permission',
             },
         };
     }
@@ -755,6 +767,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     registerHttpRoutes(router, runtime, fail);
 
     registerJobsAndEventsRoutes(router, runtime, fail);
+
+    registerAgentHistoryRoutes(router, runtime, fail);
 
     router.get('/admin/policies', async (req, res) => {
         try {

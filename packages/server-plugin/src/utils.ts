@@ -53,10 +53,28 @@ export function ensureDir(dirPath: string): void {
 }
 
 export function atomicWriteJson(filePath: string, value: unknown): void {
-    ensureDir(path.dirname(filePath));
+    atomicWriteFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function atomicWriteFile(filePath: string, value: string | NodeJS.ArrayBufferView): void {
+    const parentDir = path.dirname(filePath);
+    ensureDir(parentDir);
     const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf8');
-    fs.renameSync(tempPath, filePath);
+    let fileDescriptor: number | null = null;
+    try {
+        fileDescriptor = fs.openSync(tempPath, 'wx');
+        fs.writeFileSync(fileDescriptor, value);
+        fs.fsyncSync(fileDescriptor);
+        fs.closeSync(fileDescriptor);
+        fileDescriptor = null;
+        fs.renameSync(tempPath, filePath);
+        fsyncDirectory(parentDir);
+    } finally {
+        if (fileDescriptor !== null) {
+            fs.closeSync(fileDescriptor);
+        }
+        fs.rmSync(tempPath, { force: true });
+    }
 }
 
 export function readJsonFile<T>(filePath: string, fallback: T): T {
@@ -249,6 +267,23 @@ function stripTrailingDot(value: string): string {
 
 function looksLikeAbsoluteUrl(value: string): boolean {
     return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
+}
+
+function fsyncDirectory(dirPath: string): void {
+    let fileDescriptor: number | null = null;
+    try {
+        fileDescriptor = fs.openSync(dirPath, 'r');
+        fs.fsyncSync(fileDescriptor);
+    } catch (error) {
+        // Windows does not consistently allow directory handles to be fsynced.
+        if (process.platform !== 'win32') {
+            throw error;
+        }
+    } finally {
+        if (fileDescriptor !== null) {
+            fs.closeSync(fileDescriptor);
+        }
+    }
 }
 
 function resolveUserDirectories(directories: RequestUser['directories']): RequestUser['directories'] {

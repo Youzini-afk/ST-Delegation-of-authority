@@ -14,6 +14,7 @@ export interface UserAuthorityPaths {
 
 export interface GlobalAuthorityPaths {
     controlDbFile: string;
+    agentWorkspacesDir: string;
 }
 
 export function getUserAuthorityPaths(user: UserContext): UserAuthorityPaths {
@@ -72,5 +73,6 @@ export function getGlobalAuthorityPaths(): GlobalAuthorityPaths {
     const stateDir = path.join(baseDir, 'state');
     return {
         controlDbFile: path.join(stateDir, 'control.sqlite'),
+        agentWorkspacesDir: path.join(stateDir, 'agent-workspaces'),
     };
 }

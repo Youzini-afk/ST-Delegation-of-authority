@@ -28,6 +28,7 @@ export type AuthorityErrorCode =
     | 'concurrency_limit_exceeded'
     | 'lock_timeout'
     | 'idempotency_conflict'
+    | 'workspace_conflict'
     | 'timeout'
     | 'core_unavailable'
     | 'core_request_failed';

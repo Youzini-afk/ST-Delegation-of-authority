@@ -4,10 +4,13 @@ const path = require('node:path');
 module.exports = {
     mode: 'development',
     target: 'node',
-    entry: path.resolve(__dirname, 'src/index.ts'),
+    entry: {
+        index: path.resolve(__dirname, 'src/index.ts'),
+        agent: path.resolve(__dirname, 'src/agent-cli.ts'),
+    },
     output: {
         path: path.resolve(__dirname, 'dist/authority'),
-        filename: 'index.cjs',
+        filename: '[name].cjs',
         library: {
             type: 'commonjs2',
         },

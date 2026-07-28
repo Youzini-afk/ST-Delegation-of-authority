@@ -53,6 +53,17 @@ export interface AgentWorkspaceRecord {
     updatedAt: string;
 }
 
+export interface AgentWorkspaceRegisterRequest {
+    id?: string;
+    displayName?: string;
+    rootPath: string;
+    defaultRef?: string;
+}
+
+export interface AgentWorkspaceListResponse {
+    workspaces: AgentWorkspaceRecord[];
+}
+
 export interface WorkspaceCheckpointRequest {
     message: string;
     runId?: string;
@@ -74,6 +85,8 @@ export type WorkspaceDiffStatus = 'added' | 'modified' | 'deleted' | 'type_chang
 export interface WorkspaceDiffEntry {
     path: string;
     status: WorkspaceDiffStatus;
+    beforeKind?: WorkspaceTreeEntryKind;
+    afterKind?: WorkspaceTreeEntryKind;
     beforeOid?: WorkspaceObjectId;
     afterOid?: WorkspaceObjectId;
     beforeSizeBytes?: number;
@@ -89,14 +102,33 @@ export interface WorkspaceDiffResponse {
 
 export interface WorkspaceRollbackRequest {
     targetCommitId: WorkspaceObjectId;
+    operationId?: string;
     force?: boolean;
     message?: string;
 }
 
 export interface WorkspaceRollbackResponse {
+    operationId: string;
     workspace: AgentWorkspaceRecord;
     restoredCommitId: WorkspaceObjectId;
     rollbackCommit: WorkspaceCommitObject;
     changedPaths: number;
     warnings: string[];
+}
+
+export interface WorkspaceCommitListResponse {
+    workspace: AgentWorkspaceRecord;
+    commits: WorkspaceCommitObject[];
+}
+
+export interface WorkspaceStatusResponse {
+    workspace: AgentWorkspaceRecord;
+    dirty: boolean;
+    changes: WorkspaceDiffEntry[];
+    pendingRollback: {
+        operationId: string;
+        targetCommitId: WorkspaceObjectId;
+        rollbackCommitId: WorkspaceObjectId;
+        startedAt: string;
+    } | null;
 }

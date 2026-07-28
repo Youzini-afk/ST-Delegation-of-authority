@@ -19,6 +19,21 @@ import { InstallService } from './install-service.js';
 import type { AuthorityModuleManifest } from '@stdo/shared-types';
 
 const cleanupDirs: string[] = [];
+const symlinkTestsSupported = supportsDirectorySymlinks();
+
+function supportsDirectorySymlinks(): boolean {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-symlink-check-'));
+    try {
+        const target = path.join(baseDir, 'target');
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, path.join(baseDir, 'link'), 'dir');
+        return true;
+    } catch {
+        return false;
+    } finally {
+        fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+}
 
 interface Fixture {
     sillyTavernRoot: string;
@@ -592,7 +607,7 @@ describe('ModuleDiscoveryService', () => {
         expect(duplicateRecords[0]?.diagnostics?.[0]?.code).toBe('duplicate_module_id');
     });
 
-    it('ignores symlinked extension directories', () => {
+    it.skipIf(!symlinkTestsSupported)('ignores symlinked extension directories', () => {
         const fixture = createFixture();
         const realExtensionDir = path.join(fixture.thirdPartyRoot, 'real-extension');
         const symlinkedDir = path.join(fixture.thirdPartyRoot, 'symlinked-extension');
@@ -788,7 +803,7 @@ describe('ModuleDiscoveryService', () => {
         expect(result.records).toHaveLength(0);
     });
 
-    it('rejects a symlinked .authority/module.json', () => {
+    it.skipIf(!symlinkTestsSupported)('rejects a symlinked .authority/module.json', () => {
         const fixture = createFixture();
         // Real manifest lives in a sibling extension; the candidate extension
         // symlinks its module.json at the malicious path.
@@ -818,7 +833,7 @@ describe('ModuleDiscoveryService', () => {
         expect(malicious?.manifest).toBeNull();
     });
 
-    it('rejects a symlinked entry server.cjs', () => {
+    it.skipIf(!symlinkTestsSupported)('rejects a symlinked entry server.cjs', () => {
         const fixture = createFixture();
         const extensionDir = path.join(fixture.thirdPartyRoot, 'symlinked-entry');
         fs.mkdirSync(extensionDir, { recursive: true });
@@ -907,7 +922,7 @@ describe('ModuleDiscoveryService', () => {
         expect(record.diagnostics?.[0]?.code).toBe('entry_path_escape');
     });
 
-    it('rejects an entry that escapes via a symlinked ancestor directory in realpath', () => {
+    it.skipIf(!symlinkTestsSupported)('rejects an entry that escapes via a symlinked ancestor directory in realpath', () => {
         const fixture = createFixture();
         // Layout: extension/.authority/ contains a symlinked subdir `link`
         // pointing to a real dir outside .authority. The entry `link/x.cjs`

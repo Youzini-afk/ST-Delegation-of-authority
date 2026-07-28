@@ -375,7 +375,7 @@ function sanitizeErrorMessage(message: string): string {
  * intentionally requires a path separator after the first segment so that
  * URL-like single-segment paths (`/api`, `/modules`) are preserved.
  */
-const ABSOLUTE_PATH_PATTERN = /\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)+/g;
+const ABSOLUTE_PATH_PATTERN = /(?:\b[a-zA-Z]:[\\/][^\r\n"'<>|]*|\\\\[^\\/\s]+[\\/][^\r\n"'<>|]*|\/[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)+)/g;
 
 /**
  * Sanitize discovery/load diagnostics for inclusion in public error details.

@@ -29,6 +29,21 @@ import type { CoreService as CoreServiceType } from './core-service.js';
 import type { PoliciesState, SessionRecord, StoredGrantEntry, UserContext } from '../types.js';
 
 const cleanupDirs: string[] = [];
+const symlinkTestsSupported = supportsFileSymlinks();
+
+function supportsFileSymlinks(): boolean {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-symlink-check-'));
+    try {
+        const target = path.join(baseDir, 'target.txt');
+        fs.writeFileSync(target, 'target');
+        fs.symlinkSync(target, path.join(baseDir, 'link.txt'), 'file');
+        return true;
+    } catch {
+        return false;
+    } finally {
+        fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+}
 
 interface Fixture {
     sillyTavernRoot: string;
@@ -749,7 +764,7 @@ describe('CompanionModuleLoaderService', () => {
         expect(serialized).toContain('./server.cjs');
     });
 
-    it('revalidates entry before load and marks load_error when entry was swapped to a symlink after discovery', async () => {
+    it.skipIf(!symlinkTestsSupported)('revalidates entry before load and marks load_error when entry was swapped to a symlink after discovery', async () => {
         const fixture = createFixture();
         const extensionDir = path.join(fixture.thirdPartyRoot, 'swap-extension');
         fs.mkdirSync(extensionDir, { recursive: true });
@@ -1319,13 +1334,14 @@ describe('CompanionModuleLoaderService', () => {
     it('wraps companion handler throws in transaction_handler_failed with sanitized message', async () => {
         const fixture = createFixture();
         const extensionDir = path.join(fixture.thirdPartyRoot, 'throwing-extension');
+        const leakedPath = path.join(fixture.sillyTavernRoot, 'secret');
         fs.mkdirSync(extensionDir, { recursive: true });
         writeModule(extensionDir, {
             serverCjsContent: `
                 module.exports.activate = async function activate(ctx) {
                     ctx.registerTransaction('task.run', {
                         handler: async () => {
-                            throw new Error('companion handler exploded at ${fixture.sillyTavernRoot}/secret');
+                            throw new Error(${JSON.stringify(`companion handler exploded at ${leakedPath}`)});
                         },
                     });
                 };
@@ -1357,7 +1373,7 @@ describe('CompanionModuleLoaderService', () => {
         // The error message must be sanitized: no absolute paths.
         const serialized = JSON.stringify(err.toPayload());
         expect(serialized).not.toContain(fixture.sillyTavernRoot);
-        expect(serialized).not.toContain('/secret');
+        expect(serialized).not.toContain(leakedPath);
         // The useful "exploded" fragment is preserved.
         expect(details.message).toContain('exploded');
     });

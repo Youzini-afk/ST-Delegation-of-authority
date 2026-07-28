@@ -26,7 +26,7 @@ describe('resolveContainedPath', () => {
     it('resolves paths under their base directory', () => {
         const base = path.join('/tmp', 'authority-base');
 
-        expect(resolveContainedPath(base, 'ext-a', 'state.sqlite')).toBe(path.join(base, 'ext-a', 'state.sqlite'));
+        expect(resolveContainedPath(base, 'ext-a', 'state.sqlite')).toBe(path.resolve(base, 'ext-a', 'state.sqlite'));
         expect(isPathInside(base, path.join(base, 'nested', 'file.txt'))).toBe(true);
     });
 
