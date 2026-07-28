@@ -40,7 +40,9 @@ queued -> running
 
 ST 或 DOA 重启后，仍处于执行状态的 Run 标记为 `interrupted`。浏览器或 module 工具已开始执行、但因取消、超时或重启无法确认结果时，invocation 标记为 `outcome_unknown`，Run 同样中断，不允许模型自动重试。只读步骤可以重新发起；包含修改或未知外部副作用的任务必须先核对版本树和调用结果，不能盲目续跑。
 
-Run、消息、事件、工具调用和审批分别按 Run 原子落盘到 `<DATA_ROOT>/_authority-global/authority/state/agent/runs`。OpenAI-compatible LLM profile 保存在同一状态目录；API key 因服务端重启后仍需发起请求而持久化，但不做应用层加密：POSIX 下目录/文件收紧为 `0700/0600`，Windows 依赖 ST data 目录继承的本机账户 ACL，备份也必须按密钥材料保护。它不返回客户端，面向客户端的 profile 只包含是否已配置、mask 和 fingerprint。远程 profile 只允许 HTTPS，本机回环地址可使用 HTTP；更换 origin 时必须同时明确更换或清除 key。模型调用使用非流式 Chat Completions tool-call 协议，请求体、assistant 内容、工具参数、usage 元数据和单 Run 持久文件均有硬上限。单次 Run 还有明确步数上限，DOA 同时执行数与单用户启动频率也有固定上限；默认并发大于一时，单用户不能占满所有全局执行槽。
+Run、消息、事件、工具调用和审批分别按 Run 原子落盘到 `<DATA_ROOT>/_authority-global/authority/state/agent/runs`。列表只读取启动时建立并随写入更新的内存摘要索引，并按 `(createdAt, id)` 稳定 cursor 分页返回；旧列表入口也只返回首个有界页面，不会在每次打开历史时重读或一次返回所有完整对话。终态 Run 自动保留最近 1000 条且总文件大小不超过 512 MiB，管理员也可主动缩减；仍在退出执行栈的 Run、进行中的 Run 与工作区 commit/object/ref 历史都不参与当次清理。
+
+OpenAI-compatible LLM profile 保存在同一状态目录；API key 因服务端重启后仍需发起请求而持久化，但不做应用层加密：POSIX 下目录/文件收紧为 `0700/0600`，Windows 依赖 ST data 目录继承的本机账户 ACL，备份也必须按密钥材料保护。它不返回客户端，面向客户端的 profile 只包含是否已配置、mask 和 fingerprint。远程 profile 只允许 HTTPS，本机回环地址可使用 HTTP；更换 origin 时必须同时明确更换或清除 key。模型调用使用非流式 Chat Completions tool-call 协议，请求体、assistant 内容、工具参数、usage 元数据和单 Run 持久文件均有硬上限。单次 Run 还有明确步数上限，DOA 同时执行数与单用户启动频率也有固定上限；默认并发大于一时，单用户不能占满所有全局执行槽。
 
 ## 工具模型
 
@@ -56,11 +58,23 @@ SSE 只负责通知。浏览器调用、结果和终态必须持久保存，并�
 
 浏览器注册是短租约能力，前端存活时续租；工具描述变化会产生新的 registration ID，旧 Run 不能借审批执行被替换后的描述。模型发起浏览器工具后，服务端先持久化 invocation，再由相同用户、扩展和 browser instance 通过带稳定 claim ID 的 HTTP claim 认领，最后凭同一 claim 回传结果。重复 claim 对同一 claim ID 幂等，不同 claim 不能重复执行；claim secret 不出现在普通扩展的 Run detail 中。超时、取消或晚到结果按持久 invocation 状态裁决，断开的 SSE 不影响正确性。
 
-管理员经 `/admin/agent/*` 管理 LLM profile、查看全部 Run、处理审批，并使用 `/admin/agent/workspaces/*` 管理工作区 ACL、检查点、diff 与回退。审批记录持久化处理管理员身份；profile 响应永远只返回是否已配置、mask 与 fingerprint，不返回 API key 明文。
+管理员经 `/admin/agent/*` 管理 LLM profile、分页查看全部 Run、处理审批和清理旧终态记录，并使用 `/admin/agent/workspaces/*` 管理工作区 ACL、检查点、diff 与回退。审批记录持久化处理管理员身份；profile 响应永远只返回是否已配置、mask 与 fingerprint，不返回 API key 明文。
 
 前端 extension ID 是同一 ST 页面内的归属与治理标识，不是抵抗恶意同源脚本的密码学身份。所有前端插件共享页面 origin；安装恶意前端插件等价于授予它页面级能力。真正的服务端隔离边界是已认证用户、工作区 ACL、Authority session 与服务端策略。若将来需要抵抗同源插件互相冒充，必须由 ST loader 提供隔离执行环境或不可伪造的扩展凭据，SDK 缓存本身不能提供这种保证。
 
 第一批 host 工具保持为 IDE 原语：列目录、读文件、文本搜索、原子写文件、精确文本替换、工作区终端、状态、历史和 diff。模型只看到 workspace ID 与相对路径，不接收服务器物理根路径。文件工具不跟随 symlink，读取、搜索和命令输出都有上限；终端只继承运行所需的最小环境变量集，不继承服务端密钥。`plan` 只暴露 DOA 能确认无副作用的 host 检查工具，不执行 module/browser 工具；`ask` 按工具策略持久化审批并暂停；`auto` 可直接执行普通工作区写入。高风险 module/browser 工具仍始终审批，终端也始终单独审批并为整个工作区（排除 `.git`、`node_modules`）建立检查点。
+
+## Agent 工作台
+
+Security Center 的管理员 `Agent` 页是平台自带 IDE 入口，复用 `AuthorityClient.agent.*`，不拥有第二套执行协议。它提供：
+
+- 新建 `plan` / `ask` / `auto` Run，选择工作区、LLM profile 与最大步骤；
+- 查看持久消息、事件、工具调用和最终结果，并对活动 Run 轻量轮询；
+- 批准或拒绝等待中的高风险工具、取消 Run；
+- 注册工作区 ACL、查看 dirty 状态与最近提交 diff、建立检查点、回退或恢复中断的回退；
+- 管理只显示 mask/fingerprint 的 LLM profile，以及分页、筛选和清理旧终态 Run。
+
+工作台自身也以 `third-party/st-authority-sdk` session 发起 Run；即使当前用户是管理员，创建 Run 仍经过 `agent.run:<workspaceId>` 的声明与授权流程。管理员 API 负责治理数据和审批，不提供绕过 Run 权限的新建入口。
 
 ## 工作区版本树
 

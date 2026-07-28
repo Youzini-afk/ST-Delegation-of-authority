@@ -51,6 +51,31 @@ describe('AgentService', () => {
         await fixture.agent.stop();
     });
 
+    it('paginates and filters persisted run summaries', async () => {
+        const fixture = await createFixture(vi.fn(async () => finalMessage('done')));
+        for (let index = 0; index < 3; index += 1) {
+            fixture.agent.createRun({ goal: `Run ${index}`, workspaceId: 'workspace' });
+        }
+
+        const first = fixture.agent.listRunsPage({ page: { limit: 2 } });
+        const second = fixture.agent.listRunsPage({ page: { cursor: first.page.nextCursor!, limit: 2 } });
+
+        expect(first.runs).toHaveLength(2);
+        expect(first.page).toMatchObject({ hasMore: true, totalCount: 3 });
+        expect(first.page.nextCursor).not.toBe('2');
+        expect(second.runs).toHaveLength(1);
+        expect(second.page).toMatchObject({ nextCursor: null, hasMore: false, totalCount: 3 });
+        expect(new Set([...first.runs, ...second.runs].map(run => run.id)).size).toBe(3);
+        expect(() => fixture.agent.listRunsPage({ page: { cursor: 'not-a-cursor' } }))
+            .toThrow(AuthorityServiceError);
+        expect(() => fixture.agent.listRunsPage({
+            status: 'failed',
+            page: { cursor: first.page.nextCursor! },
+        })).toThrow(AuthorityServiceError);
+        expect(() => fixture.agent.pruneTerminalRuns(-1)).toThrow(AuthorityServiceError);
+        await fixture.agent.stop();
+    });
+
     it('keeps one user waiting for approval from occupying the whole global queue', async () => {
         const requester = vi.fn<AgentCompletionRequester>(async (_profile, request) => {
             const prompt = request.messages.find(message => message.role === 'user')?.content ?? '';

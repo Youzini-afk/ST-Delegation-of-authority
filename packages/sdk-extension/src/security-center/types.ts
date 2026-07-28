@@ -12,14 +12,22 @@ import type {
     ControlExtensionRecord,
     SessionInitResponse,
     AuthorityUsageSummaryResponse,
+    AgentLlmProfile,
+    AgentRunDetail,
+    AgentRunListResponse,
+    AgentToolDescriptor,
+    AgentWorkspaceRecord,
     SqlDatabaseRecord,
     TriviumDatabaseRecord,
+    WorkspaceCommitObject,
+    WorkspaceDiffResponse,
+    WorkspaceStatusResponse,
 } from '@stdo/shared-types';
 import type { AuthorityPolicyEntry, PermissionResource, PermissionStatus } from '@stdo/shared-types';
 import type { StManagerBridgeConfig } from './st-manager-bridge.js';
 import type { StManagerBackupSummary, StManagerControlConfig } from './st-manager-control.js';
 
-export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'policies' | 'updates';
+export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'agent' | 'policies' | 'updates';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
 export type OverviewSectionKey = 'governance' | 'capabilityMatrix' | 'recentActivity';
 export type OverviewSectionState = Record<OverviewSectionKey, boolean>;
@@ -105,6 +113,24 @@ export interface PoliciesResponse {
     updatedAt: string;
 }
 
+export interface AgentWorkbenchState {
+    loaded: boolean;
+    loading: boolean;
+    busy: boolean;
+    error: string | null;
+    profiles: AgentLlmProfile[];
+    tools: AgentToolDescriptor[];
+    workspaces: AgentWorkspaceRecord[];
+    runs: AgentRunListResponse;
+    selectedProfileId: string | null;
+    selectedWorkspaceId: string | null;
+    selectedRun: AgentRunDetail | null;
+    workspaceStatus: WorkspaceStatusResponse | null;
+    workspaceCommits: WorkspaceCommitObject[];
+    workspaceDiff: WorkspaceDiffResponse | null;
+    runStatus: AgentRunListResponse['runs'][number]['status'] | '';
+}
+
 export interface SecurityCenterState {
     loading: boolean;
     error: string | null;
@@ -119,6 +145,7 @@ export interface SecurityCenterState {
     overviewSectionState: OverviewSectionState;
     extensionFilter: string;
     policies: PoliciesResponse | null;
+    agent: AgentWorkbenchState;
     policyEditorExtensionId: string | null;
     packageOperations: PackageOperation[];
     packageActionInProgress: boolean;

@@ -4,6 +4,8 @@ import type {
     AgentBrowserToolRegistrationRequest,
     AgentLlmProfileInput,
     AgentRunCreateRequest,
+    AgentRunListRequest,
+    AgentRunPruneRequest,
     AgentToolResultRequest,
     PermissionResource,
 } from '@stdo/shared-types';
@@ -43,7 +45,19 @@ export function registerAgentRoutes(router: RouterLike, runtime: AuthorityRuntim
             await runtime.agent.start();
             const { user, session } = await caller(runtime, req);
             extensionId = session.extension.id;
-            res.json({ runs: runtime.agent.listRuns(extensionId, user.handle) });
+            res.json(runtime.agent.listRunsPage({}, extensionId, user.handle));
+        } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
+    router.post('/agent/runs/list', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agent.start();
+            const { user, session } = await caller(runtime, req);
+            extensionId = session.extension.id;
+            res.json(runtime.agent.listRunsPage((req.body ?? {}) as AgentRunListRequest, extensionId, user.handle));
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
@@ -209,7 +223,34 @@ export function registerAgentRoutes(router: RouterLike, runtime: AuthorityRuntim
         try {
             assertAdmin(req);
             await runtime.agent.start();
-            res.json({ runs: runtime.agent.listRuns() });
+            res.json(runtime.agent.listRunsPage());
+        } catch (error) {
+            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+
+    router.post('/admin/agent/runs/list', async (req, res) => {
+        try {
+            assertAdmin(req);
+            await runtime.agent.start();
+            res.json(runtime.agent.listRunsPage((req.body ?? {}) as AgentRunListRequest));
+        } catch (error) {
+            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
+        }
+    });
+
+    router.post('/admin/agent/runs/prune', async (req, res) => {
+        try {
+            const user = assertAdmin(req);
+            await runtime.agent.start();
+            const request = (req.body ?? {}) as AgentRunPruneRequest;
+            const result = runtime.agent.pruneTerminalRuns(request.retainLatest);
+            void runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Terminal Agent runs pruned', {
+                deletedRuns: result.deletedRuns,
+                reclaimedBytes: result.reclaimedBytes,
+                retainLatest: request.retainLatest,
+            }).catch(() => undefined);
+            res.json(result);
         } catch (error) {
             fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
         }

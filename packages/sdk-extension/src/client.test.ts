@@ -1880,6 +1880,43 @@ describe('AuthorityClient', () => {
         });
     });
 
+    it('uses cursor pages for Agent run history and admin pruning', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const requestWithSession = vi.fn(async () => ({
+            runs: [],
+            page: { nextCursor: null, limit: 25, hasMore: false, totalCount: 0 },
+            deletedRuns: 0,
+            reclaimedBytes: 0,
+            retainedTerminalRuns: 0,
+            activeRuns: 0,
+        }));
+        Object.assign(client as object, { requestWithSession });
+
+        await client.agent.listRunsPage({ page: { cursor: '25', limit: 25 }, status: 'failed' });
+        await client.agent.admin.runs.listPage({ page: { limit: 50 } });
+        await client.agent.admin.runs.prune({ retainLatest: 200 });
+
+        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/agent/runs/list', {
+            method: 'POST',
+            body: { page: { cursor: '25', limit: 25 }, status: 'failed' },
+        });
+        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/admin/agent/runs/list', {
+            method: 'POST',
+            body: { page: { limit: 50 } },
+        });
+        expect(requestWithSession).toHaveBeenNthCalledWith(3, '/admin/agent/runs/prune', {
+            method: 'POST',
+            body: { retainLatest: 200 },
+        });
+    });
+
     it('preflights the manifest permission target and static required resources', async () => {
         const { AuthorityClient } = await import('./client.js');
         const client = new AuthorityClient({

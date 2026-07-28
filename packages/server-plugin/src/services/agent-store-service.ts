@@ -6,6 +6,7 @@ import type {
     AgentLlmProfileInput,
     AgentRunDetail,
     AgentRunEvent,
+    AgentRunPruneResponse,
     AgentRunRecord,
     AgentRunStatus,
 } from '@stdo/shared-types';
@@ -15,7 +16,10 @@ const PROFILE_FORMAT = 'authority-agent-profiles/v1';
 const RUN_FORMAT = 'authority-agent-run/v1';
 const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
 const ACTIVE_RUNS = new Set<AgentRunStatus>(['queued', 'running', 'waiting_approval', 'waiting_browser_tool']);
+const TERMINAL_RUNS = new Set<AgentRunStatus>(['completed', 'failed', 'cancelled', 'interrupted']);
 const MAX_STORED_RUN_BYTES = 16 * 1024 * 1024;
+const MAX_RETAINED_TERMINAL_RUNS = 1_000;
+const MAX_RETAINED_TERMINAL_BYTES = 512 * 1024 * 1024;
 
 export interface StoredAgentLlmProfile extends AgentLlmProfile {
     apiKey: string | null;
@@ -36,6 +40,9 @@ export interface AgentStoreServiceOptions {
 
 export class AgentStoreService {
     private readonly now: () => string;
+    private readonly runSummaries = new Map<string, AgentRunRecord>();
+    private readonly runSizes = new Map<string, number>();
+    private runIndexLoaded = false;
 
     constructor(
         public readonly stateDir: string,
@@ -49,10 +56,11 @@ export class AgentStoreService {
         protectDirectory(this.stateDir);
         protectDirectory(this.runsDir());
         const interrupted: AgentRunRecord[] = [];
-        for (const run of this.readAllRuns()) {
-            if (!ACTIVE_RUNS.has(run.run.status)) {
+        for (const summary of this.listRuns()) {
+            if (!ACTIVE_RUNS.has(summary.status)) {
                 continue;
             }
+            const run = this.readRun(summary.id);
             const timestamp = this.now();
             run.run.status = 'interrupted';
             run.run.updatedAt = timestamp;
@@ -81,6 +89,7 @@ export class AgentStoreService {
             this.writeRun(run);
             interrupted.push(structuredClone(run.run));
         }
+        this.pruneAutomatically();
         return interrupted;
     }
 
@@ -177,9 +186,10 @@ export class AgentStoreService {
     }
 
     listRuns(): AgentRunRecord[] {
-        return this.readAllRuns()
-            .map(run => structuredClone(run.run))
-            .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        this.loadRunIndex();
+        return [...this.runSummaries.values()]
+            .map(run => structuredClone(run))
+            .sort(compareRunsNewestFirst);
     }
 
     updateRun(runId: string, update: (detail: AgentRunDetail) => void): AgentRunDetail {
@@ -189,6 +199,42 @@ export class AgentStoreService {
         this.writeRun(stored);
         const { format: _format, ...detail } = stored;
         return structuredClone(detail);
+    }
+
+    pruneTerminalRuns(
+        retainLatest = MAX_RETAINED_TERMINAL_RUNS,
+        protectedRunIds: Iterable<string> = [],
+    ): AgentRunPruneResponse {
+        if (!Number.isSafeInteger(retainLatest) || retainLatest < 0 || retainLatest > MAX_RETAINED_TERMINAL_RUNS) {
+            throw new Error(`Agent retainLatest must be an integer between 0 and ${MAX_RETAINED_TERMINAL_RUNS}`);
+        }
+        this.loadRunIndex();
+        const protectedIds = new Set(protectedRunIds);
+        const activeRuns = [...this.runSummaries.values()].filter(run => ACTIVE_RUNS.has(run.status)).length;
+        const terminalRuns = [...this.runSummaries.values()]
+            .filter(run => TERMINAL_RUNS.has(run.status))
+            .sort((left, right) => compareNewestFirst(left.updatedAt, left.id, right.updatedAt, right.id));
+        let deletedRuns = 0;
+        let reclaimedBytes = 0;
+        let retainedBytes = 0;
+        let retainedTerminalRuns = 0;
+
+        for (const run of terminalRuns) {
+            const size = this.runSizes.get(run.id) ?? fs.statSync(this.runPath(run.id)).size;
+            if (protectedIds.has(run.id)
+                || (retainedTerminalRuns < retainLatest && retainedBytes + size <= MAX_RETAINED_TERMINAL_BYTES)) {
+                retainedTerminalRuns += 1;
+                retainedBytes += size;
+                continue;
+            }
+            fs.unlinkSync(this.runPath(run.id));
+            this.runSummaries.delete(run.id);
+            this.runSizes.delete(run.id);
+            deletedRuns += 1;
+            reclaimedBytes += size;
+        }
+
+        return { deletedRuns, reclaimedBytes, retainedTerminalRuns, activeRuns };
     }
 
     nowIso(): string {
@@ -225,20 +271,26 @@ export class AgentStoreService {
         return profile;
     }
 
-    private readAllRuns(): StoredRun[] {
+    private loadRunIndex(): void {
+        if (this.runIndexLoaded) {
+            return;
+        }
         ensureDir(this.runsDir());
-        const runs: StoredRun[] = [];
+        this.runSummaries.clear();
+        this.runSizes.clear();
         for (const entry of fs.readdirSync(this.runsDir(), { withFileTypes: true })) {
             if (!entry.isFile() || !entry.name.endsWith('.json')) {
                 continue;
             }
             try {
-                runs.push(this.readRun(entry.name.slice(0, -5)));
+                const run = this.readRun(entry.name.slice(0, -5));
+                this.runSummaries.set(run.run.id, structuredClone(run.run));
+                this.runSizes.set(run.run.id, fs.statSync(this.runPath(run.run.id)).size);
             } catch (error) {
                 console.warn(`[authority] Ignoring unreadable Agent run ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
-        return runs;
+        this.runIndexLoaded = true;
     }
 
     private readRun(runId: string): StoredRun {
@@ -261,6 +313,16 @@ export class AgentStoreService {
         }
         atomicWriteFile(this.runPath(run.run.id), serialized);
         protectFile(this.runPath(run.run.id));
+        this.runSummaries.set(run.run.id, structuredClone(run.run));
+        this.runSizes.set(run.run.id, Buffer.byteLength(serialized, 'utf8'));
+    }
+
+    private pruneAutomatically(): void {
+        try {
+            this.pruneTerminalRuns();
+        } catch (error) {
+            console.warn(`[authority] Unable to prune terminal Agent runs: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     private profilesPath(): string {
@@ -275,6 +337,16 @@ export class AgentStoreService {
         assertSafeId(runId, 'Agent run id');
         return path.join(this.runsDir(), `${runId}.json`);
     }
+}
+
+function compareRunsNewestFirst(left: AgentRunRecord, right: AgentRunRecord): number {
+    return compareNewestFirst(left.createdAt, left.id, right.createdAt, right.id);
+}
+
+function compareNewestFirst(leftTime: string, leftId: string, rightTime: string, rightId: string): number {
+    if (leftTime !== rightTime) return leftTime > rightTime ? -1 : 1;
+    if (leftId !== rightId) return leftId > rightId ? -1 : 1;
+    return 0;
 }
 
 function publicProfile(profile: StoredAgentLlmProfile): AgentLlmProfile {

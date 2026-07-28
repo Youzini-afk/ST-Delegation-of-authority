@@ -12,8 +12,12 @@ import type {
     AgentRunCreateRequest,
     AgentRunDetail,
     AgentRunEvent,
+    AgentRunListRequest,
+    AgentRunListResponse,
     AgentRunMessage,
+    AgentRunPruneResponse,
     AgentRunRecord,
+    AgentRunStatus,
     AgentToolDescriptor,
     AgentToolInvocation,
     AgentToolResultRequest,
@@ -51,8 +55,12 @@ const MAX_ACTIVE_RUNS_PER_USER = 32;
 const MAX_ACTIVE_RUNS_PER_CALLER = 16;
 const MAX_RUN_STARTS_PER_USER_PER_MINUTE = 30;
 const RUN_START_WINDOW_MS = 60_000;
+const DEFAULT_RUN_PAGE_LIMIT = 50;
+const MAX_RUN_PAGE_LIMIT = 200;
+const MAX_RETAINED_TERMINAL_RUNS = 1_000;
 const BROWSER_TOOL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/;
 const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+const RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'waiting_browser_tool', ...TERMINAL_RUNS]);
 
 type ApprovalDecision = 'approved' | 'denied' | 'expired' | 'cancelled';
 type BrowserToolDecision = 'completed' | 'failed' | 'cancelled' | 'timed_out';
@@ -186,6 +194,7 @@ export class AgentService {
         if (!completed) {
             console.warn(`[authority] ${this.tasks.size} Agent run(s) did not stop within ${this.shutdownTimeoutMs} ms`);
         }
+        this.pruneRunStore();
         this.started = false;
     }
 
@@ -233,6 +242,44 @@ export class AgentService {
             throw new Error('Agent run owner requires both user and extension identity');
         }
         return runs.filter(run => run.callerExtensionId === callerExtensionId && run.callerUserHandle === callerUserHandle);
+    }
+
+    listRunsPage(
+        request: AgentRunListRequest = {},
+        callerExtensionId?: string,
+        callerUserHandle?: string,
+    ): AgentRunListResponse {
+        const { cursor, limit } = normalizeRunPage(request);
+        const runs = this.listRuns(callerExtensionId, callerUserHandle)
+            .filter(run => request.status === undefined || run.status === request.status);
+        const firstIndex = cursor
+            ? runs.findIndex(run => isAfterRunCursor(run, cursor))
+            : 0;
+        const startIndex = firstIndex === -1 ? runs.length : firstIndex;
+        const pageRuns = runs.slice(startIndex, startIndex + limit);
+        const hasMore = startIndex + pageRuns.length < runs.length;
+        return {
+            runs: pageRuns,
+            page: {
+                nextCursor: hasMore ? encodeRunCursor(pageRuns.at(-1)!, request.status) : null,
+                limit,
+                hasMore,
+                totalCount: runs.length,
+            },
+        };
+    }
+
+    pruneTerminalRuns(retainLatest?: number): AgentRunPruneResponse {
+        if (retainLatest !== undefined
+            && (!Number.isSafeInteger(retainLatest) || retainLatest < 0 || retainLatest > MAX_RETAINED_TERMINAL_RUNS)) {
+            throw new AuthorityServiceError(
+                `Agent retainLatest must be an integer between 0 and ${MAX_RETAINED_TERMINAL_RUNS}`,
+                400,
+                'validation_error',
+                'validation',
+            );
+        }
+        return this.store.pruneTerminalRuns(retainLatest, this.executingRunIds());
     }
 
     getRun(runId: string): AgentRunDetail {
@@ -351,6 +398,7 @@ export class AgentService {
                 waiter.resolve('cancelled');
             }
         }
+        this.pruneRunStore();
         return detail.run;
     }
 
@@ -591,6 +639,7 @@ export class AgentService {
                     this.tasks.delete(runId);
                     this.controllers.delete(runId);
                     this.runContexts.delete(runId);
+                    this.pruneRunStore();
                     this.drainQueue();
                 });
             this.tasks.set(runId, task);
@@ -1171,6 +1220,70 @@ export class AgentService {
             appendEvent(detail, 'run.interrupted', timestamp, { reason: message });
         });
     }
+
+    private executingRunIds(): Set<string> {
+        return new Set([...this.tasks.keys(), ...this.controllers.keys()]);
+    }
+
+    private pruneRunStore(): void {
+        try {
+            this.store.pruneTerminalRuns(undefined, this.executingRunIds());
+        } catch (error) {
+            console.warn(`[authority] Unable to prune terminal Agent runs: ${errorMessage(error)}`);
+        }
+    }
+}
+
+interface AgentRunCursor {
+    createdAt: string;
+    id: string;
+}
+
+function normalizeRunPage(request: AgentRunListRequest): { cursor: AgentRunCursor | null; limit: number } {
+    if (request.status !== undefined && !RUN_STATUSES.has(request.status)) {
+        throw new AuthorityServiceError('Invalid Agent run status', 400, 'validation_error', 'validation');
+    }
+    const limit = request.page?.limit ?? DEFAULT_RUN_PAGE_LIMIT;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RUN_PAGE_LIMIT) {
+        throw new AuthorityServiceError(
+            `Agent run page limit must be an integer between 1 and ${MAX_RUN_PAGE_LIMIT}`,
+            400,
+            'validation_error',
+            'validation',
+        );
+    }
+    const cursor = request.page?.cursor;
+    if (cursor === undefined) {
+        return { cursor: null, limit };
+    }
+    try {
+        if (typeof cursor !== 'string' || cursor.length > 512 || !/^[a-zA-Z0-9_-]+$/.test(cursor)) {
+            throw new Error('invalid cursor encoding');
+        }
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+        if (!Array.isArray(decoded)
+            || decoded.length !== 4
+            || decoded[0] !== 1
+            || typeof decoded[1] !== 'string'
+            || !Number.isFinite(Date.parse(decoded[1]))
+            || typeof decoded[2] !== 'string'
+            || !decoded[2]
+            || decoded[2].length > 128
+            || decoded[3] !== (request.status ?? null)) {
+            throw new Error('invalid cursor payload');
+        }
+        return { cursor: { createdAt: decoded[1], id: decoded[2] }, limit };
+    } catch {
+        throw new AuthorityServiceError('Invalid Agent run page cursor', 400, 'validation_error', 'validation');
+    }
+}
+
+function encodeRunCursor(run: AgentRunRecord, status?: AgentRunStatus): string {
+    return Buffer.from(JSON.stringify([1, run.createdAt, run.id, status ?? null]), 'utf8').toString('base64url');
+}
+
+function isAfterRunCursor(run: AgentRunRecord, cursor: AgentRunCursor): boolean {
+    return run.createdAt < cursor.createdAt || (run.createdAt === cursor.createdAt && run.id < cursor.id);
 }
 
 function moduleToolDescriptors(moduleHost?: ModuleHostService): AgentToolDescriptor[] {

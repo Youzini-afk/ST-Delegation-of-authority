@@ -106,6 +106,17 @@ export interface AgentRunListResponse {
     page: CursorPageInfo;
 }
 
+export interface AgentRunPruneRequest {
+    retainLatest?: number;
+}
+
+export interface AgentRunPruneResponse {
+    deletedRuns: number;
+    reclaimedBytes: number;
+    retainedTerminalRuns: number;
+    activeRuns: number;
+}
+
 export type AgentRunEventType =
     | 'run.created'
     | 'run.started'

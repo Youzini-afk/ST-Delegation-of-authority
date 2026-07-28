@@ -1,10 +1,10 @@
 # Authority — SillyTavern 扩展的后端能力与权限治理
 
-Authority 是一个 SillyTavern 服务端插件，给第三方扩展提供统一的后端能力——数据库、存储、文件读写、网络请求、图数据库、后台任务、事件流——而不是让每个扩展自己造轮子。
+Authority 是一个 SillyTavern 服务端插件，给第三方扩展提供统一的后端能力——数据库、存储、文件读写、网络请求、图数据库、后台任务、事件流与 Agent Runtime——而不是让每个扩展自己造轮子。
 
 同时它不是裸放后端，上面盖了一层权限治理：扩展要先用先声明，用户可以放行或拒绝，管理员可以统一收口。
 
-**插件 ID** `authority` · **SDK** `third-party/st-authority-sdk` · **预构建平台** Windows x64 / Linux x64 / Linux arm64 / Android arm64（当前不含 `darwin-arm64`，macOS Apple Silicon 需源码构建 core）
+**插件 ID** `authority` · **SDK** `third-party/st-authority-sdk` · **预构建平台** Windows x64 / Linux x64（glibc、musl）/ Linux arm64 / Android arm64（当前不含 `darwin-arm64`，macOS Apple Silicon 需源码构建 core）
 
 ---
 
@@ -20,8 +20,9 @@ Authority 是一个 SillyTavern 服务端插件，给第三方扩展提供统一
 | HTTP 请求 | `client.http.fetch()` | 走 core 发出请求，支持大 body 分块 |
 | 后台任务 | `client.jobs.*` | 内置 delay / sql.backup / trivium.flush / fs.import-jsonl |
 | 事件流 | `client.events.subscribe()` | SSE 推送，core 管队列，Node 桥接 |
+| Agent Runtime | `client.agent.*` | 持久 Run、工作区 IDE 工具、审批、浏览器工具与可回退版本树 |
 
-所有数据都是按用户 + 扩展隔离的，扩展不能访问其他扩展的数据或宿主文件系统。
+普通存储数据按用户 + 扩展隔离，扩展不能访问其他扩展的数据；Agent 只能在管理员登记并由当前用户获准访问的工作区内操作宿主文件。
 
 ## 快速开始
 
@@ -132,6 +133,24 @@ const job = await client.jobs.create({ type: 'delay', payload: { ms: 5000 } });
 client.events.subscribe({ channel: 'extension:third-party/your-extension' }, (event) => { /* ... */ });
 ```
 
+### Agent
+
+扩展声明 `agent.run` 后，可以在管理员已登记且当前用户获准访问的工作区内发起持久 Run；`plan` 只规划，`ask` 在副作用前审批，`auto` 按策略执行：
+
+```js
+const run = await client.agent.createRun({
+  goal: '定位并修复插件冲突，然后运行相关测试',
+  workspaceId: 'sillytavern',
+  mode: 'ask'
+});
+
+const detail = await client.agent.waitForCompletion(run.id, {
+  onProgress: current => console.log(current.run.status)
+});
+```
+
+前端插件还可以通过 `client.agent.browser.*` 注册自己的领域工具。完整边界、工具模型与独立恢复命令见 [Authority Agent 平台](docs/server/agent-platform.md)。
+
 ---
 
 ## 权限与安全
@@ -143,7 +162,7 @@ Authority 的安全边界是轻量但明确的：
 - 扩展在 `init()` 时声明所需能力
 - 用户可以选择 `allow-once` / `allow-session` / `allow-always` / `deny`
 - 管理员可以设全局默认策略和按扩展覆盖策略
-- 当前所有资源系统默认 `granted`，新装扩展开箱即用
+- 普通数据资源系统默认 `granted`；`agent.run` 与 `agent.browser` 默认 `prompt`
 
 权限评估顺序（从高到低）：
 
@@ -153,7 +172,7 @@ Authority 的安全边界是轻量但明确的：
 
 这意味着：没有管理员收紧规则时大部分请求直接放行；管理员设 `prompt` 时用户仍可手动授权；管理员设 `denied` / `blocked` 时强于用户授权。
 
-**明确不提供**：任意 shell 执行、VM 执行、服务端代码托管、任意文件系统访问、REST 直连作为扩展一等接入方式。
+普通扩展 API 不提供任意 shell、VM、服务端代码托管或宿主文件系统直通。Agent 工作区终端是单独的高风险能力：只能在管理员登记的根目录内运行，始终审批并先建立检查点；它不等于扩展可直接取得任意 shell。
 
 ### Security Center
 
@@ -163,6 +182,7 @@ Authority 内置 Security Center 控制面 UI，通过 `window.STAuthority.openS
 - **扩展详情** — 声明权限、授权记录、策略覆盖、资源占用、活动审计
 - **数据资产** — 按扩展聚合的数据库和存储视图
 - **活动与排障** — 审计（permission / usage / warning / error）、任务状态、告警
+- **Agent 工作台** — 创建 Run、实时步骤、审批、模型配置、工作区检查点与回退
 - **管理员策略** — 全局默认、扩展级策略覆盖、grant 重置
 - **运维面板** — 更新、用法汇总、portable package 导入导出、诊断归档
 
@@ -181,7 +201,7 @@ SillyTavern 前端
 ```
 
 - **SDK extension** — 前端接入、权限弹窗、Security Center
-- **Node server plugin** — 插件生命周期、路由、会话、权限评估、SDK 安装、SSE 桥接
+- **Node server plugin** — 插件生命周期、路由、会话、权限评估、Agent Runtime、工作区版本树、SDK 安装、SSE 桥接
 - **Rust authority-core** — 数据面和控制面权威执行层：SQL/KV/Blob/Trivium/文件/HTTP/Jobs/Events
 
 ---
@@ -250,6 +270,7 @@ npm run sync:installable && npm run check:installable
 | [docs/server/admin-import-export.md](docs/server/admin-import-export.md) | 管理员运维、迁移、备份 |
 | [docs/server/performance-benchmarks.md](docs/server/performance-benchmarks.md) | 基准测试说明 |
 | [docs/server/ai-integration-guide.md](docs/server/ai-integration-guide.md) | 编程 AI 接入规则 |
+| [docs/server/agent-platform.md](docs/server/agent-platform.md) | Agent Runtime、IDE、插件工具与独立恢复 |
 
 ---
 
@@ -297,6 +318,10 @@ npm run sync:installable && npm run check:installable
 - 确认声明了 `events.stream` 权限
 - Job 事件默认 channel 为 `extension:<extensionId>`
 
+### ST 无法启动，但需要回退 Agent 改动
+
+在 ST 根目录直接运行 `node plugins/authority/runtime/agent.cjs rescue status` 查看状态，再用 `log`、`diff`、`rollback` 或 `resume` 恢复；该入口不启动 SillyTavern。完整命令见 [独立恢复](docs/server/agent-platform.md#独立恢复)。
+
 ---
 
 ## 当前限制与计划
@@ -306,7 +331,7 @@ npm run sync:installable && npm run check:installable
 - Jobs 仅支持内置类型（`delay`、`sql.backup`、`trivium.flush`、`fs.import-jsonl`），不是任意代码执行
 - 事件流为 SSE，不支持 WebSocket 和跨用户广播
 - SQL 主要覆盖 `sql.private`
-- 不提供 shell 执行、VM 执行、服务端代码托管
+- 不提供 VM、服务端代码托管或绕过 Agent 工作区/审批边界的任意 shell
 - Trivium 数据库节点数 ≥10000 时，TDB 会自动构建 QuIVer BQ-native Vamana 图索引，存储在 `<name>.tdb.quiver` 文件中。该文件是派生数据：portable package 不会导出它，导入后首次查询会自动重建（耗时数百 ms 至几秒）。如需 100% 精确召回率，可在 `searchAdvanced` 调用中传入 `forceBruteForce: true`
 
 **后续方向：**

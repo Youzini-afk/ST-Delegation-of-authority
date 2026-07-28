@@ -10,7 +10,7 @@ export const SECURITY_CENTER_CONFIG: AuthorityInitConfig = {
     displayName: AUTHORITY_EXTENSION_DISPLAY_NAME,
     version: AUTHORITY_EXTENSION_VERSION,
     installType: 'local',
-    declaredPermissions: {},
+    declaredPermissions: { agent: { run: true } },
     uiLabel: '扩展权限中心',
 };
 

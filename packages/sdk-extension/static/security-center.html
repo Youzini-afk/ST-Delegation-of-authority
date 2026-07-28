@@ -22,6 +22,10 @@
           <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           <span class="authority-tab__label">活动</span>
         </button>
+        <button type="button" class="authority-tab" data-tab="agent" role="tab" id="security-center-tab-agent" aria-selected="false" aria-controls="security-center-tabpanel-agent">
+          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 9l-2 3 2 3"/><path d="M13 15h4"/><path d="M12 2v3"/></svg>
+          <span class="authority-tab__label">Agent</span>
+        </button>
         <button type="button" class="authority-tab" data-tab="policies" role="tab" id="security-center-tab-policies" aria-selected="false" aria-controls="security-center-tabpanel-policies">
           <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
           <span class="authority-tab__label">策略</span>
@@ -74,6 +78,9 @@
         </section>
         <section class="authority-section" data-section="activity" role="tabpanel" id="security-center-tabpanel-activity" aria-labelledby="security-center-tab-activity">
           <div data-role="activity-view"></div>
+        </section>
+        <section class="authority-section" data-section="agent" role="tabpanel" id="security-center-tabpanel-agent" aria-labelledby="security-center-tab-agent">
+          <div data-role="agent-view"></div>
         </section>
         <section class="authority-section" data-section="policies" role="tabpanel" id="security-center-tabpanel-policies" aria-labelledby="security-center-tab-policies">
           <div data-role="policies-view"></div>

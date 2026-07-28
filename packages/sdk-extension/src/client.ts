@@ -9,6 +9,10 @@ import type {
     AgentLlmProfileInput,
     AgentRunCreateRequest,
     AgentRunDetail,
+    AgentRunListRequest,
+    AgentRunListResponse,
+    AgentRunPruneRequest,
+    AgentRunPruneResponse,
     AgentRunRecord,
     AgentToolDescriptor,
     AgentToolInvocation,
@@ -613,6 +617,7 @@ export class AuthorityClient {
         listTools: () => Promise<AgentToolDescriptor[]>;
         createRun: (request: AgentRunCreateRequest) => Promise<AgentRunRecord>;
         listRuns: () => Promise<AgentRunRecord[]>;
+        listRunsPage: (request?: AgentRunListRequest) => Promise<AgentRunListResponse>;
         getRun: (runId: string) => Promise<AgentRunDetail>;
         cancelRun: (runId: string) => Promise<AgentRunRecord>;
         waitForCompletion: (runId: string, options?: AgentRunWaitForCompletionOptions) => Promise<AgentRunDetail>;
@@ -630,9 +635,11 @@ export class AuthorityClient {
             };
             runs: {
                 list: () => Promise<AgentRunRecord[]>;
+                listPage: (request?: AgentRunListRequest) => Promise<AgentRunListResponse>;
                 get: (runId: string) => Promise<AgentRunDetail>;
                 cancel: (runId: string) => Promise<AgentRunRecord>;
                 resolveApproval: (runId: string, approvalId: string, request: AgentApprovalResolveRequest) => Promise<AgentApprovalRecord>;
+                prune: (request?: AgentRunPruneRequest) => Promise<AgentRunPruneResponse>;
             };
             workspaces: {
                 list: () => Promise<AgentWorkspaceRecord[]>;
@@ -1875,6 +1882,12 @@ export class AuthorityClient {
                 const response = await this.requestWithSession<{ runs: AgentRunRecord[] }>('/agent/runs');
                 return response.runs;
             },
+            listRunsPage: async (request = {}) => {
+                return await this.requestWithSession<AgentRunListResponse>('/agent/runs/list', {
+                    method: 'POST',
+                    body: request,
+                });
+            },
             getRun: async runId => {
                 return await this.requestWithSession<AgentRunDetail>(`/agent/runs/${agentPathId(runId, 'runId')}`);
             },
@@ -1980,6 +1993,12 @@ export class AuthorityClient {
                         const response = await this.requestWithSession<{ runs: AgentRunRecord[] }>('/admin/agent/runs');
                         return response.runs;
                     },
+                    listPage: async (request = {}) => {
+                        return await this.requestWithSession<AgentRunListResponse>('/admin/agent/runs/list', {
+                            method: 'POST',
+                            body: request,
+                        });
+                    },
                     get: async runId => {
                         return await this.requestWithSession<AgentRunDetail>(`/admin/agent/runs/${agentPathId(runId, 'runId')}`);
                     },
@@ -1993,6 +2012,12 @@ export class AuthorityClient {
                             `/admin/agent/runs/${agentPathId(runId, 'runId')}/approvals/${agentPathId(approvalId, 'approvalId')}/resolve`,
                             { method: 'POST', body: request },
                         );
+                    },
+                    prune: async (request = {}) => {
+                        return await this.requestWithSession<AgentRunPruneResponse>('/admin/agent/runs/prune', {
+                            method: 'POST',
+                            body: request,
+                        });
                     },
                 },
                 workspaces: {

@@ -26,6 +26,8 @@ function setup(extensionId = 'third-party/ext-a', isAdmin = false) {
             start: vi.fn().mockResolvedValue([]),
             listTools: vi.fn(() => []),
             listRuns: vi.fn(() => []),
+            listRunsPage: vi.fn(() => ({ runs: [], page: { nextCursor: null, limit: 50, hasMore: false, totalCount: 0 } })),
+            pruneTerminalRuns: vi.fn(() => ({ deletedRuns: 0, reclaimedBytes: 0, retainedTerminalRuns: 0, activeRuns: 0 })),
             createRun: vi.fn(() => ({ id: 'run-1', workspaceId: 'workspace-a', mode: 'ask' })),
             getRun: vi.fn(() => ({ run: { id: 'run-1', callerUserHandle: 'alice', callerExtensionId: extensionId } })),
             cancelRun: vi.fn(() => ({ id: 'run-1', status: 'cancelled' })),
@@ -84,6 +86,30 @@ describe('Agent routes', () => {
         await get.get('/agent/tools')!(request(), response());
 
         expect(runtime.agent.listTools).toHaveBeenCalledWith('third-party/ext-a', 'alice');
+    });
+
+    it('paginates extension runs inside the authenticated owner scope', async () => {
+        const { runtime, post } = setup();
+
+        await post.get('/agent/runs/list')!(request({ page: { cursor: '50', limit: 25 }, status: 'failed' }), response());
+
+        expect(runtime.agent.listRunsPage).toHaveBeenCalledWith(
+            { page: { cursor: '50', limit: 25 }, status: 'failed' },
+            'third-party/ext-a',
+            'alice',
+        );
+    });
+
+    it('caps legacy run lists through the paginated owner and admin paths', async () => {
+        const extension = setup();
+        await extension.get.get('/agent/runs')!(request(), response());
+        expect(extension.runtime.agent.listRunsPage).toHaveBeenCalledWith({}, 'third-party/ext-a', 'alice');
+        expect(extension.runtime.agent.listRuns).not.toHaveBeenCalled();
+
+        const admin = setup('third-party/ext-a', true);
+        await admin.get.get('/admin/agent/runs')!(request(undefined, true), response());
+        expect(admin.runtime.agent.listRunsPage).toHaveBeenCalledWith();
+        expect(admin.runtime.agent.listRuns).not.toHaveBeenCalled();
     });
 
     it('binds a created run to the authenticated extension and workspace permission', async () => {
@@ -223,6 +249,20 @@ describe('Agent routes', () => {
             expect.any(String),
             'Agent approval resolved',
             { runId: 'run-1', approvalId: 'approval-1', decision: 'approve' },
+        );
+    });
+
+    it('allows an admin to prune terminal run details without touching active runs', async () => {
+        const { runtime, post } = setup('third-party/ext-a', true);
+
+        await post.get('/admin/agent/runs/prune')!(request({ retainLatest: 200 }, true), response());
+
+        expect(runtime.agent.pruneTerminalRuns).toHaveBeenCalledWith(200);
+        expect(runtime.audit.logUsage).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            expect.any(String),
+            'Terminal Agent runs pruned',
+            expect.objectContaining({ retainLatest: 200 }),
         );
     });
 });

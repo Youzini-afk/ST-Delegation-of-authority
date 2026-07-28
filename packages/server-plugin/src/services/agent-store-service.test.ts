@@ -119,6 +119,58 @@ describe('AgentStoreService', () => {
         expect(() => store.createRun(detail)).toThrow('exceeds the 16777216 byte limit');
         expect(() => store.getRun('run-oversized')).toThrow();
     });
+
+    it('prunes only older terminal runs and preserves active runs', () => {
+        const store = createStore();
+        const active = runDetail('run-active');
+        active.run.status = 'running';
+        store.createRun(active);
+        for (let index = 1; index <= 3; index += 1) {
+            const detail = runDetail(`run-terminal-${index}`);
+            detail.run.status = 'completed';
+            detail.run.updatedAt = `2026-01-01T00:00:0${index}.000Z`;
+            detail.run.finishedAt = detail.run.updatedAt;
+            store.createRun(detail);
+        }
+
+        const result = store.pruneTerminalRuns(1);
+
+        expect(result).toMatchObject({
+            deletedRuns: 2,
+            retainedTerminalRuns: 1,
+            activeRuns: 1,
+        });
+        expect(result.reclaimedBytes).toBeGreaterThan(0);
+        expect(store.listRuns().map(run => run.id).sort()).toEqual(['run-active', 'run-terminal-3']);
+        expect(store.getRun('run-active').run.status).toBe('running');
+    });
+
+    it('does not prune a terminal run while its executor is still unwinding', () => {
+        const store = createStore();
+        for (const id of ['run-newer', 'run-executing']) {
+            const detail = runDetail(id);
+            detail.run.status = 'completed';
+            detail.run.updatedAt = id === 'run-newer'
+                ? '2026-01-01T00:00:02.000Z'
+                : '2026-01-01T00:00:01.000Z';
+            store.createRun(detail);
+        }
+
+        const protectedResult = store.pruneTerminalRuns(0, ['run-executing']);
+
+        expect(protectedResult).toMatchObject({ deletedRuns: 1, retainedTerminalRuns: 1 });
+        expect(store.getRun('run-executing').run.status).toBe('completed');
+        expect(store.pruneTerminalRuns(0)).toMatchObject({ deletedRuns: 1, retainedTerminalRuns: 0 });
+    });
+
+    it('orders equal timestamps by run id for stable cursor boundaries', () => {
+        const store = createStore();
+        for (const id of ['run-a', 'run-c', 'run-b']) {
+            store.createRun(runDetail(id));
+        }
+
+        expect(store.listRuns().map(run => run.id)).toEqual(['run-c', 'run-b', 'run-a']);
+    });
 });
 
 function createStore(now?: () => string): AgentStoreService {

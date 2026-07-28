@@ -4,11 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 describe('Security Center tab interaction', () => {
     const source = fs.readFileSync(path.resolve(__dirname, 'security-center.ts'), 'utf8');
+    const constants = fs.readFileSync(path.resolve(__dirname, 'security-center/constants.ts'), 'utf8');
     const html = fs.readFileSync(path.resolve(__dirname, '../static/security-center.html'), 'utf8');
     const css = fs.readFileSync(path.resolve(__dirname, '../static/style.css'), 'utf8');
 
     it('declares a primary tab name whitelist matching all valid CenterTab values', () => {
-        expect(source).toContain("const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'policies', 'updates']");
+        expect(source).toContain("const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates']");
     });
 
     it('provides a type guard to validate arbitrary tab values against the whitelist', () => {
@@ -22,7 +23,7 @@ describe('Security Center tab interaction', () => {
         const switchTabEnd = source.indexOf('private async render(): Promise<void> {', switchTabStart);
         const switchTabBody = source.slice(switchTabStart, switchTabEnd);
         expect(switchTabBody).toContain('PRIMARY_TAB_NAMES.includes(tab)');
-        expect(switchTabBody).toContain("tab === 'policies' || tab === 'updates'");
+        expect(switchTabBody).toContain("tab === 'agent' || tab === 'policies' || tab === 'updates'");
         expect(switchTabBody).toContain('this.state.selectedTab === tab');
         expect(switchTabBody).toContain('this.renderTabs()');
         expect(switchTabBody).toContain('this.toggleSections()');
@@ -90,8 +91,8 @@ describe('Security Center tab interaction', () => {
         const tabNames = tabs.map(match => match[1]);
         const panelNames = panels.map(match => match[1]);
 
-        expect(tabNames).toEqual(['overview', 'detail', 'databases', 'activity', 'policies', 'updates']);
-        expect(panelNames).toEqual(['overview', 'detail', 'databases', 'activity', 'policies', 'updates']);
+        expect(tabNames).toEqual(['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates']);
+        expect(panelNames).toEqual(['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates']);
 
         for (const match of tabs) {
             const tabHtml = match[0];
@@ -112,6 +113,19 @@ describe('Security Center tab interaction', () => {
 
     it('static HTML has role=tablist on the tab container', () => {
         expect(html).toContain('<nav class="authority-tabs" role="tablist">');
+    });
+
+    it('declares agent.run before the built-in workbench creates runs', () => {
+        expect(constants).toContain('declaredPermissions: { agent: { run: true } }');
+        expect(source).toContain("AuthoritySDK.init(SECURITY_CENTER_CONFIG)");
+    });
+
+    it('keeps Agent form drafts across redraws and rejects stale refresh results', () => {
+        expect(source).toContain('const draft = this.captureAgentFormDraft(container);');
+        expect(source).toContain('this.restoreAgentFormDraft(container, draft);');
+        expect(source).toContain('const generation = ++this.agentRefreshGeneration;');
+        expect(source).toContain('if (generation !== this.agentRefreshGeneration) return;');
+        expect(source).toContain('if (this.state.agent.selectedRun?.run.id !== runId) return;');
     });
 
     it('static CSS disables pointer-events on tab icon descendants', () => {
