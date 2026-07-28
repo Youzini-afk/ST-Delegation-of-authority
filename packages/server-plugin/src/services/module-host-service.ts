@@ -192,7 +192,9 @@ interface ResolvedEffectiveLimits {
     maxRequestBytes: number;
     maxResponseBytes: number;
     timeoutMs: number;
-    source: ModuleTransactionEffectiveLimits['source'];
+    requestSource: ModuleTransactionEffectiveLimits['source'];
+    responseSource: ModuleTransactionEffectiveLimits['source'];
+    timeoutSource: ModuleTransactionEffectiveLimits['source'];
 }
 
 /**
@@ -216,6 +218,16 @@ function resolveLimit(
         return Math.min(manifestValue, hardMax);
     }
     return isCompanion ? hostDefault : Infinity;
+}
+
+function limitSource(
+    manifestValue: number | undefined,
+    hardMax: number,
+): ModuleTransactionEffectiveLimits['source'] {
+    if (manifestValue === undefined) {
+        return 'host_default';
+    }
+    return manifestValue > hardMax ? 'hard_cap' : 'manifest';
 }
 
 /**
@@ -769,6 +781,7 @@ export class ModuleHostService {
         moduleId: string,
         transactionName: string,
         request: ModuleTransactionRequest,
+        externalSignal?: AbortSignal,
     ): Promise<ModuleTransactionResponse> {
         validateModuleId(moduleId);
         validateTransactionName(transactionName);
@@ -780,6 +793,17 @@ export class ModuleHostService {
                 'validation_error',
                 'validation',
                 { code: 'dry_run_unsupported' as ModuleErrorCode, moduleId, transaction: transactionName },
+            );
+        }
+        const requestedTimeoutMs = request.options?.timeoutMs;
+        if (requestedTimeoutMs !== undefined
+            && (!Number.isSafeInteger(requestedTimeoutMs) || requestedTimeoutMs < 1 || requestedTimeoutMs > MODULE_MAX_TIMEOUT_MS)) {
+            throw new AuthorityServiceError(
+                `Transaction timeoutMs must be an integer between 1 and ${MODULE_MAX_TIMEOUT_MS}`,
+                400,
+                'validation_error',
+                'validation',
+                { code: 'validation_error', moduleId, transaction: transactionName, timeoutMs: requestedTimeoutMs },
             );
         }
 
@@ -856,7 +880,7 @@ export class ModuleHostService {
         // built-ins that have no byte/timeout expectations. Companion
         // modules always get host defaults (source: 'host_default' or
         // 'hard_cap') because they are untrusted external code.
-        const limits = this.resolveEffectiveLimits(module, transaction);
+        const limits = this.resolveEffectiveLimits(module, transaction, requestedTimeoutMs);
 
         // Phase 3: enforce request size centrally before dispatching to the
         // handler. Measure the WHOLE request payload (input + idempotencyKey
@@ -877,7 +901,7 @@ export class ModuleHostService {
                     transaction: transactionName,
                     requestBytes,
                     maxRequestBytes: limits.maxRequestBytes,
-                    limitSource: limits.source,
+                    limitSource: limits.requestSource,
                 },
             );
         }
@@ -968,7 +992,17 @@ export class ModuleHostService {
         // timeout IS enforced, the host aborts `abortController` when the
         // timer fires so cooperative handlers (built-in and companion) see
         // `signal.aborted === true`.
-        const handlerResult = await this.invokeHandlerWithLimits(handler, ctx, input, request, module, transaction, limits, abortController);
+        const handlerResult = await this.invokeHandlerWithLimits(
+            handler,
+            ctx,
+            input,
+            request,
+            module,
+            transaction,
+            limits,
+            abortController,
+            externalSignal,
+        );
 
         // Phase 3: serialize the response to detect non-serializable results
         // before returning to the HTTP route. JSON.stringify throws on
@@ -1048,7 +1082,7 @@ export class ModuleHostService {
                     transaction: transactionName,
                     responseBytes: serializedResponseBytes,
                     maxResponseBytes: limits.maxResponseBytes,
-                    limitSource: limits.source,
+                    limitSource: limits.responseSource,
                 },
             );
         }
@@ -1074,6 +1108,7 @@ export class ModuleHostService {
     private resolveEffectiveLimits(
         module: RegisteredModule,
         transaction: ModuleTransactionManifest,
+        requestedTimeoutMs?: number,
     ): ResolvedEffectiveLimits {
         const isCompanion = module.contextMode === 'companion';
         const maxRequestBytes = resolveLimit(
@@ -1088,19 +1123,22 @@ export class ModuleHostService {
             MODULE_DEFAULT_RESPONSE_BYTES,
             MODULE_MAX_RESPONSE_BYTES,
         );
-        const timeoutMs = resolveLimit(
+        const configuredTimeoutMs = resolveLimit(
             isCompanion,
             transaction.timeoutMs,
             MODULE_DEFAULT_TIMEOUT_MS,
             MODULE_MAX_TIMEOUT_MS,
         );
-        const source: ModuleTransactionEffectiveLimits['source']
-            = (transaction.maxRequestBytes !== undefined
-                || transaction.maxResponseBytes !== undefined
-                || transaction.timeoutMs !== undefined)
-                ? 'manifest'
-                : isCompanion ? 'host_default' : 'host_default';
-        return { maxRequestBytes, maxResponseBytes, timeoutMs, source };
+        const requestSource = limitSource(transaction.maxRequestBytes, MODULE_MAX_REQUEST_BYTES);
+        const responseSource = limitSource(transaction.maxResponseBytes, MODULE_MAX_RESPONSE_BYTES);
+        let timeoutSource = limitSource(transaction.timeoutMs, MODULE_MAX_TIMEOUT_MS);
+        const timeoutMs = requestedTimeoutMs === undefined
+            ? configuredTimeoutMs
+            : Math.min(configuredTimeoutMs, requestedTimeoutMs);
+        if (requestedTimeoutMs !== undefined && requestedTimeoutMs <= configuredTimeoutMs) {
+            timeoutSource = 'request';
+        }
+        return { maxRequestBytes, maxResponseBytes, timeoutMs, requestSource, responseSource, timeoutSource };
     }
 
     /**
@@ -1131,42 +1169,51 @@ export class ModuleHostService {
         transaction: ModuleTransactionManifest,
         limits: ResolvedEffectiveLimits,
         abortController: AbortController,
+        externalSignal?: AbortSignal,
     ): Promise<ModuleTransactionHandlerResult> {
-        if (limits.timeoutMs === Infinity) {
-            // No timeout: invoke directly. The signal on ctx is never
-            // aborted. Handler failures still surface as
-            // transaction_handler_failed with a sanitized message.
-            try {
-                return await handler(ctx, input, request);
-            } catch (error) {
-                throw this.wrapHandlerError(error, module.manifest.id, transaction.name);
-            }
+        if (externalSignal?.aborted) {
+            throw abortSignalError(externalSignal);
         }
 
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-                // Abort the controller FIRST so cooperative handlers
-                // observing `signal.aborted` see the abort event before
-                // the host rejects the race.
-                abortController.abort();
-                reject(new ModuleHandlerTimeoutError(module.manifest.id, transaction.name, limits.timeoutMs));
-            }, limits.timeoutMs);
-            if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
-                timer.unref();
-            }
-        });
+        let abortListener: (() => void) | undefined;
+        let timedOut = false;
+        const contenders: Promise<ModuleTransactionHandlerResult>[] = [
+            Promise.resolve().then(() => handler(ctx, input, request)),
+        ];
+        if (limits.timeoutMs !== Infinity) {
+            contenders.push(new Promise<never>((_, reject) => {
+                timer = setTimeout(() => {
+                    timedOut = true;
+                    const timeoutError = new ModuleHandlerTimeoutError(module.manifest.id, transaction.name, limits.timeoutMs);
+                    abortController.abort(timeoutError);
+                    reject(timeoutError);
+                }, limits.timeoutMs);
+                if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+                    timer.unref();
+                }
+            }));
+        }
+        if (externalSignal) {
+            contenders.push(new Promise<never>((_, reject) => {
+                abortListener = () => {
+                    abortController.abort(externalSignal.reason);
+                    reject(abortSignalError(externalSignal));
+                };
+                externalSignal.addEventListener('abort', abortListener, { once: true });
+                if (externalSignal.aborted) {
+                    abortListener();
+                }
+            }));
+        }
 
         try {
-            const result = await Promise.race([
-                handler(ctx, input, request),
-                timeoutPromise,
-            ]);
+            const result = await Promise.race(contenders);
             return result;
         } catch (error) {
-            if (error instanceof ModuleHandlerTimeoutError) {
+            if (timedOut || error instanceof ModuleHandlerTimeoutError) {
                 throw new AuthorityServiceError(
-                    error.message,
+                    `Module transaction timed out: ${module.manifest.id}/${transaction.name}`,
                     504,
                     'timeout',
                     'timeout',
@@ -1175,9 +1222,12 @@ export class ModuleHostService {
                         moduleId: module.manifest.id,
                         transaction: transaction.name,
                         timeoutMs: limits.timeoutMs,
-                        limitSource: limits.source,
+                        limitSource: limits.timeoutSource,
                     },
                 );
+            }
+            if (externalSignal?.aborted) {
+                throw abortSignalError(externalSignal);
             }
             throw this.wrapHandlerError(error, module.manifest.id, transaction.name);
         } finally {
@@ -1188,6 +1238,9 @@ export class ModuleHostService {
             // downstream code that did not expect an abort.
             if (timer !== undefined) {
                 clearTimeout(timer);
+            }
+            if (abortListener) {
+                externalSignal?.removeEventListener('abort', abortListener);
             }
         }
     }
@@ -1318,4 +1371,11 @@ export class ModuleHostService {
             source,
         };
     }
+}
+
+function abortSignalError(signal: AbortSignal): Error {
+    if (signal.reason instanceof Error) {
+        return signal.reason;
+    }
+    return Object.assign(new Error('Module transaction cancelled'), { name: 'AbortError' });
 }

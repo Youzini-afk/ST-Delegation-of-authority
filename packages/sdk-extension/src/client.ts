@@ -1,4 +1,21 @@
 import type {
+    AgentApprovalRecord,
+    AgentApprovalResolveRequest,
+    AgentBrowserToolClaimRequest,
+    AgentBrowserToolClaimResponse,
+    AgentBrowserToolRegistrationRequest,
+    AgentBrowserToolRegistrationResponse,
+    AgentLlmProfile,
+    AgentLlmProfileInput,
+    AgentRunCreateRequest,
+    AgentRunDetail,
+    AgentRunRecord,
+    AgentToolDescriptor,
+    AgentToolInvocation,
+    AgentToolResultRequest,
+    AgentWorkspaceListResponse,
+    AgentWorkspaceRecord,
+    AgentWorkspaceRegisterRequest,
     AuthorityGrant,
     AuthorityInitConfig,
     AuthorityPolicyEntry,
@@ -25,6 +42,7 @@ import type {
     AuthorityModuleManifest,
     ModuleGetResponse,
     ModuleListResponse,
+    ModuleTransactionManifest,
     ModuleTransactionRequest,
     ModuleTransactionResponse,
     PermissionEvaluateBatchResponse,
@@ -110,6 +128,13 @@ import type {
     TriviumUpsertResponse,
     TriviumUpdatePayloadRequest,
     TriviumUpdateVectorRequest,
+    WorkspaceCheckpointRequest,
+    WorkspaceCheckpointResponse,
+    WorkspaceCommitListResponse,
+    WorkspaceDiffResponse,
+    WorkspaceRollbackRequest,
+    WorkspaceRollbackResponse,
+    WorkspaceStatusResponse,
 } from '@stdo/shared-types';
 import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
 import { showPermissionPrompt, type PermissionPromptContext } from './permission-prompt.js';
@@ -176,6 +201,10 @@ function isTerminalJobStatus(status: JobRecord['status']): boolean {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
+function isTerminalAgentRunStatus(status: AgentRunRecord['status']): boolean {
+    return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
+}
+
 function isJobRecord(value: unknown): value is JobRecord {
     return typeof value === 'object'
         && value !== null
@@ -187,24 +216,24 @@ function getJobSubscriptionSnapshot(job: JobRecord): string {
     return JSON.stringify(job);
 }
 
-function getJobWaitPollInterval(value: unknown): number {
+function getWaitPollInterval(value: unknown, subject: 'job' | 'agent run'): number {
     if (value == null) {
         return 1000;
     }
     if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
         return value;
     }
-    throw new Error('Authority job pollIntervalMs must be a positive safe integer');
+    throw new Error(`Authority ${subject} pollIntervalMs must be a positive safe integer`);
 }
 
-function getOptionalJobWaitTimeout(value: unknown): number | null {
+function getOptionalWaitTimeout(value: unknown, subject: 'job' | 'agent run'): number | null {
     if (value == null) {
         return null;
     }
     if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
         return value;
     }
-    throw new Error('Authority job timeoutMs must be a positive safe integer');
+    throw new Error(`Authority ${subject} timeoutMs must be a positive safe integer`);
 }
 
 function getSqlPageAllPageSize(value: unknown): number {
@@ -227,16 +256,16 @@ function getOptionalMaxPages(value: unknown): number | null {
     throw new Error('Authority sql.pageAll maxPages must be a positive safe integer');
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
+function throwIfAborted(signal: AbortSignal | undefined, subject: 'job' | 'agent run'): void {
     if (signal?.aborted) {
-        throw new Error('Authority job wait aborted');
+        throw new Error(`Authority ${subject} wait aborted`);
     }
 }
 
-function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
+function waitForDelay(ms: number, signal: AbortSignal | undefined, subject: 'job' | 'agent run'): Promise<void> {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) {
-            reject(new Error('Authority job wait aborted'));
+            reject(new Error(`Authority ${subject} wait aborted`));
             return;
         }
 
@@ -248,7 +277,7 @@ function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
         const onAbort = () => {
             clearTimeout(timer);
             cleanup();
-            reject(new Error('Authority job wait aborted'));
+            reject(new Error(`Authority ${subject} wait aborted`));
         };
 
         const cleanup = () => {
@@ -256,6 +285,20 @@ function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
         };
 
         signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+    if (!signal) {
+        return promise;
+    }
+    if (signal.aborted) {
+        return Promise.reject(signal.reason ?? new Error('Authority request aborted'));
+    }
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(signal.reason ?? new Error('Authority request aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
     });
 }
 
@@ -303,6 +346,18 @@ export interface JobSubscribeOptions {
     pollIntervalMs?: number;
     emitCurrent?: boolean;
     onUpdate?: (job: JobRecord) => void | Promise<void>;
+}
+
+export interface AgentRunWaitForCompletionOptions {
+    pollIntervalMs?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onProgress?: (run: AgentRunDetail) => void | Promise<void>;
+}
+
+export interface AgentWorkspaceDiffOptions {
+    from?: string | null;
+    to?: string | null;
 }
 
 export interface BlobPutJsonRequest {
@@ -419,6 +474,7 @@ export interface AuthorityChunkedTriviumUpsertResult extends AuthorityChunkedTri
 interface SessionRequestOptions {
     method?: 'GET' | 'POST';
     body?: unknown;
+    signal?: AbortSignal;
 }
 
 type InlineThresholdKey =
@@ -553,11 +609,51 @@ export class AuthorityClient {
         execute: <TResult = unknown>(moduleId: string, transactionName: string, input?: unknown, options?: AuthorityModuleTransactionOptions) => Promise<AuthorityModuleTransactionResponse<TResult>>;
     };
 
+    readonly agent: {
+        listTools: () => Promise<AgentToolDescriptor[]>;
+        createRun: (request: AgentRunCreateRequest) => Promise<AgentRunRecord>;
+        listRuns: () => Promise<AgentRunRecord[]>;
+        getRun: (runId: string) => Promise<AgentRunDetail>;
+        cancelRun: (runId: string) => Promise<AgentRunRecord>;
+        waitForCompletion: (runId: string, options?: AgentRunWaitForCompletionOptions) => Promise<AgentRunDetail>;
+        browser: {
+            registerTools: (request: AgentBrowserToolRegistrationRequest) => Promise<AgentBrowserToolRegistrationResponse>;
+            claim: (request: AgentBrowserToolClaimRequest) => Promise<AgentBrowserToolClaimResponse>;
+            submitResult: (request: AgentToolResultRequest) => Promise<AgentToolInvocation>;
+        };
+        admin: {
+            profiles: {
+                list: () => Promise<AgentLlmProfile[]>;
+                get: (profileId: string) => Promise<AgentLlmProfile>;
+                upsert: (profile: AgentLlmProfileInput) => Promise<AgentLlmProfile>;
+                delete: (profileId: string) => Promise<boolean>;
+            };
+            runs: {
+                list: () => Promise<AgentRunRecord[]>;
+                get: (runId: string) => Promise<AgentRunDetail>;
+                cancel: (runId: string) => Promise<AgentRunRecord>;
+                resolveApproval: (runId: string, approvalId: string, request: AgentApprovalResolveRequest) => Promise<AgentApprovalRecord>;
+            };
+            workspaces: {
+                list: () => Promise<AgentWorkspaceRecord[]>;
+                register: (request: AgentWorkspaceRegisterRequest) => Promise<AgentWorkspaceRecord>;
+                get: (workspaceId: string) => Promise<AgentWorkspaceRecord>;
+                status: (workspaceId: string) => Promise<WorkspaceStatusResponse>;
+                commits: (workspaceId: string, limit?: number) => Promise<WorkspaceCommitListResponse>;
+                diff: (workspaceId: string, options?: AgentWorkspaceDiffOptions) => Promise<WorkspaceDiffResponse>;
+                checkpoint: (workspaceId: string, request: WorkspaceCheckpointRequest) => Promise<WorkspaceCheckpointResponse>;
+                rollback: (workspaceId: string, request: WorkspaceRollbackRequest) => Promise<WorkspaceRollbackResponse>;
+                resumeRollback: (workspaceId: string) => Promise<WorkspaceRollbackResponse>;
+            };
+        };
+    };
+
     private session: SessionInitResponse | null = null;
     private sessionPromise: Promise<SessionInitResponse> | null = null;
     private probeSnapshot: AuthorityProbeResponse | null = null;
     private probePromise: Promise<AuthorityProbeResponse> | null = null;
     private readonly runtimeGrants = new Map<string, AuthorityGrant>();
+    private readonly moduleManifests = new Map<string, AuthorityModuleManifest>();
 
     constructor(private config: AuthorityInitConfig) {
         this.storage = {
@@ -1538,12 +1634,12 @@ export class AuthorityClient {
                 });
             },
             waitForCompletion: async (id, options = {}) => {
-                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
-                const timeoutMs = getOptionalJobWaitTimeout(options.timeoutMs);
+                const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'job');
+                const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'job');
                 const startedAt = Date.now();
 
                 while (true) {
-                    throwIfAborted(options.signal);
+                    throwIfAborted(options.signal, 'job');
                     const job = await this.jobs.get(id);
                     await options.onProgress?.(job);
                     if (isTerminalJobStatus(job.status)) {
@@ -1552,11 +1648,11 @@ export class AuthorityClient {
                     if (timeoutMs != null && Date.now() - startedAt >= timeoutMs) {
                         throw new Error(`Authority job ${id} did not complete within ${timeoutMs}ms`);
                     }
-                    await waitForDelay(pollIntervalMs, options.signal);
+                    await waitForDelay(pollIntervalMs, options.signal, 'job');
                 }
             },
             subscribe: async (id, options = {}) => {
-                const pollIntervalMs = getJobWaitPollInterval(options.pollIntervalMs);
+                const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'job');
                 let closed = false;
                 let pollTimer: ReturnType<typeof setTimeout> | null = null;
                 let lastSnapshot: string | null = null;
@@ -1683,12 +1779,21 @@ export class AuthorityClient {
         this.modules = {
             list: async () => {
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
-                return await this.requestWithSession<ModuleListResponse>('/modules');
+                const response = await this.requestWithSession<ModuleListResponse>('/modules');
+                for (const manifest of response.modules) {
+                    this.moduleManifests.set(manifest.id, structuredClone(manifest));
+                }
+                return response;
             },
             get: async moduleId => {
                 const trimmedModuleId = trimModuleIdentifier(moduleId);
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
+                const cached = this.moduleManifests.get(trimmedModuleId);
+                if (cached) {
+                    return structuredClone(cached);
+                }
                 const response = await this.requestWithSession<ModuleGetResponse>(`/modules/${encodeURIComponent(trimmedModuleId)}`);
+                this.moduleManifests.set(trimmedModuleId, structuredClone(response.module));
                 return response.module;
             },
             execute: async <TResult = unknown>(
@@ -1705,8 +1810,8 @@ export class AuthorityClient {
                 // user-facing permission request.
                 const trimmedIdempotencyKey = options?.idempotencyKey?.trim();
                 const timeoutMs = options?.timeoutMs;
-                if (timeoutMs !== undefined && !(typeof timeoutMs === 'number' && Number.isSafeInteger(timeoutMs) && timeoutMs > 0)) {
-                    throw new Error('Authority modules.execute timeoutMs must be a positive safe integer');
+                if (timeoutMs !== undefined && !(typeof timeoutMs === 'number' && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 600_000)) {
+                    throw new Error('Authority modules.execute timeoutMs must be an integer between 1 and 600000');
                 }
 
                 const body: ModuleTransactionRequest = {
@@ -1717,11 +1822,24 @@ export class AuthorityClient {
 
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
 
+                const manifest = await this.modules.get(trimmedModuleId);
+                const transaction = manifest.transactions[trimmedTransactionName];
+                if (!transaction) {
+                    throw new Error(`Authority module transaction not found: ${trimmedModuleId}:${trimmedTransactionName}`);
+                }
+
                 await this.ensurePermission({
                     resource: 'module.execute',
-                    target: `${trimmedModuleId}:${trimmedTransactionName}`,
+                    target: modulePermissionTarget(trimmedModuleId, trimmedTransactionName, transaction),
                     reason: `执行模块事务 ${trimmedModuleId}:${trimmedTransactionName}`,
                 });
+                for (const required of transaction.requiredResources) {
+                    await this.ensurePermission({
+                        resource: required.resource,
+                        ...(required.target === undefined ? {} : { target: required.target }),
+                        reason: required.reason ?? `模块事务 ${trimmedModuleId}:${trimmedTransactionName} 需要此能力`,
+                    });
+                }
 
                 return await this.requestWithSession<AuthorityModuleTransactionResponse<TResult>>(
                     `/modules/${encodeURIComponent(trimmedModuleId)}/transactions/${encodeURIComponent(trimmedTransactionName)}`,
@@ -1730,6 +1848,206 @@ export class AuthorityClient {
                         body,
                     },
                 );
+            },
+        };
+
+        this.agent = {
+            listTools: async () => {
+                const response = await this.requestWithSession<{ tools: AgentToolDescriptor[] }>('/agent/tools');
+                return response.tools;
+            },
+            createRun: async request => {
+                const workspaceId = request.workspaceId?.trim();
+                if (!workspaceId) {
+                    throw new Error('Agent workspaceId is required');
+                }
+                await this.ensurePermission({
+                    resource: 'agent.run',
+                    target: workspaceId,
+                    reason: `在工作区 ${workspaceId} 启动 Agent`,
+                });
+                return await this.requestWithSession<AgentRunRecord>('/agent/runs', {
+                    method: 'POST',
+                    body: { ...request, workspaceId },
+                });
+            },
+            listRuns: async () => {
+                const response = await this.requestWithSession<{ runs: AgentRunRecord[] }>('/agent/runs');
+                return response.runs;
+            },
+            getRun: async runId => {
+                return await this.requestWithSession<AgentRunDetail>(`/agent/runs/${agentPathId(runId, 'runId')}`);
+            },
+            cancelRun: async runId => {
+                return await this.requestWithSession<AgentRunRecord>(`/agent/runs/${agentPathId(runId, 'runId')}/cancel`, {
+                    method: 'POST',
+                });
+            },
+            waitForCompletion: async (runId, options = {}) => {
+                const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'agent run');
+                const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'agent run');
+                const startedAt = Date.now();
+
+                while (true) {
+                    throwIfAborted(options.signal, 'agent run');
+                    const elapsedMs = Date.now() - startedAt;
+                    if (timeoutMs != null && elapsedMs >= timeoutMs) {
+                        throw new Error(`Authority agent run ${runId} did not complete within ${timeoutMs}ms`);
+                    }
+                    const timeoutSignal = timeoutMs == null
+                        ? undefined
+                        : AbortSignal.timeout(Math.max(1, timeoutMs - elapsedMs));
+                    const signal = options.signal && timeoutSignal
+                        ? AbortSignal.any([options.signal, timeoutSignal])
+                        : options.signal ?? timeoutSignal;
+                    let detail: AgentRunDetail;
+                    try {
+                        detail = await this.requestWithSession<AgentRunDetail>(
+                            `/agent/runs/${agentPathId(runId, 'runId')}`,
+                            signal ? { signal } : {},
+                        );
+                    } catch (error) {
+                        if (options.signal?.aborted) {
+                            throw new Error('Authority agent run wait aborted');
+                        }
+                        if (timeoutSignal?.aborted && !options.signal?.aborted) {
+                            throw new Error(`Authority agent run ${runId} did not complete within ${timeoutMs}ms`);
+                        }
+                        throw error;
+                    }
+                    await options.onProgress?.(detail);
+                    if (isTerminalAgentRunStatus(detail.run.status)) {
+                        return detail;
+                    }
+                    const remainingMs = timeoutMs == null ? pollIntervalMs : timeoutMs - (Date.now() - startedAt);
+                    await waitForDelay(Math.max(1, Math.min(pollIntervalMs, remainingMs)), options.signal, 'agent run');
+                }
+            },
+            browser: {
+                registerTools: async request => {
+                    const browserInstanceId = request.browserInstanceId?.trim();
+                    if (!browserInstanceId) {
+                        throw new Error('Browser instance id is required');
+                    }
+                    await this.ensurePermission({
+                        resource: 'agent.browser',
+                        target: browserInstanceId,
+                        reason: '向 Agent 注册浏览器工具',
+                    });
+                    return await this.requestWithSession<AgentBrowserToolRegistrationResponse>('/agent/browser-tools/register', {
+                        method: 'POST',
+                        body: { ...request, browserInstanceId },
+                    });
+                },
+                claim: async request => {
+                    return await this.requestWithSession<AgentBrowserToolClaimResponse>('/agent/browser-tools/claim', {
+                        method: 'POST',
+                        body: request,
+                    });
+                },
+                submitResult: async request => {
+                    return await this.requestWithSession<AgentToolInvocation>('/agent/browser-tools/result', {
+                        method: 'POST',
+                        body: request,
+                    });
+                },
+            },
+            admin: {
+                profiles: {
+                    list: async () => {
+                        const response = await this.requestWithSession<{ profiles: AgentLlmProfile[] }>('/admin/agent/profiles');
+                        return response.profiles;
+                    },
+                    get: async profileId => {
+                        return await this.requestWithSession<AgentLlmProfile>(`/admin/agent/profiles/${agentPathId(profileId, 'profileId')}`);
+                    },
+                    upsert: async profile => {
+                        return await this.requestWithSession<AgentLlmProfile>('/admin/agent/profiles', {
+                            method: 'POST',
+                            body: profile,
+                        });
+                    },
+                    delete: async profileId => {
+                        const response = await this.requestWithSession<{ deleted: boolean }>(
+                            `/admin/agent/profiles/${agentPathId(profileId, 'profileId')}/delete`,
+                            { method: 'POST' },
+                        );
+                        return response.deleted;
+                    },
+                },
+                runs: {
+                    list: async () => {
+                        const response = await this.requestWithSession<{ runs: AgentRunRecord[] }>('/admin/agent/runs');
+                        return response.runs;
+                    },
+                    get: async runId => {
+                        return await this.requestWithSession<AgentRunDetail>(`/admin/agent/runs/${agentPathId(runId, 'runId')}`);
+                    },
+                    cancel: async runId => {
+                        return await this.requestWithSession<AgentRunRecord>(`/admin/agent/runs/${agentPathId(runId, 'runId')}/cancel`, {
+                            method: 'POST',
+                        });
+                    },
+                    resolveApproval: async (runId, approvalId, request) => {
+                        return await this.requestWithSession<AgentApprovalRecord>(
+                            `/admin/agent/runs/${agentPathId(runId, 'runId')}/approvals/${agentPathId(approvalId, 'approvalId')}/resolve`,
+                            { method: 'POST', body: request },
+                        );
+                    },
+                },
+                workspaces: {
+                    list: async () => {
+                        const response = await this.requestWithSession<AgentWorkspaceListResponse>('/admin/agent/workspaces');
+                        return response.workspaces;
+                    },
+                    register: async request => {
+                        return await this.requestWithSession<AgentWorkspaceRecord>('/admin/agent/workspaces', {
+                            method: 'POST',
+                            body: request,
+                        });
+                    },
+                    get: async workspaceId => {
+                        return await this.requestWithSession<AgentWorkspaceRecord>(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}`);
+                    },
+                    status: async workspaceId => {
+                        return await this.requestWithSession<WorkspaceStatusResponse>(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/status`);
+                    },
+                    commits: async (workspaceId, limit = 100) => {
+                        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+                            throw new Error('Authority agent workspace commit limit must be an integer between 1 and 500');
+                        }
+                        return await this.requestWithSession<WorkspaceCommitListResponse>(
+                            `/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/commits?limit=${limit}`,
+                        );
+                    },
+                    diff: async (workspaceId, options = {}) => {
+                        const query = new URLSearchParams();
+                        if (options.from !== undefined) query.set('from', options.from === null ? 'empty' : options.from);
+                        if (options.to !== undefined) query.set('to', options.to === null ? 'empty' : options.to);
+                        const suffix = query.size > 0 ? `?${query.toString()}` : '';
+                        return await this.requestWithSession<WorkspaceDiffResponse>(
+                            `/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/diff${suffix}`,
+                        );
+                    },
+                    checkpoint: async (workspaceId, request) => {
+                        return await this.requestWithSession<WorkspaceCheckpointResponse>(
+                            `/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/checkpoints`,
+                            { method: 'POST', body: request },
+                        );
+                    },
+                    rollback: async (workspaceId, request) => {
+                        return await this.requestWithSession<WorkspaceRollbackResponse>(
+                            `/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/rollback`,
+                            { method: 'POST', body: request },
+                        );
+                    },
+                    resumeRollback: async workspaceId => {
+                        return await this.requestWithSession<WorkspaceRollbackResponse>(
+                            `/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/rollback/resume`,
+                            { method: 'POST' },
+                        );
+                    },
+                },
             },
         };
     }
@@ -2272,12 +2590,13 @@ export class AuthorityClient {
     }
 
     private async requestWithSession<T>(path: string, options: SessionRequestOptions = {}, retried = false): Promise<T> {
-        const session = await this.ensureInitialized();
+        const session = await waitForSignal(this.ensureInitialized(), options.signal);
 
         try {
             const requestOptions = {
                 body: options.body,
                 sessionToken: session.sessionToken,
+                ...(options.signal ? { signal: options.signal } : {}),
             } as const;
 
             if (options.method) {
@@ -2290,7 +2609,7 @@ export class AuthorityClient {
             return await authorityRequest<T>(path, requestOptions);
         } catch (error) {
             if (!retried && isInvalidSessionError(error)) {
-                await this.init(true);
+                await waitForSignal(this.init(true), options.signal);
                 return await this.requestWithSession<T>(path, options, true);
             }
 
@@ -2609,6 +2928,8 @@ function groupByResource<T extends AuthorityGrant | AuthorityPolicyEntry>(items:
         'jobs.background': [],
         'events.stream': [],
         'module.execute': [],
+        'agent.run': [],
+        'agent.browser': [],
     } as Record<PermissionResource, T[]>;
 
     for (const item of items) {
@@ -2624,6 +2945,13 @@ function safeParse(value: string): unknown {
     } catch {
         return value;
     }
+}
+
+function agentPathId(value: unknown, label: string): string {
+    if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(`Authority agent ${label} must be a non-empty string`);
+    }
+    return encodeURIComponent(value.trim());
 }
 
 function getSqlDatabaseName(value: unknown): string {
@@ -2679,4 +3007,19 @@ function trimModuleTransactionName(value: unknown): string {
         throw new Error('Authority modules transactionName must be a non-empty string');
     }
     return trimmed;
+}
+
+function modulePermissionTarget(
+    moduleId: string,
+    transactionName: string,
+    transaction: ModuleTransactionManifest,
+): string {
+    switch (transaction.permissionTarget.kind) {
+        case 'module':
+            return moduleId;
+        case 'transaction':
+            return `${moduleId}:${transactionName}`;
+        case 'custom':
+            return transaction.permissionTarget.target;
+    }
 }

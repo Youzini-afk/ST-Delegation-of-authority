@@ -158,10 +158,16 @@ export class WorkspaceHistoryService {
             if (input.defaultRef !== undefined && typeof input.defaultRef !== 'string') {
                 throw validationError('Workspace defaultRef must be a string');
             }
+            const allowedUserHandles = normalizeAllowedUserHandles(input.allowedUserHandles);
             const rootPath = this.resolveWorkspaceRoot(input.rootPath);
             const registry = this.readRegistry();
             const existingByRoot = registry.workspaces.find(workspace => samePath(workspace.rootPath, rootPath));
             if (existingByRoot) {
+                if (input.allowedUserHandles !== undefined) {
+                    existingByRoot.allowedUserHandles = allowedUserHandles;
+                    existingByRoot.updatedAt = this.now();
+                    this.writeRegistry(registry);
+                }
                 return this.withCurrentHead(existingByRoot);
             }
 
@@ -182,6 +188,7 @@ export class WorkspaceHistoryService {
                 id,
                 displayName: input.displayName?.trim() || path.basename(rootPath),
                 rootPath,
+                allowedUserHandles,
                 defaultRef,
                 headCommitId: null,
                 createdAt: timestamp,
@@ -208,6 +215,15 @@ export class WorkspaceHistoryService {
 
     getWorkspace(workspaceId: string): AgentWorkspaceRecord {
         return this.withCurrentHead(this.getStoredWorkspace(workspaceId));
+    }
+
+    assertWorkspaceAccess(workspaceId: string, userHandle: string, isAdmin: boolean): AgentWorkspaceRecord {
+        const workspace = this.getWorkspace(workspaceId);
+        const normalizedUserHandle = userHandle.trim();
+        if (!isAdmin && !workspace.allowedUserHandles.includes(normalizedUserHandle)) {
+            throw new AuthorityServiceError(`Workspace not found: ${workspaceId}`, 404, 'validation_error', 'validation');
+        }
+        return workspace;
     }
 
     async checkpoint(
@@ -1208,6 +1224,9 @@ export class WorkspaceHistoryService {
             throw new Error('Invalid workspace registry');
         }
         for (const workspace of registry.workspaces) {
+            if (workspace.allowedUserHandles === undefined) {
+                workspace.allowedUserHandles = [];
+            }
             validateWorkspaceRecord(workspace);
         }
         return registry;
@@ -1807,12 +1826,31 @@ function validateWorkspaceRecord(workspace: AgentWorkspaceRecord): void {
         || !workspace.displayName.trim()
         || typeof workspace.rootPath !== 'string'
         || !path.isAbsolute(workspace.rootPath)
+        || !Array.isArray(workspace.allowedUserHandles)
+        || workspace.allowedUserHandles.length > 256
+        || workspace.allowedUserHandles.some(userHandle => typeof userHandle !== 'string' || !userHandle.trim() || userHandle.length > 200)
         || (workspace.headCommitId !== null && !OID_PATTERN.test(workspace.headCommitId))
         || typeof workspace.createdAt !== 'string'
         || typeof workspace.updatedAt !== 'string'
     ) {
         throw new Error(`Invalid workspace registry entry: ${workspace.id}`);
     }
+}
+
+function normalizeAllowedUserHandles(value: unknown): string[] {
+    if (value === undefined) {
+        return [];
+    }
+    if (!Array.isArray(value) || value.length > 256) {
+        throw validationError('Workspace allowedUserHandles must be an array of at most 256 user handles');
+    }
+    const handles = value.map(userHandle => {
+        if (typeof userHandle !== 'string' || !userHandle.trim() || userHandle.trim().length > 200) {
+            throw validationError('Workspace allowedUserHandles contains an invalid user handle');
+        }
+        return userHandle.trim();
+    });
+    return [...new Set(handles)].sort((left, right) => left.localeCompare(right));
 }
 
 function isTreeKind(value: unknown): value is WorkspaceTreeEntryKind {

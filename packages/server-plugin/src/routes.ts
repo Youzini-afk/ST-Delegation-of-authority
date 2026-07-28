@@ -53,6 +53,7 @@ import { listPrivateSqlDatabases, registerSqlRoutes } from './routes/sql-routes.
 import { registerHttpRoutes } from './routes/http-routes.js';
 import { registerModuleRoutes } from './routes/module-routes.js';
 import { registerAgentHistoryRoutes } from './routes/agent-history-routes.js';
+import { registerAgentRoutes } from './routes/agent-routes.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import type { AdminUpdateAction, AdminUpdateResponse, AuthorityRequest, AuthorityResponse } from './types.js';
 import { asErrorMessage, AuthorityServiceError, buildPermissionDescriptor, getSessionToken, getUserContext, isAuthorityServiceError } from './utils.js';
@@ -125,7 +126,9 @@ function isPermissionResource(value: string): value is PermissionResource {
         || value === 'http.fetch'
         || value === 'jobs.background'
         || value === 'events.stream'
-        || value === 'module.execute';
+        || value === 'module.execute'
+        || value === 'agent.run'
+        || value === 'agent.browser';
 }
 
 function isPermissionErrorDetails(value: AuthorityErrorPayload['details']): value is NonNullable<AuthorityErrorPayload['details']> & {
@@ -769,6 +772,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     registerJobsAndEventsRoutes(router, runtime, fail);
 
     registerAgentHistoryRoutes(router, runtime, fail);
+
+    registerAgentRoutes(router, runtime, fail);
 
     router.get('/admin/policies', async (req, res) => {
         try {

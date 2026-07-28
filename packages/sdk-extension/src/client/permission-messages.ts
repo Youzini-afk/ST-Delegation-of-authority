@@ -68,6 +68,12 @@ export function getPermissionResourceLabel(resource: PermissionResource): string
             return '后台任务';
         case 'events.stream':
             return '事件流';
+        case 'module.execute':
+            return '模块事务';
+        case 'agent.run':
+            return 'Agent 运行';
+        case 'agent.browser':
+            return 'Agent 浏览器工具';
         default:
             return resource;
     }

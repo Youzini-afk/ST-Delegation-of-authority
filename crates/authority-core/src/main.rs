@@ -4148,6 +4148,8 @@ fn validate_supported_resource(field_name: &str, value: &str) -> Result<(), ApiE
             "jobs.background",
             "events.stream",
             "module.execute",
+            "agent.run",
+            "agent.browser",
         ],
     )
 }
@@ -5860,6 +5862,48 @@ mod tests {
         assert_eq!(requeued["job"]["payload"]["message"], json!("done"));
         assert_eq!(requeued["job"]["idempotencyKey"], JsonValue::Null);
         assert_ne!(requeued["job"]["id"], json!("job-failed-delay-1"));
+    }
+
+    #[test]
+    fn control_policies_accept_agent_resources() {
+        let db_path = test_db_path("control-policies-agent");
+        let updated_at = current_timestamp_iso();
+        let entry = |resource: &str, target: &str| ControlPolicyEntry {
+            key: format!("{resource}:{target}"),
+            resource: String::from(resource),
+            target: String::from(target),
+            status: String::from("prompt"),
+            risk_level: String::from("high"),
+            updated_at: updated_at.clone(),
+            source: String::from("admin"),
+        };
+        let saved = handle_control_policies_save(ControlPoliciesSaveRequest {
+            db_path,
+            actor: ControlUserInfo {
+                handle: String::from("admin"),
+                is_admin: true,
+            },
+            partial: ControlPoliciesPartial {
+                defaults: Some(HashMap::from([
+                    (String::from("agent.run"), String::from("prompt")),
+                    (String::from("agent.browser"), String::from("prompt")),
+                ])),
+                extensions: Some(HashMap::from([(
+                    String::from("third-party/ext-a"),
+                    HashMap::from([
+                        (String::from("agent.run:workspace-a"), entry("agent.run", "workspace-a")),
+                        (String::from("agent.browser:tab-a"), entry("agent.browser", "tab-a")),
+                    ]),
+                )])),
+                limits: None,
+            },
+        })
+        .expect("Agent policies should save");
+
+        assert_eq!(saved["defaults"]["agent.run"], json!("prompt"));
+        assert_eq!(saved["defaults"]["agent.browser"], json!("prompt"));
+        assert_eq!(saved["extensions"]["third-party/ext-a"]["agent.run:workspace-a"]["resource"], json!("agent.run"));
+        assert_eq!(saved["extensions"]["third-party/ext-a"]["agent.browser:tab-a"]["resource"], json!("agent.browser"));
     }
 
     #[test]

@@ -71,6 +71,55 @@ describe('AgentLlmClient', () => {
         })).rejects.toThrow('cancelled');
         expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    it('rejects oversized requests and assistant content at the provider boundary', async () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: 'x'.repeat(256 * 1024 + 1) },
+            }],
+        }), { status: 200 })) as unknown as typeof fetch;
+        const client = new AgentLlmClient(fetchMock);
+
+        await expect(client.complete(profile(), {
+            messages: [{ role: 'user', content: 'x'.repeat(8 * 1024 * 1024) }],
+            tools: [],
+            signal: new AbortController().signal,
+        })).rejects.toThrow('request exceeded the 8 MB limit');
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        await expect(client.complete(profile(), {
+            messages: [{ role: 'user', content: 'test' }],
+            tools: [],
+            signal: new AbortController().signal,
+        })).rejects.toThrow('assistant content exceeded the 256 KB limit');
+    });
+
+    it('rejects excessive combined tool arguments and bounds provider usage metadata', async () => {
+        const calls = Array.from({ length: 9 }, (_, index) => ({
+            id: `call-${index}`,
+            type: 'function',
+            function: { name: 'host_read_file', arguments: 'x'.repeat(128 * 1024) },
+        }));
+        const responses = [
+            new Response(JSON.stringify({
+                choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: calls } }],
+            }), { status: 200 }),
+            new Response(JSON.stringify({
+                choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }],
+                usage: { provider_blob: 'x'.repeat(20 * 1024) },
+            }), { status: 200 }),
+        ];
+        const client = new AgentLlmClient(vi.fn(async () => responses.shift()!) as unknown as typeof fetch);
+        const request = {
+            messages: [{ role: 'user' as const, content: 'test' }],
+            tools: [],
+            signal: new AbortController().signal,
+        };
+
+        await expect(client.complete(profile(), request)).rejects.toThrow('tool arguments exceeded the 1 MB combined limit');
+        await expect(client.complete(profile(), request)).resolves.toMatchObject({ usage: { truncated: true } });
+    });
 });
 
 function profile(): StoredAgentLlmProfile {

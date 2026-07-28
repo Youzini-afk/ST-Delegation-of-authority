@@ -733,6 +733,20 @@ describe('ModuleHostService', () => {
         expect(details.message).toContain('boom from handler');
     });
 
+    it('wraps synchronous handler throws in a transaction_handler_failed structured error', async () => {
+        const service = createService();
+        service.register(buildManifest(), {
+            'task.run': () => { throw new Error('synchronous boom'); },
+        });
+        const user = createUser(false);
+        const session = createSession(user);
+
+        const error = await service.execute(user, session, 'sample-module', 'task.run', {}).catch(value => value) as AuthorityServiceError;
+
+        expect(error).toBeInstanceOf(AuthorityServiceError);
+        expect(error.details).toMatchObject({ code: 'transaction_handler_failed', message: 'synchronous boom' });
+    });
+
     it('enforces an explicit manifest timeout on built-ins with a structured transaction_timeout error', async () => {
         const service = createService();
         const handler = vi.fn().mockImplementation(async () => {
@@ -765,6 +779,97 @@ describe('ModuleHostService', () => {
         expect(details.code).toBe('transaction_timeout');
         expect(details.timeoutMs).toBe(50);
         expect(details.limitSource).toBe('manifest');
+    });
+
+    it('honors a shorter caller transaction timeout', async () => {
+        const service = createService();
+        service.register(
+            buildManifest({
+                transactions: {
+                    'task.run': buildTransaction({ name: 'task.run', timeoutMs: 500 }),
+                },
+            }),
+            { 'task.run': async () => await new Promise(resolve => setTimeout(() => resolve({ result: true }), 1_000)) },
+        );
+        const user = createUser(false);
+        const session = createSession(user);
+
+        const error = await service.execute(user, session, 'sample-module', 'task.run', {
+            options: { timeoutMs: 20 },
+        }).catch(value => value) as AuthorityServiceError;
+
+        expect(error).toBeInstanceOf(AuthorityServiceError);
+        expect(error.status).toBe(504);
+        expect(error.details).toMatchObject({ code: 'transaction_timeout', timeoutMs: 20, limitSource: 'request' });
+    });
+
+    it('keeps timeout classification when a cooperative handler rejects on abort', async () => {
+        const service = createService();
+        service.register(
+            buildManifest({
+                transactions: {
+                    'task.run': buildTransaction({ name: 'task.run', timeoutMs: 20 }),
+                },
+            }),
+            {
+                'task.run': async ctx => await new Promise((_resolve, reject) => {
+                    ctx.signal.addEventListener('abort', () => reject(new Error('cooperative stop')), { once: true });
+                }),
+            },
+        );
+        const user = createUser(false);
+        const session = createSession(user);
+
+        const error = await service.execute(user, session, 'sample-module', 'task.run', {}).catch(value => value) as AuthorityServiceError;
+
+        expect(error.status).toBe(504);
+        expect(error.details).toMatchObject({ code: 'transaction_timeout', timeoutMs: 20, limitSource: 'manifest' });
+    });
+
+    it('keeps response limit attribution when only timeout is caller-limited', async () => {
+        const service = createService();
+        service.register(
+            buildManifest({
+                transactions: {
+                    'task.run': buildTransaction({ name: 'task.run', timeoutMs: 500, maxResponseBytes: 32 }),
+                },
+            }),
+            { 'task.run': vi.fn().mockResolvedValue({ result: { value: 'x'.repeat(100) } }) },
+        );
+        const user = createUser(false);
+        const session = createSession(user);
+
+        const error = await service.execute(user, session, 'sample-module', 'task.run', {
+            options: { timeoutMs: 100 },
+        }).catch(value => value) as AuthorityServiceError;
+
+        expect(error.status).toBe(413);
+        expect(error.details).toMatchObject({ code: 'module_response_too_large', limitSource: 'manifest' });
+    });
+
+    it('relays caller cancellation to a module transaction signal', async () => {
+        const service = createService();
+        let observedAbort = false;
+        let started = false;
+        service.register(buildManifest(), {
+            'task.run': async ctx => await new Promise((_resolve, reject) => {
+                started = true;
+                ctx.signal.addEventListener('abort', () => {
+                    observedAbort = true;
+                    reject(ctx.signal.reason);
+                }, { once: true });
+            }),
+        });
+        const user = createUser(false);
+        const session = createSession(user);
+        const controller = new AbortController();
+
+        const execution = service.execute(user, session, 'sample-module', 'task.run', {}, controller.signal);
+        await vi.waitFor(() => expect(started).toBe(true));
+        controller.abort(new Error('Agent cancelled module'));
+
+        await expect(execution).rejects.toThrow('Agent cancelled module');
+        expect(observedAbort).toBe(true);
     });
 
     it('built-in modules without an explicit timeout are not subject to the 120 s companion default', async () => {

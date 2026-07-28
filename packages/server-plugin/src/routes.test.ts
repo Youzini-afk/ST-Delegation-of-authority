@@ -42,6 +42,9 @@ describe('registerRoutes', () => {
             '/modules',
             '/modules/:moduleId',
             '/modules/:moduleId/record',
+            '/agent/tools',
+            '/agent/runs',
+            '/admin/agent/profiles',
         ]));
         expect(posts).toEqual(expect.arrayContaining([
             '/permissions/evaluate-batch',
@@ -92,6 +95,8 @@ describe('registerRoutes', () => {
             '/admin/native-migration/operations/:id/rollback',
             '/admin/diagnostic-bundle/archive',
             '/admin/update',
+            '/agent/runs',
+            '/agent/browser-tools/register',
         ]));
     });
 
@@ -132,6 +137,13 @@ describe('registerRoutes', () => {
             '/admin/agent/workspaces/:workspaceId/status',
             '/admin/agent/workspaces/:workspaceId/commits',
             '/admin/agent/workspaces/:workspaceId/diff',
+            '/agent/tools',
+            '/agent/runs',
+            '/agent/runs/:runId',
+            '/admin/agent/profiles',
+            '/admin/agent/profiles/:profileId',
+            '/admin/agent/runs',
+            '/admin/agent/runs/:runId',
             '/admin/policies',
             '/admin/usage-summary',
             '/admin/import-export/operations',
@@ -232,6 +244,15 @@ describe('registerRoutes', () => {
             '/admin/agent/workspaces/:workspaceId/checkpoints',
             '/admin/agent/workspaces/:workspaceId/rollback',
             '/admin/agent/workspaces/:workspaceId/rollback/resume',
+            '/agent/runs',
+            '/agent/runs/:runId/cancel',
+            '/agent/browser-tools/register',
+            '/agent/browser-tools/claim',
+            '/agent/browser-tools/result',
+            '/admin/agent/profiles',
+            '/admin/agent/profiles/:profileId/delete',
+            '/admin/agent/runs/:runId/cancel',
+            '/admin/agent/runs/:runId/approvals/:approvalId/resolve',
             '/admin/policies',
             '/admin/import-export/export',
             '/admin/import-export/import-transfer/init',
@@ -313,6 +334,62 @@ describe('registerRoutes', () => {
                 target: '*',
                 key: 'storage.kv:*',
                 riskLevel: 'low',
+            },
+        });
+    });
+
+    it('returns structured permission payloads for unauthorized Agent runs', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() {
+                return undefined;
+            },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) {
+                posts.set(path, handler);
+            },
+        };
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/ext-a' } }),
+            },
+            agent: { start: vi.fn().mockResolvedValue([]) },
+            workspaceHistory: { assertWorkspaceAccess: vi.fn() },
+            permissions: { authorize: vi.fn().mockResolvedValue(false) },
+            audit: {
+                logPermission: vi.fn().mockResolvedValue(undefined),
+                logError: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+        registerRoutes(router, runtime);
+        const response = {
+            status: vi.fn(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+        response.status.mockReturnValue(response);
+
+        await posts.get('/agent/runs')?.({
+            user: {
+                profile: { handle: 'alice', admin: false },
+                directories: { root: 'C:/users/alice' },
+            },
+            body: { goal: 'Inspect the workspace', workspaceId: 'workspace-a' },
+            headers: {},
+        }, response);
+
+        expect(response.status).toHaveBeenCalledWith(403);
+        expect(response.json).toHaveBeenCalledWith({
+            error: 'Permission not granted: agent.run for workspace-a',
+            code: 'permission_not_granted',
+            category: 'permission',
+            details: {
+                resource: 'agent.run',
+                target: 'workspace-a',
+                key: 'agent.run:workspace-a',
+                riskLevel: 'high',
             },
         });
     });

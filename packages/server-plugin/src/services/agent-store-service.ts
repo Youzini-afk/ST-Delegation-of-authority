@@ -9,12 +9,13 @@ import type {
     AgentRunRecord,
     AgentRunStatus,
 } from '@stdo/shared-types';
-import { atomicWriteJson, ensureDir } from '../utils.js';
+import { atomicWriteFile, atomicWriteJson, ensureDir } from '../utils.js';
 
 const PROFILE_FORMAT = 'authority-agent-profiles/v1';
 const RUN_FORMAT = 'authority-agent-run/v1';
 const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
 const ACTIVE_RUNS = new Set<AgentRunStatus>(['queued', 'running', 'waiting_approval', 'waiting_browser_tool']);
+const MAX_STORED_RUN_BYTES = 16 * 1024 * 1024;
 
 export interface StoredAgentLlmProfile extends AgentLlmProfile {
     apiKey: string | null;
@@ -66,10 +67,14 @@ export class AgentStoreService {
                 }
             }
             for (const invocation of run.invocations) {
-                if (invocation.status === 'pending' || invocation.status === 'waiting_approval' || invocation.status === 'claimed') {
+                if (invocation.status === 'pending' || invocation.status === 'waiting_approval') {
                     invocation.status = 'cancelled';
                     invocation.updatedAt = timestamp;
                     invocation.error = 'Agent host restarted';
+                } else if (invocation.status === 'claimed') {
+                    invocation.status = 'outcome_unknown';
+                    invocation.updatedAt = timestamp;
+                    invocation.error = 'Agent host restarted while the tool was executing; its side effects are unknown';
                 }
             }
             run.events.push(this.event(run, 'run.interrupted', timestamp, { reason: run.run.error }));
@@ -95,6 +100,9 @@ export class AgentStoreService {
         const maxOutputTokens = optionalInteger(input.maxOutputTokens, 'LLM profile maxOutputTokens', 1, 1_000_000);
         const timeoutMs = optionalInteger(input.timeoutMs, 'LLM profile timeoutMs', 1_000, 600_000) ?? 120_000;
         const existing = requestedId ? profiles.profiles.find(profile => profile.id === requestedId) : undefined;
+        if (existing && input.apiKey === undefined && new URL(existing.baseUrl).origin !== new URL(baseUrl).origin) {
+            throw new Error('LLM profile apiKey must be supplied or explicitly cleared when baseUrl origin changes');
+        }
         const timestamp = this.now();
         const apiKey = input.apiKey === undefined
             ? existing?.apiKey ?? null
@@ -234,7 +242,11 @@ export class AgentStoreService {
     }
 
     private readRun(runId: string): StoredRun {
-        const value = readJson<StoredRun>(this.runPath(runId), `Agent run ${runId}`);
+        const filePath = this.runPath(runId);
+        if (fs.statSync(filePath).size > MAX_STORED_RUN_BYTES) {
+            throw new Error(`Agent run exceeds the ${MAX_STORED_RUN_BYTES} byte limit: ${runId}`);
+        }
+        const value = readJson<StoredRun>(filePath, `Agent run ${runId}`);
         if (value.format !== RUN_FORMAT || value.run?.id !== runId || !Array.isArray(value.events)) {
             throw new Error(`Invalid Agent run: ${runId}`);
         }
@@ -243,7 +255,11 @@ export class AgentStoreService {
 
     private writeRun(run: StoredRun): void {
         protectDirectory(this.runsDir());
-        atomicWriteJson(this.runPath(run.run.id), run);
+        const serialized = `${JSON.stringify(run, null, 2)}\n`;
+        if (Buffer.byteLength(serialized, 'utf8') > MAX_STORED_RUN_BYTES) {
+            throw new Error(`Agent run exceeds the ${MAX_STORED_RUN_BYTES} byte limit: ${run.run.id}`);
+        }
+        atomicWriteFile(this.runPath(run.run.id), serialized);
         protectFile(this.runPath(run.run.id));
     }
 
@@ -272,7 +288,19 @@ function normalizeBaseUrl(value: string): string {
     if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash) {
         throw new Error('LLM profile baseUrl must be an http(s) URL without credentials, query, or fragment');
     }
+    if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) {
+        throw new Error('LLM profile baseUrl must use HTTPS unless it targets localhost or a loopback address');
+    }
     return url.toString().replace(/\/$/, '');
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+    const normalized = hostname.toLowerCase();
+    return normalized === 'localhost'
+        || normalized.endsWith('.localhost')
+        || normalized === '::1'
+        || normalized === '[::1]'
+        || /^127(?:\.\d{1,3}){3}$/.test(normalized);
 }
 
 function requiredText(value: unknown, label: string, maxLength: number): string {

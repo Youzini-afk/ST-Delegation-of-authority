@@ -106,6 +106,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         new AgentStoreService(globalPaths.agentStateDir),
         workspaceHistory,
         new AgentHostToolService(workspaceHistory),
+        { moduleHost: modules },
     );
 
     return {

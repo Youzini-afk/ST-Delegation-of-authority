@@ -322,7 +322,9 @@ export class PermissionService {
             || declaredPermissions.http?.allow?.length
             || declaredPermissions.jobs?.background
             || declaredPermissions.events?.channels
-            || declaredPermissions.modules?.execute,
+            || declaredPermissions.modules?.execute
+            || declaredPermissions.agent?.run
+            || declaredPermissions.agent?.browser,
         );
     }
 
@@ -350,6 +352,10 @@ export class PermissionService {
                 return this.matchesDeclaredTarget(declaredPermissions.events?.channels, resource, target);
             case 'module.execute':
                 return this.matchesDeclaredTarget(declaredPermissions.modules?.execute, resource, target);
+            case 'agent.run':
+                return this.matchesDeclaredTarget(declaredPermissions.agent?.run, resource, target);
+            case 'agent.browser':
+                return this.matchesDeclaredTarget(declaredPermissions.agent?.browser, resource, target);
             default:
                 return false;
         }

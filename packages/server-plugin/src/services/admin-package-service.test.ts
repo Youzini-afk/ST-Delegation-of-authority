@@ -114,6 +114,8 @@ function createPortablePackage(): AuthorityPortablePackage {
             'jobs.background': 'prompt',
             'events.stream': 'prompt',
             'module.execute': 'prompt',
+            'agent.run': 'prompt',
+            'agent.browser': 'prompt',
         },
         extensions: {
             'third-party/ext-a': {

@@ -20,7 +20,7 @@ export type AgentToolApprovalPolicy = 'never' | 'on-mutation' | 'always';
 export type AgentToolSource =
     | { kind: 'host'; handler: string }
     | { kind: 'module'; moduleId: string; transactionName: string }
-    | { kind: 'browser'; extensionId: string; browserInstanceId: string };
+    | { kind: 'browser'; userHandle: string; extensionId: string; browserInstanceId: string; registrationId: string };
 
 export interface AgentToolDescriptor {
     id: string;
@@ -67,7 +67,7 @@ export interface AgentRunCreateRequest {
     goal: string;
     context?: unknown;
     instructions?: string;
-    workspaceId?: string;
+    workspaceId: string;
     profileId?: string;
     mode?: AgentExecutionMode;
     allowedTools?: string[];
@@ -76,6 +76,7 @@ export interface AgentRunCreateRequest {
 
 export interface AgentRunRecord {
     id: string;
+    callerUserHandle: string;
     callerExtensionId: string;
     workspaceId: string;
     profileId: string;
@@ -111,6 +112,7 @@ export type AgentRunEventType =
     | 'assistant.message'
     | 'tool.requested'
     | 'tool.waiting_approval'
+    | 'tool.waiting_browser'
     | 'tool.approval_resolved'
     | 'tool.started'
     | 'tool.completed'
@@ -157,24 +159,29 @@ export type AgentToolInvocationStatus =
     | 'completed'
     | 'failed'
     | 'cancelled'
+    | 'outcome_unknown'
     | 'timed_out';
 
 export interface AgentToolInvocation {
     callId: string;
     runId: string;
     toolId: string;
+    execution: AgentToolExecution;
     arguments: unknown;
     status: AgentToolInvocationStatus;
     createdAt: string;
     updatedAt: string;
     deadlineAt: string;
     browserInstanceId?: string;
+    claimId?: string;
     result?: unknown;
     error?: string;
 }
 
 export interface AgentToolResultRequest {
+    runId: string;
     callId: string;
+    claimId: string;
     browserInstanceId: string;
     status: 'completed' | 'failed' | 'cancelled';
     result?: unknown;
@@ -197,6 +204,7 @@ export interface AgentApprovalRecord {
     updatedAt: string;
     expiresAt?: string;
     resolvedAt?: string;
+    resolvedByUserHandle?: string;
 }
 
 export interface AgentApprovalResolveRequest {
@@ -211,6 +219,17 @@ export interface AgentBrowserToolRegistrationRequest {
 
 export interface AgentBrowserToolRegistrationResponse {
     browserInstanceId: string;
+    registrationId: string;
     leaseExpiresAt: string;
     tools: AgentToolDescriptor[];
+}
+
+export interface AgentBrowserToolClaimRequest {
+    browserInstanceId: string;
+    claimId: string;
+    callId?: string;
+}
+
+export interface AgentBrowserToolClaimResponse {
+    invocation: AgentToolInvocation | null;
 }

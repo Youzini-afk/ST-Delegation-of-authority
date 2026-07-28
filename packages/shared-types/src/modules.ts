@@ -219,7 +219,7 @@ export interface ModuleTransactionEffectiveLimits {
     /** Effective per-transaction timeout in milliseconds. */
     timeoutMs: number;
     /** Source of the resolved limits: manifest, host default, or hard cap. */
-    source: 'manifest' | 'host_default' | 'hard_cap';
+    source: 'manifest' | 'host_default' | 'hard_cap' | 'request';
 }
 
 /**

@@ -35,6 +35,8 @@ export const SUPPORTED_RESOURCES: PermissionResource[] = [
     'jobs.background',
     'events.stream',
     'module.execute',
+    'agent.run',
+    'agent.browser',
 ];
 
 export const RESOURCE_RISK: Record<PermissionResource, RiskLevel> = {
@@ -47,6 +49,8 @@ export const RESOURCE_RISK: Record<PermissionResource, RiskLevel> = {
     'jobs.background': 'medium',
     'events.stream': 'low',
     'module.execute': 'medium',
+    'agent.run': 'high',
+    'agent.browser': 'high',
 };
 
 export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus> = {
@@ -59,6 +63,8 @@ export const DEFAULT_POLICY_STATUS: Record<PermissionResource, PermissionStatus>
     'jobs.background': 'granted',
     'events.stream': 'granted',
     'module.execute': 'granted',
+    'agent.run': 'prompt',
+    'agent.browser': 'prompt',
 };
 
 /** Authority module host protocol version. Bump when manifest/handler contract changes. */

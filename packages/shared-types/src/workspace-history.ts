@@ -47,6 +47,7 @@ export interface AgentWorkspaceRecord {
     id: string;
     displayName: string;
     rootPath: string;
+    allowedUserHandles: string[];
     defaultRef: string;
     headCommitId: WorkspaceObjectId | null;
     createdAt: string;
@@ -57,6 +58,7 @@ export interface AgentWorkspaceRegisterRequest {
     id?: string;
     displayName?: string;
     rootPath: string;
+    allowedUserHandles?: string[];
     defaultRef?: string;
 }
 

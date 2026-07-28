@@ -39,7 +39,11 @@ export function registerAgentHistoryRoutes(
     router.post('/admin/agent/workspaces', async (req, res) => {
         try {
             const user = assertAdmin(req);
-            const workspace = await runtime.workspaceHistory.registerWorkspace((req.body ?? {}) as AgentWorkspaceRegisterRequest);
+            const request = (req.body ?? {}) as AgentWorkspaceRegisterRequest;
+            const workspace = await runtime.workspaceHistory.registerWorkspace({
+                ...request,
+                allowedUserHandles: request.allowedUserHandles ?? [user.handle],
+            });
             void runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace registered', {
                 workspaceId: workspace.id,
             }).catch(() => undefined);

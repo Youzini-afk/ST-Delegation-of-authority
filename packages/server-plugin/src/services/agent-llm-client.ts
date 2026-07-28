@@ -2,6 +2,11 @@ import type { AgentRunMessage } from '@stdo/shared-types';
 import type { StoredAgentLlmProfile } from './agent-store-service.js';
 
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+const MAX_ASSISTANT_CONTENT_CHARS = 256 * 1024;
+const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
+const MAX_TOTAL_TOOL_ARGUMENT_CHARS = 1024 * 1024;
+const MAX_USAGE_CHARS = 16 * 1024;
 
 export interface AgentLlmToolDefinition {
     type: 'function';
@@ -46,20 +51,24 @@ export class AgentLlmClient {
         const timer = setTimeout(() => controller.abort(new Error(`LLM request timed out after ${profile.timeoutMs} ms`)), profile.timeoutMs);
         try {
             throwIfAborted(controller.signal);
+            const body = JSON.stringify({
+                model: profile.model,
+                messages: request.messages.map(toOpenAiMessage),
+                stream: false,
+                ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: 'auto' } : {}),
+                ...(profile.temperature === null ? {} : { temperature: profile.temperature }),
+                ...(profile.maxOutputTokens === null ? {} : { max_tokens: profile.maxOutputTokens }),
+            });
+            if (Buffer.byteLength(body, 'utf8') > MAX_REQUEST_BYTES) {
+                throw new Error('LLM request exceeded the 8 MB limit');
+            }
             const response = await this.fetchImpl(completionUrl(profile.baseUrl), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     ...(profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {}),
                 },
-                body: JSON.stringify({
-                    model: profile.model,
-                    messages: request.messages.map(toOpenAiMessage),
-                    stream: false,
-                    ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: 'auto' } : {}),
-                    ...(profile.temperature === null ? {} : { temperature: profile.temperature }),
-                    ...(profile.maxOutputTokens === null ? {} : { max_tokens: profile.maxOutputTokens }),
-                }),
+                body,
                 signal: controller.signal,
             });
             const text = await readLimitedText(response);
@@ -157,6 +166,9 @@ function parseCompletion(text: string): AgentLlmCompletionResponse {
         throw new Error('LLM response did not include an assistant message');
     }
     const content = message.content === null || typeof message.content === 'string' ? message.content : null;
+    if (content !== null && content.length > MAX_ASSISTANT_CONTENT_CHARS) {
+        throw new Error('LLM assistant content exceeded the 256 KB limit');
+    }
     const toolCalls = message.tool_calls === undefined ? undefined : parseToolCalls(message.tool_calls);
     if ((content === null || !content.trim()) && !toolCalls?.length) {
         throw new Error('LLM assistant message was empty');
@@ -168,7 +180,7 @@ function parseCompletion(text: string): AgentLlmCompletionResponse {
             ...(toolCalls?.length ? { toolCalls } : {}),
         },
         finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
-        ...(payload.usage === undefined ? {} : { usage: payload.usage }),
+        ...(payload.usage === undefined ? {} : { usage: boundedUsage(payload.usage) }),
     };
 }
 
@@ -177,6 +189,7 @@ function parseToolCalls(value: unknown): NonNullable<AgentRunMessage['toolCalls'
         throw new Error('LLM response contained invalid tool calls');
     }
     const ids = new Set<string>();
+    let totalArgumentChars = 0;
     return value.map((call, index) => {
         const id = call?.id;
         const name = call?.function?.name;
@@ -190,11 +203,23 @@ function parseToolCalls(value: unknown): NonNullable<AgentRunMessage['toolCalls'
             || typeof name !== 'string'
             || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)
             || typeof args !== 'string'
-            || args.length > 128 * 1024
+            || args.length > MAX_TOOL_ARGUMENT_CHARS
         ) {
             throw new Error(`LLM response contained an invalid tool call at index ${index}`);
+        }
+        totalArgumentChars += args.length;
+        if (totalArgumentChars > MAX_TOTAL_TOOL_ARGUMENT_CHARS) {
+            throw new Error('LLM response tool arguments exceeded the 1 MB combined limit');
         }
         ids.add(id);
         return { id, name, arguments: args };
     });
+}
+
+function boundedUsage(value: unknown): unknown {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === 'string' && serialized.length <= MAX_USAGE_CHARS) {
+        return value;
+    }
+    return { truncated: true };
 }

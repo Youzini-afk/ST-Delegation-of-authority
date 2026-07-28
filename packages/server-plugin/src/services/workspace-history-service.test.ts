@@ -15,6 +15,17 @@ afterEach(() => {
 });
 
 describe('WorkspaceHistoryService', () => {
+    it('persists workspace user ACLs and hides denied workspaces', async () => {
+        const fixture = await createFixture();
+
+        expect(fixture.service.assertWorkspaceAccess('test', 'alice', false).allowedUserHandles).toEqual(['alice']);
+        expect(() => fixture.service.assertWorkspaceAccess('test', 'bob', false)).toThrow('Workspace not found');
+        expect(fixture.service.assertWorkspaceAccess('test', 'bob', true).id).toBe('test');
+
+        await fixture.service.registerWorkspace({ rootPath: fixture.root, allowedUserHandles: ['bob', 'alice', 'bob'] });
+        expect(fixture.service.getWorkspace('test').allowedUserHandles).toEqual(['alice', 'bob']);
+    });
+
     it('keeps mutation checkpoints and the mutation under one workspace lock', async () => {
         const fixture = await createFixture();
         write(fixture.root, 'state.txt', 'before');
@@ -457,7 +468,7 @@ async function createFixture(): Promise<{ root: string; store: string; service: 
     const store = path.join(base, 'history');
     fs.mkdirSync(root, { recursive: true });
     const service = new WorkspaceHistoryService(store);
-    await service.registerWorkspace({ id: 'test', displayName: 'Test workspace', rootPath: root });
+    await service.registerWorkspace({ id: 'test', displayName: 'Test workspace', rootPath: root, allowedUserHandles: ['alice'] });
     return { root, store, service };
 }
 

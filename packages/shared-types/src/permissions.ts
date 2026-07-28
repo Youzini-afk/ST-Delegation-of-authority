@@ -7,7 +7,9 @@ export type PermissionResource =
     | 'http.fetch'
     | 'jobs.background'
     | 'events.stream'
-    | 'module.execute';
+    | 'module.execute'
+    | 'agent.run'
+    | 'agent.browser';
 
 export type PermissionStatus = 'granted' | 'denied' | 'prompt' | 'blocked';
 
@@ -49,6 +51,10 @@ export interface DeclaredPermissions {
     };
     modules?: {
         execute?: boolean | string[];
+    };
+    agent?: {
+        run?: boolean | string[];
+        browser?: boolean | string[];
     };
 }
 

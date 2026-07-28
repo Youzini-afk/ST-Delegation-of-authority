@@ -42,6 +42,43 @@ describe('AgentStoreService', () => {
         expect(store.getProfileForRequest('main').apiKey).toBe('secret-api-key');
     });
 
+    it('does not carry an LLM secret to a different origin or cleartext remote endpoint', () => {
+        const store = createStore();
+        store.upsertProfile({
+            id: 'main',
+            displayName: 'Main',
+            provider: 'openai-compatible',
+            baseUrl: 'https://api.example.com/v1',
+            model: 'test-model',
+            apiKey: 'secret-api-key',
+        });
+
+        expect(() => store.upsertProfile({
+            id: 'main',
+            displayName: 'Other',
+            provider: 'openai-compatible',
+            baseUrl: 'https://other.example/v1',
+            model: 'test-model',
+        })).toThrow(/apiKey must be supplied or explicitly cleared/);
+        expect(() => store.upsertProfile({
+            id: 'insecure',
+            displayName: 'Insecure',
+            provider: 'openai-compatible',
+            baseUrl: 'http://api.example.com/v1',
+            model: 'test-model',
+        })).toThrow(/must use HTTPS/);
+
+        store.upsertProfile({
+            id: 'main',
+            displayName: 'Other',
+            provider: 'openai-compatible',
+            baseUrl: 'https://other.example/v1',
+            model: 'test-model',
+            apiKey: '',
+        });
+        expect(store.getProfileForRequest('main').apiKey).toBeNull();
+    });
+
     it('marks unfinished persisted runs interrupted on restart', () => {
         let tick = 0;
         const store = createStore(() => `2026-01-01T00:00:0${tick++}.000Z`);
@@ -58,6 +95,30 @@ describe('AgentStoreService', () => {
         expect(store.getRun('run-1').run).not.toHaveProperty('pendingApprovalId');
         expect(store.start()).toEqual([]);
     });
+
+    it('marks a claimed tool outcome unknown after restart', () => {
+        const store = createStore();
+        const detail = runDetail('run-claimed');
+        detail.run.status = 'running';
+        detail.invocations[0]!.status = 'claimed';
+        store.createRun(detail);
+
+        store.start();
+
+        expect(store.getRun('run-claimed').invocations[0]).toMatchObject({
+            status: 'outcome_unknown',
+            error: expect.stringContaining('side effects are unknown'),
+        });
+    });
+
+    it('refuses to persist an oversized Agent run', () => {
+        const store = createStore();
+        const detail = runDetail('run-oversized');
+        detail.messages.push({ role: 'user', content: 'x'.repeat(16 * 1024 * 1024) });
+
+        expect(() => store.createRun(detail)).toThrow('exceeds the 16777216 byte limit');
+        expect(() => store.getRun('run-oversized')).toThrow();
+    });
 });
 
 function createStore(now?: () => string): AgentStoreService {
@@ -70,6 +131,7 @@ function runDetail(id: string): AgentRunDetail {
     return {
         run: {
             id,
+            callerUserHandle: 'alice',
             callerExtensionId: 'test',
             workspaceId: 'workspace',
             profileId: 'profile',
@@ -89,6 +151,7 @@ function runDetail(id: string): AgentRunDetail {
             callId: 'call-1',
             runId: id,
             toolId: 'host_write_file',
+            execution: 'host',
             arguments: { path: 'a.txt' },
             status: 'waiting_approval',
             createdAt: '2026-01-01T00:00:00.000Z',

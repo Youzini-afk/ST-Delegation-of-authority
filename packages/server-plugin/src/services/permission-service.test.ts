@@ -191,6 +191,27 @@ describe('PermissionService', () => {
         expect((await permissions.evaluate(user, session, { resource: 'module.execute', target: 'sample-module:task.run' })).decision).toBe('blocked');
     });
 
+    it('keeps Agent runs prompt-gated and blocks undeclared workspaces', async () => {
+        const user = createUser(false);
+        const session = createSession(user, { agent: { run: ['workspace-a'] } });
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        expect((await permissions.evaluate(user, session, { resource: 'agent.run', target: 'workspace-a' })).decision).toBe('prompt');
+        expect((await permissions.evaluate(user, session, { resource: 'agent.run', target: 'workspace-b' })).decision).toBe('blocked');
+    });
+
+    it('scopes browser Agent registration separately from workspace runs', async () => {
+        const user = createUser(false);
+        const session = createSession(user, { agent: { browser: ['tab-a'] } });
+        const core = createMockCore();
+        const permissions = new PermissionService(new PolicyService(core), core);
+
+        expect((await permissions.evaluate(user, session, { resource: 'agent.browser', target: 'tab-a' })).decision).toBe('prompt');
+        expect((await permissions.evaluate(user, session, { resource: 'agent.browser', target: 'tab-b' })).decision).toBe('blocked');
+        expect((await permissions.evaluate(user, session, { resource: 'agent.run', target: 'workspace-a' })).decision).toBe('blocked');
+    });
+
     it('grants all module transactions when the extension declares execute=true', async () => {
         const user = createUser(false);
         const session = createSession(user, {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from './version.js';
 import type {
+    AuthorityModuleManifest,
     AuthorityProbeResponse,
     TriviumBulkDeleteRequest,
     TriviumBulkUpsertRequest,
@@ -1601,6 +1602,7 @@ describe('AuthorityClient', () => {
             ensurePermission,
             requestWithSession,
         });
+        Object.assign(client.modules as object, { get: vi.fn().mockResolvedValue(buildModuleManifest()) });
 
         const result = await client.modules.execute(' sample-module ', 'task.run', { count: 5 }, {
             idempotencyKey: '  idem-1  ',
@@ -1646,6 +1648,7 @@ describe('AuthorityClient', () => {
             ensurePermission: vi.fn().mockResolvedValue(undefined),
             requestWithSession,
         });
+        Object.assign(client.modules as object, { get: vi.fn().mockResolvedValue(buildModuleManifest()) });
 
         await client.modules.execute('sample-module', 'task.run');
 
@@ -1673,7 +1676,6 @@ describe('AuthorityClient', () => {
             ensurePermission,
             requestWithSession,
         });
-
         await expect(client.modules.execute('sample-module', 'task:run')).rejects.toThrow(/transactionName/);
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(requestWithSession).not.toHaveBeenCalled();
@@ -1766,6 +1768,7 @@ describe('AuthorityClient', () => {
             ensurePermission,
             requestWithSession,
         });
+        Object.assign(client.modules as object, { get: vi.fn().mockResolvedValue(buildModuleManifest()) });
 
         const result = await client.tx('sample-module:task.run', { count: 9 });
 
@@ -1848,6 +1851,249 @@ describe('AuthorityClient', () => {
         await expect(client.tx('sample-module:foo:bar')).rejects.toThrow(/transactionName/);
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
+    });
+
+    it('creates Agent runs under the requested workspace permission', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: { agent: { run: ['workspace-a'] } },
+        });
+        const ensurePermission = vi.fn().mockResolvedValue(undefined);
+        const requestWithSession = vi.fn(async () => ({ id: 'run-1', status: 'queued' }));
+        Object.assign(client as object, { ensurePermission, requestWithSession });
+
+        const request = { goal: '修复插件', workspaceId: 'workspace-a', mode: 'ask' as const };
+        await client.agent.createRun(request);
+
+        expect(ensurePermission).toHaveBeenCalledWith({
+            resource: 'agent.run',
+            target: 'workspace-a',
+            reason: '在工作区 workspace-a 启动 Agent',
+        });
+        expect(requestWithSession).toHaveBeenCalledWith('/agent/runs', {
+            method: 'POST',
+            body: request,
+        });
+    });
+
+    it('preflights the manifest permission target and static required resources', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const manifest = buildModuleManifest();
+        manifest.transactions['task.run']!.permissionTarget = { kind: 'custom', target: 'shared:graph' };
+        manifest.transactions['task.run']!.requiredResources = [{
+            resource: 'http.fetch',
+            target: 'api.example.com',
+            reason: 'Fetch graph metadata',
+        }];
+        const ensurePermission = vi.fn().mockResolvedValue(undefined);
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission,
+            requestWithSession: vi.fn().mockResolvedValue({ ok: true }),
+        });
+        Object.assign(client.modules as object, { get: vi.fn().mockResolvedValue(manifest) });
+
+        await client.modules.execute('sample-module', 'task.run');
+
+        expect(ensurePermission).toHaveBeenNthCalledWith(1, {
+            resource: 'module.execute',
+            target: 'shared:graph',
+            reason: '执行模块事务 sample-module:task.run',
+        });
+        expect(ensurePermission).toHaveBeenNthCalledWith(2, {
+            resource: 'http.fetch',
+            target: 'api.example.com',
+            reason: 'Fetch graph metadata',
+        });
+    });
+
+    it('rejects Agent runs without a workspace before requesting permission', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const ensurePermission = vi.fn();
+        const requestWithSession = vi.fn();
+        Object.assign(client as object, { ensurePermission, requestWithSession });
+
+        await expect(client.agent.createRun({ goal: 'No workspace' } as any)).rejects.toThrow('workspaceId is required');
+        expect(ensurePermission).not.toHaveBeenCalled();
+        expect(requestWithSession).not.toHaveBeenCalled();
+    });
+
+    it('routes browser Agent tool registration, claim, and result without caller identity fields', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: { agent: { browser: true } },
+        });
+        const ensurePermission = vi.fn().mockResolvedValue(undefined);
+        const requestWithSession = vi.fn(async (path: string) => ({ path }));
+        Object.assign(client as object, { ensurePermission, requestWithSession });
+
+        const registration = {
+            browserInstanceId: 'tab-a',
+            tools: [{
+                id: 'inspect-chat',
+                title: 'Inspect chat',
+                description: 'Reads the active chat',
+                inputSchema: { type: 'object' },
+                riskLevel: 'low' as const,
+                approvalPolicy: 'never' as const,
+                mutatesWorkspace: false,
+            }],
+        };
+        const claim = { browserInstanceId: 'tab-a', claimId: 'claim-1' };
+        const result = {
+            runId: 'run-1',
+            callId: 'call-1',
+            claimId: 'claim-1',
+            browserInstanceId: 'tab-a',
+            status: 'completed' as const,
+            result: { messageCount: 4 },
+        };
+
+        await client.agent.browser.registerTools(registration);
+        await client.agent.browser.claim(claim);
+        await client.agent.browser.submitResult(result);
+
+        expect(ensurePermission).toHaveBeenCalledTimes(1);
+        expect(ensurePermission).toHaveBeenCalledWith({
+            resource: 'agent.browser',
+            target: 'tab-a',
+            reason: '向 Agent 注册浏览器工具',
+        });
+        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/agent/browser-tools/register', { method: 'POST', body: registration });
+        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/agent/browser-tools/claim', { method: 'POST', body: claim });
+        expect(requestWithSession).toHaveBeenNthCalledWith(3, '/agent/browser-tools/result', { method: 'POST', body: result });
+    });
+
+    it('waits for an Agent run terminal state', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const requestWithSession = vi.fn()
+            .mockResolvedValueOnce({ run: { id: 'run-1', status: 'running' } })
+            .mockResolvedValueOnce({ run: { id: 'run-1', status: 'completed' }, messages: [] });
+        Object.assign(client as object, { requestWithSession });
+
+        const detail = await client.agent.waitForCompletion('run-1', { pollIntervalMs: 1, timeoutMs: 100 });
+
+        expect(detail.run.status).toBe('completed');
+        expect(requestWithSession).toHaveBeenCalledTimes(2);
+    });
+
+    it('aborts a hanging Agent status request at the wait deadline', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        authorityRequestMock.mockResolvedValueOnce(buildSession());
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        await client.init();
+        authorityRequestMock.mockImplementationOnce((_path, options) => new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        }));
+        const startedAt = Date.now();
+
+        await expect(client.agent.waitForCompletion('run-1', { pollIntervalMs: 10_000, timeoutMs: 20 }))
+            .rejects.toThrow('did not complete within 20ms');
+        expect(Date.now() - startedAt).toBeLessThan(1_000);
+    });
+
+    it('aborts a hanging Agent status request when the caller aborts', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        authorityRequestMock.mockResolvedValueOnce(buildSession());
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        await client.init();
+        authorityRequestMock.mockImplementationOnce((_path, options) => new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        }));
+        const controller = new AbortController();
+        const waiting = client.agent.waitForCompletion('run-1', { signal: controller.signal, timeoutMs: 1_000 });
+        controller.abort();
+
+        await expect(waiting).rejects.toThrow('Authority agent run wait aborted');
+    });
+
+    it('keeps the Agent wait deadline while refreshing an invalid session', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const { isInvalidSessionError } = await import('./api.js');
+        authorityRequestMock.mockResolvedValueOnce(buildSession());
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        await client.init();
+        vi.mocked(isInvalidSessionError).mockReturnValueOnce(true);
+        authorityRequestMock
+            .mockRejectedValueOnce(new Error('invalid session'))
+            .mockImplementationOnce(() => new Promise(() => {}));
+
+        await expect(client.agent.waitForCompletion('run-1', { timeoutMs: 20 }))
+            .rejects.toThrow('did not complete within 20ms');
+    });
+
+    it('routes Agent admin workspace history endpoints', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const requestWithSession = vi.fn(async (path: string) => path.includes('/diff')
+            ? { workspaceId: 'workspace a', fromCommitId: null, toCommitId: 'head-1', entries: [] }
+            : { workspace: { id: 'workspace a' }, commits: [] });
+        Object.assign(client as object, { requestWithSession });
+
+        await client.agent.admin.workspaces.commits('workspace a', 25);
+        await client.agent.admin.workspaces.diff('workspace a', { from: null, to: 'head-1' });
+
+        expect(requestWithSession).toHaveBeenNthCalledWith(
+            1,
+            '/admin/agent/workspaces/workspace%20a/commits?limit=25',
+        );
+        expect(requestWithSession).toHaveBeenNthCalledWith(
+            2,
+            '/admin/agent/workspaces/workspace%20a/diff?from=empty&to=head-1',
+        );
     });
 });
 
@@ -2065,5 +2311,25 @@ function buildSession() {
             },
         },
         features: buildProbe().features,
+    };
+}
+
+function buildModuleManifest(): AuthorityModuleManifest {
+    return {
+        id: 'sample-module',
+        displayName: 'Sample Module',
+        version: '1.0.0',
+        protocolVersion: 1,
+        transactions: {
+            'task.run': {
+                name: 'task.run',
+                version: '1.0.0',
+                title: 'Run task',
+                riskLevel: 'medium',
+                permissionTarget: { kind: 'transaction' },
+                requiredResources: [],
+                idempotency: 'optional',
+            },
+        },
     };
 }
