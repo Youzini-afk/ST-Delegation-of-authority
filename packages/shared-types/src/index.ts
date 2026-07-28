@@ -1,4 +1,5 @@
 export { AUTHORITY_VERSION } from './version.js';
+export type * from './agent.js';
 export type * from './admin-packages.js';
 export type * from './common.js';
 export type * from './control.js';
@@ -15,3 +16,4 @@ export type * from './sql.js';
 export type * from './storage.js';
 export type * from './transfers.js';
 export type * from './trivium.js';
+export type * from './workspace-history.js';

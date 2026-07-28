@@ -54,6 +54,9 @@
 - `docs/server/ai-integration-guide.md`
   - 面向编程 AI 的接入规则、常见修改任务、反模式和检查清单
 
+- `docs/server/agent-platform.md`
+  - Agent Runtime、IDE、插件工具协议、工作区版本树与独立恢复合同
+
 ## 适合先读哪一篇
 
 - **想先理解系统全貌**

@@ -84,6 +84,10 @@ export interface ModuleTransactionManifest {
      * posture as {@link maxRequestBytes}.
      */
     maxResponseBytes?: number;
+    /** Optional JSON Schema used by Agent hosts and generated clients. */
+    inputSchema?: Record<string, unknown>;
+    /** Optional JSON Schema describing the successful `result` payload. */
+    outputSchema?: Record<string, unknown>;
 }
 
 /** Manifest describing an authority module. */
