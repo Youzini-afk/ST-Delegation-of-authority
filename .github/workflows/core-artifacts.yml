@@ -13,7 +13,7 @@ on:
         description: Commit synchronized installable artifacts to main
         required: false
         type: boolean
-        default: true
+        default: false
   pull_request:
     paths:
       - .github/workflows/core-artifacts.yml
@@ -77,13 +77,13 @@ jobs:
             binary_name: authority-core
     steps:
       - uses: actions/checkout@v4
-        if: github.event_name != 'pull_request'
+        if: inputs.commitInstallable
         with:
           ref: main
           fetch-depth: 0
 
       - uses: actions/checkout@v4
-        if: github.event_name == 'pull_request'
+        if: inputs.commitInstallable != true
 
       - uses: actions/setup-node@v4
         with:
@@ -162,13 +162,13 @@ jobs:
     needs: build-core
     steps:
       - uses: actions/checkout@v4
-        if: github.event_name != 'pull_request'
+        if: inputs.commitInstallable
         with:
           ref: main
           fetch-depth: 0
 
       - uses: actions/checkout@v4
-        if: github.event_name == 'pull_request'
+        if: inputs.commitInstallable != true
 
       - uses: actions/setup-node@v4
         with:
@@ -231,6 +231,9 @@ jobs:
         run: |
           node ./scripts/installable.mjs sync
           node ./scripts/installable.mjs check
+
+      - name: Smoke standalone recovery CLI
+        run: node runtime/agent.cjs rescue workspaces --store "${{ runner.temp }}/authority-recovery-smoke"
 
       - name: Validate synchronized artifact versions
         run: |
@@ -314,7 +317,6 @@ jobs:
         with:
           name: authority-installable-multiplatform
           path: |
-            index.js
             package.json
             LICENSE
             README.md

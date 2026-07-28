@@ -3,12 +3,19 @@ name: CI
 on:
   pull_request:
   push:
-    branches:
-      - main
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    name: Validate ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +38,11 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Smoke standalone recovery CLI
+        run: node packages/server-plugin/dist/authority/agent.cjs rescue workspaces --store "${{ runner.temp }}/authority-recovery-smoke"
+
       - name: Benchmark gate
+        if: matrix.os == 'ubuntu-latest'
         env:
           AUTHORITY_BENCH_MAX_AVG_MS: '150'
           AUTHORITY_BENCH_MAX_P95_MS: '300'

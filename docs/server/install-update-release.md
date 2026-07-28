@@ -353,7 +353,7 @@ npm run check:installable
 
 ## 12.1 CI 里的 benchmark gate
 
-当前 `.github/workflows/ci.yml` 在 `Typecheck`、`Build`、`Test` 之后，会继续执行：
+当前 `.github/workflows/ci.yml` 会在 Linux、Windows 与 macOS 分别执行 `Typecheck`、`Build`、完整测试和独立恢复 CLI 冒烟；Linux 随后继续执行：
 
 ```bash
 npm run bench:core
@@ -368,6 +368,8 @@ npm run bench:core
 
 - 避免明显的性能回退直接进入 `main`
 - 给 SQL 与 paged control audit/jobs/events 这条关键路径一个最低限度的回归门禁
+
+五个平台的预编译 core 与 installable 一致性由 `.github/workflows/core-artifacts.yml` 单独构建、汇总和校验；该流程默认只上传产物，不写回仓库，版本发布流程显式授权时才同步到 `main`。
 
 如果你在改：
 
