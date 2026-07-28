@@ -1,1 +1,1 @@
-export const AUTHORITY_VERSION = '1.5.6';
+export const AUTHORITY_VERSION = '1.5.7';
