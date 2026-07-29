@@ -1,8 +1,9 @@
 import type {
     AgentLlmProfileInput,
-    AgentRunCreateRequest,
-    AgentRunRecord,
-    AgentRunStatus,
+    AgentSessionCreateRequest,
+    AgentSessionSnapshot,
+    AgentSessionSummary,
+    AgentSessionUpdateRequest,
     AgentWorkspaceRegisterRequest,
     AuthorityPolicyEntry,
     DataTransferInitResponse,
@@ -14,7 +15,7 @@ import type {
     SessionInitResponse,
 } from '@stdo/shared-types';
 import { authorityRequest } from './api.js';
-import type { AuthorityClient } from './client.js';
+import type { AuthorityClient, AuthorityEventsSubscription } from './client.js';
 import { clearChildren, escapeHtml, formatDate } from './dom.js';
 import {
     renderActivityLogRows,
@@ -35,8 +36,9 @@ import {
     STATUS_OPTIONS,
 } from './security-center/constants.js';
 import {
-    isActiveAgentRun,
-    renderAgentRunDetail,
+    getActiveAgentSessionRun,
+    isActiveAgentSession,
+    renderAgentSessionMain,
     renderAgentWorkbench,
 } from './security-center/agent-workbench.js';
 import { showImpactConfirmation } from './security-center/impact-confirmation.js';
@@ -122,6 +124,9 @@ class SecurityCenterView {
     private readonly state: SecurityCenterState;
     private agentClientPromise: Promise<AuthorityClient> | null = null;
     private agentPollTimer: number | null = null;
+    private agentSessionSubscription: AuthorityEventsSubscription | null = null;
+    private agentSessionSubscriptionGeneration = 0;
+    private agentSessionRefreshTimer: number | null = null;
     private agentRefreshGeneration = 0;
     private initialTabPending: boolean;
 
@@ -151,17 +156,18 @@ class SecurityCenterView {
                 profiles: [],
                 tools: [],
                 workspaces: [],
-                runs: {
-                    runs: [],
+                sessions: {
+                    sessions: [],
                     page: { nextCursor: null, limit: 50, hasMore: false, totalCount: 0 },
                 },
                 selectedProfileId: null,
                 selectedWorkspaceId: null,
-                selectedRun: null,
+                selectedSession: null,
+                creatingSession: true,
+                inspectorTab: 'activity',
                 workspaceStatus: null,
                 workspaceCommits: [],
                 workspaceDiff: null,
-                runStatus: '',
             },
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
@@ -462,15 +468,14 @@ class SecurityCenterView {
                 return;
             }
 
-            if (target.matches('[data-role="agent-workspace-select"]')) {
+            if (target.matches('[data-role="agent-workspace-select"], [data-role="agent-new-workspace"]')) {
                 this.state.agent.selectedWorkspaceId = target.value || null;
                 void this.refreshSelectedAgentWorkspace();
                 return;
             }
 
-            if (target.matches('[data-role="agent-run-status"]')) {
-                this.state.agent.runStatus = target.value as AgentRunStatus | '';
-                void this.refreshAgentWorkbench();
+            if (target.matches('[data-role="agent-new-profile"]')) {
+                this.state.agent.selectedProfileId = target.value || null;
             }
         });
     }
@@ -548,29 +553,50 @@ class SecurityCenterView {
             case 'agent-refresh':
                 void this.refreshAgentWorkbench();
                 return;
-            case 'agent-create-run':
-                void this.createAgentRun();
+            case 'agent-new-session':
+                this.beginAgentSession();
                 return;
-            case 'agent-select-run':
-                if (element.dataset.runId) void this.selectAgentRun(element.dataset.runId);
+            case 'agent-create-session':
+                void this.createAgentSession();
+                return;
+            case 'agent-select-session':
+                if (element.dataset.sessionId) void this.selectAgentSession(element.dataset.sessionId);
+                return;
+            case 'agent-send-message':
+                if (element.dataset.sessionId) void this.sendAgentMessage(element.dataset.sessionId);
+                return;
+            case 'agent-update-session':
+                if (element.dataset.sessionId) void this.updateAgentSession(element.dataset.sessionId);
                 return;
             case 'agent-cancel-run':
-                if (element.dataset.runId) void this.cancelAgentRun(element.dataset.runId);
+                if (element.dataset.sessionId && element.dataset.runId) {
+                    void this.cancelAgentRun(element.dataset.sessionId, element.dataset.runId);
+                }
+                return;
+            case 'agent-resume-run':
+                if (element.dataset.sessionId && element.dataset.runId) {
+                    void this.resumeAgentRun(element.dataset.sessionId, element.dataset.runId);
+                }
                 return;
             case 'agent-resolve-approval':
-                if (element.dataset.runId && element.dataset.approvalId) {
+                if (element.dataset.sessionId && element.dataset.approvalId) {
                     void this.resolveAgentApproval(
-                        element.dataset.runId,
+                        element.dataset.sessionId,
                         element.dataset.approvalId,
                         element.dataset.decision === 'approve' ? 'approve' : 'deny',
                     );
                 }
                 return;
-            case 'agent-load-more-runs':
-                void this.loadMoreAgentRuns();
+            case 'agent-load-more-sessions':
+                void this.loadMoreAgentSessions();
                 return;
-            case 'agent-prune-runs':
-                void this.pruneAgentRuns();
+            case 'agent-inspector-tab':
+                if (element.dataset.inspectorTab === 'activity'
+                    || element.dataset.inspectorTab === 'workspace'
+                    || element.dataset.inspectorTab === 'settings') {
+                    this.state.agent.inspectorTab = element.dataset.inspectorTab;
+                    void this.renderAgentSection();
+                }
                 return;
             case 'agent-edit-profile':
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
@@ -618,53 +644,56 @@ class SecurityCenterView {
             return;
         }
         const generation = ++this.agentRefreshGeneration;
-        const runStatus = this.state.agent.runStatus;
         this.state.agent.loading = true;
         this.state.agent.error = null;
         void this.renderAgentSection();
         try {
             const client = await this.getAgentClient();
-            const runRequest = {
+            const sessionRequest = {
                 page: { ...(options.cursor ? { cursor: options.cursor } : {}), limit: 50 },
-                ...(runStatus ? { status: runStatus } : {}),
             };
-            const [profiles, tools, workspaces, runs] = await Promise.all([
+            const [profiles, tools, workspaces, sessions] = await Promise.all([
                 client.agent.admin.profiles.list(),
                 client.agent.listTools(),
                 client.agent.admin.workspaces.list(),
-                client.agent.admin.runs.listPage(runRequest),
+                client.agent.sessions.listPage(sessionRequest),
             ]);
             if (generation !== this.agentRefreshGeneration) return;
             const selectedProfileId = profiles.some(profile => profile.id === this.state.agent.selectedProfileId)
                 ? this.state.agent.selectedProfileId
+                : profiles[0]?.id ?? null;
+            const selectedSessionId = this.state.agent.selectedSession?.session.id;
+            const selectedSession = selectedSessionId
+                ? await client.agent.sessions.get(selectedSessionId).catch(() => null)
                 : null;
-            const selectedWorkspaceId = workspaces.some(workspace => workspace.id === this.state.agent.selectedWorkspaceId)
+            if (generation !== this.agentRefreshGeneration) return;
+            const sessionWorkspaceId = selectedSession?.session.workspaceId ?? null;
+            const selectedWorkspaceId = workspaces.some(workspace => workspace.id === sessionWorkspaceId)
+                ? sessionWorkspaceId
+                : workspaces.some(workspace => workspace.id === this.state.agent.selectedWorkspaceId)
                 ? this.state.agent.selectedWorkspaceId
                 : workspaces[0]?.id ?? null;
-            const selectedRunId = this.state.agent.selectedRun?.run.id;
-            const [workspaceResult, selectedRun] = await Promise.all([
+            const workspaceResult = await (
                 selectedWorkspaceId
                     ? this.fetchAgentWorkspace(client, selectedWorkspaceId)
                         .then(value => ({ value, error: null }))
                         .catch(error => ({ value: null, error }))
-                    : Promise.resolve({ value: null, error: null }),
-                selectedRunId
-                    ? client.agent.admin.runs.get(selectedRunId).catch(() => null)
-                    : Promise.resolve(null),
-            ]);
+                    : Promise.resolve({ value: null, error: null })
+            );
             if (generation !== this.agentRefreshGeneration) return;
             this.state.agent.profiles = profiles;
             this.state.agent.tools = tools;
             this.state.agent.workspaces = workspaces;
-            this.state.agent.runs = options.append
-                ? { runs: mergeAgentRuns(this.state.agent.runs.runs, runs.runs), page: runs.page }
-                : runs;
+            this.state.agent.sessions = options.append
+                ? { sessions: mergeAgentSessions(this.state.agent.sessions.sessions, sessions.sessions), page: sessions.page }
+                : sessions;
             this.state.agent.selectedProfileId = selectedProfileId;
             this.state.agent.selectedWorkspaceId = selectedWorkspaceId;
             this.state.agent.workspaceStatus = workspaceResult.value?.status ?? null;
             this.state.agent.workspaceCommits = workspaceResult.value?.commits ?? [];
             this.state.agent.workspaceDiff = workspaceResult.value?.diff ?? null;
-            this.state.agent.selectedRun = selectedRun;
+            this.state.agent.selectedSession = selectedSession;
+            if (selectedSession) this.state.agent.creatingSession = false;
             this.state.agent.error = workspaceResult.error
                 ? `工作区状态读取失败：${workspaceResult.error instanceof Error ? workspaceResult.error.message : String(workspaceResult.error)}`
                 : null;
@@ -677,6 +706,7 @@ class SecurityCenterView {
             if (generation !== this.agentRefreshGeneration) return;
             this.state.agent.loading = false;
             void this.renderAgentSection();
+            void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
     }
@@ -723,38 +753,110 @@ class SecurityCenterView {
             window.clearTimeout(this.agentPollTimer);
             this.agentPollTimer = null;
         }
-        const selected = this.state.agent.selectedRun;
-        if (!selected || !isActiveAgentRun(selected.run.status) || this.state.selectedTab !== 'agent' || !this.root.isConnected) {
+        const selected = this.state.agent.selectedSession;
+        if (!selected || !isActiveAgentSession(selected) || this.state.selectedTab !== 'agent' || !this.root.isConnected) {
             return;
         }
-        this.agentPollTimer = window.setTimeout(() => void this.pollSelectedAgentRun(), 1_500);
+        this.agentPollTimer = window.setTimeout(() => void this.pollSelectedAgentSession(), 5_000);
     }
 
-    private async pollSelectedAgentRun(): Promise<void> {
+    private async pollSelectedAgentSession(): Promise<void> {
         this.agentPollTimer = null;
-        const selected = this.state.agent.selectedRun;
+        const selected = this.state.agent.selectedSession;
         if (!selected || !this.root.isConnected || this.state.agent.busy) {
             this.scheduleAgentPoll();
             return;
         }
-        const runId = selected.run.id;
+        const sessionId = selected.session.id;
         try {
-            const detail = await (await this.getAgentClient()).agent.admin.runs.get(runId);
-            if (this.state.agent.selectedRun?.run.id !== runId) return;
-            this.state.agent.selectedRun = detail;
-            this.state.agent.runs.runs = mergeAgentRuns(this.state.agent.runs.runs, [detail.run]);
-            this.renderSelectedAgentRunDetail();
+            const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
+            if (this.state.agent.selectedSession?.session.id !== sessionId) return;
+            this.applySelectedAgentSession(snapshot);
+            this.renderSelectedAgentSession();
         } catch {
         } finally {
             this.scheduleAgentPoll();
         }
     }
 
-    private renderSelectedAgentRunDetail(): void {
-        const container = this.root.querySelector<HTMLElement>('[data-role="agent-run-detail"]');
+    private renderSelectedAgentSession(): void {
+        const container = this.root.querySelector<HTMLElement>('[data-role="agent-session-main"]');
         if (container) {
-            container.innerHTML = renderAgentRunDetail(this.state.agent.selectedRun, this.state.agent.busy);
+            const draft = this.captureAgentFormDraft(container);
+            container.innerHTML = renderAgentSessionMain(this.state.agent, this.state.agent.busy ? 'disabled' : '');
+            this.restoreAgentFormDraft(container, draft);
         }
+    }
+
+    private async subscribeSelectedAgentSession(): Promise<void> {
+        this.closeAgentSessionSubscription();
+        const generation = this.agentSessionSubscriptionGeneration;
+        const selected = this.state.agent.selectedSession;
+        if (!selected || this.state.agent.creatingSession || this.state.selectedTab !== 'agent' || !this.root.isConnected) return;
+        const sessionId = selected.session.id;
+        try {
+            const subscription = await (await this.getAgentClient()).agent.sessions.subscribe(sessionId, {
+                onSnapshot: snapshot => {
+                    if (generation !== this.agentSessionSubscriptionGeneration
+                        || this.state.agent.selectedSession?.session.id !== sessionId) return;
+                    this.applySelectedAgentSession(snapshot);
+                    this.renderSelectedAgentSession();
+                },
+                onEvent: () => {
+                    if (generation === this.agentSessionSubscriptionGeneration) {
+                        this.scheduleAgentSessionRefresh(sessionId);
+                    }
+                },
+                onError: () => {
+                    if (generation === this.agentSessionSubscriptionGeneration) this.scheduleAgentPoll();
+                },
+            });
+            if (generation !== this.agentSessionSubscriptionGeneration
+                || this.state.agent.selectedSession?.session.id !== sessionId
+                || this.state.selectedTab !== 'agent'
+                || !this.root.isConnected) {
+                subscription.close();
+                return;
+            }
+            this.agentSessionSubscription = subscription;
+        } catch {
+            if (generation === this.agentSessionSubscriptionGeneration) this.scheduleAgentPoll();
+        }
+    }
+
+    private scheduleAgentSessionRefresh(sessionId: string): void {
+        if (this.agentSessionRefreshTimer !== null) window.clearTimeout(this.agentSessionRefreshTimer);
+        this.agentSessionRefreshTimer = window.setTimeout(async () => {
+            this.agentSessionRefreshTimer = null;
+            if (this.state.agent.selectedSession?.session.id !== sessionId) return;
+            try {
+                const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
+                if (this.state.agent.selectedSession?.session.id !== sessionId) return;
+                this.applySelectedAgentSession(snapshot);
+                this.renderSelectedAgentSession();
+            } catch {
+                this.scheduleAgentPoll();
+            }
+        }, 120);
+    }
+
+    private closeAgentSessionSubscription(): void {
+        this.agentSessionSubscriptionGeneration += 1;
+        this.agentSessionSubscription?.close();
+        this.agentSessionSubscription = null;
+        if (this.agentSessionRefreshTimer !== null) {
+            window.clearTimeout(this.agentSessionRefreshTimer);
+            this.agentSessionRefreshTimer = null;
+        }
+    }
+
+    private applySelectedAgentSession(snapshot: AgentSessionSnapshot): void {
+        this.state.agent.selectedSession = snapshot;
+        this.state.agent.selectedWorkspaceId = snapshot.session.workspaceId;
+        this.state.agent.sessions.sessions = mergeAgentSessions(
+            this.state.agent.sessions.sessions,
+            [summarizeAgentSession(snapshot)],
+        );
     }
 
     private async performAgentMutation(
@@ -784,94 +886,122 @@ class SecurityCenterView {
         }
     }
 
-    private async createAgentRun(): Promise<void> {
-        const goal = this.agentFieldValue('agent-run-goal');
-        const instructions = this.agentFieldValue('agent-run-instructions');
-        const workspaceId = this.agentFieldValue('agent-run-workspace');
-        const profileId = this.agentFieldValue('agent-run-profile');
-        const mode = this.agentFieldValue('agent-run-mode') as NonNullable<AgentRunCreateRequest['mode']>;
-        const maxSteps = Number(this.agentFieldValue('agent-run-max-steps'));
-        const request: AgentRunCreateRequest = {
-            goal,
+    private beginAgentSession(): void {
+        this.closeAgentSessionSubscription();
+        this.state.agent.creatingSession = true;
+        this.state.agent.selectedSession = null;
+        this.state.agent.inspectorTab = 'settings';
+        void this.renderAgentSection();
+    }
+
+    private async createAgentSession(): Promise<void> {
+        const message = this.agentFieldValue('agent-new-message');
+        const workspaceId = this.agentFieldValue('agent-new-workspace');
+        const profileId = this.agentFieldValue('agent-new-profile');
+        const mode = this.agentFieldValue('agent-new-mode') as NonNullable<AgentSessionCreateRequest['mode']>;
+        const maxSteps = Number(this.agentFieldValue('agent-new-max-steps'));
+        const request: AgentSessionCreateRequest = {
+            message,
             workspaceId,
             ...(profileId ? { profileId } : {}),
             mode,
             maxSteps,
-            ...(instructions ? { instructions } : {}),
         };
         await this.performAgentMutation(async client => {
-            const run = await client.agent.createRun(request);
-            this.state.agent.selectedRun = await client.agent.admin.runs.get(run.id);
-            this.clearAgentFields('agent-run-goal', 'agent-run-instructions');
-            return 'Agent 已启动';
+            const snapshot = await client.agent.sessions.create(request);
+            this.state.agent.selectedSession = snapshot;
+            this.state.agent.creatingSession = false;
+            this.state.agent.inspectorTab = 'activity';
+            this.state.agent.selectedWorkspaceId = snapshot.session.workspaceId;
+            this.clearAgentFields('agent-new-message');
+            return 'Agent 会话已开始';
         });
     }
 
-    private async selectAgentRun(runId: string): Promise<void> {
-        if (this.state.agent.busy) {
-            return;
-        }
+    private async selectAgentSession(sessionId: string): Promise<void> {
+        if (this.state.agent.busy) return;
+        this.closeAgentSessionSubscription();
         this.state.agent.busy = true;
         void this.renderAgentSection();
         try {
-            this.state.agent.selectedRun = await (await this.getAgentClient()).agent.admin.runs.get(runId);
+            const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
+            this.state.agent.selectedSession = snapshot;
+            this.state.agent.creatingSession = false;
+            this.state.agent.selectedWorkspaceId = snapshot.session.workspaceId;
             this.state.agent.error = null;
+            const workspace = await this.fetchAgentWorkspace(await this.getAgentClient(), snapshot.session.workspaceId);
+            this.state.agent.workspaceStatus = workspace.status;
+            this.state.agent.workspaceCommits = workspace.commits;
+            this.state.agent.workspaceDiff = workspace.diff;
         } catch (error) {
             this.reportAgentError(error);
         } finally {
             this.state.agent.busy = false;
             void this.renderAgentSection();
+            void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
     }
 
-    private async cancelAgentRun(runId: string): Promise<void> {
-        const run = this.state.agent.selectedRun?.run.id === runId ? this.state.agent.selectedRun.run : null;
+    private async sendAgentMessage(sessionId: string): Promise<void> {
+        const content = this.agentFieldValue('agent-message');
+        const delivery = this.agentFieldValue('agent-message-delivery') as 'auto' | 'steer' | 'follow_up';
+        await this.performAgentMutation(async client => {
+            const result = await client.agent.sessions.send(sessionId, { content, delivery });
+            this.applySelectedAgentSession(result.snapshot);
+            this.clearAgentFields('agent-message');
+        }, false);
+    }
+
+    private async updateAgentSession(sessionId: string): Promise<void> {
+        const request: AgentSessionUpdateRequest = {
+            title: this.agentFieldValue('agent-session-title'),
+            profileId: this.agentFieldValue('agent-session-profile'),
+            mode: this.agentFieldValue('agent-session-mode') as NonNullable<AgentSessionUpdateRequest['mode']>,
+            maxSteps: Number(this.agentFieldValue('agent-session-max-steps')),
+        };
+        await this.performAgentMutation(async client => {
+            this.applySelectedAgentSession(await client.agent.sessions.update(sessionId, request));
+            return '会话设置已保存';
+        }, false);
+    }
+
+    private async cancelAgentRun(sessionId: string, runId: string): Promise<void> {
+        const snapshot = this.state.agent.selectedSession?.session.id === sessionId
+            ? this.state.agent.selectedSession
+            : null;
         if (!await showImpactConfirmation({
             title: '取消 Agent 运行',
-            description: '运行会停止继续规划和调用工具。',
+            description: '运行会停止继续规划和调用工具，但会话仍可继续。',
             confirmLabel: '取消运行',
-            target: run ? run.goal : runId,
-            effects: ['已经完成的工具副作用不会自动撤销。', '需要恢复文件时，可以在右侧工作区检查器回退到检查点。'],
+            target: snapshot?.session.title ?? runId,
+            effects: ['已经完成的工具副作用不会自动撤销。', '需要恢复文件时，可以在右侧“变更”中回退到检查点。'],
             tone: 'warning',
-        })) {
-            return;
-        }
+        })) return;
         await this.performAgentMutation(async client => {
-            await client.agent.admin.runs.cancel(runId);
-            return 'Agent 运行已取消';
-        });
+            this.applySelectedAgentSession(await client.agent.sessions.cancelRun(sessionId, runId));
+            return '当前运行已取消';
+        }, false);
     }
 
-    private async resolveAgentApproval(runId: string, approvalId: string, decision: 'approve' | 'deny'): Promise<void> {
+    private async resumeAgentRun(sessionId: string, runId: string): Promise<void> {
         await this.performAgentMutation(async client => {
-            await client.agent.admin.runs.resolveApproval(runId, approvalId, { decision });
+            this.applySelectedAgentSession(await client.agent.sessions.resumeRun(sessionId, runId));
+            return 'Agent 运行已恢复';
+        }, false);
+    }
+
+    private async resolveAgentApproval(sessionId: string, approvalId: string, decision: 'approve' | 'deny'): Promise<void> {
+        await this.performAgentMutation(async client => {
+            this.applySelectedAgentSession(await client.agent.admin.sessions.resolveApproval(sessionId, approvalId, { decision }));
             return decision === 'approve' ? '已批准工具调用' : '已拒绝工具调用';
-        });
+        }, false);
     }
 
-    private async loadMoreAgentRuns(): Promise<void> {
-        const cursor = this.state.agent.runs.page.nextCursor;
-        if (!cursor || this.state.agent.loading) {
-            return;
-        }
+    private async loadMoreAgentSessions(): Promise<void> {
+        const cursor = this.state.agent.sessions.page.nextCursor;
+        if (!cursor || this.state.agent.loading) return;
         await this.refreshAgentWorkbench({ cursor, append: true });
-    }
-
-    private async pruneAgentRuns(): Promise<void> {
-        if (!await showImpactConfirmation({
-            title: '清理 Agent 运行记录',
-            description: '删除较旧的终态记录，只保留最近 200 条。',
-            confirmLabel: '清理记录',
-            effects: ['进行中的运行不会被删除。', '工作区检查点与版本历史不会被删除。', '已删除的对话和工具记录无法从工作台恢复。'],
-            tone: 'danger',
-        })) {
-            return;
-        }
-        await this.performAgentMutation(async client => {
-            const result = await client.agent.admin.runs.prune({ retainLatest: 200 });
-            return `已删除 ${result.deletedRuns} 条记录，回收 ${formatBytes(result.reclaimedBytes)}`;
-        });
     }
 
     private async saveAgentProfile(): Promise<void> {
@@ -1715,11 +1845,15 @@ class SecurityCenterView {
             if (!this.state.agent.loaded) {
                 void this.refreshAgentWorkbench();
             } else {
+                void this.subscribeSelectedAgentSession();
                 this.scheduleAgentPoll();
             }
-        } else if (this.agentPollTimer !== null) {
-            window.clearTimeout(this.agentPollTimer);
-            this.agentPollTimer = null;
+        } else {
+            this.closeAgentSessionSubscription();
+            if (this.agentPollTimer !== null) {
+                window.clearTimeout(this.agentPollTimer);
+                this.agentPollTimer = null;
+            }
         }
     }
 
@@ -2781,12 +2915,37 @@ class SecurityCenterView {
     }
 }
 
-function mergeAgentRuns(existing: AgentRunRecord[], incoming: AgentRunRecord[]): AgentRunRecord[] {
-    const runs = new Map(existing.map(run => [run.id, run]));
-    for (const run of incoming) {
-        runs.set(run.id, run);
+function mergeAgentSessions(existing: AgentSessionSummary[], incoming: AgentSessionSummary[]): AgentSessionSummary[] {
+    const sessions = new Map(existing.map(session => [session.id, session]));
+    for (const session of incoming) {
+        sessions.set(session.id, session);
     }
-    return [...runs.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return [...sessions.values()].sort((left, right) => {
+        const timestamp = right.updatedAt.localeCompare(left.updatedAt);
+        return timestamp || right.id.localeCompare(left.id);
+    });
+}
+
+function summarizeAgentSession(snapshot: AgentSessionSnapshot): AgentSessionSummary {
+    const ref = snapshot.refs.find(item => item.name === 'main') ?? snapshot.refs[0];
+    const run = getActiveAgentSessionRun(snapshot);
+    const path = new Set(snapshot.activePaths[ref?.name ?? 'main'] ?? []);
+    const messages = snapshot.conversation.filter(
+        (entry): entry is Extract<AgentSessionSnapshot['conversation'][number], { kind: 'message' }> =>
+            entry.kind === 'message' && path.has(entry.id),
+    );
+    const lastMessage = [...messages].reverse().find(entry => entry.content?.trim());
+    return {
+        ...snapshot.session,
+        status: run?.status ?? 'idle',
+        activeRunId: run?.id ?? null,
+        activeRunStatus: run?.status ?? null,
+        messageCount: messages.length,
+        pendingApprovalCount: snapshot.approvals.filter(approval => approval.status === 'pending').length,
+        pendingMessageCount: snapshot.pendingMessages.length,
+        lastMessagePreview: lastMessage?.content?.replace(/\s+/g, ' ').trim().slice(0, 180) ?? null,
+        lastSequence: snapshot.lastSequence,
+    };
 }
 
 function base64ToBytes(content: string): Uint8Array {

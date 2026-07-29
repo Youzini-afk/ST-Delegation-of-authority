@@ -130,6 +130,15 @@ export function buildEventStreamUrl(sessionToken: string, channel: string): stri
     return url.toString();
 }
 
+export function buildAgentSessionStreamUrl(ticket: string, sessionId: string): string {
+    const url = new URL(
+        `${AUTHORITY_API_BASE}/agent/sessions/${encodeURIComponent(sessionId)}/events`,
+        window.location.origin,
+    );
+    url.searchParams.set('ticket', ticket);
+    return url.toString();
+}
+
 export function hostnameFromUrl(url: string): string {
     return new URL(url, window.location.origin).hostname.toLowerCase();
 }

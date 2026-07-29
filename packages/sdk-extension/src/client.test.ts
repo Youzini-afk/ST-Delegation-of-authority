@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTHORITY_VERSION } from './version.js';
 import type {
+    AgentSessionSnapshot,
     AuthorityModuleManifest,
     AuthorityProbeResponse,
     TriviumBulkDeleteRequest,
@@ -27,6 +28,7 @@ vi.mock('./api.js', () => ({
         readonly code: string | undefined;
     },
     authorityRequest: authorityRequestMock,
+    buildAgentSessionStreamUrl: vi.fn(() => 'http://localhost/agent-events'),
     buildEventStreamUrl: vi.fn(() => 'http://localhost/events'),
     hostnameFromUrl: vi.fn(() => 'example.com'),
     isInvalidSessionError: vi.fn(() => false),
@@ -1853,7 +1855,7 @@ describe('AuthorityClient', () => {
         expect(execute).not.toHaveBeenCalled();
     });
 
-    it('creates Agent runs under the requested workspace permission', async () => {
+    it('creates and continues a durable Agent session under its workspace permission', async () => {
         const { AuthorityClient } = await import('./client.js');
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
@@ -1863,24 +1865,37 @@ describe('AuthorityClient', () => {
             declaredPermissions: { agent: { run: ['workspace-a'] } },
         });
         const ensurePermission = vi.fn().mockResolvedValue(undefined);
-        const requestWithSession = vi.fn(async () => ({ id: 'run-1', status: 'queued' }));
+        const snapshot = buildAgentSessionSnapshot('queued', 'workspace-a');
+        const requestWithSession = vi.fn()
+            .mockResolvedValueOnce(snapshot)
+            .mockResolvedValueOnce({ snapshot, runId: 'run-1', queuedMessageId: null });
         Object.assign(client as object, { ensurePermission, requestWithSession });
 
-        const request = { goal: '修复插件', workspaceId: 'workspace-a', mode: 'ask' as const };
-        await client.agent.createRun(request);
+        const request = { message: '修复插件', workspaceId: 'workspace-a', mode: 'ask' as const };
+        await client.agent.sessions.create(request);
+        await client.agent.sessions.send('session-1', { content: '继续检查' });
 
-        expect(ensurePermission).toHaveBeenCalledWith({
+        expect(ensurePermission).toHaveBeenNthCalledWith(1, {
             resource: 'agent.run',
             target: 'workspace-a',
-            reason: '在工作区 workspace-a 启动 Agent',
+            reason: '在工作区 workspace-a 创建 Agent 会话',
         });
-        expect(requestWithSession).toHaveBeenCalledWith('/agent/runs', {
+        expect(ensurePermission).toHaveBeenNthCalledWith(2, {
+            resource: 'agent.run',
+            target: 'workspace-a',
+            reason: '继续 Agent 会话（workspace-a）',
+        });
+        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/agent/sessions', {
             method: 'POST',
             body: request,
         });
+        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/agent/sessions/session-1/messages', {
+            method: 'POST',
+            body: { content: '继续检查' },
+        });
     });
 
-    it('uses cursor pages for Agent run history and admin pruning', async () => {
+    it('uses cursor pages for owner and admin Agent session history', async () => {
         const { AuthorityClient } = await import('./client.js');
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
@@ -1890,30 +1905,21 @@ describe('AuthorityClient', () => {
             declaredPermissions: {},
         });
         const requestWithSession = vi.fn(async () => ({
-            runs: [],
+            sessions: [],
             page: { nextCursor: null, limit: 25, hasMore: false, totalCount: 0 },
-            deletedRuns: 0,
-            reclaimedBytes: 0,
-            retainedTerminalRuns: 0,
-            activeRuns: 0,
         }));
         Object.assign(client as object, { requestWithSession });
 
-        await client.agent.listRunsPage({ page: { cursor: '25', limit: 25 }, status: 'failed' });
-        await client.agent.admin.runs.listPage({ page: { limit: 50 } });
-        await client.agent.admin.runs.prune({ retainLatest: 200 });
+        await client.agent.sessions.listPage({ page: { cursor: 'cursor-1', limit: 25 }, archived: true });
+        await client.agent.admin.sessions.listPage({ page: { limit: 50 } });
 
-        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/agent/runs/list', {
+        expect(requestWithSession).toHaveBeenNthCalledWith(1, '/agent/sessions/list', {
             method: 'POST',
-            body: { page: { cursor: '25', limit: 25 }, status: 'failed' },
+            body: { page: { cursor: 'cursor-1', limit: 25 }, archived: true },
         });
-        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/admin/agent/runs/list', {
+        expect(requestWithSession).toHaveBeenNthCalledWith(2, '/admin/agent/sessions/list', {
             method: 'POST',
             body: { page: { limit: 50 } },
-        });
-        expect(requestWithSession).toHaveBeenNthCalledWith(3, '/admin/agent/runs/prune', {
-            method: 'POST',
-            body: { retainLatest: 200 },
         });
     });
 
@@ -1955,7 +1961,7 @@ describe('AuthorityClient', () => {
         });
     });
 
-    it('rejects Agent runs without a workspace before requesting permission', async () => {
+    it('rejects Agent sessions without a workspace before requesting permission', async () => {
         const { AuthorityClient } = await import('./client.js');
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
@@ -1968,7 +1974,7 @@ describe('AuthorityClient', () => {
         const requestWithSession = vi.fn();
         Object.assign(client as object, { ensurePermission, requestWithSession });
 
-        await expect(client.agent.createRun({ goal: 'No workspace' } as any)).rejects.toThrow('workspaceId is required');
+        await expect(client.agent.sessions.create({ message: 'No workspace' } as any)).rejects.toThrow('workspaceId is required');
         expect(ensurePermission).not.toHaveBeenCalled();
         expect(requestWithSession).not.toHaveBeenCalled();
     });
@@ -2012,18 +2018,28 @@ describe('AuthorityClient', () => {
         await client.agent.browser.claim(claim);
         await client.agent.browser.submitResult(result);
 
-        expect(ensurePermission).toHaveBeenCalledTimes(1);
-        expect(ensurePermission).toHaveBeenCalledWith({
+        expect(ensurePermission).toHaveBeenCalledTimes(3);
+        expect(ensurePermission).toHaveBeenNthCalledWith(1, {
             resource: 'agent.browser',
             target: 'tab-a',
             reason: '向 Agent 注册浏览器工具',
+        });
+        expect(ensurePermission).toHaveBeenNthCalledWith(2, {
+            resource: 'agent.browser',
+            target: 'tab-a',
+            reason: '领取 Agent 浏览器工具任务',
+        });
+        expect(ensurePermission).toHaveBeenNthCalledWith(3, {
+            resource: 'agent.browser',
+            target: 'tab-a',
+            reason: '提交 Agent 浏览器工具结果',
         });
         expect(requestWithSession).toHaveBeenNthCalledWith(1, '/agent/browser-tools/register', { method: 'POST', body: registration });
         expect(requestWithSession).toHaveBeenNthCalledWith(2, '/agent/browser-tools/claim', { method: 'POST', body: claim });
         expect(requestWithSession).toHaveBeenNthCalledWith(3, '/agent/browser-tools/result', { method: 'POST', body: result });
     });
 
-    it('waits for an Agent run terminal state', async () => {
+    it('waits for a run terminal state inside its durable Agent session', async () => {
         const { AuthorityClient } = await import('./client.js');
         const client = new AuthorityClient({
             extensionId: 'third-party/ext-a',
@@ -2033,14 +2049,18 @@ describe('AuthorityClient', () => {
             declaredPermissions: {},
         });
         const requestWithSession = vi.fn()
-            .mockResolvedValueOnce({ run: { id: 'run-1', status: 'running' } })
-            .mockResolvedValueOnce({ run: { id: 'run-1', status: 'completed' }, messages: [] });
+            .mockResolvedValueOnce(buildAgentSessionSnapshot('running'))
+            .mockResolvedValueOnce(buildAgentSessionSnapshot('completed'));
         Object.assign(client as object, { requestWithSession });
 
-        const detail = await client.agent.waitForCompletion('run-1', { pollIntervalMs: 1, timeoutMs: 100 });
+        const snapshot = await client.agent.sessions.waitForRun('session-1', 'run-1', {
+            pollIntervalMs: 1,
+            timeoutMs: 100,
+        });
 
-        expect(detail.run.status).toBe('completed');
+        expect(snapshot.runs[0]!.status).toBe('completed');
         expect(requestWithSession).toHaveBeenCalledTimes(2);
+        expect(requestWithSession).toHaveBeenCalledWith('/agent/sessions/session-1', expect.any(Object));
     });
 
     it('aborts a hanging Agent status request at the wait deadline', async () => {
@@ -2059,7 +2079,7 @@ describe('AuthorityClient', () => {
         }));
         const startedAt = Date.now();
 
-        await expect(client.agent.waitForCompletion('run-1', { pollIntervalMs: 10_000, timeoutMs: 20 }))
+        await expect(client.agent.sessions.waitForRun('session-1', 'run-1', { pollIntervalMs: 10_000, timeoutMs: 20 }))
             .rejects.toThrow('did not complete within 20ms');
         expect(Date.now() - startedAt).toBeLessThan(1_000);
     });
@@ -2079,7 +2099,10 @@ describe('AuthorityClient', () => {
             options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
         }));
         const controller = new AbortController();
-        const waiting = client.agent.waitForCompletion('run-1', { signal: controller.signal, timeoutMs: 1_000 });
+        const waiting = client.agent.sessions.waitForRun('session-1', 'run-1', {
+            signal: controller.signal,
+            timeoutMs: 1_000,
+        });
         controller.abort();
 
         await expect(waiting).rejects.toThrow('Authority agent run wait aborted');
@@ -2102,8 +2125,106 @@ describe('AuthorityClient', () => {
             .mockRejectedValueOnce(new Error('invalid session'))
             .mockImplementationOnce(() => new Promise(() => {}));
 
-        await expect(client.agent.waitForCompletion('run-1', { timeoutMs: 20 }))
+        await expect(client.agent.sessions.waitForRun('session-1', 'run-1', { timeoutMs: 20 }))
             .rejects.toThrow('did not complete within 20ms');
+    });
+
+    it('subscribes to Agent session snapshots and journal signals over SSE', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const { buildAgentSessionStreamUrl } = await import('./api.js');
+        const listeners = new Map<string, (event: unknown) => void>();
+        const close = vi.fn();
+        const openedUrls: string[] = [];
+        const sources: FakeEventSource[] = [];
+        let openedWithCredentials = false;
+
+        class FakeMessageEvent {
+            readonly data: string;
+
+            constructor(_type: string, init: { data: string }) {
+                this.data = init.data;
+            }
+        }
+
+        class FakeEventSource {
+            onerror: (() => void) | null = null;
+
+            constructor(url: string | URL, init?: EventSourceInit) {
+                openedUrls.push(String(url));
+                openedWithCredentials = Boolean(init?.withCredentials);
+                sources.push(this);
+            }
+
+            addEventListener(type: string, listener: (event: never) => void): void {
+                listeners.set(type, listener as (event: unknown) => void);
+            }
+
+            close(): void {
+                close();
+            }
+        }
+
+        vi.stubGlobal('MessageEvent', FakeMessageEvent);
+        vi.stubGlobal('EventSource', FakeEventSource);
+        vi.useFakeTimers();
+        try {
+            authorityRequestMock
+                .mockResolvedValueOnce(buildSession())
+                .mockResolvedValueOnce({ ticket: 'one-time-ticket' })
+                .mockResolvedValueOnce({ ticket: 'second-ticket' });
+            const client = new AuthorityClient({
+                extensionId: 'third-party/ext-a',
+                displayName: 'Ext A',
+                version: AUTHORITY_VERSION,
+                installType: 'local',
+                declaredPermissions: {},
+            });
+            const onSnapshot = vi.fn();
+            const onEvent = vi.fn();
+            const subscription = await client.agent.sessions.subscribe('session/1', { onSnapshot, onEvent });
+            const snapshot = buildAgentSessionSnapshot('running');
+            const event = {
+                sessionId: 'session/1',
+                sequence: 8,
+                type: 'run.started',
+                timestamp: '2026-01-01T00:00:01.000Z',
+            };
+
+            expect(() => listeners.get('authority.agent.session.snapshot')?.(
+                new FakeMessageEvent('message', { data: 'not-json' }),
+            )).not.toThrow();
+            expect(() => listeners.get('authority.agent.session.event')?.(
+                new FakeMessageEvent('message', { data: '{}' }),
+            )).not.toThrow();
+            listeners.get('authority.agent.session.snapshot')?.(
+                new FakeMessageEvent('message', { data: JSON.stringify(snapshot) }),
+            );
+            listeners.get('authority.agent.session.event')?.(
+                new FakeMessageEvent('message', { data: JSON.stringify(event) }),
+            );
+            await Promise.resolve();
+
+            expect(buildAgentSessionStreamUrl).toHaveBeenCalledWith('one-time-ticket', 'session/1');
+            expect(authorityRequestMock).toHaveBeenNthCalledWith(
+                2,
+                '/agent/sessions/session%2F1/events-ticket',
+                expect.objectContaining({ method: 'POST' }),
+            );
+            expect(openedUrls).toEqual(['http://localhost/agent-events']);
+            expect(openedWithCredentials).toBe(true);
+            expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+            expect(onEvent).toHaveBeenCalledWith(event);
+
+            sources[0]!.onerror?.();
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(buildAgentSessionStreamUrl).toHaveBeenNthCalledWith(2, 'second-ticket', 'session/1');
+            expect(openedUrls).toEqual(['http://localhost/agent-events', 'http://localhost/agent-events']);
+            subscription.close();
+            expect(close).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+        }
     });
 
     it('routes Agent admin workspace history endpoints', async () => {
@@ -2310,6 +2431,68 @@ function buildProbe(overrides: Partial<{
                 },
             },
         },
+    };
+}
+
+function buildAgentSessionSnapshot(
+    status: AgentSessionSnapshot['runs'][number]['status'],
+    workspaceId = 'workspace-a',
+): AgentSessionSnapshot {
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
+    return {
+        session: {
+            id: 'session-1',
+            callerUserHandle: 'alice',
+            callerExtensionId: 'third-party/ext-a',
+            workspaceId,
+            title: 'Durable session',
+            profileId: 'profile-1',
+            mode: 'ask',
+            allowedTools: [],
+            maxSteps: 8,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+        },
+        lastSequence: 3,
+        refs: [{
+            name: 'main',
+            leafEntryId: 'message-1',
+            activeRunId: terminal ? null : 'run-1',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+        }],
+        conversation: [{
+            id: 'message-1',
+            sequence: 1,
+            ref: 'main',
+            parentId: null,
+            timestamp,
+            runId: 'run-1',
+            kind: 'message',
+            role: 'user',
+            content: 'Continue',
+        }],
+        activePaths: { main: ['message-1'] },
+        runs: [{
+            id: 'run-1',
+            ref: 'main',
+            triggerMessageId: 'message-1',
+            status,
+            profileId: 'profile-1',
+            mode: 'ask',
+            allowedTools: [],
+            maxSteps: 8,
+            stepCount: 0,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            resumeCount: 0,
+        }],
+        steps: [],
+        generations: [],
+        invocations: [],
+        approvals: [],
+        pendingMessages: [],
     };
 }
 

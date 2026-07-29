@@ -83,4 +83,16 @@ describe('authorityRequest', () => {
             category: 'session',
         });
     });
+
+    it('builds an encoded Agent session event stream URL with only a one-time ticket', async () => {
+        vi.stubGlobal('window', { location: { origin: 'https://st.example.test' } });
+        const { buildAgentSessionStreamUrl } = await import('./api.js');
+
+        const url = new URL(buildAgentSessionStreamUrl('one-time-ticket', 'session/a b'));
+
+        expect(url.origin).toBe('https://st.example.test');
+        expect(url.pathname).toBe('/api/plugins/authority/agent/sessions/session%2Fa%20b/events');
+        expect(url.searchParams.get('ticket')).toBe('one-time-ticket');
+        expect(url.searchParams.has('authoritySessionToken')).toBe(false);
+    });
 });

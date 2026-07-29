@@ -3,7 +3,6 @@ import { AdminPackageService } from './services/admin-package-service.js';
 import { AgentHostToolService } from './services/agent-host-tools.js';
 import { AgentSessionRuntimeService } from './services/agent-session-runtime-service.js';
 import { AgentSessionStoreService } from './services/agent-session-store-service.js';
-import { AgentService } from './services/agent-service.js';
 import { AgentStoreService } from './services/agent-store-service.js';
 import { AuditService } from './services/audit-service.js';
 import { CompanionModuleLoaderService } from './services/companion-module-loader-service.js';
@@ -75,7 +74,7 @@ export interface AuthorityRuntime {
      */
     companionLoader: CompanionModuleLoaderService;
     workspaceHistory: WorkspaceHistoryService;
-    agent: AgentService;
+    agentProfiles: AgentStoreService;
     agentSessions: AgentSessionRuntimeService;
 }
 
@@ -107,12 +106,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const workspaceHistory = new WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
     const agentStore = new AgentStoreService(globalPaths.agentStateDir);
     const agentHostTools = new AgentHostToolService(workspaceHistory);
-    const agent = new AgentService(
-        agentStore,
-        workspaceHistory,
-        agentHostTools,
-        { moduleHost: modules },
-    );
     const agentSessions = new AgentSessionRuntimeService(
         new AgentSessionStoreService(globalPaths.agentStateDir),
         agentStore,
@@ -146,7 +139,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         idempotency,
         companionLoader,
         workspaceHistory,
-        agent,
+        agentProfiles: agentStore,
         agentSessions,
     };
 }

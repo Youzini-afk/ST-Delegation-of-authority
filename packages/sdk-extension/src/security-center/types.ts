@@ -13,8 +13,8 @@ import type {
     SessionInitResponse,
     AuthorityUsageSummaryResponse,
     AgentLlmProfile,
-    AgentRunDetail,
-    AgentRunListResponse,
+    AgentSessionListResponse,
+    AgentSessionSnapshot,
     AgentToolDescriptor,
     AgentWorkspaceRecord,
     SqlDatabaseRecord,
@@ -119,14 +119,15 @@ export interface AgentWorkbenchState {
     profiles: AgentLlmProfile[];
     tools: AgentToolDescriptor[];
     workspaces: AgentWorkspaceRecord[];
-    runs: AgentRunListResponse;
+    sessions: AgentSessionListResponse;
     selectedProfileId: string | null;
     selectedWorkspaceId: string | null;
-    selectedRun: AgentRunDetail | null;
+    selectedSession: AgentSessionSnapshot | null;
+    creatingSession: boolean;
+    inspectorTab: 'activity' | 'workspace' | 'settings';
     workspaceStatus: WorkspaceStatusResponse | null;
     workspaceCommits: WorkspaceCommitObject[];
     workspaceDiff: WorkspaceDiffResponse | null;
-    runStatus: AgentRunListResponse['runs'][number]['status'] | '';
 }
 
 export interface SecurityCenterState {

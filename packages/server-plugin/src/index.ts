@@ -40,9 +40,6 @@ export async function init(router: any): Promise<void> {
         // service's logger indirectly via console for now.
         console.warn(`[authority] Companion module discovery/load failed: ${message}`);
     }
-    void runtime.agent.start().catch(error => {
-        console.warn(`[authority] Agent service startup failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
     void runtime.agentSessions.start().then(result => {
         for (const problem of result.problems) {
             console.warn(`[authority] Agent session recovery skipped ${problem.sessionId}: ${problem.error}`);
@@ -63,13 +60,9 @@ export async function exit(): Promise<void> {
         await current.agentSessions.stop();
     } finally {
         try {
-            await current.agent.stop();
+            await current.core.stop();
         } finally {
-            try {
-                await current.core.stop();
-            } finally {
-                runtime = null;
-            }
+            runtime = null;
         }
     }
 }

@@ -158,12 +158,13 @@ describe('Security Center tab interaction', () => {
         expect(source).toContain("AuthoritySDK.init(SECURITY_CENTER_CONFIG)");
     });
 
-    it('keeps Agent form drafts across redraws and rejects stale refresh results', () => {
+    it('keeps Agent composer drafts across redraws and rejects stale session refreshes', () => {
         expect(source).toContain('const draft = this.captureAgentFormDraft(container);');
         expect(source).toContain('this.restoreAgentFormDraft(container, draft);');
         expect(source).toContain('const generation = ++this.agentRefreshGeneration;');
         expect(source).toContain('if (generation !== this.agentRefreshGeneration) return;');
-        expect(source).toContain('if (this.state.agent.selectedRun?.run.id !== runId) return;');
+        expect(source).toContain('if (this.state.agent.selectedSession?.session.id !== sessionId) return;');
+        expect(source).toContain('agent.sessions.subscribe(sessionId');
     });
 
     it('static CSS disables pointer-events on tab icon descendants', () => {

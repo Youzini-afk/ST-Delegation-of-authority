@@ -57,6 +57,53 @@ describe('AgentSessionRuntimeService', () => {
         expect(first.session.id).toBe(created.session.id);
     });
 
+    it('persists session settings as one journal transition and restores them after restart', async () => {
+        const fixture = await createFixture(sequenceRequester([]));
+        fixture.profileStore.upsertProfile({
+            id: 'profile-2',
+            displayName: 'Second profile',
+            provider: 'openai-compatible',
+            baseUrl: 'http://localhost:2345/v1',
+            model: 'second',
+        });
+        const created = await fixture.runtime.createSession({ workspaceId: 'workspace', profileId: 'profile' });
+
+        await expect(fixture.runtime.updateSession(created.session.id, {}))
+            .rejects.toThrow('session update is empty');
+        const updated = await fixture.runtime.updateSession(created.session.id, {
+            title: 'Long-lived repair session',
+            profileId: 'profile-2',
+            mode: 'plan',
+            allowedTools: ['host_read_file', 'host_search_text'],
+            maxSteps: 31,
+            archived: true,
+        });
+
+        expect(updated.session).toMatchObject({
+            title: 'Long-lived repair session',
+            profileId: 'profile-2',
+            mode: 'plan',
+            allowedTools: ['host_read_file', 'host_search_text'],
+            maxSteps: 31,
+            archivedAt: expect.any(String),
+        });
+        const updateRecords = fixture.sessionStore.readSession(created.session.id).records
+            .filter(record => record.entry.type === 'session.updated');
+        expect(updateRecords).toHaveLength(1);
+        await fixture.runtime.stop();
+
+        const restarted = new AgentSessionRuntimeService(
+            fixture.sessionStore,
+            fixture.profileStore,
+            fixture.history,
+            new AgentHostToolService(fixture.history),
+            { requestCompletion: sequenceRequester([]) },
+        );
+        await restarted.start();
+        expect((await restarted.getSession(created.session.id)).session).toEqual(updated.session);
+        await restarted.stop();
+    });
+
     it('records approval, intent, checkpoints, tool result, and model continuation in durable order', async () => {
         const fixture = await createFixture(sequenceRequester([
             toolCall('call-write', 'host_write_file', { path: 'config.json', content: '{"ok":true}' }),

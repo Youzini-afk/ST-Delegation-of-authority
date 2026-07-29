@@ -4,6 +4,7 @@ import type {
     AgentBrowserToolRegistrationRequest,
     AgentBrowserToolRegistrationResponse,
     AgentExecutionMode,
+    AgentSessionUpdateRequest,
     AgentToolDescriptor,
 } from '@stdo/shared-types';
 import type { SessionRecord, UserContext } from '../types.js';
@@ -378,6 +379,63 @@ export class AgentSessionRuntimeService {
         )).snapshot;
     }
 
+    async updateSession(
+        sessionId: string,
+        request: AgentSessionUpdateRequest,
+        callerExtensionId?: string,
+        callerContext?: AgentSessionCallerContext,
+    ): Promise<AgentSessionSnapshot> {
+        this.assertRunning();
+        if (callerContext && callerExtensionId && callerContext.session.extension.id !== callerExtensionId) {
+            throw new Error('Agent caller context does not match the caller extension');
+        }
+        const actor = this.actor(sessionId);
+        const snapshot = await actor.perform(writer => {
+            const current = writer.snapshot();
+            this.assertOwner(current, callerExtensionId, callerContext?.user.handle);
+            const update: Extract<AgentSessionJournalEntry, { type: 'session.updated' }> = {
+                id: crypto.randomUUID(),
+                type: 'session.updated',
+                timestamp: this.now(),
+            };
+            if (request.title !== undefined) {
+                update.title = requiredText(request.title, 'Agent session title', 500);
+            }
+            if (request.profileId !== undefined) {
+                update.profileId = selectOne(
+                    request.profileId,
+                    this.profileStore.listProfiles(),
+                    item => item.id,
+                    'LLM profile',
+                ).id;
+            }
+            if (request.mode !== undefined) update.mode = normalizeMode(request.mode);
+            if (request.allowedTools !== undefined) {
+                update.allowedTools = normalizeAllowedTools(
+                    request.allowedTools,
+                    this.tools.list(current.session.callerUserHandle, current.session.callerExtensionId),
+                );
+            }
+            if (request.maxSteps !== undefined) {
+                if (!Number.isSafeInteger(request.maxSteps)
+                    || request.maxSteps < 1
+                    || request.maxSteps > HARD_MAX_STEPS) {
+                    throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
+                }
+                update.maxSteps = request.maxSteps;
+            }
+            if (request.archived !== undefined) {
+                if (typeof request.archived !== 'boolean') throw new Error('Agent session archived must be boolean');
+                update.archived = request.archived;
+            }
+            if (Object.keys(update).length === 3) throw new Error('Agent session update is empty');
+            this.append(writer, update);
+            return writer.snapshot();
+        });
+        if (callerContext) this.contexts.set(sessionId, callerContext);
+        return snapshot;
+    }
+
     listSessions(callerExtensionId?: string, callerUserHandle?: string): AgentSessionSnapshot[] {
         const sessions = this.sessionStore.listSessions().sessions;
         if (callerExtensionId === undefined && callerUserHandle === undefined) return sessions;
@@ -648,13 +706,30 @@ export class AgentSessionRuntimeService {
 
     subscribe(sessionId: string, listener: SessionEventListener): () => void {
         this.assertRunning();
-        const listeners = this.listeners.get(sessionId) ?? new Set<SessionEventListener>();
-        listeners.add(listener);
-        this.listeners.set(sessionId, listeners);
-        return () => {
-            listeners.delete(listener);
-            if (listeners.size === 0) this.listeners.delete(sessionId);
-        };
+        return this.addListener(sessionId, listener);
+    }
+
+    async openSubscription(
+        sessionId: string,
+        listener: SessionEventListener,
+        callerExtensionId?: string,
+        callerContext?: AgentSessionCallerContext,
+    ): Promise<{ snapshot: AgentSessionSnapshot; close: () => void }> {
+        this.assertRunning();
+        if (callerContext && callerExtensionId && callerContext.session.extension.id !== callerExtensionId) {
+            throw new Error('Agent caller context does not match the caller extension');
+        }
+        const actor = this.actor(sessionId);
+        const opened = await actor.perform(writer => {
+            const snapshot = writer.snapshot();
+            this.assertOwner(snapshot, callerExtensionId, callerContext?.user.handle);
+            return {
+                snapshot,
+                close: this.addListener(sessionId, listener),
+            };
+        });
+        if (callerContext) this.contexts.set(sessionId, callerContext);
+        return opened;
     }
 
     private enqueue(sessionId: string, runId: string): void {
@@ -934,6 +1009,16 @@ export class AgentSessionRuntimeService {
             }
         }
         return record;
+    }
+
+    private addListener(sessionId: string, listener: SessionEventListener): () => void {
+        const listeners = this.listeners.get(sessionId) ?? new Set<SessionEventListener>();
+        listeners.add(listener);
+        this.listeners.set(sessionId, listeners);
+        return () => {
+            listeners.delete(listener);
+            if (listeners.size === 0) this.listeners.delete(sessionId);
+        };
     }
 
     private assertOwner(snapshot: AgentSessionSnapshot, extensionId?: string, userHandle?: string): void {

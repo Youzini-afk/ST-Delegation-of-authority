@@ -1,18 +1,27 @@
+import crypto from 'node:crypto';
 import type {
     AgentApprovalResolveRequest,
     AgentBrowserToolClaimRequest,
     AgentBrowserToolRegistrationRequest,
     AgentLlmProfileInput,
-    AgentRunCreateRequest,
-    AgentRunListRequest,
-    AgentRunPruneRequest,
+    AgentSessionCreateRequest,
+    AgentSessionListRequest,
+    AgentSessionSendRequest,
+    AgentSessionUpdateRequest,
     AgentToolResultRequest,
     PermissionResource,
 } from '@stdo/shared-types';
 import { AUTHORITY_SDK_EXTENSION_ID } from '../constants.js';
 import type { AuthorityRuntime } from '../runtime.js';
+import type { AgentSessionJournalRecord, AgentSessionSnapshot } from '../services/agent-session-model.js';
 import type { AuthorityRequest, AuthorityResponse, SessionRecord, UserContext } from '../types.js';
 import { getSessionToken, getUserContext } from '../utils.js';
+import {
+    pageAgentSessions,
+    presentAgentSession,
+    presentAgentSessionEvent,
+    presentAgentSessionInvocation,
+} from './agent-session-presenter.js';
 
 type RouterLike = {
     get(path: string, handler: (req: AuthorityRequest, res: AuthorityResponse) => void | Promise<void>): void;
@@ -27,96 +36,271 @@ type RouteFailureHandler = (
     error: unknown,
 ) => void;
 
+interface AgentStreamTicket {
+    sessionId: string;
+    context: { user: UserContext; session: SessionRecord };
+    expiresAt: number;
+    expiryTimer: ReturnType<typeof setTimeout>;
+}
+
+const AGENT_STREAM_TICKET_TTL_MS = 30_000;
+
 export function registerAgentRoutes(router: RouterLike, runtime: AuthorityRuntime, fail: RouteFailureHandler): void {
+    const streamTickets = new Map<string, AgentStreamTicket>();
     router.get('/agent/tools', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
+            await runtime.agentSessions.start();
             const { user, session } = await caller(runtime, req);
             extensionId = session.extension.id;
-            res.json({ tools: runtime.agent.listTools(extensionId, user.handle) });
+            res.json({ tools: runtime.agentSessions.tools.list(user.handle, extensionId) });
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
 
-    router.get('/agent/runs', async (req, res) => {
+    router.get('/agent/sessions', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
+            await runtime.agentSessions.start();
             const { user, session } = await caller(runtime, req);
             extensionId = session.extension.id;
-            res.json(runtime.agent.listRunsPage({}, extensionId, user.handle));
+            res.json(pageAgentSessions(
+                runtime.agentSessions.listSessions(extensionId, user.handle),
+            ));
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
 
-    router.post('/agent/runs/list', async (req, res) => {
+    router.post('/agent/sessions/list', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
+            await runtime.agentSessions.start();
             const { user, session } = await caller(runtime, req);
             extensionId = session.extension.id;
-            res.json(runtime.agent.listRunsPage((req.body ?? {}) as AgentRunListRequest, extensionId, user.handle));
+            res.json(pageAgentSessions(
+                runtime.agentSessions.listSessions(extensionId, user.handle),
+                (req.body ?? {}) as AgentSessionListRequest,
+            ));
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
 
-    router.post('/agent/runs', async (req, res) => {
+    router.post('/agent/sessions', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
-            const request = (req.body ?? {}) as AgentRunCreateRequest;
-            const workspaceId = request.workspaceId?.trim();
-            if (!workspaceId) {
-                throw new Error('Agent workspaceId is required');
-            }
-            await runtime.agent.start();
+            await runtime.agentSessions.start();
+            const request = (req.body ?? {}) as AgentSessionCreateRequest;
+            const workspaceId = requiredWorkspaceId(request.workspaceId);
+            const context = await callerForWorkspace(runtime, req, workspaceId);
+            extensionId = context.session.extension.id;
+            const snapshot = await runtime.agentSessions.createSession(
+                { ...request, workspaceId },
+                extensionId,
+                context,
+            );
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session created', {
+                sessionId: snapshot.session.id,
+                workspaceId: snapshot.session.workspaceId,
+                mode: snapshot.session.mode,
+            }).catch(() => undefined);
+            res.json(presentAgentSession(snapshot));
+        } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
+    router.get('/agent/sessions/:sessionId', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
             const context = await caller(runtime, req);
             extensionId = context.session.extension.id;
-            runtime.workspaceHistory.assertWorkspaceAccess(workspaceId, context.user.handle, context.user.isAdmin);
-            if (!await runtime.permissions.authorize(context.user, context.session, {
-                resource: 'agent.run',
-                target: workspaceId,
-            })) {
-                throw new Error(`Permission not granted: agent.run for ${workspaceId}`);
-            }
-            const run = runtime.agent.createRun({ ...request, workspaceId }, extensionId, context);
-            void runtime.audit.logUsage(context.user, extensionId, 'Agent run created', {
-                runId: run.id,
-                workspaceId: run.workspaceId,
-                mode: run.mode,
+            const snapshot = await ownedSession(runtime, sessionId(req), context);
+            res.json(presentAgentSession(snapshot));
+        } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
+    router.post('/agent/sessions/:sessionId/update', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const snapshot = await runtime.agentSessions.updateSession(
+                sessionId(req),
+                (req.body ?? {}) as AgentSessionUpdateRequest,
+                extensionId,
+                context,
+            );
+            res.json(presentAgentSession(snapshot));
+        } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
+    router.post('/agent/sessions/:sessionId/messages', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const existing = await ownedSession(runtime, id, context, false);
+            await authorizeWorkspace(runtime, context, existing.session.workspaceId);
+            const result = await runtime.agentSessions.sendMessage(
+                id,
+                (req.body ?? {}) as AgentSessionSendRequest,
+                extensionId,
+                context,
+            );
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session message accepted', {
+                sessionId: id,
+                runId: result.runId,
+                queuedMessageId: result.queuedMessageId,
             }).catch(() => undefined);
-            res.json(run);
+            res.json({
+                snapshot: presentAgentSession(result.snapshot),
+                runId: result.runId,
+                queuedMessageId: result.queuedMessageId,
+            });
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
 
-    router.get('/agent/runs/:runId', async (req, res) => {
+    router.post('/agent/sessions/:sessionId/runs/:runId/cancel', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
-            const { user, session } = await caller(runtime, req);
-            extensionId = session.extension.id;
-            res.json(ownedRun(runtime, runId(req), user.handle, extensionId));
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            await ownedSession(runtime, id, context);
+            const snapshot = await runtime.agentSessions.cancelRun(id, runId(req));
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session run cancelled', {
+                sessionId: id,
+                runId: runId(req),
+            }).catch(() => undefined);
+            res.json(presentAgentSession(snapshot));
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
 
-    router.post('/agent/runs/:runId/cancel', async (req, res) => {
+    router.post('/agent/sessions/:sessionId/runs/:runId/resume', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
-            const { user, session } = await caller(runtime, req);
-            extensionId = session.extension.id;
-            const id = runId(req);
-            ownedRun(runtime, id, user.handle, extensionId);
-            const run = runtime.agent.cancelRun(id);
-            void runtime.audit.logUsage(user, extensionId, 'Agent run cancelled', { runId: id }).catch(() => undefined);
-            res.json(run);
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const existing = await ownedSession(runtime, id, context, false);
+            await authorizeWorkspace(runtime, context, existing.session.workspaceId);
+            const snapshot = await runtime.agentSessions.resumeRun(id, runId(req), extensionId, context);
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session run resumed', {
+                sessionId: id,
+                runId: runId(req),
+            }).catch(() => undefined);
+            res.json(presentAgentSession(snapshot));
         } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
+    router.post('/agent/sessions/:sessionId/events-ticket', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            await ownedSession(runtime, id, context);
+            pruneAgentStreamTickets(streamTickets);
+            const ticket = crypto.randomBytes(32).toString('base64url');
+            const expiresAt = Date.now() + AGENT_STREAM_TICKET_TTL_MS;
+            const expiryTimer = setTimeout(() => streamTickets.delete(ticket), AGENT_STREAM_TICKET_TTL_MS);
+            expiryTimer.unref?.();
+            streamTickets.set(ticket, { sessionId: id, context, expiresAt, expiryTimer });
+            res.json({ ticket, expiresAt: new Date(expiresAt).toISOString() });
+        } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
+    router.get('/agent/sessions/:sessionId/events', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        let streamClose: (() => void) | null = null;
+        let heartbeat: ReturnType<typeof setInterval> | null = null;
+        let disconnected = false;
+        const cleanup = () => {
+            disconnected = true;
+            if (heartbeat !== null) clearInterval(heartbeat);
+            heartbeat = null;
+            streamClose?.();
+            streamClose = null;
+        };
+        res.on?.('close', cleanup);
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const ticketId = requiredAgentStreamTicket(req.query?.ticket);
+            const ticket = streamTickets.get(ticketId);
+            streamTickets.delete(ticketId);
+            if (ticket) clearTimeout(ticket.expiryTimer);
+            if (!ticket || ticket.expiresAt <= Date.now() || ticket.sessionId !== id) {
+                throw new Error('Agent session stream ticket is invalid or expired');
+            }
+            const requestUser = getUserContext(req);
+            if (requestUser.handle !== ticket.context.user.handle
+                || requestUser.isAdmin !== ticket.context.user.isAdmin) {
+                throw new Error('Agent session stream ticket owner mismatch');
+            }
+            const context = ticket.context;
+            extensionId = context.session.extension.id;
+            const buffered: AgentSessionJournalRecord[] = [];
+            let ready = false;
+            const opened = await runtime.agentSessions.openSubscription(
+                id,
+                record => {
+                    if (!ready) {
+                        buffered.push(record);
+                        return;
+                    }
+                    writeSse(res, 'authority.agent.session.event', presentAgentSessionEvent(id, record));
+                },
+                extensionId,
+                context,
+            );
+            streamClose = opened.close;
+            if (disconnected) {
+                cleanup();
+                return;
+            }
+
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.write('retry: 2000\n\n');
+            writeSse(
+                res,
+                'authority.agent.session.snapshot',
+                presentAgentSession(opened.snapshot),
+            );
+            ready = true;
+            for (const record of buffered) {
+                if (record.sequence > opened.snapshot.lastSequence) {
+                    writeSse(res, 'authority.agent.session.event', presentAgentSessionEvent(id, record));
+                }
+            }
+            heartbeat = setInterval(() => res.write(': keepalive\n\n'), 15_000);
+            heartbeat.unref?.();
+        } catch (error) {
+            cleanup();
             fail(runtime, req, res, extensionId, error);
         }
     });
@@ -124,14 +308,13 @@ export function registerAgentRoutes(router: RouterLike, runtime: AuthorityRuntim
     router.post('/agent/browser-tools/register', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
+            await runtime.agentSessions.start();
             const request = (req.body ?? {}) as AgentBrowserToolRegistrationRequest;
             const browserInstanceId = request.browserInstanceId?.trim();
-            if (!browserInstanceId) {
-                throw new Error('Browser instance id is required');
-            }
+            if (!browserInstanceId) throw new Error('Browser instance id is required');
             const { user, session } = await caller(runtime, req, browserInstanceId, 'agent.browser');
             extensionId = session.extension.id;
-            res.json(runtime.agent.registerBrowserTools(
+            res.json(runtime.agentSessions.registerBrowserTools(
                 user.handle,
                 extensionId,
                 { ...request, browserInstanceId },
@@ -144,13 +327,20 @@ export function registerAgentRoutes(router: RouterLike, runtime: AuthorityRuntim
     router.post('/agent/browser-tools/claim', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
-            const { user, session } = await caller(runtime, req);
+            await runtime.agentSessions.start();
+            const request = (req.body ?? {}) as AgentBrowserToolClaimRequest;
+            const browserInstanceId = requiredBrowserInstanceId(request.browserInstanceId);
+            const { user, session } = await caller(runtime, req, browserInstanceId, 'agent.browser');
             extensionId = session.extension.id;
-            res.json(runtime.agent.claimBrowserTool(
+            const claimed = await runtime.agentSessions.claimBrowserTool(
                 user.handle,
                 extensionId,
-                (req.body ?? {}) as AgentBrowserToolClaimRequest,
-            ));
+                { ...request, browserInstanceId },
+            );
+            res.json({
+                sessionId: claimed?.sessionId ?? null,
+                invocation: claimed ? presentAgentSessionInvocation(claimed.invocation) : null,
+            });
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
@@ -159,146 +349,124 @@ export function registerAgentRoutes(router: RouterLike, runtime: AuthorityRuntim
     router.post('/agent/browser-tools/result', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
-            const { user, session } = await caller(runtime, req);
+            await runtime.agentSessions.start();
+            const request = (req.body ?? {}) as AgentToolResultRequest;
+            const browserInstanceId = requiredBrowserInstanceId(request.browserInstanceId);
+            const { user, session } = await caller(runtime, req, browserInstanceId, 'agent.browser');
             extensionId = session.extension.id;
-            res.json(runtime.agent.submitBrowserToolResult(
+            const invocation = await runtime.agentSessions.submitBrowserToolResult(
                 user.handle,
                 extensionId,
-                (req.body ?? {}) as AgentToolResultRequest,
-            ));
+                { ...request, browserInstanceId },
+            );
+            res.json(presentAgentSessionInvocation(invocation));
         } catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
 
-    router.get('/admin/agent/profiles', (req, res) => {
-        try {
-            assertAdmin(req);
-            res.json({ profiles: runtime.agent.listProfiles() });
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+    registerAgentAdminRoutes(router, runtime, fail);
+}
 
-    router.post('/admin/agent/profiles', (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            const profile = runtime.agent.upsertProfile((req.body ?? {}) as AgentLlmProfileInput);
-            void runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Agent LLM profile saved', {
+function registerAgentAdminRoutes(
+    router: RouterLike,
+    runtime: AuthorityRuntime,
+    fail: RouteFailureHandler,
+): void {
+    router.get('/admin/agent/profiles', withAgentAdmin(runtime, fail, async (_req, res) => {
+        res.json({ profiles: runtime.agentProfiles.listProfiles() });
+    }));
+
+    router.post('/admin/agent/profiles', withAgentAdmin(runtime, fail, async (req, res, context) => {
+            const profile = runtime.agentProfiles.upsertProfile((req.body ?? {}) as AgentLlmProfileInput);
+            void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent LLM profile saved', {
                 profileId: profile.id,
                 baseUrl: profile.baseUrl,
                 model: profile.model,
             }).catch(() => undefined);
             res.json(profile);
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+    }));
 
-    router.get('/admin/agent/profiles/:profileId', (req, res) => {
-        try {
-            assertAdmin(req);
-            res.json(runtime.agent.getProfile(decodeParam(req.params?.profileId, 'profile id')));
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+    router.get('/admin/agent/profiles/:profileId', withAgentAdmin(runtime, fail, async (req, res) => {
+        res.json(runtime.agentProfiles.getProfile(decodeParam(req.params?.profileId, 'profile id')));
+    }));
 
-    router.post('/admin/agent/profiles/:profileId/delete', (req, res) => {
-        try {
-            const user = assertAdmin(req);
+    router.post('/admin/agent/profiles/:profileId/delete', withAgentAdmin(runtime, fail, async (req, res, context) => {
             const profileId = decodeParam(req.params?.profileId, 'profile id');
-            const deleted = runtime.agent.deleteProfile(profileId);
-            void runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Agent LLM profile deleted', {
+            const deleted = runtime.agentProfiles.deleteProfile(profileId);
+            void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent LLM profile deleted', {
                 profileId,
                 deleted,
             }).catch(() => undefined);
             res.json({ deleted });
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+    }));
 
-    router.get('/admin/agent/runs', async (req, res) => {
-        try {
-            assertAdmin(req);
-            await runtime.agent.start();
-            res.json(runtime.agent.listRunsPage());
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+    router.get('/admin/agent/sessions', withAgentAdmin(runtime, fail, async (_req, res) => {
+        await runtime.agentSessions.start();
+        res.json(pageAgentSessions(runtime.agentSessions.listSessions()));
+    }));
 
-    router.post('/admin/agent/runs/list', async (req, res) => {
-        try {
-            assertAdmin(req);
-            await runtime.agent.start();
-            res.json(runtime.agent.listRunsPage((req.body ?? {}) as AgentRunListRequest));
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+    router.post('/admin/agent/sessions/list', withAgentAdmin(runtime, fail, async (req, res) => {
+            await runtime.agentSessions.start();
+            res.json(pageAgentSessions(
+                runtime.agentSessions.listSessions(),
+                (req.body ?? {}) as AgentSessionListRequest,
+            ));
+    }));
 
-    router.post('/admin/agent/runs/prune', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            await runtime.agent.start();
-            const request = (req.body ?? {}) as AgentRunPruneRequest;
-            const result = runtime.agent.pruneTerminalRuns(request.retainLatest);
-            void runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Terminal Agent runs pruned', {
-                deletedRuns: result.deletedRuns,
-                reclaimedBytes: result.reclaimedBytes,
-                retainLatest: request.retainLatest,
+    router.get('/admin/agent/sessions/:sessionId', withAgentAdmin(runtime, fail, async (req, res) => {
+        await runtime.agentSessions.start();
+        res.json(presentAgentSession(await runtime.agentSessions.getSession(sessionId(req))));
+    }));
+
+    router.post('/admin/agent/sessions/:sessionId/runs/:runId/cancel', withAgentAdmin(runtime, fail, async (req, res, context) => {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const run = runId(req);
+            const snapshot = await runtime.agentSessions.cancelRun(id, run);
+            void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent session run cancelled by admin', {
+                sessionId: id,
+                runId: run,
             }).catch(() => undefined);
-            res.json(result);
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+            res.json(presentAgentSession(snapshot));
+    }));
 
-    router.get('/admin/agent/runs/:runId', async (req, res) => {
-        try {
-            assertAdmin(req);
-            await runtime.agent.start();
-            res.json(runtime.agent.getRun(runId(req)));
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-
-    router.post('/admin/agent/runs/:runId/cancel', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            await runtime.agent.start();
-            const id = runId(req);
-            const run = runtime.agent.cancelRun(id);
-            void runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Agent run cancelled by admin', {
-                runId: id,
-            }).catch(() => undefined);
-            res.json(run);
-        } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-
-    router.post('/admin/agent/runs/:runId/approvals/:approvalId/resolve', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            await runtime.agent.start();
-            const id = runId(req);
+    router.post('/admin/agent/sessions/:sessionId/approvals/:approvalId/resolve', withAgentAdmin(runtime, fail, async (req, res, context) => {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
             const approvalId = decodeParam(req.params?.approvalId, 'approval id');
             const request = (req.body ?? {}) as AgentApprovalResolveRequest;
-            const approval = runtime.agent.resolveApproval(id, approvalId, request, user.handle);
-            void runtime.audit.logUsage(user, AUTHORITY_SDK_EXTENSION_ID, 'Agent approval resolved', {
-                runId: id,
+            const decision = requiredApprovalDecision(request.decision);
+            const snapshot = await runtime.agentSessions.resolveApproval(id, approvalId, decision, context.user.handle);
+            void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent approval resolved', {
+                sessionId: id,
                 approvalId,
-                decision: request.decision,
+                decision,
             }).catch(() => undefined);
-            res.json(approval);
+            res.json(presentAgentSession(snapshot));
+    }));
+}
+
+function withAgentAdmin(
+    runtime: AuthorityRuntime,
+    fail: RouteFailureHandler,
+    handler: (
+        req: AuthorityRequest,
+        res: AuthorityResponse,
+        context: { user: UserContext; session: SessionRecord },
+    ) => void | Promise<void>,
+): (req: AuthorityRequest, res: AuthorityResponse) => Promise<void> {
+    return async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            if (!context.user.isAdmin) throw new Error('Forbidden');
+            await handler(req, res, context);
         } catch (error) {
-            fail(runtime, req, res, AUTHORITY_SDK_EXTENSION_ID, error);
+            fail(runtime, req, res, extensionId, error);
         }
-    });
+    };
 }
 
 async function caller(
@@ -316,29 +484,83 @@ async function caller(
     return { user, session };
 }
 
-function assertAdmin(req: AuthorityRequest): UserContext {
-    const user = getUserContext(req);
-    if (!user.isAdmin) {
-        throw new Error('Forbidden');
-    }
-    return user;
+async function callerForWorkspace(
+    runtime: AuthorityRuntime,
+    req: AuthorityRequest,
+    workspaceId: string,
+): Promise<{ user: UserContext; session: SessionRecord }> {
+    const context = await caller(runtime, req);
+    await authorizeWorkspace(runtime, context, workspaceId);
+    return context;
 }
 
-function ownedRun(
+async function authorizeWorkspace(
+    runtime: AuthorityRuntime,
+    context: { user: UserContext; session: SessionRecord },
+    workspaceId: string,
+): Promise<void> {
+    runtime.workspaceHistory.assertWorkspaceAccess(workspaceId, context.user.handle, context.user.isAdmin);
+    if (!await runtime.permissions.authorize(context.user, context.session, {
+        resource: 'agent.run',
+        target: workspaceId,
+    })) {
+        throw new Error(`Permission not granted: agent.run for ${workspaceId}`);
+    }
+}
+
+async function ownedSession(
     runtime: AuthorityRuntime,
     id: string,
-    userHandle: string,
-    extensionId: string,
-): ReturnType<AuthorityRuntime['agent']['getRun']> {
-    const detail = runtime.agent.getRun(id);
-    if (detail.run.callerUserHandle !== userHandle || detail.run.callerExtensionId !== extensionId) {
-        throw new Error(`Agent run not found: ${id}`);
+    context: { user: UserContext; session: SessionRecord },
+    attachContext = true,
+): Promise<AgentSessionSnapshot> {
+    const snapshot = await runtime.agentSessions.getSession(id);
+    if (snapshot.session.callerUserHandle !== context.user.handle
+        || snapshot.session.callerExtensionId !== context.session.extension.id) {
+        throw new Error(`Agent session not found: ${id}`);
     }
-    const result = structuredClone(detail);
-    for (const invocation of result.invocations) {
-        delete invocation.claimId;
+    if (attachContext) {
+        runtime.agentSessions.attachContext(id, context.session.extension.id, context);
     }
-    return result;
+    return snapshot;
+}
+
+function requiredWorkspaceId(value: unknown): string {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('Agent workspaceId is required');
+    return value.trim();
+}
+
+function requiredBrowserInstanceId(value: unknown): string {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('Browser instance id is required');
+    return value.trim();
+}
+
+function requiredAgentStreamTicket(value: unknown): string {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(value)) {
+        throw new Error('Agent session stream ticket is invalid or expired');
+    }
+    return value;
+}
+
+function pruneAgentStreamTickets(tickets: Map<string, AgentStreamTicket>): void {
+    const now = Date.now();
+    for (const [ticket, entry] of tickets) {
+        if (entry.expiresAt <= now) {
+            clearTimeout(entry.expiryTimer);
+            tickets.delete(ticket);
+        }
+    }
+}
+
+function requiredApprovalDecision(value: unknown): 'approve' | 'deny' {
+    if (value !== 'approve' && value !== 'deny') {
+        throw new Error('Agent approval decision must be approve or deny');
+    }
+    return value;
+}
+
+function sessionId(req: AuthorityRequest): string {
+    return decodeParam(req.params?.sessionId, 'session id');
 }
 
 function runId(req: AuthorityRequest): string {
@@ -346,11 +568,12 @@ function runId(req: AuthorityRequest): string {
 }
 
 function decodeParam(value: string | undefined, label: string): string {
-    try {
-        const result = decodeURIComponent(value ?? '');
-        if (!result) throw new Error();
-        return result;
-    } catch {
-        throw new Error(`Invalid ${label}`);
-    }
+    if (typeof value !== 'string' || !value) throw new Error(`Invalid ${label}`);
+    // Express has already decoded route parameters once. Decoding again would
+    // turn a literal "%2F" in an id into a different resource name.
+    return value;
+}
+
+function writeSse(res: AuthorityResponse, event: string, data: unknown): void {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }

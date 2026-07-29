@@ -47,6 +47,7 @@ export interface AuthorityResponse {
     setHeader(name: string, value: string): void;
     write(chunk: string): void;
     end(chunk?: string): void;
+    on?(event: string, listener: () => void): void;
     sendStatus?(code: number): void;
 }
 

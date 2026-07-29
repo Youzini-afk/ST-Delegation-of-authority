@@ -43,7 +43,7 @@ describe('registerRoutes', () => {
             '/modules/:moduleId',
             '/modules/:moduleId/record',
             '/agent/tools',
-            '/agent/runs',
+            '/agent/sessions',
             '/admin/agent/profiles',
         ]));
         expect(posts).toEqual(expect.arrayContaining([
@@ -95,7 +95,7 @@ describe('registerRoutes', () => {
             '/admin/native-migration/operations/:id/rollback',
             '/admin/diagnostic-bundle/archive',
             '/admin/update',
-            '/agent/runs',
+            '/agent/sessions',
             '/agent/browser-tools/register',
         ]));
     });
@@ -138,12 +138,13 @@ describe('registerRoutes', () => {
             '/admin/agent/workspaces/:workspaceId/commits',
             '/admin/agent/workspaces/:workspaceId/diff',
             '/agent/tools',
-            '/agent/runs',
-            '/agent/runs/:runId',
+            '/agent/sessions',
+            '/agent/sessions/:sessionId',
+            '/agent/sessions/:sessionId/events',
             '/admin/agent/profiles',
             '/admin/agent/profiles/:profileId',
-            '/admin/agent/runs',
-            '/admin/agent/runs/:runId',
+            '/admin/agent/sessions',
+            '/admin/agent/sessions/:sessionId',
             '/admin/policies',
             '/admin/usage-summary',
             '/admin/import-export/operations',
@@ -244,18 +245,21 @@ describe('registerRoutes', () => {
             '/admin/agent/workspaces/:workspaceId/checkpoints',
             '/admin/agent/workspaces/:workspaceId/rollback',
             '/admin/agent/workspaces/:workspaceId/rollback/resume',
-            '/agent/runs/list',
-            '/agent/runs',
-            '/agent/runs/:runId/cancel',
+            '/agent/sessions/list',
+            '/agent/sessions',
+            '/agent/sessions/:sessionId/update',
+            '/agent/sessions/:sessionId/messages',
+            '/agent/sessions/:sessionId/runs/:runId/cancel',
+            '/agent/sessions/:sessionId/runs/:runId/resume',
+            '/agent/sessions/:sessionId/events-ticket',
             '/agent/browser-tools/register',
             '/agent/browser-tools/claim',
             '/agent/browser-tools/result',
             '/admin/agent/profiles',
             '/admin/agent/profiles/:profileId/delete',
-            '/admin/agent/runs/list',
-            '/admin/agent/runs/prune',
-            '/admin/agent/runs/:runId/cancel',
-            '/admin/agent/runs/:runId/approvals/:approvalId/resolve',
+            '/admin/agent/sessions/list',
+            '/admin/agent/sessions/:sessionId/runs/:runId/cancel',
+            '/admin/agent/sessions/:sessionId/approvals/:approvalId/resolve',
             '/admin/policies',
             '/admin/import-export/export',
             '/admin/import-export/import-transfer/init',
@@ -355,7 +359,7 @@ describe('registerRoutes', () => {
             sessions: {
                 assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/ext-a' } }),
             },
-            agent: { start: vi.fn().mockResolvedValue([]) },
+            agentSessions: { start: vi.fn().mockResolvedValue({ sessions: 0, recoveredRuns: 0, problems: [] }) },
             workspaceHistory: { assertWorkspaceAccess: vi.fn() },
             permissions: { authorize: vi.fn().mockResolvedValue(false) },
             audit: {
@@ -374,12 +378,12 @@ describe('registerRoutes', () => {
         };
         response.status.mockReturnValue(response);
 
-        await posts.get('/agent/runs')?.({
+        await posts.get('/agent/sessions')?.({
             user: {
                 profile: { handle: 'alice', admin: false },
                 directories: { root: 'C:/users/alice' },
             },
-            body: { goal: 'Inspect the workspace', workspaceId: 'workspace-a' },
+            body: { message: 'Inspect the workspace', workspaceId: 'workspace-a' },
             headers: {},
         }, response);
 
