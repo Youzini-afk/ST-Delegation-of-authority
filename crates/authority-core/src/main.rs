@@ -2965,7 +2965,8 @@ fn save_control_job_record(
         Some(value) => Some(serde_json::to_string(value).map_err(to_json_error)?),
         None => None,
     };
-    connection.execute(
+    let transaction = connection.unchecked_transaction().map_err(to_sql_error)?;
+    transaction.execute(
         "INSERT INTO authority_jobs (
             user_handle, id, extension_id, type, status, created_at, updated_at, progress, summary, error, payload, result, channel,
             started_at, finished_at, timeout_ms, idempotency_key, attempt, max_attempts, cancel_requested_at
@@ -3013,11 +3014,12 @@ fn save_control_job_record(
         ],
     ).map_err(to_sql_error)?;
     replace_job_attempt_history(
-        connection,
+        &transaction,
         user_handle,
         &job.id,
         job.attempt_history.as_ref(),
     )?;
+    transaction.commit().map_err(to_sql_error)?;
     Ok(())
 }
 
