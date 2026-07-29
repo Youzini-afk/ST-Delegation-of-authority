@@ -1,6 +1,8 @@
 import { SseBroker } from './events/sse-broker.js';
 import { AdminPackageService } from './services/admin-package-service.js';
 import { AgentHostToolService } from './services/agent-host-tools.js';
+import { AgentSessionRuntimeService } from './services/agent-session-runtime-service.js';
+import { AgentSessionStoreService } from './services/agent-session-store-service.js';
 import { AgentService } from './services/agent-service.js';
 import { AgentStoreService } from './services/agent-store-service.js';
 import { AuditService } from './services/audit-service.js';
@@ -74,6 +76,7 @@ export interface AuthorityRuntime {
     companionLoader: CompanionModuleLoaderService;
     workspaceHistory: WorkspaceHistoryService;
     agent: AgentService;
+    agentSessions: AgentSessionRuntimeService;
 }
 
 export function createAuthorityRuntime(): AuthorityRuntime {
@@ -102,10 +105,19 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
     const globalPaths = getGlobalAuthorityPaths();
     const workspaceHistory = new WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
+    const agentStore = new AgentStoreService(globalPaths.agentStateDir);
+    const agentHostTools = new AgentHostToolService(workspaceHistory);
     const agent = new AgentService(
-        new AgentStoreService(globalPaths.agentStateDir),
+        agentStore,
         workspaceHistory,
-        new AgentHostToolService(workspaceHistory),
+        agentHostTools,
+        { moduleHost: modules },
+    );
+    const agentSessions = new AgentSessionRuntimeService(
+        new AgentSessionStoreService(globalPaths.agentStateDir),
+        agentStore,
+        workspaceHistory,
+        agentHostTools,
         { moduleHost: modules },
     );
 
@@ -135,5 +147,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         companionLoader,
         workspaceHistory,
         agent,
+        agentSessions,
     };
 }

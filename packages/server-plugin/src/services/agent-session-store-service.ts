@@ -594,7 +594,11 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
             requiredIdentifier(value.stepId, 'Agent step id');
             requiredIdentifier(value.generationId, 'Agent generation id');
             enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'interrupted', 'timed_out'], 'Agent generation outcome');
-            if (typeof value.responseStarted !== 'boolean') throw new Error('Agent generation responseStarted must be boolean');
+            enumValue(
+                value.providerRequestState,
+                ['not_sent', 'sent_or_unknown', 'response_received'],
+                'Agent provider request state',
+            );
             optionalIdentifier(value.providerRequestId, 'Agent provider request id');
             optionalNullableText(value.finishReason, 'Agent generation finish reason', 1_000);
             optionalText(value.error, 'Agent generation error', 100_000);
@@ -621,6 +625,11 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
             requiredIdentifier(value.approvalId, 'Agent approval id');
             enumValue(value.decision, ['approved', 'denied', 'expired', 'cancelled'], 'Agent approval decision');
             optionalText(value.resolvedByUserHandle, 'Agent approval resolver', 200);
+            return;
+        case 'tool.waiting':
+            requiredIdentifier(value.invocationId, 'Agent invocation id');
+            enumValue(value.reason, ['browser'], 'Agent tool wait reason');
+            isoTimestamp(value.deadlineAt, 'Agent tool wait deadline');
             return;
         case 'tool.started':
             requiredIdentifier(value.invocationId, 'Agent invocation id');

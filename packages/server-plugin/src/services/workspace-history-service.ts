@@ -125,6 +125,12 @@ export interface WorkspaceMutationResult<T> {
     after: WorkspaceCheckpointResponse;
 }
 
+export interface WorkspaceMutationHooks {
+    beforeCheckpoint?: (checkpoint: WorkspaceCheckpointResponse) => Promise<void> | void;
+    afterCheckpoint?: (checkpoint: WorkspaceCheckpointResponse) => Promise<void> | void;
+    failureCheckpoint?: (checkpoint: WorkspaceCheckpointResponse) => Promise<void> | void;
+}
+
 export function resolveWorkspaceHistoryStore(dataRoot: string): string {
     return path.resolve(dataRoot, '_authority-global', 'authority', 'state', 'agent-workspaces');
 }
@@ -244,29 +250,42 @@ export class WorkspaceHistoryService {
         request: WorkspaceMutationRequest,
         actor: WorkspaceCommitActor,
         mutate: () => Promise<T> | T,
+        hooks: WorkspaceMutationHooks = {},
     ): Promise<WorkspaceMutationResult<T>> {
         return await this.withLock(`workspace-${workspaceId}`, async () => {
             this.assertNoPendingRollback(workspaceId);
             const workspace = this.getStoredWorkspace(workspaceId);
             this.recoverRefJournal(workspace);
             const { beforeMessage, afterMessage, failureMessage, ...checkpoint } = request;
-            const before = this.checkpointLocked(workspace, { ...checkpoint, message: beforeMessage }, actor);
+            const before = this.checkpointLocked(workspace, {
+                ...checkpoint,
+                message: beforeMessage,
+                metadata: { ...checkpoint.metadata, mutationPhase: 'before' },
+            }, actor);
+            await hooks.beforeCheckpoint?.(before);
+            let value: T;
             try {
-                const value = await mutate();
-                const after = this.checkpointLocked(workspace, { ...checkpoint, message: afterMessage }, actor);
-                return { value, before, after };
+                value = await mutate();
             } catch (error) {
                 try {
-                    this.checkpointLocked(workspace, {
+                    const failure = this.checkpointLocked(workspace, {
                         ...checkpoint,
                         message: failureMessage ?? `${afterMessage} (failed)`,
-                        metadata: { ...checkpoint.metadata, mutationFailed: true },
+                        metadata: { ...checkpoint.metadata, mutationFailed: true, mutationPhase: 'failure' },
                     }, actor);
+                    await hooks.failureCheckpoint?.(failure);
                 } catch (checkpointError) {
                     throw new AggregateError([error, checkpointError], 'Workspace mutation and failure checkpoint both failed');
                 }
                 throw error;
             }
+            const after = this.checkpointLocked(workspace, {
+                ...checkpoint,
+                message: afterMessage,
+                metadata: { ...checkpoint.metadata, mutationPhase: 'after' },
+            }, actor);
+            await hooks.afterCheckpoint?.(after);
+            return { value, before, after };
         });
     }
 
@@ -284,6 +303,27 @@ export class WorkspaceHistoryService {
             nextId = commit.parents[0] ?? null;
         }
         return commits;
+    }
+
+    findCommitsForToolCall(workspaceId: string, runId: string, toolCallId: string): WorkspaceCommitObject[] {
+        const workspace = this.getStoredWorkspace(workspaceId);
+        const ref = this.readRef(workspace);
+        const matches: WorkspaceCommitObject[] = [];
+        const phases = new Set<string>();
+        const visited = new Set<string>();
+        let nextId = ref.head;
+        while (nextId && !(phases.has('before') && (phases.has('after') || phases.has('failure')))) {
+            if (visited.has(nextId)) throw new Error(`Workspace commit cycle detected: ${nextId}`);
+            visited.add(nextId);
+            const commit = this.readCommit(nextId, workspace.id);
+            if (commit.runId === runId && commit.toolCallId === toolCallId) {
+                matches.push(commit);
+                const phase = commit.metadata?.mutationPhase;
+                if (phase === 'before' || phase === 'after' || phase === 'failure') phases.add(phase);
+            }
+            nextId = commit.parents[0] ?? null;
+        }
+        return matches;
     }
 
     diff(workspaceId: string, fromCommitId: string | null, toCommitId: string | null): WorkspaceDiffResponse {

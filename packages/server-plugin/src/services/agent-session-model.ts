@@ -11,6 +11,7 @@ export type AgentSessionRunStatus =
     | 'queued'
     | 'running'
     | 'waiting_approval'
+    | 'waiting_tool'
     | 'cancelling'
     | 'suspended'
     | 'completed'
@@ -18,6 +19,8 @@ export type AgentSessionRunStatus =
     | 'cancelled';
 
 export type AgentSessionQueueKind = 'steer' | 'follow_up' | 'next_run';
+
+export type AgentProviderRequestState = 'not_sent' | 'sent_or_unknown' | 'response_received';
 
 export interface AgentSessionDefinition {
     id: string;
@@ -128,7 +131,7 @@ export interface AgentSessionGenerationState {
     createdAt: string;
     updatedAt: string;
     finishedAt?: string;
-    responseStarted: boolean;
+    providerRequestState: AgentProviderRequestState;
     providerRequestId?: string;
     finishReason?: string | null;
     usage?: unknown;
@@ -357,7 +360,7 @@ export interface AgentSessionGenerationFinishedEntry extends AgentSessionEntryBa
     stepId: string;
     generationId: string;
     outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'timed_out';
-    responseStarted: boolean;
+    providerRequestState: AgentProviderRequestState;
     providerRequestId?: string;
     finishReason?: string | null;
     usage?: unknown;
@@ -402,6 +405,13 @@ export interface AgentSessionToolStartedEntry extends AgentSessionEntryBase {
     idempotencyKey?: string;
 }
 
+export interface AgentSessionToolWaitingEntry extends AgentSessionEntryBase {
+    type: 'tool.waiting';
+    invocationId: string;
+    reason: 'browser';
+    deadlineAt: string;
+}
+
 export interface AgentSessionToolFinishedEntry extends AgentSessionEntryBase {
     type: 'tool.finished';
     invocationId: string;
@@ -440,6 +450,7 @@ export type AgentSessionJournalEntry =
     | AgentSessionToolRequestedEntry
     | AgentSessionApprovalRequestedEntry
     | AgentSessionApprovalResolvedEntry
+    | AgentSessionToolWaitingEntry
     | AgentSessionToolStartedEntry
     | AgentSessionToolFinishedEntry
     | AgentSessionWorkspaceCheckpointEntry;
@@ -748,14 +759,14 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             return;
         }
         case 'run.cancel_requested': {
-            const run = requireRunStatus(projection, entry.runId, ['queued', 'running', 'waiting_approval', 'suspended']);
+            const run = requireRunStatus(projection, entry.runId, ['queued', 'running', 'waiting_approval', 'waiting_tool', 'suspended']);
             run.status = 'cancelling';
             run.cancelRequestedAt = entry.timestamp;
             run.updatedAt = entry.timestamp;
             return;
         }
         case 'run.finished': {
-            const run = requireRunStatus(projection, entry.runId, ['queued', 'running', 'waiting_approval', 'cancelling', 'suspended']);
+            const run = requireRunStatus(projection, entry.runId, ['queued', 'running', 'waiting_approval', 'waiting_tool', 'cancelling', 'suspended']);
             if (activeStep(projection, entry.runId)) throw new Error(`Cannot finish Agent run with an active step: ${entry.runId}`);
             run.status = entry.outcome;
             run.finishedAt = entry.timestamp;
@@ -814,7 +825,7 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
                 status: 'running',
                 createdAt: entry.timestamp,
                 updatedAt: entry.timestamp,
-                responseStarted: false,
+                providerRequestState: 'not_sent',
             });
             return;
         }
@@ -824,7 +835,7 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
                 throw new Error(`Agent generation identity mismatch: ${entry.generationId}`);
             }
             generation.status = entry.outcome;
-            generation.responseStarted = entry.responseStarted;
+            generation.providerRequestState = entry.providerRequestState;
             generation.finishedAt = entry.timestamp;
             generation.updatedAt = entry.timestamp;
             if (entry.providerRequestId !== undefined) generation.providerRequestId = entry.providerRequestId;
@@ -889,15 +900,34 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             const invocation = requireInvocationStatus(projection, approval.invocationId, ['waiting_approval']);
             invocation.status = entry.decision === 'approved' ? 'pending' : 'cancelled';
             invocation.updatedAt = entry.timestamp;
-            const run = requireRunStatus(projection, approval.runId, ['waiting_approval']);
-            if (![...projection.approvals.values()].some(item => item.runId === run.id && item.status === 'pending')) {
+            const run = requireRunStatus(projection, approval.runId, ['waiting_approval', 'cancelling']);
+            if (run.status === 'waiting_approval'
+                && ![...projection.approvals.values()].some(item => item.runId === run.id && item.status === 'pending')) {
                 run.status = 'running';
                 run.updatedAt = entry.timestamp;
             }
             return;
         }
+        case 'tool.waiting': {
+            const invocation = requireInvocationStatus(projection, entry.invocationId, ['pending']);
+            if (invocation.execution !== 'browser' || entry.reason !== 'browser') {
+                throw new Error(`Only browser tools may wait for an external executor: ${entry.invocationId}`);
+            }
+            invocation.deadlineAt = entry.deadlineAt;
+            invocation.updatedAt = entry.timestamp;
+            const run = requireRunStatus(projection, invocation.runId, ['running']);
+            run.status = 'waiting_tool';
+            run.updatedAt = entry.timestamp;
+            return;
+        }
         case 'tool.started': {
             const invocation = requireInvocationStatus(projection, entry.invocationId, ['pending']);
+            const run = requireRun(projection, invocation.runId);
+            if (invocation.execution === 'browser') {
+                if (run.status !== 'waiting_tool') throw new Error(`Browser tool run is not waiting: ${entry.invocationId}`);
+            } else if (run.status !== 'running') {
+                throw new Error(`Agent tool run is not active: ${entry.invocationId}`);
+            }
             invocation.status = 'claimed';
             invocation.startedAt = entry.timestamp;
             invocation.updatedAt = entry.timestamp;
@@ -912,6 +942,11 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             invocation.updatedAt = entry.timestamp;
             if (entry.result !== undefined) invocation.result = structuredClone(entry.result);
             if (entry.error !== undefined) invocation.error = entry.error;
+            const run = requireRun(projection, invocation.runId);
+            if (run.status === 'waiting_tool') {
+                run.status = 'running';
+                run.updatedAt = entry.timestamp;
+            }
             return;
         }
         case 'workspace.checkpointed': {

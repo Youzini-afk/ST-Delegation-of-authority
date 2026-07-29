@@ -85,6 +85,29 @@ describe('WorkspaceHistoryService', () => {
         expect((await fixture.service.status('test')).dirty).toBe(false);
     });
 
+    it('finds the durable checkpoint pair for a tool call beyond unrelated newer commits', async () => {
+        const fixture = await createFixture();
+        write(fixture.root, 'state.txt', 'before');
+        const mutation = await fixture.service.runMutation('test', {
+            beforeMessage: 'before indexed tool',
+            afterMessage: 'after indexed tool',
+            paths: ['state.txt'],
+            runId: 'run-indexed',
+            toolCallId: 'call-indexed',
+        }, { kind: 'agent', id: 'run-indexed' }, () => {
+            write(fixture.root, 'state.txt', 'after');
+        });
+        await fixture.service.checkpoint('test', {
+            message: 'newer unrelated commit',
+            paths: ['state.txt'],
+            runId: 'another-run',
+            toolCallId: 'another-call',
+        }, { kind: 'agent', id: 'another-run' });
+
+        expect(fixture.service.findCommitsForToolCall('test', 'run-indexed', 'call-indexed').map(commit => commit.id))
+            .toEqual([mutation.after.commit.id, mutation.before.commit.id]);
+    });
+
     it('tracks only requested paths and builds deduplicated history', async () => {
         const fixture = await createFixture();
         write(fixture.root, 'tracked.txt', 'one');

@@ -43,6 +43,13 @@ export async function init(router: any): Promise<void> {
     void runtime.agent.start().catch(error => {
         console.warn(`[authority] Agent service startup failed: ${error instanceof Error ? error.message : String(error)}`);
     });
+    void runtime.agentSessions.start().then(result => {
+        for (const problem of result.problems) {
+            console.warn(`[authority] Agent session recovery skipped ${problem.sessionId}: ${problem.error}`);
+        }
+    }).catch(error => {
+        console.warn(`[authority] Agent session runtime startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     void runtime.core.start();
 }
 
@@ -53,12 +60,16 @@ export async function exit(): Promise<void> {
 
     const current = runtime;
     try {
-        await current.agent.stop();
+        await current.agentSessions.stop();
     } finally {
         try {
-            await current.core.stop();
+            await current.agent.stop();
         } finally {
-            runtime = null;
+            try {
+                await current.core.stop();
+            } finally {
+                runtime = null;
+            }
         }
     }
 }

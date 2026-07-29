@@ -27,6 +27,7 @@ export interface AgentLlmCompletionResponse {
     message: AgentRunMessage;
     finishReason: string | null;
     usage?: unknown;
+    providerRequestId?: string;
 }
 
 export type AgentCompletionRequester = (
@@ -76,7 +77,7 @@ export class AgentLlmClient {
             if (!response.ok) {
                 throw new Error(`LLM request failed (${response.status}): ${redact(text.slice(0, 4_000), profile.apiKey)}`);
             }
-            return parseCompletion(text);
+            return parseCompletion(text, response.headers.get('x-request-id'));
         } catch (error) {
             if (controller.signal.aborted && !request.signal.aborted) {
                 throw controller.signal.reason instanceof Error
@@ -153,7 +154,7 @@ function toOpenAiMessage(message: AgentRunMessage): Record<string, unknown> {
     return { role: message.role, content: message.content ?? '' };
 }
 
-function parseCompletion(text: string): AgentLlmCompletionResponse {
+function parseCompletion(text: string, responseRequestId: string | null): AgentLlmCompletionResponse {
     let payload: any;
     try {
         payload = JSON.parse(text);
@@ -173,6 +174,7 @@ function parseCompletion(text: string): AgentLlmCompletionResponse {
     if ((content === null || !content.trim()) && !toolCalls?.length) {
         throw new Error('LLM assistant message was empty');
     }
+    const requestId = providerRequestId(responseRequestId, payload?.id);
     return {
         message: {
             role: 'assistant',
@@ -181,7 +183,13 @@ function parseCompletion(text: string): AgentLlmCompletionResponse {
         },
         finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
         ...(payload.usage === undefined ? {} : { usage: boundedUsage(payload.usage) }),
+        ...(requestId ? { providerRequestId: requestId } : {}),
     };
+}
+
+function providerRequestId(headerValue: string | null, payloadValue: unknown): string | undefined {
+    const value = headerValue || (typeof payloadValue === 'string' ? payloadValue : '');
+    return value && value.length <= 500 ? value : undefined;
 }
 
 function parseToolCalls(value: unknown): NonNullable<AgentRunMessage['toolCalls']> {

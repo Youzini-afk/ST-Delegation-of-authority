@@ -44,7 +44,7 @@ describe('AgentSessionStoreService', () => {
             stepId: 'step-1',
             generationId: 'generation-1',
             outcome: 'completed',
-            responseStarted: true,
+            providerRequestState: 'response_received',
             finishReason: 'tool_calls',
             usage: { prompt_tokens: 10, completion_tokens: 4 },
         });
@@ -123,7 +123,7 @@ describe('AgentSessionStoreService', () => {
             stepId: 'step-2',
             generationId: 'generation-2',
             outcome: 'completed',
-            responseStarted: true,
+            providerRequestState: 'response_received',
             finishReason: 'stop',
         });
         append(writer, {

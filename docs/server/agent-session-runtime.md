@@ -84,6 +84,14 @@ hash 使用递归排序键名的 canonical JSON 计算。完整记录损坏、�
 
 会话级单写者保证执行因果顺序。不同 Session 可以并行运行；修改同一工作区时仍必须经过 `WorkspaceHistoryService` 的跨进程工作区锁。
 
+运行时按职责拆分，避免把产品命令、模型循环和副作用恢复重新揉成一个任务服务：
+
+- Runtime coordinator 持有 Session actor、调度、公平并发、计时器和生命周期门闩。
+- Run executor 只驱动 Generation、工具批次、steer 与 follow-up 边界。
+- Tool executor 是唯一可跨越外部副作用边界的组件；它必须先看到 durable intent，并在同一 actor 内再次确认 Run 所有权。
+- Recovery service 只核对已落盘事实并保守收束，不自动重发模型请求或工具调用。
+- Journal service 集中可复用的审批、取消和工具结果协议；它不打开 writer，也不调度工作。
+
 ## 5. 有效前缀与外部副作用
 
 任意已落盘前缀都必须可解释。对外部效果采用“意图先于效果、结果后于效果”：
@@ -94,14 +102,14 @@ approval.requested / approval.resolved（如需要）
 workspace.checkpointed(before)（工作区变更时）
 tool.started
 <执行外部效果>
-tool.finished
 workspace.checkpointed(after|failure)
+tool.finished
 conversation.message(role=tool)
 ```
 
 进程可能在任意两项之间退出。恢复器按已有证据裁决：
 
-- 仅有 requested、尚未 started：没有开始副作用，可以重新调度或取消。
+- 仅有 requested、尚未 started：没有开始工具副作用；当前恢复策略会取消该 Invocation、暂停 Run，并要求显式恢复，不自动重放。
 - started 后缺少 finished：不得假定失败，也不得盲目重试。
 - browser/module/终端或其他不可证明幂等的调用：标为 `outcome_unknown` 并暂停。
 - 工作区变更：结合 before/after/failure commit 与当前 workspace head 核对。
