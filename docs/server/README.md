@@ -18,7 +18,7 @@
 - **内部 core 执行层**：Rust `authority-core`
 - **内部 core 绑定地址**：插件运行时为 `127.0.0.1:<ephemeral-port>`
 - **Session Header**：`x-authority-session-token`
-- **Session Query**：`authoritySessionToken`
+- **SSE 认证**：先以 Session Header 换取 30 秒单次 ticket，URL 不携带长期 session token
 - **Core Header**：`x-authority-core-token`
 - **内置后台任务**：`delay`、`sql.backup`、`trivium.flush`、`fs.import-jsonl`
 - **控制面诊断种类**：`permission`、`usage`、`warning`、`error`
@@ -55,7 +55,10 @@
   - 面向编程 AI 的接入规则、常见修改任务、反模式和检查清单
 
 - `docs/server/agent-platform.md`
-  - Agent Runtime、IDE、插件工具协议、工作区版本树与独立恢复合同
+  - Agent Runtime、持久 Session、IDE、插件工具协议、工作区版本树与独立恢复合同
+
+- `docs/server/agent-session-runtime.md`
+  - Session 日志、投影、单写者、输入队列与副作用恢复不变量
 
 ## 适合先读哪一篇
 
@@ -83,6 +86,10 @@
 
 - **想让编程 AI 快速安全地改这个项目**
   - 先读 `ai-integration-guide.md`
+
+- **想修改 Agent 会话、执行循环或恢复语义**
+  - 先读 `agent-session-runtime.md`
+  - 再读 `agent-platform.md`
 
 ## 常用验证命令
 

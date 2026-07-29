@@ -13,7 +13,7 @@
 - **公开 API Base**：`/api/plugins/authority`
 - **默认内容类型**：JSON
 - **会话 Header**：`x-authority-session-token`
-- **会话 Query**：`authoritySessionToken`
+- **SSE ticket**：使用会话 Header 向 ticket 端点换取；长期 session token 不进入 URL
 - **错误格式**：结构化 `AuthorityErrorPayload`，基础形态为 `{ "error": "...", "code": "...", "category": "...", "details": ... }`
 
 ## 2. 认证与会话
@@ -58,7 +58,7 @@
 - `/probe`
 - 管理员接口（依赖当前 ST 用户 admin 身份）
 
-之外，绝大多数能力接口都需要有效 session。
+之外，绝大多数能力接口都需要有效 session。`/admin/agent/*` 是例外中的例外：它既要求有效 Authority session，也要求当前 ST 用户是 admin。
 
 ## 3. 路由分组总览
 
@@ -166,9 +166,27 @@
 - `GET /jobs/:id`
 - `POST /jobs/:id/cancel`
 - `POST /jobs/:id/requeue`
+- `POST /events/ticket`
 - `GET /events/stream`
 
-## 3.8 管理员接口
+## 3.8 Agent
+
+- `GET /agent/tools`
+- `GET /agent/sessions`
+- `POST /agent/sessions/list`
+- `POST /agent/sessions`
+- `GET /agent/sessions/:sessionId`
+- `POST /agent/sessions/:sessionId/update`
+- `POST /agent/sessions/:sessionId/messages`
+- `POST /agent/sessions/:sessionId/runs/:runId/cancel`
+- `POST /agent/sessions/:sessionId/runs/:runId/resume`
+- `POST /agent/sessions/:sessionId/events-ticket`
+- `GET /agent/sessions/:sessionId/events`
+- `POST /agent/browser-tools/register`
+- `POST /agent/browser-tools/claim`
+- `POST /agent/browser-tools/result`
+
+## 3.9 管理员接口
 
 - `GET /admin/policies`
 - `POST /admin/policies`
@@ -182,6 +200,9 @@
 - `POST /admin/import-export/operations/:id/open-download`
 - `GET /admin/diagnostic-bundle`
 - `POST /admin/diagnostic-bundle/archive`
+- `/admin/agent/profiles*`
+- `/admin/agent/sessions*`
+- `/admin/agent/workspaces*`
 
 ## 4. 接口语义详解
 
@@ -375,7 +396,9 @@
 | Trivium | `/trivium/*` | `trivium.private` | 数据库名 |
 | HTTP fetch | `/http/fetch` | `http.fetch` | URL hostname |
 | Jobs | `/jobs/*` | `jobs.background` | `job.type` |
-| SSE 订阅 | `/events/stream` | `events.stream` | channel |
+| SSE 订阅 | `/events/ticket` + `/events/stream` | `events.stream` | channel |
+| Agent Session | `/agent/sessions*` | `agent.run` | workspace ID |
+| Agent 浏览器工具 | `/agent/browser-tools/*` | `agent.browser` | browser instance ID |
 
 ## 6. KV / Blob API
 
@@ -612,21 +635,45 @@ https://api.openai.com/v1/...
 
 ## 12. SSE 事件流
 
+- `POST /events/ticket`
 - `GET /events/stream`
 
 特点：
 
 - 使用 SSE
-- 需要 session
+- ticket 端点要求 `x-authority-session-token`
 - 默认 channel：`extension:<extensionId>`
-- 也可通过 query 传入 `channel`
-- Query 中可带 `authoritySessionToken`
+- ticket 请求体可指定 `channel`
+- 返回的 ticket 绑定用户、Authority session 与 channel，默认 30 秒过期且只能消费一次
+- EventSource URL 只传 `ticket`，不接受长期 session token
 
 服务端行为：
 
 - 建立连接后先发一个 `authority.connected`
 - 然后通过控制面事件轮询不断推送事件
 - 底层使用带 cursor/page 元数据的 control events poll，但这些元数据不会直接暴露给浏览器 SSE 消费者
+- SDK 断线后会关闭旧 EventSource、重新申请 ticket，再建立连接
+
+## 12.1 Agent 持久会话
+
+Agent 的公共产品对象是 Session。Run 是一条输入触发后、Agent 再次空闲前的从属执行记录；Step 与 Generation 仅用于诊断和恢复。
+
+主要请求：
+
+- `POST /agent/sessions`：创建 Session；可同时携带首条 `message`
+- `POST /agent/sessions/list`：按 cursor 分页列出当前 user + extension 的 Session
+- `GET /agent/sessions/:sessionId`：读取权威 `AgentSessionSnapshot`
+- `POST /agent/sessions/:sessionId/update`：更新标题、profile、模式、工具、步数或归档状态
+- `POST /agent/sessions/:sessionId/messages`：发送消息；返回 snapshot、`runId` 或排队消息 ID
+- `POST .../runs/:runId/cancel|resume`：取消或显式恢复 Session 内的 Run
+
+消息的 `delivery` 可为 `auto`、`steer` 或 `follow_up`。Agent 忙碌时，输入会先作为执行事实落盘，直到安全边界才进入活动对话分支。
+
+Session 实时流同样使用短时单次 ticket：先调用 `POST /agent/sessions/:sessionId/events-ticket`，再连接 `GET /agent/sessions/:sessionId/events?ticket=...`。每次连接先发送权威 snapshot，后续才发送 sequence 更大的事件；断线重连重新取 snapshot，因此 SSE 不是事实源。
+
+browser tool 的 register / claim / result 都要求有效 Authority session，并按 user + extension + browser instance 隔离。`agent.run:<workspaceId>` 与 `agent.browser:<browserInstanceId>` 是两个独立权限。
+
+管理员的 profile、Session 审查、审批和 workspace-history 接口位于 `/admin/agent/*`。这些路由同时验证 Authority session 与 ST admin 身份，且 profile 响应不会返回 API key 明文。
 
 ## 13. 管理员接口
 

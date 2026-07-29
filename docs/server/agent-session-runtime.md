@@ -1,6 +1,6 @@
 # Authority Agent 持久会话运行时
 
-本文定义 Authority Agent v2 的领域边界、持久化不变量与恢复语义。它替代“一个任务对应一份完整 Run JSON”的一次性任务模型，但不削弱现有权限、审批、工具和工作区版本树能力。
+本文定义 Authority Agent 当前持久会话运行时的领域边界、持久化不变量与恢复语义。系统以 Session 为产品实体，不再提供“一项任务对应一份完整 Run JSON”的公共模型，同时保留权限、审批、工具和工作区版本树能力。
 
 ## 1. 领域边界
 
@@ -146,7 +146,7 @@ event(lastSequence + 2)
 
 断线重连重新获取快照。SSE/连接只负责交付，不是事实源；断开 UI 不取消 Session 或 Run。
 
-目标工作台结构：
+工作台结构：
 
 - 左侧：Session 列表；
 - 中间：持续时间线与固定输入框；
@@ -168,10 +168,13 @@ event(lastSequence + 2)
 
 新的会话日志负责执行事实的持久与恢复，不替代工作区版本树，也不把网络、module 或 browser 副作用伪装成可由文件回退撤销。
 
-## 10. 实施顺序
+## 10. 实现映射
 
-1. 会话日志、状态投影、单写者和损坏恢复。
-2. 现有 Agent loop 迁移为 Run / Step / Generation 驱动，并接入审批、工具和工作区历史。
-3. Session API、快照和实时事件。
-4. Codex/IDE 式工作台与插件 Agent SDK。
-5. 独立恢复入口、旧 Run 归档/迁移和完整多平台 CI。
+- `AgentSessionStoreService`：日志、hash 链、单写者、损坏检测和投影加载。
+- `AgentSessionRuntimeService`：Session actor、命令入口、调度、公平并发和生命周期。
+- `AgentSessionRunExecutor`：Generation、工具批次、steer 与 follow-up 安全边界。
+- `AgentSessionToolExecutor`：durable intent 之后的唯一外部副作用入口。
+- `AgentSessionJournalService`：审批、取消、工具结果和通用日志协议。
+- `AgentSessionRecoveryService`：重启后根据持久事实保守收束，不自动重发模型或工具调用。
+
+公开 API、SDK 与工作台只消费 Session 快照和事件。历史 `agent/runs/*.json` 不属于当前事实源，运行时不会读取、迁移或删除它们，也不会为其保留旧公共 API。

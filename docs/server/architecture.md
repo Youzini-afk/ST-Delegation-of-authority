@@ -151,9 +151,11 @@ AuthoritySDK.trivium.search()
 ## 5.3 SSE 事件流
 
 ```text
-browser EventSource
-  -> GET /api/plugins/authority/events/stream
-  -> Session 校验 + events.stream 权限检查
+AuthoritySDK（携带 Session Header）
+  -> POST /api/plugins/authority/events/ticket
+  -> Session 校验 + events.stream 权限检查 + 签发单次短时 ticket
+browser EventSource（URL 只携带 ticket）
+  -> GET /api/plugins/authority/events/stream?ticket=...
   -> SseBroker.register(...)
   -> 每 500ms 调用 core.pollControlEvents(...)
   -> 将控制面事件写回 SSE
@@ -163,6 +165,7 @@ browser EventSource
 
 - 当前公开层只提供 **订阅**，没有公开的“任意事件发布”HTTP 路由
 - SSE 是基于控制面事件轮询桥接，不是纯内存广播
+- ticket 默认 30 秒过期且只能消费一次；断线重连必须重新申请
 
 ## 5.4 大对象读写与动态 inline / transfer 分流
 
@@ -289,13 +292,14 @@ Node adapter 启动 core 时会：
 给前端扩展使用：
 
 - Header：`x-authority-session-token`
-- Query：`authoritySessionToken`
+- 不接受 Query 形式的长期 session token
 
 用途：
 
 - 识别某个扩展会话
 - 将调用绑定到当前 user + extension
 - 作为公开 API 的身份凭证
+- 为 EventSource 等无法设置自定义 Header 的传输换取短时单次 ticket
 
 ## 7.2 core token
 

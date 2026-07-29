@@ -20,7 +20,7 @@ Authority 是一个 SillyTavern 服务端插件，给第三方扩展提供统一
 | HTTP 请求 | `client.http.fetch()` | 走 core 发出请求，支持大 body 分块 |
 | 后台任务 | `client.jobs.*` | 内置 delay / sql.backup / trivium.flush / fs.import-jsonl |
 | 事件流 | `client.events.subscribe()` | SSE 推送，core 管队列，Node 桥接 |
-| Agent Runtime | `client.agent.*` | 持久 Run、工作区 IDE 工具、审批、浏览器工具与可回退版本树 |
+| Agent Runtime | `client.agent.*` | 持久 Session、连续对话、工作区 IDE 工具、审批、浏览器工具与可回退版本树 |
 
 普通存储数据按用户 + 扩展隔离，扩展不能访问其他扩展的数据；Agent 只能在管理员登记并由当前用户获准访问的工作区内操作宿主文件。
 
@@ -135,21 +135,29 @@ client.events.subscribe({ channel: 'extension:third-party/your-extension' }, (ev
 
 ### Agent
 
-扩展声明 `agent.run` 后，可以在管理员已登记且当前用户获准访问的工作区内发起持久 Run；`plan` 只规划，`ask` 在副作用前审批，`auto` 按策略执行：
+扩展声明 `agent.run` 后，可以在管理员已登记且当前用户获准访问的工作区内创建持久 Session。后续消息都进入同一会话；每次消息触发的 Run 只是会话内部的执行记录。`plan` 只规划，`ask` 在副作用前审批，`auto` 按策略执行：
 
 ```js
-const run = await client.agent.createRun({
-  goal: '定位并修复插件冲突，然后运行相关测试',
+const session = await client.agent.sessions.create({
   workspaceId: 'sillytavern',
+  title: '排查插件冲突',
   mode: 'ask'
 });
 
-const detail = await client.agent.waitForCompletion(run.id, {
-  onProgress: current => console.log(current.run.status)
+const accepted = await client.agent.sessions.send(session.session.id, {
+  content: '定位并修复插件冲突，然后运行相关测试'
 });
+
+if (accepted.runId) {
+  await client.agent.sessions.waitForRun(
+    session.session.id,
+    accepted.runId,
+    { onProgress: snapshot => console.log(snapshot.refs[0]?.activeRunId) }
+  );
+}
 ```
 
-前端插件还可以通过 `client.agent.browser.*` 注册自己的领域工具。完整边界、工具模型与独立恢复命令见 [Authority Agent 平台](docs/server/agent-platform.md)。
+Agent 忙碌时的新消息可作为 steer 或 follow-up 排队；前端插件也可通过 `client.agent.browser.*` 注册自己的领域工具。完整产品边界见 [Authority Agent 平台](docs/server/agent-platform.md)，会话日志和恢复语义见 [持久会话运行时](docs/server/agent-session-runtime.md)。
 
 ---
 
@@ -182,7 +190,7 @@ Authority 内置 Security Center 控制面 UI，通过 `window.STAuthority.openS
 - **扩展详情** — 声明权限、授权记录、策略覆盖、资源占用、活动审计
 - **数据资产** — 按扩展聚合的数据库和存储视图
 - **活动与排障** — 审计（permission / usage / warning / error）、任务状态、告警
-- **Agent 工作台** — 创建 Run、实时步骤、审批、模型配置、工作区检查点与回退
+- **Agent 工作台** — Session 列表、连续时间线与输入框、实时活动、审批、模型配置、工作区检查点与回退
 - **管理员策略** — 全局默认、扩展级策略覆盖、grant 重置
 - **运维面板** — 更新、用法汇总、portable package 导入导出、诊断归档
 
@@ -271,6 +279,7 @@ npm run sync:installable && npm run check:installable
 | [docs/server/performance-benchmarks.md](docs/server/performance-benchmarks.md) | 基准测试说明 |
 | [docs/server/ai-integration-guide.md](docs/server/ai-integration-guide.md) | 编程 AI 接入规则 |
 | [docs/server/agent-platform.md](docs/server/agent-platform.md) | Agent Runtime、IDE、插件工具与独立恢复 |
+| [docs/server/agent-session-runtime.md](docs/server/agent-session-runtime.md) | Agent Session 日志、执行边界与崩溃恢复语义 |
 
 ---
 
