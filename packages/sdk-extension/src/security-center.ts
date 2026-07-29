@@ -102,9 +102,16 @@ const DEFAULT_OVERVIEW_SECTION_STATE: OverviewSectionState = {
     recentActivity: true,
 };
 const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates'];
+type CenterArea = 'agent' | 'governance' | 'system';
 
 function isValidCenterTab(value: string | undefined): value is CenterTab {
     return typeof value === 'string' && (PRIMARY_TAB_NAMES as readonly string[]).includes(value);
+}
+
+function getCenterArea(tab: CenterTab): CenterArea {
+    if (tab === 'agent') return 'agent';
+    if (tab === 'updates') return 'system';
+    return 'governance';
 }
 
 export function bootstrapSecurityCenter(): Promise<void> {
@@ -124,11 +131,13 @@ class SecurityCenterView {
     private agentClientPromise: Promise<AuthorityClient> | null = null;
     private agentPollTimer: number | null = null;
     private agentRefreshGeneration = 0;
+    private initialTabPending: boolean;
 
     constructor(
         private readonly root: HTMLElement,
         private readonly focusExtensionId?: string,
     ) {
+        this.initialTabPending = !focusExtensionId;
         this.state = {
             loading: true,
             error: null,
@@ -505,6 +514,10 @@ class SecurityCenterView {
             this.state.probe = probe;
             this.state.session = session;
             this.state.isAdmin = session.user.isAdmin;
+            if (this.initialTabPending) {
+                this.state.selectedTab = this.state.isAdmin ? 'agent' : 'overview';
+                this.initialTabPending = false;
+            }
             this.state.overviewSectionState = this.loadOverviewSectionState(session.user.handle);
             this.state.extensions = extensions;
             this.state.details = new Map(detailEntries);
@@ -1692,19 +1705,37 @@ class SecurityCenterView {
 
     private renderTabs(): void {
         const tablist = this.root.querySelector<HTMLElement>('[role="tablist"]');
-        if (!tablist) {
-            return;
-        }
-        for (const tab of tablist.querySelectorAll<HTMLElement>('[role="tab"]')) {
-            const tabName = tab.dataset.tab as CenterTab | undefined;
-            if (!tabName || !PRIMARY_TAB_NAMES.includes(tabName)) {
-                continue;
+        const activeArea = getCenterArea(this.state.selectedTab);
+
+        for (const areaTab of this.root.querySelectorAll<HTMLElement>('[data-area]')) {
+            const area = areaTab.dataset.area as CenterArea | undefined;
+            if (!area) continue;
+            const isActive = area === activeArea;
+            const requiresAdmin = area === 'agent' || area === 'system';
+            areaTab.hidden = requiresAdmin && !this.state.isAdmin;
+            areaTab.classList.toggle('authority-area-tab--active', isActive);
+            if (isActive) {
+                areaTab.setAttribute('aria-current', 'page');
+            } else {
+                areaTab.removeAttribute('aria-current');
             }
-            const isActive = tabName === this.state.selectedTab;
-            tab.classList.toggle('authority-tab--active', isActive);
-            tab.hidden = (tabName === 'agent' || tabName === 'policies' || tabName === 'updates') && !this.state.isAdmin;
-            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
-            tab.setAttribute('tabindex', isActive ? '0' : '-1');
+        }
+
+        const governanceTabs = this.root.querySelector<HTMLElement>('[data-role="governance-tabs"]');
+        if (governanceTabs) {
+            governanceTabs.hidden = activeArea !== 'governance';
+        }
+
+        if (tablist) {
+            for (const tab of tablist.querySelectorAll<HTMLElement>('[role="tab"]')) {
+                const tabName = tab.dataset.tab as CenterTab | undefined;
+                if (!tabName || !PRIMARY_TAB_NAMES.includes(tabName)) continue;
+                const isActive = tabName === this.state.selectedTab;
+                tab.classList.toggle('authority-tab--active', isActive);
+                tab.hidden = tabName === 'policies' && !this.state.isAdmin;
+                tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+                tab.setAttribute('tabindex', isActive ? '0' : '-1');
+            }
         }
     }
 

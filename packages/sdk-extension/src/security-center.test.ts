@@ -17,6 +17,13 @@ describe('Security Center tab interaction', () => {
         expect(source).toContain('(PRIMARY_TAB_NAMES as readonly string[]).includes(value)');
     });
 
+    it('maps the seven views into Agent, governance, and system areas', () => {
+        expect(source).toContain("type CenterArea = 'agent' | 'governance' | 'system'");
+        expect(source).toContain("if (tab === 'agent') return 'agent'");
+        expect(source).toContain("if (tab === 'updates') return 'system'");
+        expect(source).toContain("return 'governance'");
+    });
+
     it('validates tab values in switchTab against the primary tab whitelist', () => {
         const switchTabStart = source.indexOf('private switchTab(tab: CenterTab): void {');
         expect(switchTabStart).toBeGreaterThanOrEqual(0);
@@ -30,11 +37,15 @@ describe('Security Center tab interaction', () => {
         expect(switchTabBody).not.toContain('this.render()');
     });
 
-    it('scopes renderTabs to primary tabs inside the tablist and manages tabindex', () => {
+    it('renders the active primary area and manages the governance tablist', () => {
         const renderTabsStart = source.indexOf('private renderTabs(): void {');
         expect(renderTabsStart).toBeGreaterThanOrEqual(0);
         const renderTabsEnd = source.indexOf('private renderExtensionList(): void {', renderTabsStart);
         const renderTabsBody = source.slice(renderTabsStart, renderTabsEnd);
+        expect(renderTabsBody).toContain("'[data-area]'");
+        expect(renderTabsBody).toContain("'authority-area-tab--active'");
+        expect(renderTabsBody).toContain("'aria-current'");
+        expect(renderTabsBody).toContain("'[data-role=\"governance-tabs\"]'");
         expect(renderTabsBody).toContain('[role="tablist"]');
         expect(renderTabsBody).toContain('[role="tab"]');
         expect(renderTabsBody).toContain('PRIMARY_TAB_NAMES.includes(tabName)');
@@ -85,13 +96,16 @@ describe('Security Center tab interaction', () => {
         expect(bindEventsBody).toContain('if (isValidCenterTab(tab)) {');
     });
 
-    it('static HTML contains matching tab/tabpanel ARIA ids and data-tab values', () => {
+    it('static HTML preserves all seven panels and groups governance views below three primary areas', () => {
+        const areas = Array.from(html.matchAll(/<button[^>]*class="authority-area-tab"[^>]*data-area="([^"]+)"[^>]*>/g));
         const tabs = Array.from(html.matchAll(/<button[^>]*class="authority-tab"[^>]*data-tab="([^"]+)"[^>]*>/g));
         const panels = Array.from(html.matchAll(/<section[^>]*data-section="([^"]+)"[^>]*>/g));
+        const areaNames = areas.map(match => match[1]);
         const tabNames = tabs.map(match => match[1]);
         const panelNames = panels.map(match => match[1]);
 
-        expect(tabNames).toEqual(['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates']);
+        expect(areaNames).toEqual(['agent', 'governance', 'system']);
+        expect(tabNames).toEqual(['overview', 'detail', 'databases', 'activity', 'policies']);
         expect(panelNames).toEqual(['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates']);
 
         for (const match of tabs) {
@@ -109,10 +123,12 @@ describe('Security Center tab interaction', () => {
             expect(panelHtml).toContain(`id="security-center-tabpanel-${panelName}"`);
             expect(panelHtml).toContain(`aria-labelledby="security-center-tab-${panelName}"`);
         }
+        expect(areas[0][0]).toContain('id="security-center-tab-agent"');
+        expect(areas[2][0]).toContain('id="security-center-tab-updates"');
     });
 
     it('static HTML has role=tablist on the tab container', () => {
-        expect(html).toContain('<nav class="authority-tabs" role="tablist">');
+        expect(html).toContain('<nav class="authority-tabs" role="tablist"');
     });
 
     it('declares agent.run before the built-in workbench creates runs', () => {
