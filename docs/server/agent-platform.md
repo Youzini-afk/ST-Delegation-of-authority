@@ -1,6 +1,6 @@
 # Authority Agent 平台
 
-Authority Agent 把 DOA 建设为 SillyTavern 内的通用 Agent Runtime、IDE 工作台与插件 Agent SDK。它面向管理员登记的工作区提供代码、文件、终端、配置、插件、Authority module 和浏览器工具；BME 等领域插件仍拥有自己的数据与语义，DOA 负责持续会话、模型循环、工具编排、权限和恢复。
+Authority Agent 把 DOA 建设为 SillyTavern 内的通用 Agent Runtime、IDE 工作台与插件 Agent SDK。内置工作台默认以整个 SillyTavern 为作用域，插件启动时自动注册这一恢复边界；插件 Agent SDK 仍可显式使用其他已授权工作区。BME 等领域插件继续拥有自己的数据与语义，DOA 负责持续会话、模型循环、工具编排、权限和恢复。
 
 ## 产品模型
 
@@ -128,10 +128,11 @@ Security Center 的 Agent 页直接复用公共 Session SDK，不维护第二套
 
 - 左侧是可分页的持久 Session 列表和新会话入口；
 - 中间是连续时间线、恢复提示与固定输入框；
-- 右侧是当前活动、审批、工具轨迹、工作区、版本和模型设置；
+- 右侧只呈现当前 Session 的任务、审批、执行轨迹、变更和版本检查点；
+- 执行策略位于输入区，模型连接集中在全局设置页；工作区注册、工具目录和服务端路径不暴露给内置工作台用户；
 - Run / Step / Generation 只在活动状态与诊断详情中出现。
 
-工作台以 `third-party/st-authority-sdk` 的 Authority session 工作。即使当前用户是管理员，创建和继续会话仍经过工作区 ACL 与 `agent.run:<workspaceId>` 授权。
+工作台以 `third-party/st-authority-sdk` 的 Authority session 工作。默认作用域虽然由服务端自动注册，创建和继续会话仍经过工作区 ACL 与 `agent.run:<workspaceId>` 授权，不会因隐藏配置界面而绕过安全边界。
 
 ## 独立恢复
 

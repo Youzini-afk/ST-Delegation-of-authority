@@ -1,6 +1,7 @@
 import { AUTHORITY_PLUGIN_ID } from './constants.js';
 import { createAuthorityRuntime, type AuthorityRuntime } from './runtime.js';
 import { registerRoutes } from './routes.js';
+import { ensureDefaultAgentWorkspace } from './services/default-agent-workspace.js';
 
 /**
  * Webpack-safe runtime require for the bundled `runtime/index.cjs`. Tests
@@ -23,6 +24,14 @@ export async function init(router: any): Promise<void> {
     runtime ??= createAuthorityRuntime();
     registerRoutes(router, runtime);
     await runtime.install.bootstrap();
+    try {
+        const workspace = await ensureDefaultAgentWorkspace(runtime);
+        if (!workspace) {
+            console.warn('[authority] SillyTavern root could not be resolved; the default Agent scope was not registered.');
+        }
+    } catch (error) {
+        console.warn(`[authority] Default Agent scope registration failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     // Phase 1+2: discover companion module manifests and then load their
     // server.cjs at startup. Discovery failures must never block DOA
     // startup; they are recorded as diagnostics on the affected records and

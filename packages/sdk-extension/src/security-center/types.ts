@@ -15,7 +15,6 @@ import type {
     AgentLlmProfile,
     AgentSessionListResponse,
     AgentSessionSnapshot,
-    AgentToolDescriptor,
     AgentWorkspaceRecord,
     SqlDatabaseRecord,
     TriviumDatabaseRecord,
@@ -117,14 +116,14 @@ export interface AgentWorkbenchState {
     busy: boolean;
     error: string | null;
     profiles: AgentLlmProfile[];
-    tools: AgentToolDescriptor[];
     workspaces: AgentWorkspaceRecord[];
     sessions: AgentSessionListResponse;
     selectedProfileId: string | null;
+    defaultWorkspaceId: string | null;
     selectedWorkspaceId: string | null;
     selectedSession: AgentSessionSnapshot | null;
     creatingSession: boolean;
-    inspectorTab: 'activity' | 'workspace' | 'settings';
+    inspectorTab: 'activity' | 'workspace';
     workspaceStatus: WorkspaceStatusResponse | null;
     workspaceCommits: WorkspaceCommitObject[];
     workspaceDiff: WorkspaceDiffResponse | null;

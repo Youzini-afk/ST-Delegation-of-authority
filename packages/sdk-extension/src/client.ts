@@ -661,6 +661,7 @@ export class AuthorityClient {
             };
             workspaces: {
                 list: () => Promise<AgentWorkspaceRecord[]>;
+                default: () => Promise<AgentWorkspaceRecord>;
                 register: (request: AgentWorkspaceRegisterRequest) => Promise<AgentWorkspaceRecord>;
                 get: (workspaceId: string) => Promise<AgentWorkspaceRecord>;
                 status: (workspaceId: string) => Promise<WorkspaceStatusResponse>;
@@ -2215,6 +2216,9 @@ export class AuthorityClient {
                     list: async () => {
                         const response = await this.requestWithSession<AgentWorkspaceListResponse>('/admin/agent/workspaces');
                         return response.workspaces;
+                    },
+                    default: async () => {
+                        return await this.requestWithSession<AgentWorkspaceRecord>('/admin/agent/workspaces/default');
                     },
                     register: async request => {
                         return await this.requestWithSession<AgentWorkspaceRecord>('/admin/agent/workspaces', {

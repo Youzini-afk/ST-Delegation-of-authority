@@ -4,7 +4,6 @@ import type {
     AgentSessionSnapshot,
     AgentSessionSummary,
     AgentSessionUpdateRequest,
-    AgentWorkspaceRegisterRequest,
     AuthorityPolicyEntry,
     DataTransferInitResponse,
     DataTransferReadResponse,
@@ -38,9 +37,9 @@ import {
 import {
     getActiveAgentSessionRun,
     isActiveAgentSession,
-    renderAgentSessionMain,
     renderAgentWorkbench,
 } from './security-center/agent-workbench.js';
+import { renderAgentSettings } from './security-center/agent-settings.js';
 import { showImpactConfirmation } from './security-center/impact-confirmation.js';
 import {
     formatBytes,
@@ -155,13 +154,13 @@ class SecurityCenterView {
                 busy: false,
                 error: null,
                 profiles: [],
-                tools: [],
                 workspaces: [],
                 sessions: {
                     sessions: [],
                     page: { nextCursor: null, limit: 50, hasMore: false, totalCount: 0 },
                 },
                 selectedProfileId: null,
+                defaultWorkspaceId: null,
                 selectedWorkspaceId: null,
                 selectedSession: null,
                 creatingSession: true,
@@ -454,6 +453,14 @@ class SecurityCenterView {
             if (target.matches('[data-role="extension-search"]')) {
                 this.state.extensionFilter = target.value.trim().toLowerCase();
                 this.renderExtensionList();
+                return;
+            }
+
+            if (target.matches('[data-role="agent-session-filter"]')) {
+                const query = target.value.trim().toLowerCase();
+                for (const item of this.root.querySelectorAll<HTMLElement>('[data-action="agent-select-session"]')) {
+                    item.hidden = Boolean(query) && !item.textContent?.toLowerCase().includes(query);
+                }
             }
         });
 
@@ -469,15 +476,6 @@ class SecurityCenterView {
                 return;
             }
 
-            if (target.matches('[data-role="agent-workspace-select"], [data-role="agent-new-workspace"]')) {
-                this.state.agent.selectedWorkspaceId = target.value || null;
-                void this.refreshSelectedAgentWorkspace();
-                return;
-            }
-
-            if (target.matches('[data-role="agent-new-profile"]')) {
-                this.state.agent.selectedProfileId = target.value || null;
-            }
         });
     }
 
@@ -557,6 +555,9 @@ class SecurityCenterView {
             case 'agent-new-session':
                 this.beginAgentSession();
                 return;
+            case 'agent-use-prompt':
+                this.applyAgentPrompt(element.dataset.prompt ?? '');
+                return;
             case 'agent-create-session':
                 void this.createAgentSession();
                 return;
@@ -593,28 +594,24 @@ class SecurityCenterView {
                 return;
             case 'agent-inspector-tab':
                 if (element.dataset.inspectorTab === 'activity'
-                    || element.dataset.inspectorTab === 'workspace'
-                    || element.dataset.inspectorTab === 'settings') {
+                    || element.dataset.inspectorTab === 'workspace') {
                     this.state.agent.inspectorTab = element.dataset.inspectorTab;
-                    void this.renderAgentSection();
+                    this.renderAgentSurfaces();
                 }
                 return;
             case 'agent-edit-profile':
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
-                void this.renderAgentSection();
+                this.renderSettingsSection();
                 return;
             case 'agent-new-profile':
                 this.state.agent.selectedProfileId = null;
-                void this.renderAgentSection();
+                this.renderSettingsSection();
                 return;
             case 'agent-save-profile':
                 void this.saveAgentProfile();
                 return;
             case 'agent-delete-profile':
                 if (element.dataset.profileId) void this.deleteAgentProfile(element.dataset.profileId);
-                return;
-            case 'agent-register-workspace':
-                void this.registerAgentWorkspace();
                 return;
             case 'agent-workspace-refresh':
                 void this.refreshSelectedAgentWorkspace();
@@ -647,18 +644,18 @@ class SecurityCenterView {
         const generation = ++this.agentRefreshGeneration;
         this.state.agent.loading = true;
         this.state.agent.error = null;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const client = await this.getAgentClient();
             const sessionRequest = {
                 page: { ...(options.cursor ? { cursor: options.cursor } : {}), limit: 50 },
             };
-            const [profiles, tools, workspaces, sessions] = await Promise.all([
+            const [profiles, defaultWorkspace, sessions] = await Promise.all([
                 client.agent.admin.profiles.list(),
-                client.agent.listTools(),
-                client.agent.admin.workspaces.list(),
+                client.agent.admin.workspaces.default(),
                 client.agent.sessions.listPage(sessionRequest),
             ]);
+            const workspaces = await client.agent.admin.workspaces.list();
             if (generation !== this.agentRefreshGeneration) return;
             const selectedProfileId = profiles.some(profile => profile.id === this.state.agent.selectedProfileId)
                 ? this.state.agent.selectedProfileId
@@ -671,9 +668,7 @@ class SecurityCenterView {
             const sessionWorkspaceId = selectedSession?.session.workspaceId ?? null;
             const selectedWorkspaceId = workspaces.some(workspace => workspace.id === sessionWorkspaceId)
                 ? sessionWorkspaceId
-                : workspaces.some(workspace => workspace.id === this.state.agent.selectedWorkspaceId)
-                ? this.state.agent.selectedWorkspaceId
-                : workspaces[0]?.id ?? null;
+                : defaultWorkspace.id;
             const workspaceResult = await (
                 selectedWorkspaceId
                     ? this.fetchAgentWorkspace(client, selectedWorkspaceId)
@@ -683,12 +678,12 @@ class SecurityCenterView {
             );
             if (generation !== this.agentRefreshGeneration) return;
             this.state.agent.profiles = profiles;
-            this.state.agent.tools = tools;
             this.state.agent.workspaces = workspaces;
             this.state.agent.sessions = options.append
                 ? { sessions: mergeAgentSessions(this.state.agent.sessions.sessions, sessions.sessions), page: sessions.page }
                 : sessions;
             this.state.agent.selectedProfileId = selectedProfileId;
+            this.state.agent.defaultWorkspaceId = defaultWorkspace.id;
             this.state.agent.selectedWorkspaceId = selectedWorkspaceId;
             this.state.agent.workspaceStatus = workspaceResult.value?.status ?? null;
             this.state.agent.workspaceCommits = workspaceResult.value?.commits ?? [];
@@ -706,7 +701,7 @@ class SecurityCenterView {
         } finally {
             if (generation !== this.agentRefreshGeneration) return;
             this.state.agent.loading = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
             void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
@@ -731,7 +726,7 @@ class SecurityCenterView {
             return;
         }
         this.state.agent.busy = true;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const workspaceId = this.state.agent.selectedWorkspaceId;
             const snapshot = workspaceId
@@ -745,7 +740,7 @@ class SecurityCenterView {
             this.reportAgentError(error);
         } finally {
             this.state.agent.busy = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
         }
     }
 
@@ -781,12 +776,7 @@ class SecurityCenterView {
     }
 
     private renderSelectedAgentSession(): void {
-        const container = this.root.querySelector<HTMLElement>('[data-role="agent-session-main"]');
-        if (container) {
-            const draft = this.captureAgentFormDraft(container);
-            container.innerHTML = renderAgentSessionMain(this.state.agent, this.state.agent.busy ? 'disabled' : '');
-            this.restoreAgentFormDraft(container, draft);
-        }
+        this.renderAgentSurfaces();
     }
 
     private async subscribeSelectedAgentSession(): Promise<void> {
@@ -860,6 +850,13 @@ class SecurityCenterView {
         );
     }
 
+    private resolveDefaultAgentWorkspaceId(): string | null {
+        return this.state.agent.defaultWorkspaceId
+            ?? this.state.agent.selectedWorkspaceId
+            ?? this.state.agent.workspaces[0]?.id
+            ?? null;
+    }
+
     private async performAgentMutation(
         action: (client: AuthorityClient) => Promise<string | void>,
         refresh = true,
@@ -869,7 +866,7 @@ class SecurityCenterView {
         }
         this.state.agent.busy = true;
         this.state.agent.error = null;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const message = await action(await this.getAgentClient());
             if (refresh) {
@@ -882,7 +879,7 @@ class SecurityCenterView {
             this.reportAgentError(error);
         } finally {
             this.state.agent.busy = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
             this.scheduleAgentPoll();
         }
     }
@@ -891,20 +888,38 @@ class SecurityCenterView {
         this.closeAgentSessionSubscription();
         this.state.agent.creatingSession = true;
         this.state.agent.selectedSession = null;
-        this.state.agent.inspectorTab = 'settings';
-        void this.renderAgentSection();
+        this.state.agent.inspectorTab = 'activity';
+        this.renderAgentSurfaces();
+    }
+
+    private applyAgentPrompt(prompt: string): void {
+        const field = this.root.querySelector<HTMLTextAreaElement>('[data-role="agent-new-message"]');
+        if (!field) return;
+        field.value = prompt;
+        field.focus();
     }
 
     private async createAgentSession(): Promise<void> {
         const message = this.agentFieldValue('agent-new-message');
-        const workspaceId = this.agentFieldValue('agent-new-workspace');
-        const profileId = this.agentFieldValue('agent-new-profile');
+        const workspaceId = this.resolveDefaultAgentWorkspaceId();
+        const profileId = this.state.agent.profiles.some(profile => profile.id === this.state.agent.selectedProfileId)
+            ? this.state.agent.selectedProfileId
+            : this.state.agent.profiles[0]?.id ?? null;
+        if (!message || !workspaceId || !profileId) {
+            this.reportAgentError(new Error(!message
+                ? '请先描述你想让 Agent 完成的事情。'
+                : !profileId
+                    ? '请先在设置中配置模型连接。'
+                    : 'SillyTavern 默认作用域尚未初始化，请刷新后重试。'));
+            this.renderAgentSurfaces();
+            return;
+        }
         const mode = this.agentFieldValue('agent-new-mode') as NonNullable<AgentSessionCreateRequest['mode']>;
         const maxSteps = Number(this.agentFieldValue('agent-new-max-steps'));
         const request: AgentSessionCreateRequest = {
             message,
             workspaceId,
-            ...(profileId ? { profileId } : {}),
+            profileId,
             mode,
             maxSteps,
         };
@@ -923,7 +938,7 @@ class SecurityCenterView {
         if (this.state.agent.busy) return;
         this.closeAgentSessionSubscription();
         this.state.agent.busy = true;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
             this.state.agent.selectedSession = snapshot;
@@ -938,7 +953,7 @@ class SecurityCenterView {
             this.reportAgentError(error);
         } finally {
             this.state.agent.busy = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
             void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
@@ -1045,27 +1060,6 @@ class SecurityCenterView {
                 this.state.agent.selectedProfileId = null;
             }
             return 'LLM 配置已删除';
-        });
-    }
-
-    private async registerAgentWorkspace(): Promise<void> {
-        const users = this.agentFieldValue('agent-workspace-users')
-            .split(',')
-            .map(value => value.trim())
-            .filter(Boolean);
-        const id = this.agentFieldValue('agent-workspace-id');
-        const displayName = this.agentFieldValue('agent-workspace-name');
-        const request: AgentWorkspaceRegisterRequest = {
-            ...(id ? { id } : {}),
-            ...(displayName ? { displayName } : {}),
-            rootPath: this.agentFieldValue('agent-workspace-root'),
-            ...(users.length > 0 ? { allowedUserHandles: users } : {}),
-        };
-        await this.performAgentMutation(async client => {
-            const workspace = await client.agent.admin.workspaces.register(request);
-            this.state.agent.selectedWorkspaceId = workspace.id;
-            this.clearAgentFields('agent-workspace-name', 'agent-workspace-root', 'agent-workspace-id', 'agent-workspace-users');
-            return 'Agent 工作区已注册';
         });
     }
 
@@ -1842,13 +1836,12 @@ class SecurityCenterView {
         this.state.selectedTab = tab;
         this.renderTabs();
         this.toggleSections();
-        if (tab === 'agent') {
-            if (!this.state.agent.loaded) {
-                void this.refreshAgentWorkbench();
-            } else {
-                void this.subscribeSelectedAgentSession();
-                this.scheduleAgentPoll();
-            }
+        if ((tab === 'agent' || tab === 'settings') && !this.state.agent.loaded) {
+            void this.refreshAgentWorkbench();
+        }
+        if (tab === 'agent' && this.state.agent.loaded) {
+            void this.subscribeSelectedAgentSession();
+            this.scheduleAgentPoll();
         } else {
             this.closeAgentSessionSubscription();
             if (this.agentPollTimer !== null) {
@@ -1866,7 +1859,7 @@ class SecurityCenterView {
         await this.renderDetailSection();
         await this.renderDatabasesSection();
         await this.renderActivitySection();
-        await this.renderAgentSection();
+        this.renderAgentSection();
         await this.renderPoliciesSection();
         await this.renderUpdatesSection();
         this.renderSettingsSection();
@@ -1972,25 +1965,9 @@ class SecurityCenterView {
             `;
             return;
         }
-        container.innerHTML = `
-            <div class="authority-page-stack authority-settings-page">
-                <header class="authority-page-header">
-                    <div>
-                        <div class="authority-eyebrow">SETTINGS</div>
-                        <h2>全局设置</h2>
-                        <p>集中管理 Agent 使用的模型与连接；运行中的 Session 会继续保留自己的配置快照。</p>
-                    </div>
-                </header>
-                <section class="authority-card authority-settings-placeholder">
-                    <div class="authority-card__header">
-                        <div>
-                            <h3>模型与连接</h3>
-                            <p>现有模型配置将在 Agent 工作台重构时迁移到这里。</p>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        `;
+        const draft = this.captureAgentFormDraft(container);
+        container.innerHTML = renderAgentSettings(this.state.agent);
+        this.restoreAgentFormDraft(container, draft);
     }
 
     private renderExtensionList(): void {
@@ -2302,7 +2279,7 @@ class SecurityCenterView {
         `;
     }
 
-    private async renderAgentSection(): Promise<void> {
+    private renderAgentSection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="agent-view"]');
         if (!container) {
             return;
@@ -2312,6 +2289,11 @@ class SecurityCenterView {
             ? renderAgentWorkbench(this.state.agent)
             : '<div class="authority-empty">只有管理员可以使用 Agent 工作台。</div>';
         this.restoreAgentFormDraft(container, draft);
+    }
+
+    private renderAgentSurfaces(): void {
+        this.renderAgentSection();
+        this.renderSettingsSection();
     }
 
     private captureAgentFormDraft(container: HTMLElement): { profileId: string; values: Map<string, string> } {

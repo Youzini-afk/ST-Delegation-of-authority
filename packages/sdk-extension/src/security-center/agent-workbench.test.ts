@@ -4,10 +4,11 @@ import {
     isActiveAgentSession,
     renderAgentWorkbench,
 } from './agent-workbench.js';
+import { renderAgentSettings } from './agent-settings.js';
 import type { AgentWorkbenchState } from './types.js';
 
 describe('Agent session workbench rendering', () => {
-    it('keeps approvals in the activity inspector and escapes their content', () => {
+    it('keeps approvals in the task context and escapes their content', () => {
         const state = workbenchState();
         state.selectedSession!.approvals[0]!.arguments = { path: '<unsafe>' };
 
@@ -52,7 +53,7 @@ describe('Agent session workbench rendering', () => {
         expect(html).not.toContain('result-secret');
     });
 
-    it('renders a persistent three-pane conversation workspace, not a one-shot task launcher', () => {
+    it('renders a persistent Session workspace, not a one-shot task launcher', () => {
         const html = renderAgentWorkbench(workbenchState());
 
         expect(html).toContain('class="authority-agent-rail"');
@@ -63,27 +64,26 @@ describe('Agent session workbench rendering', () => {
         expect(html).toContain('data-role="agent-message"');
         expect(html).toContain('data-action="agent-send-message"');
         expect(html).toContain('data-action="agent-inspector-tab"');
+        expect(html).toContain('data-role="agent-session-filter"');
         expect(html).not.toContain('data-action="agent-create-run"');
         expect(html).not.toContain('data-action="agent-select-run"');
         expect(html).not.toContain('新建任务');
     });
 
-    it('separates activity, workspace recovery, and session settings contracts', () => {
+    it('separates task activity from recoverable changes without exposing workspace setup', () => {
         const state = workbenchState();
         const activity = renderAgentWorkbench(state);
 
         state.inspectorTab = 'workspace';
-        const workspace = renderAgentWorkbench(state);
-
-        state.inspectorTab = 'settings';
-        const settings = renderAgentWorkbench(state);
+        const changes = renderAgentWorkbench(state);
 
         expect(activity).toContain('data-action="agent-resolve-approval"');
-        expect(workspace).toContain('data-action="agent-workspace-checkpoint"');
-        expect(workspace).toContain('data-action="agent-workspace-rollback"');
-        expect(settings).toContain('data-action="agent-update-session"');
-        expect(settings).toContain('data-action="agent-save-profile"');
-        expect(settings).toContain('data-role="agent-session-title"');
+        expect(changes).toContain('data-action="agent-workspace-checkpoint"');
+        expect(changes).toContain('data-action="agent-workspace-rollback"');
+        expect(changes).not.toContain('data-role="agent-workspace-select"');
+        expect(changes).not.toContain('data-action="agent-register-workspace"');
+        expect(activity).not.toContain('工具目录');
+        expect(activity).not.toContain('data-action="agent-save-profile"');
     });
 
     it('uses the first message to create a durable session', () => {
@@ -94,16 +94,36 @@ describe('Agent session workbench rendering', () => {
         const html = renderAgentWorkbench(state);
 
         expect(html).toContain('data-role="agent-new-message"');
-        expect(html).toContain('data-role="agent-new-workspace"');
-        expect(html).toContain('data-role="agent-new-profile"');
+        expect(html).toContain('data-role="agent-new-mode"');
+        expect(html).toContain('data-role="agent-new-max-steps"');
         expect(html).toContain('data-action="agent-create-session"');
+        expect(html).toContain('data-action="agent-use-prompt"');
+        expect(html).toContain('作用域：整个 SillyTavern');
+        expect(html).not.toContain('data-role="agent-new-workspace"');
+        expect(html).not.toContain('data-role="agent-new-profile"');
+        expect(html).not.toContain('class="authority-agent-inspector"');
         expect(html).not.toContain('data-role="agent-run-goal"');
+    });
+
+    it('moves model connection management into global settings', () => {
+        const state = workbenchState();
+        const agent = renderAgentWorkbench(state);
+        const settings = renderAgentSettings(state);
+
+        expect(agent).not.toContain('data-role="agent-profile-api-key"');
+        expect(agent).not.toContain('data-action="agent-save-profile"');
+        expect(settings).toContain('data-role="agent-profile-api-key"');
+        expect(settings).toContain('data-action="agent-save-profile"');
+        expect(settings).toContain('data-action="agent-new-profile"');
+        expect(settings).toContain('data-action="agent-delete-profile"');
+        expect(settings).not.toContain('工具目录');
+        expect(settings).not.toContain('注册工作区');
     });
 
     it('disables every interactive Agent control while a mutation is in progress', () => {
         const state = workbenchState();
         state.busy = true;
-        const html = renderAgentWorkbench(state);
+        const html = `${renderAgentWorkbench(state)}${renderAgentSettings(state)}`;
         const controls = Array.from(html.matchAll(/<(?:button|textarea|select|input)\b[^>]*>/g), match => match[0])
             .filter(control => !control.includes('type="hidden"'));
 
@@ -133,14 +153,6 @@ function workbenchState(): AgentWorkbenchState {
             maxOutputTokens: 8192,
             timeoutMs: 120000,
         }],
-        tools: [{
-            id: 'host_write_file',
-            title: 'Write file',
-            description: 'Writes a file in the workspace.',
-            execution: 'host',
-            riskLevel: 'medium',
-            approvalPolicy: 'ask',
-        }],
         workspaces: [{
             id: 'workspace',
             displayName: 'Workspace',
@@ -163,6 +175,7 @@ function workbenchState(): AgentWorkbenchState {
             page: { nextCursor: 'older', limit: 50, hasMore: true, totalCount: 2 },
         },
         selectedProfileId: 'profile',
+        defaultWorkspaceId: 'workspace',
         selectedWorkspaceId: 'workspace',
         selectedSession: snapshot,
         creatingSession: false,

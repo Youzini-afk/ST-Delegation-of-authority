@@ -2325,15 +2325,20 @@ describe('AuthorityClient', () => {
             : { workspace: { id: 'workspace a' }, commits: [] });
         Object.assign(client as object, { requestWithSession });
 
+        await client.agent.admin.workspaces.default();
         await client.agent.admin.workspaces.commits('workspace a', 25);
         await client.agent.admin.workspaces.diff('workspace a', { from: null, to: 'head-1' });
 
         expect(requestWithSession).toHaveBeenNthCalledWith(
             1,
-            '/admin/agent/workspaces/workspace%20a/commits?limit=25',
+            '/admin/agent/workspaces/default',
         );
         expect(requestWithSession).toHaveBeenNthCalledWith(
             2,
+            '/admin/agent/workspaces/workspace%20a/commits?limit=25',
+        );
+        expect(requestWithSession).toHaveBeenNthCalledWith(
+            3,
             '/admin/agent/workspaces/workspace%20a/diff?from=empty&to=head-1',
         );
     });

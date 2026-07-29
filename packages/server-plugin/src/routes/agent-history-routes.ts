@@ -5,6 +5,7 @@ import type {
     WorkspaceRollbackRequest,
 } from '@stdo/shared-types';
 import type { AuthorityRuntime } from '../runtime.js';
+import { ensureDefaultAgentWorkspace } from '../services/default-agent-workspace.js';
 import type { AuthorityRequest, AuthorityResponse } from '../types.js';
 import {
     withAuthorityAdmin,
@@ -34,6 +35,14 @@ export function registerAgentHistoryRoutes(
         void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace registered', {
             workspaceId: workspace.id,
         }).catch(() => undefined);
+        res.json(workspace);
+    }));
+
+    router.get('/admin/agent/workspaces/default', withAuthorityAdmin(runtime, fail, async (_req, res) => {
+        const workspace = await ensureDefaultAgentWorkspace(runtime);
+        if (!workspace) {
+            throw new Error('SillyTavern root could not be resolved for the default Agent scope');
+        }
         res.json(workspace);
     }));
 

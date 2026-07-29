@@ -53,6 +53,21 @@ describe('Agent workspace admin routes', () => {
 
         expect(fixture.runtime.workspaceHistory.getWorkspace).toHaveBeenCalledWith('workspace%2Fname');
     });
+
+    it('returns the real record for the built-in SillyTavern scope', async () => {
+        const fixture = setup();
+        const res = response();
+
+        await fixture.get.get('/admin/agent/workspaces/default')!(request(true), res);
+
+        expect(fixture.runtime.install.getSillyTavernRoot).toHaveBeenCalledTimes(1);
+        expect(fixture.runtime.workspaceHistory.registerWorkspace).toHaveBeenCalledWith({
+            id: 'sillytavern',
+            displayName: 'SillyTavern',
+            rootPath: 'C:\\SillyTavern',
+        });
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ id: 'workspace-a' }));
+    });
 });
 
 function setup(isAdmin = true, extensionId = 'third-party/ext-a') {
@@ -76,6 +91,7 @@ function setup(isAdmin = true, extensionId = 'third-party/ext-a') {
     };
     const runtime = {
         sessions: { assertSession: vi.fn().mockResolvedValue(session) },
+        install: { getSillyTavernRoot: vi.fn(() => 'C:\\SillyTavern') },
         workspaceHistory: {
             listWorkspaces: vi.fn(() => [workspace]),
             registerWorkspace: vi.fn().mockResolvedValue(workspace),
