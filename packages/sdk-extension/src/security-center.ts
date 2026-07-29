@@ -95,8 +95,8 @@ import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center
 
 const TOAST_TITLE = '权限中心';
 const MISSING_TEXT = '未获取';
-const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates'];
-type CenterArea = 'agent' | 'governance' | 'system';
+const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings'];
+type CenterArea = 'agent' | 'governance' | 'system' | 'settings';
 
 function isValidCenterTab(value: string | undefined): value is CenterTab {
     return typeof value === 'string' && (PRIMARY_TAB_NAMES as readonly string[]).includes(value);
@@ -105,6 +105,7 @@ function isValidCenterTab(value: string | undefined): value is CenterTab {
 function getCenterArea(tab: CenterTab): CenterArea {
     if (tab === 'agent') return 'agent';
     if (tab === 'updates') return 'system';
+    if (tab === 'settings') return 'settings';
     return 'governance';
 }
 
@@ -534,7 +535,7 @@ class SecurityCenterView {
                 this.state.stManagerControlBackups = [];
             }
 
-            if (!this.state.isAdmin && (this.state.selectedTab === 'agent' || this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
+            if (!this.state.isAdmin && (this.state.selectedTab === 'agent' || this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates' || this.state.selectedTab === 'settings')) {
                 this.state.selectedTab = 'detail';
             }
             if (this.state.isAdmin && this.state.selectedTab === 'agent') {
@@ -1832,7 +1833,7 @@ class SecurityCenterView {
         if (!PRIMARY_TAB_NAMES.includes(tab)) {
             return;
         }
-        if ((tab === 'agent' || tab === 'policies' || tab === 'updates') && !this.state.isAdmin) {
+        if ((tab === 'agent' || tab === 'policies' || tab === 'updates' || tab === 'settings') && !this.state.isAdmin) {
             return;
         }
         if (this.state.selectedTab === tab) {
@@ -1868,6 +1869,7 @@ class SecurityCenterView {
         await this.renderAgentSection();
         await this.renderPoliciesSection();
         await this.renderUpdatesSection();
+        this.renderSettingsSection();
         this.toggleSections();
     }
 
@@ -1924,7 +1926,7 @@ class SecurityCenterView {
             const area = areaTab.dataset.area as CenterArea | undefined;
             if (!area) continue;
             const isActive = area === activeArea;
-            const requiresAdmin = area === 'agent' || area === 'system';
+            const requiresAdmin = area === 'agent' || area === 'system' || area === 'settings';
             areaTab.hidden = requiresAdmin && !this.state.isAdmin;
             areaTab.classList.toggle('authority-area-tab--active', isActive);
             if (isActive) {
@@ -1954,6 +1956,41 @@ class SecurityCenterView {
                 tab.setAttribute('tabindex', isActive ? '0' : '-1');
             }
         }
+    }
+
+    private renderSettingsSection(): void {
+        const container = this.root.querySelector<HTMLElement>('[data-role="settings-view"]');
+        if (!container) {
+            return;
+        }
+        if (!this.state.isAdmin) {
+            container.innerHTML = `
+                <div class="authority-empty">
+                    <strong>需要管理员权限</strong>
+                    <span>全局连接与模型配置仅对管理员开放。</span>
+                </div>
+            `;
+            return;
+        }
+        container.innerHTML = `
+            <div class="authority-page-stack authority-settings-page">
+                <header class="authority-page-header">
+                    <div>
+                        <div class="authority-eyebrow">SETTINGS</div>
+                        <h2>全局设置</h2>
+                        <p>集中管理 Agent 使用的模型与连接；运行中的 Session 会继续保留自己的配置快照。</p>
+                    </div>
+                </header>
+                <section class="authority-card authority-settings-placeholder">
+                    <div class="authority-card__header">
+                        <div>
+                            <h3>模型与连接</h3>
+                            <p>现有模型配置将在 Agent 工作台重构时迁移到这里。</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        `;
     }
 
     private renderExtensionList(): void {

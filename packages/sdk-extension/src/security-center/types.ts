@@ -27,7 +27,7 @@ import type { AuthorityPolicyEntry, PermissionResource, PermissionStatus } from 
 import type { StManagerBridgeConfig } from './st-manager-bridge.js';
 import type { StManagerBackupSummary, StManagerControlConfig } from './st-manager-control.js';
 
-export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'agent' | 'policies' | 'updates';
+export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'agent' | 'policies' | 'updates' | 'settings';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
 export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
 

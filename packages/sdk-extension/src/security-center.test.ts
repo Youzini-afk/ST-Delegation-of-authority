@@ -10,7 +10,7 @@ describe('Security Center tab interaction', () => {
     const css = fs.readFileSync(path.resolve(__dirname, '../static/style.css'), 'utf8');
 
     it('declares a primary tab name whitelist matching all valid CenterTab values', () => {
-        expect(source).toContain("const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates']");
+        expect(source).toContain("const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings']");
     });
 
     it('provides a type guard to validate arbitrary tab values against the whitelist', () => {
@@ -18,10 +18,11 @@ describe('Security Center tab interaction', () => {
         expect(source).toContain('(PRIMARY_TAB_NAMES as readonly string[]).includes(value)');
     });
 
-    it('maps the seven views into Agent, governance, and system areas', () => {
-        expect(source).toContain("type CenterArea = 'agent' | 'governance' | 'system'");
+    it('maps the eight views into Agent, extensions, system, and settings areas', () => {
+        expect(source).toContain("type CenterArea = 'agent' | 'governance' | 'system' | 'settings'");
         expect(source).toContain("if (tab === 'agent') return 'agent'");
         expect(source).toContain("if (tab === 'updates') return 'system'");
+        expect(source).toContain("if (tab === 'settings') return 'settings'");
         expect(source).toContain("return 'governance'");
     });
 
@@ -31,7 +32,7 @@ describe('Security Center tab interaction', () => {
         const switchTabEnd = source.indexOf('private async render(): Promise<void> {', switchTabStart);
         const switchTabBody = source.slice(switchTabStart, switchTabEnd);
         expect(switchTabBody).toContain('PRIMARY_TAB_NAMES.includes(tab)');
-        expect(switchTabBody).toContain("tab === 'agent' || tab === 'policies' || tab === 'updates'");
+        expect(switchTabBody).toContain("tab === 'agent' || tab === 'policies' || tab === 'updates' || tab === 'settings'");
         expect(switchTabBody).toContain('this.state.selectedTab === tab');
         expect(switchTabBody).toContain('this.renderTabs()');
         expect(switchTabBody).toContain('this.toggleSections()');
@@ -99,7 +100,7 @@ describe('Security Center tab interaction', () => {
         expect(bindEventsBody).toContain('if (isValidCenterTab(tab)) {');
     });
 
-    it('static HTML preserves all seven panels and groups them below three primary areas', () => {
+    it('static HTML preserves all eight panels and groups them below four primary areas', () => {
         const areas = Array.from(html.matchAll(/<button[^>]*class="authority-area-tab"[^>]*data-area="([^"]+)"[^>]*>/g));
         const tabs = Array.from(html.matchAll(/<button[^>]*class="authority-tab"[^>]*data-tab="([^"]+)"[^>]*>/g));
         const panels = Array.from(html.matchAll(/<section[^>]*data-section="([^"]+)"[^>]*>/g));
@@ -108,10 +109,10 @@ describe('Security Center tab interaction', () => {
         const tabNames = tabs.map(match => match[1]);
         const panelNames = panels.map(match => match[1]);
 
-        expect(areaNames).toEqual(['agent', 'governance', 'system']);
+        expect(areaNames).toEqual(['agent', 'governance', 'system', 'settings']);
         expect(tabNames).toEqual(['detail', 'overview', 'databases', 'activity', 'policies']);
-        expect(panelNames).toEqual(['agent', 'detail', 'overview', 'databases', 'activity', 'policies', 'updates']);
-        expect(areaPanels.map(match => match[1])).toEqual(['agent', 'governance', 'system']);
+        expect(panelNames).toEqual(['agent', 'detail', 'overview', 'databases', 'activity', 'policies', 'updates', 'settings']);
+        expect(areaPanels.map(match => match[1])).toEqual(['agent', 'governance', 'system', 'settings']);
 
         for (const match of tabs) {
             const tabHtml = match[0];
@@ -130,19 +131,22 @@ describe('Security Center tab interaction', () => {
         }
         expect(areas[0][0]).toContain('id="security-center-tab-agent"');
         expect(areas[2][0]).toContain('id="security-center-tab-updates"');
+        expect(areas[3][0]).toContain('id="security-center-tab-settings"');
     });
 
     it('static HTML has role=tablist on the tab container', () => {
         expect(html).toContain('<nav class="authority-tabs" role="tablist"');
     });
 
-    it('keeps the preview direction: compact brand bar, side navigation, and extension-first governance', () => {
-        expect(html).toContain('SillyTavern Agent Platform');
+    it('keeps the approved direction: compact product bar, persistent top navigation, and extension-first governance', () => {
+        expect(html).toContain('Delegation of Authority');
         expect(html).toContain('class="authority-app-shell"');
         expect(html).toContain('data-area="governance" data-tab="detail"');
-        expect(css).toContain('grid-template-columns: 82px minmax(0, 1fr)');
-        expect(css).toContain('width: min(1180px, 92vw) !important');
-        expect(css).not.toContain('width: min(1500px, 94vw) !important');
+        expect(html).toContain('data-area="settings" data-tab="settings"');
+        expect(html).not.toContain('新建任务');
+        expect(css).toContain('grid-template-columns: max-content minmax(0, 1fr) max-content');
+        expect(css).toContain('width: min(1540px, 96vw) !important');
+        expect(css).not.toContain('grid-template-columns: 82px minmax(0, 1fr)');
     });
 
     it('does not rebuild governance overview as a six-card metric wall', () => {

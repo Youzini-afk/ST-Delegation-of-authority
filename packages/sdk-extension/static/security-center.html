@@ -3,36 +3,35 @@
     <header class="authority-workbench__bar">
       <div class="authority-workbench__brand">
         <span class="authority-brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 7.25v9.5L12 21l7.5-4.25v-9.5L12 3Z"/><path d="m8.25 12 2.35 2.35L16 9"/></svg>
         </span>
-        <span class="authority-workbench__brand-copy">
-          <strong class="authority-workbench__title">Authority</strong>
-          <span class="authority-workbench__subtitle">SillyTavern Agent Platform</span>
-        </span>
+        <strong class="authority-workbench__title">Delegation of Authority</strong>
       </div>
+
+      <nav class="authority-area-tabs" aria-label="Authority 主导航">
+        <button type="button" class="authority-area-tab" data-area="agent" data-tab="agent" id="security-center-tab-agent">
+          <span>Agent</span>
+        </button>
+        <button type="button" class="authority-area-tab" data-area="governance" data-tab="detail">
+          <span>扩展</span>
+        </button>
+        <button type="button" class="authority-area-tab" data-area="system" data-tab="updates" id="security-center-tab-updates">
+          <span>系统与恢复</span>
+        </button>
+        <button type="button" class="authority-area-tab" data-area="settings" data-tab="settings" id="security-center-tab-settings" data-admin-only>
+          <span>设置</span>
+        </button>
+      </nav>
+
       <div class="authority-workbench__actions">
         <div class="authority-health-badges" data-role="health-badges"></div>
-        <button type="button" class="authority-action-button authority-action-button--primary" data-tab="agent" data-admin-only>＋ 新建任务</button>
-        <button type="button" class="authority-action-button" data-action="refresh">刷新</button>
+        <button type="button" class="authority-icon-button" data-action="refresh" aria-label="刷新 Authority 状态" title="刷新">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+        </button>
       </div>
     </header>
 
     <div class="authority-app-shell">
-      <nav class="authority-area-tabs" aria-label="Authority 主导航">
-        <button type="button" class="authority-area-tab" data-area="agent" data-tab="agent" id="security-center-tab-agent">
-          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 9l-2 3 2 3"/><path d="M13 15h4"/><path d="M12 2v3"/></svg>
-          <span>Agent</span>
-        </button>
-        <button type="button" class="authority-area-tab" data-area="governance" data-tab="detail">
-          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-          <span>治理</span>
-        </button>
-        <button type="button" class="authority-area-tab" data-area="system" data-tab="updates" id="security-center-tab-updates">
-          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V21h-4v-.08A1.7 1.7 0 0 0 8.97 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.52-1.03H3v-4h.08A1.7 1.7 0 0 0 4.6 8.94a1.7 1.7 0 0 0-.34-1.88L4.2 7l2.83-2.83.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 10 3.05V3h4v.05a1.7 1.7 0 0 0 1.03 1.52 1.7 1.7 0 0 0 1.88-.34l.06-.06L19.8 7l-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15z"/></svg>
-          <span>系统</span>
-        </button>
-      </nav>
-
       <div class="authority-workbench__main">
         <div class="authority-alert-dock" data-role="status" aria-live="polite"></div>
         <div class="authority-workbench__body">
@@ -97,6 +96,12 @@
           <section class="authority-area-panel" data-area-panel="system">
             <section class="authority-section" data-section="updates" role="tabpanel" id="security-center-tabpanel-updates" aria-labelledby="security-center-tab-updates">
               <div data-role="updates-view"></div>
+            </section>
+          </section>
+
+          <section class="authority-area-panel" data-area-panel="settings">
+            <section class="authority-section" data-section="settings" role="tabpanel" id="security-center-tabpanel-settings" aria-labelledby="security-center-tab-settings">
+              <div data-role="settings-view"></div>
             </section>
           </section>
         </div>
