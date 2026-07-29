@@ -29,8 +29,6 @@ import type { StManagerBackupSummary, StManagerControlConfig } from './st-manage
 
 export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'agent' | 'policies' | 'updates';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
-export type OverviewSectionKey = 'governance' | 'capabilityMatrix' | 'recentActivity';
-export type OverviewSectionState = Record<OverviewSectionKey, boolean>;
 export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
 
 export interface ActivityRecord {
@@ -142,7 +140,6 @@ export interface SecurityCenterState {
     details: Map<string, ExtensionDetailResponse>;
     selectedExtensionId: string | null;
     selectedTab: CenterTab;
-    overviewSectionState: OverviewSectionState;
     extensionFilter: string;
     policies: PoliciesResponse | null;
     agent: AgentWorkbenchState;

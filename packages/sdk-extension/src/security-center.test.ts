@@ -59,6 +59,8 @@ describe('Security Center tab interaction', () => {
         expect(toggleSectionsStart).toBeGreaterThanOrEqual(0);
         const toggleSectionsEnd = source.indexOf('private loadOverviewSectionState(', toggleSectionsStart);
         const toggleSectionsBody = source.slice(toggleSectionsStart, toggleSectionsEnd);
+        expect(toggleSectionsBody).toContain("'[data-area-panel]'");
+        expect(toggleSectionsBody).toContain('getCenterArea(this.state.selectedTab)');
         expect(toggleSectionsBody).toContain('PRIMARY_TAB_NAMES.includes(name)');
         expect(toggleSectionsBody).toContain('aria-hidden');
         expect(toggleSectionsBody).toContain("section.setAttribute('tabindex'");
@@ -97,17 +99,19 @@ describe('Security Center tab interaction', () => {
         expect(bindEventsBody).toContain('if (isValidCenterTab(tab)) {');
     });
 
-    it('static HTML preserves all seven panels and groups governance views below three primary areas', () => {
+    it('static HTML preserves all seven panels and groups them below three primary areas', () => {
         const areas = Array.from(html.matchAll(/<button[^>]*class="authority-area-tab"[^>]*data-area="([^"]+)"[^>]*>/g));
         const tabs = Array.from(html.matchAll(/<button[^>]*class="authority-tab"[^>]*data-tab="([^"]+)"[^>]*>/g));
         const panels = Array.from(html.matchAll(/<section[^>]*data-section="([^"]+)"[^>]*>/g));
+        const areaPanels = Array.from(html.matchAll(/<section[^>]*data-area-panel="([^"]+)"[^>]*>/g));
         const areaNames = areas.map(match => match[1]);
         const tabNames = tabs.map(match => match[1]);
         const panelNames = panels.map(match => match[1]);
 
         expect(areaNames).toEqual(['agent', 'governance', 'system']);
-        expect(tabNames).toEqual(['overview', 'detail', 'databases', 'activity', 'policies']);
-        expect(panelNames).toEqual(['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates']);
+        expect(tabNames).toEqual(['detail', 'overview', 'databases', 'activity', 'policies']);
+        expect(panelNames).toEqual(['agent', 'detail', 'overview', 'databases', 'activity', 'policies', 'updates']);
+        expect(areaPanels.map(match => match[1])).toEqual(['agent', 'governance', 'system']);
 
         for (const match of tabs) {
             const tabHtml = match[0];
@@ -130,6 +134,23 @@ describe('Security Center tab interaction', () => {
 
     it('static HTML has role=tablist on the tab container', () => {
         expect(html).toContain('<nav class="authority-tabs" role="tablist"');
+    });
+
+    it('keeps the preview direction: compact brand bar, side navigation, and extension-first governance', () => {
+        expect(html).toContain('SillyTavern Agent Platform');
+        expect(html).toContain('class="authority-app-shell"');
+        expect(html).toContain('data-area="governance" data-tab="detail"');
+        expect(css).toContain('grid-template-columns: 82px minmax(0, 1fr)');
+        expect(css).toContain('width: min(1180px, 92vw) !important');
+        expect(css).not.toContain('width: min(1500px, 94vw) !important');
+    });
+
+    it('does not rebuild governance overview as a six-card metric wall', () => {
+        const overviewStart = source.indexOf('private async renderOverviewSection(): Promise<void> {');
+        const overviewEnd = source.indexOf('private async renderDetailSection(): Promise<void> {', overviewStart);
+        const overviewBody = source.slice(overviewStart, overviewEnd);
+        expect(overviewBody).toContain('authority-governance-glance');
+        expect(overviewBody).not.toContain('renderMetricTile(');
     });
 
     it('declares agent.run before the built-in workbench creates runs', () => {

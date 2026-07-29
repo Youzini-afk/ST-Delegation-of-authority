@@ -16,32 +16,12 @@ import {
 import type { ActivityRecord, DatabaseGroupSummary, ExtensionStorageSummary } from './types.js';
 
 export type AlertTone = 'info' | 'warning' | 'error';
-export type MetricTone = 'neutral' | 'primary' | 'runtime' | 'warning' | 'error' | 'success';
+type RowTone = 'neutral' | 'primary' | 'runtime' | 'warning' | 'error' | 'success';
 
 export interface AlertItem {
     tone: AlertTone;
     title: string;
     message: string;
-}
-
-export function renderKpiCard(label: string, value: string, meta: string): string {
-    return `
-        <div class="authority-kpi-card">
-            <div class="authority-kpi-card__label">${escapeHtml(label)}</div>
-            <div class="authority-kpi-card__value">${escapeHtml(value)}</div>
-            <div class="authority-kpi-card__meta">${escapeHtml(meta)}</div>
-        </div>
-    `;
-}
-
-export function renderMetricTile(label: string, value: string, meta: string, tone: MetricTone = 'neutral'): string {
-    return `
-        <div class="authority-metric-tile authority-metric-tile--${tone}">
-            <div class="authority-metric-tile__label">${escapeHtml(label)}</div>
-            <div class="authority-metric-tile__value">${escapeHtml(value)}</div>
-            <div class="authority-metric-tile__meta">${escapeHtml(meta)}</div>
-        </div>
-    `;
 }
 
 export function renderStorageCard(label: string, value: string, meta: string): string {
@@ -132,7 +112,7 @@ export function renderGrantList(extensionId: string, grants: AuthorityGrant[], e
     `;
 }
 
-export function renderSettingsRow(label: string, description: string, control: string, tone: MetricTone = 'neutral'): string {
+export function renderSettingsRow(label: string, description: string, control: string, tone: RowTone = 'neutral'): string {
     return `
         <div class="authority-settings-row authority-settings-row--${tone}">
             <div>

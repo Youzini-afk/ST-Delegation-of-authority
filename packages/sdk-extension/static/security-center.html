@@ -2,86 +2,105 @@
   <div class="authority-workbench">
     <header class="authority-workbench__bar">
       <div class="authority-workbench__brand">
-        <div class="authority-workbench__title">Delegation of Authority</div>
-        <div class="authority-workbench__subtitle">Agent 工作台与扩展治理</div>
+        <span class="authority-brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+        </span>
+        <span class="authority-workbench__brand-copy">
+          <strong class="authority-workbench__title">Authority</strong>
+          <span class="authority-workbench__subtitle">SillyTavern Agent Platform</span>
+        </span>
       </div>
-      <nav class="authority-area-tabs" aria-label="主要区域">
+      <div class="authority-workbench__actions">
+        <div class="authority-health-badges" data-role="health-badges"></div>
+        <button type="button" class="authority-action-button authority-action-button--primary" data-tab="agent" data-admin-only>＋ 新建任务</button>
+        <button type="button" class="authority-action-button" data-action="refresh">刷新</button>
+      </div>
+    </header>
+
+    <div class="authority-app-shell">
+      <nav class="authority-area-tabs" aria-label="Authority 主导航">
         <button type="button" class="authority-area-tab" data-area="agent" data-tab="agent" id="security-center-tab-agent">
           <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 9l-2 3 2 3"/><path d="M13 15h4"/><path d="M12 2v3"/></svg>
           <span>Agent</span>
         </button>
-        <button type="button" class="authority-area-tab" data-area="governance" data-tab="overview">
-          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
-          <span>扩展治理</span>
+        <button type="button" class="authority-area-tab" data-area="governance" data-tab="detail">
+          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span>治理</span>
         </button>
         <button type="button" class="authority-area-tab" data-area="system" data-tab="updates" id="security-center-tab-updates">
-          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-          <span>系统与恢复</span>
+          <svg class="authority-tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V21h-4v-.08A1.7 1.7 0 0 0 8.97 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.52-1.03H3v-4h.08A1.7 1.7 0 0 0 4.6 8.94a1.7 1.7 0 0 0-.34-1.88L4.2 7l2.83-2.83.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 10 3.05V3h4v.05a1.7 1.7 0 0 0 1.03 1.52 1.7 1.7 0 0 0 1.88-.34l.06-.06L19.8 7l-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15z"/></svg>
+          <span>系统</span>
         </button>
       </nav>
-      <div class="authority-workbench__actions">
-        <div class="authority-health-badges" data-role="health-badges"></div>
-        <button type="button" class="menu_button authority-primary-action" data-action="refresh">刷新</button>
-      </div>
-    </header>
 
-    <div class="authority-context-bar" data-role="governance-tabs">
-      <span class="authority-context-bar__label">治理视图</span>
-      <nav class="authority-tabs" role="tablist" aria-label="扩展治理视图">
-        <button type="button" class="authority-tab" data-tab="overview" role="tab" id="security-center-tab-overview" aria-selected="false" aria-controls="security-center-tabpanel-overview">总览</button>
-        <button type="button" class="authority-tab" data-tab="detail" role="tab" id="security-center-tab-detail" aria-selected="false" aria-controls="security-center-tabpanel-detail">扩展</button>
-        <button type="button" class="authority-tab" data-tab="databases" role="tab" id="security-center-tab-databases" aria-selected="false" aria-controls="security-center-tabpanel-databases">数据</button>
-        <button type="button" class="authority-tab" data-tab="activity" role="tab" id="security-center-tab-activity" aria-selected="false" aria-controls="security-center-tabpanel-activity">活动</button>
-        <button type="button" class="authority-tab" data-tab="policies" role="tab" id="security-center-tab-policies" aria-selected="false" aria-controls="security-center-tabpanel-policies">策略</button>
-      </nav>
-    </div>
+      <div class="authority-workbench__main">
+        <div class="authority-alert-dock" data-role="status" aria-live="polite"></div>
+        <div class="authority-workbench__body">
+          <section class="authority-area-panel" data-area-panel="agent">
+            <section class="authority-section" data-section="agent" role="tabpanel" id="security-center-tabpanel-agent" aria-labelledby="security-center-tab-agent">
+              <div data-role="agent-view"></div>
+            </section>
+          </section>
 
-    <div class="authority-alert-dock" data-role="status" aria-live="polite"></div>
-    <div class="authority-workbench__body">
-      <main class="authority-view-canvas">
-        <section class="authority-section" data-section="overview" role="tabpanel" id="security-center-tabpanel-overview" aria-labelledby="security-center-tab-overview">
-          <div data-role="overview-view"></div>
-        </section>
-        <section class="authority-section" data-section="detail" role="tabpanel" id="security-center-tabpanel-detail" aria-labelledby="security-center-tab-detail">
-          <div class="authority-governance-shell">
-            <div class="authority-governance-header">
-              <div>
-                <div class="authority-eyebrow">Extension governance</div>
-                <h2>扩展治理</h2>
-                <p>查看每个扩展实际拥有的能力、数据与活动。</p>
-              </div>
-              <div class="authority-governance-tools">
-                <span class="authority-pill authority-pill--prompt" data-role="extension-count">0</span>
-                <input class="text_pole authority-search" type="search" data-role="extension-search" placeholder="搜索扩展" aria-label="搜索扩展" />
-              </div>
-            </div>
-            <div class="authority-governance-layout">
-              <aside class="authority-extension-nav" aria-label="扩展目录">
-                <div class="authority-extension-nav__header">
-                  <h3>扩展目录</h3>
+          <section class="authority-area-panel authority-area-panel--governance" data-area-panel="governance">
+            <div class="authority-governance-shell">
+              <header class="authority-governance-header">
+                <div>
+                  <h2>扩展治理</h2>
+                  <p>围绕扩展查看权限、数据与真实活动。</p>
                 </div>
-                <div class="authority-extension-nav__list" data-role="extension-list"></div>
-              </aside>
-              <div class="authority-governance-detail" data-role="detail-view"></div>
+                <div class="authority-governance-tools">
+                  <span class="authority-pill authority-pill--prompt" data-role="extension-count">0</span>
+                  <input class="text_pole authority-search" type="search" data-role="extension-search" placeholder="搜索扩展" aria-label="搜索扩展" />
+                </div>
+              </header>
+
+              <div class="authority-governance-layout">
+                <aside class="authority-extension-nav" aria-label="扩展目录">
+                  <div class="authority-extension-nav__header"><strong>扩展</strong></div>
+                  <div class="authority-extension-nav__list" data-role="extension-list"></div>
+                </aside>
+
+                <div class="authority-governance-stage">
+                  <div class="authority-context-bar" data-role="governance-tabs">
+                    <nav class="authority-tabs" role="tablist" aria-label="扩展治理视图">
+                      <button type="button" class="authority-tab" data-tab="detail" role="tab" id="security-center-tab-detail" aria-selected="false" aria-controls="security-center-tabpanel-detail">扩展</button>
+                      <button type="button" class="authority-tab" data-tab="overview" role="tab" id="security-center-tab-overview" aria-selected="false" aria-controls="security-center-tabpanel-overview">概览</button>
+                      <button type="button" class="authority-tab" data-tab="databases" role="tab" id="security-center-tab-databases" aria-selected="false" aria-controls="security-center-tabpanel-databases">数据</button>
+                      <button type="button" class="authority-tab" data-tab="activity" role="tab" id="security-center-tab-activity" aria-selected="false" aria-controls="security-center-tabpanel-activity">审计</button>
+                      <button type="button" class="authority-tab" data-tab="policies" role="tab" id="security-center-tab-policies" aria-selected="false" aria-controls="security-center-tabpanel-policies">策略</button>
+                    </nav>
+                  </div>
+
+                  <div class="authority-view-canvas">
+                    <section class="authority-section" data-section="detail" role="tabpanel" id="security-center-tabpanel-detail" aria-labelledby="security-center-tab-detail">
+                      <div class="authority-governance-detail" data-role="detail-view"></div>
+                    </section>
+                    <section class="authority-section" data-section="overview" role="tabpanel" id="security-center-tabpanel-overview" aria-labelledby="security-center-tab-overview">
+                      <div data-role="overview-view"></div>
+                    </section>
+                    <section class="authority-section" data-section="databases" role="tabpanel" id="security-center-tabpanel-databases" aria-labelledby="security-center-tab-databases">
+                      <div data-role="databases-view"></div>
+                    </section>
+                    <section class="authority-section" data-section="activity" role="tabpanel" id="security-center-tabpanel-activity" aria-labelledby="security-center-tab-activity">
+                      <div data-role="activity-view"></div>
+                    </section>
+                    <section class="authority-section" data-section="policies" role="tabpanel" id="security-center-tabpanel-policies" aria-labelledby="security-center-tab-policies">
+                      <div data-role="policies-view"></div>
+                    </section>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </section>
-        <section class="authority-section" data-section="databases" role="tabpanel" id="security-center-tabpanel-databases" aria-labelledby="security-center-tab-databases">
-          <div data-role="databases-view"></div>
-        </section>
-        <section class="authority-section" data-section="activity" role="tabpanel" id="security-center-tabpanel-activity" aria-labelledby="security-center-tab-activity">
-          <div data-role="activity-view"></div>
-        </section>
-        <section class="authority-section" data-section="agent" role="tabpanel" id="security-center-tabpanel-agent" aria-labelledby="security-center-tab-agent">
-          <div data-role="agent-view"></div>
-        </section>
-        <section class="authority-section" data-section="policies" role="tabpanel" id="security-center-tabpanel-policies" aria-labelledby="security-center-tab-policies">
-          <div data-role="policies-view"></div>
-        </section>
-        <section class="authority-section" data-section="updates" role="tabpanel" id="security-center-tabpanel-updates" aria-labelledby="security-center-tab-updates">
-          <div data-role="updates-view"></div>
-        </section>
-      </main>
+          </section>
+
+          <section class="authority-area-panel" data-area-panel="system">
+            <section class="authority-section" data-section="updates" role="tabpanel" id="security-center-tabpanel-updates" aria-labelledby="security-center-tab-updates">
+              <div data-role="updates-view"></div>
+            </section>
+          </section>
+        </div>
+      </div>
     </div>
   </div>
 </div>

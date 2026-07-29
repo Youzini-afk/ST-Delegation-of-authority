@@ -30,31 +30,28 @@ export function renderAgentWorkbench(state: AgentWorkbenchState): string {
     const selectedWorkspace = state.workspaces.find(workspace => workspace.id === state.selectedWorkspaceId) ?? null;
     const disabled = state.busy || state.loading ? 'disabled' : '';
     const activeRunCount = state.runs.runs.filter(run => isActiveAgentRun(run.status)).length;
+    const workspaceLabel = selectedWorkspace?.displayName ?? '尚未选择工作区';
+    const workspaceHead = selectedWorkspace?.headCommitId?.slice(0, 12) ?? '无检查点';
 
     return `
         <div class="authority-agent-workbench">
-            <header class="authority-agent-header">
+            <header class="authority-agent-context">
                 <div>
-                    <div class="authority-eyebrow">Agent workspace</div>
-                    <h2>Agent 工作台</h2>
-                    <p>规划、执行和审查对 SillyTavern 的变更；每次写入仍受权限、工作区边界与版本检查点保护。</p>
+                    <div class="authority-muted">当前工作区</div>
+                    <h2>${escapeHtml(workspaceLabel)}</h2>
+                    <div class="authority-muted"><code>${escapeHtml(workspaceHead)}</code> · ${state.workspaceStatus?.dirty ? '有未提交变更' : '工作区干净'}</div>
                 </div>
                 <div class="authority-page-actions">
+                    <span class="authority-muted">${escapeHtml(String(activeRunCount))} 进行中 · ${escapeHtml(String(state.runs.page.totalCount))} 条运行</span>
                     <button type="button" class="authority-action-button" data-action="agent-refresh" ${disabled}>刷新</button>
                     <button type="button" class="authority-action-button" data-action="agent-prune-runs" ${disabled}>保留最近 200 条终态记录</button>
                 </div>
             </header>
             ${state.error ? `<div class="authority-inline-note">${escapeHtml(state.error)}</div>` : ''}
-            <div class="authority-agent-summary" aria-label="Agent 状态摘要">
-                <span><strong>${escapeHtml(String(activeRunCount))}</strong> 进行中</span>
-                <span><strong>${escapeHtml(String(state.runs.page.totalCount))}</strong> 条运行</span>
-                <span><strong>${escapeHtml(String(state.workspaces.length))}</strong> 个工作区</span>
-                <span><strong>${escapeHtml(String(state.tools.length))}</strong> 个工具</span>
-            </div>
             <div class="authority-agent-ide">
                 <aside class="authority-agent-rail" aria-label="运行与历史">
-                    ${renderRunLauncher(state, disabled)}
                     ${renderRunHistory(state, disabled)}
+                    ${renderRunLauncher(state, disabled)}
                 </aside>
                 <section class="authority-agent-main" data-role="agent-run-detail" aria-label="运行详情">
                     ${renderAgentRunDetail(state.selectedRun, state.busy)}
@@ -151,8 +148,8 @@ export function renderAgentRunDetail(detail: AgentRunDetail | null, busy = false
 
 function renderRunLauncher(state: AgentWorkbenchState, disabled: string): string {
     return `
-        <details class="authority-agent-panel authority-agent-launcher" open>
-            <summary><span>新建运行</span><span class="authority-muted">描述目标</span></summary>
+        <details class="authority-agent-panel authority-agent-launcher" ${state.runs.runs.length === 0 ? 'open' : ''}>
+            <summary><span>新建任务</span><span class="authority-muted">＋</span></summary>
             <div class="authority-agent-panel__body authority-stack">
                 <label class="authority-agent-field">目标<textarea data-role="agent-run-goal" rows="4" placeholder="例如：定位角色卡加载冲突，给出修复并运行相关测试" ${disabled}></textarea></label>
                 <label class="authority-agent-field">补充指令<textarea data-role="agent-run-instructions" rows="3" placeholder="可选：验收标准、不能触碰的范围" ${disabled}></textarea></label>
@@ -176,7 +173,7 @@ function renderRunHistory(state: AgentWorkbenchState, disabled: string): string 
     ];
     return `
         <section class="authority-agent-panel authority-agent-history">
-            <div class="authority-agent-panel__header"><strong>运行历史</strong><span class="authority-muted">${escapeHtml(String(state.runs.page.totalCount))} 条</span></div>
+            <div class="authority-agent-panel__header"><strong>任务</strong><span class="authority-muted">${escapeHtml(String(state.runs.page.totalCount))} 条</span></div>
             <div class="authority-agent-history__filter"><select data-role="agent-run-status" aria-label="按运行状态筛选" ${disabled}>${statuses.map(([value, label]) => `<option value="${value}" ${state.runStatus === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
             <div class="authority-agent-run-list">
                 ${state.runs.runs.map(run => `
@@ -239,7 +236,7 @@ function renderWorkspaceStudio(state: AgentWorkbenchState, selected: AgentWorkbe
 
 function renderProfileStudio(state: AgentWorkbenchState, selected: AgentLlmProfile | null, disabled: string): string {
     return `
-        <details class="authority-agent-inspector-panel" ${state.profiles.length === 0 || selected ? 'open' : ''}>
+        <details class="authority-agent-inspector-panel" ${state.profiles.length === 0 ? 'open' : ''}>
             <summary><span>LLM 配置</span><span class="authority-muted">${escapeHtml(String(state.profiles.length))} 个</span></summary>
             <div class="authority-agent-inspector-panel__body authority-stack">
                 <div class="authority-muted">密钥只写入服务端；界面只显示掩码与指纹。</div>
