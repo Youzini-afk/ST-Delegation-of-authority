@@ -1,4 +1,6 @@
-.authority-panel {
+.authority-panel,
+.authority-permission-dialog,
+.authority-impact-dialog {
   --authority-text: var(--SmartThemeBodyColor, #ececec);
   --authority-muted: var(--SmartThemeEmColor, #b8b8b8);
   --authority-accent: var(--SmartThemeQuoteColor, #79a7ff);
@@ -200,6 +202,15 @@
   gap: 5px;
   min-width: 0;
   overflow: hidden;
+}
+
+.authority-header-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--authority-muted);
+  font-size: 0.78em;
+  white-space: nowrap;
 }
 
 .authority-primary-action {
@@ -1078,6 +1089,20 @@
   background: color-mix(in srgb, var(--authority-accent) 16%, transparent) !important;
 }
 
+.authority-action-button--danger {
+  border-color: color-mix(in srgb, var(--authority-danger) 58%, var(--authority-border)) !important;
+  background: color-mix(in srgb, var(--authority-danger) 10%, transparent) !important;
+}
+
+.authority-panel [data-action='agent-delete-profile'],
+.authority-panel [data-action='agent-prune-runs'],
+.authority-panel [data-action='agent-workspace-rollback'],
+.authority-panel [data-action='restore-st-manager-backup'],
+.authority-panel [data-action='rollback-native-migration'],
+.authority-panel [data-action='reset-all-grants'] {
+  border-color: color-mix(in srgb, var(--authority-danger) 58%, var(--authority-border));
+}
+
 .authority-action-button--wide {
   width: 100%;
 }
@@ -1664,6 +1689,276 @@
   font-size: 0.84em;
 }
 
+.authority-governance-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.authority-governance-dashboard__split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 12px;
+}
+
+.authority-governance-focus,
+.authority-governance-assets {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.authority-governance-focus .authority-log-row {
+  grid-template-columns: minmax(110px, auto) minmax(72px, auto) minmax(0, 1fr);
+}
+
+.authority-governance-focus .authority-log-row__message {
+  grid-column: 1 / -1;
+}
+
+.authority-governance-jobs {
+  display: grid;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+.authority-system-workspace {
+  gap: 10px;
+}
+
+.authority-system-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding: 9px 11px;
+  border: 1px solid var(--authority-border);
+  border-radius: 6px;
+  background: var(--authority-subtle);
+  color: var(--authority-muted);
+  font-size: 0.84em;
+}
+
+.authority-system-status span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.authority-system-status strong {
+  color: var(--authority-text);
+}
+
+.authority-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--authority-warning);
+}
+
+.authority-status-dot--ready,
+.authority-status-dot--running {
+  background: var(--authority-success);
+}
+
+.authority-status-dot--failed,
+.authority-status-dot--error,
+.authority-status-dot--missing {
+  background: var(--authority-danger);
+}
+
+.authority-system-section,
+.authority-system-subsection {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--authority-border);
+  border-radius: var(--authority-radius);
+  background: var(--authority-subtle);
+}
+
+.authority-system-section > summary,
+.authority-system-subsection > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.authority-system-section > summary::-webkit-details-marker,
+.authority-system-subsection > summary::-webkit-details-marker {
+  display: none;
+}
+
+.authority-system-section > summary:hover,
+.authority-system-subsection > summary:hover {
+  background: var(--authority-hover);
+}
+
+.authority-system-section > summary > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.authority-system-section > summary small,
+.authority-system-subsection > summary > span:last-child {
+  color: var(--authority-muted);
+  font-size: 0.78em;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.authority-system-section--danger {
+  border-color: color-mix(in srgb, var(--authority-warning) 55%, var(--authority-border));
+}
+
+.authority-system-section__body,
+.authority-system-subsection__body {
+  min-width: 0;
+  padding: 12px;
+  border-top: 1px solid var(--authority-border);
+  background: color-mix(in srgb, var(--authority-surface) 92%, transparent);
+}
+
+.authority-system-section__body > .authority-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.authority-system-section__intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.authority-system-section__intro > :first-child {
+  min-width: 0;
+}
+
+.authority-system-facts,
+.authority-system-result__facts,
+.authority-system-usage-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 7px;
+}
+
+.authority-system-facts > div,
+.authority-system-result__facts > span,
+.authority-system-usage-summary > span {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--authority-border);
+  border-radius: 5px;
+  background: var(--authority-subtle);
+}
+
+.authority-system-facts span,
+.authority-system-result__facts small,
+.authority-system-usage-summary small {
+  color: var(--authority-muted);
+  font-size: 0.76em;
+}
+
+.authority-system-facts strong,
+.authority-system-result__facts strong,
+.authority-system-usage-summary strong {
+  overflow-wrap: anywhere;
+}
+
+.authority-system-result {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--authority-info) 48%, var(--authority-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--authority-info) 7%, transparent);
+}
+
+.authority-system-import {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(250px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--authority-border);
+  border-radius: 6px;
+  background: var(--authority-subtle);
+}
+
+.authority-system-import label {
+  display: grid;
+  gap: 4px;
+  color: var(--authority-muted);
+  font-size: 0.82em;
+}
+
+.authority-impact-dialog {
+  display: grid;
+  gap: 11px;
+  max-width: 560px;
+  color: var(--authority-text);
+  font-family: var(--authority-font);
+  line-height: 1.45;
+}
+
+.authority-impact-dialog__heading {
+  padding-left: 11px;
+  border-left: 3px solid var(--authority-warning);
+}
+
+.authority-impact-dialog--danger .authority-impact-dialog__heading {
+  border-left-color: var(--authority-danger);
+}
+
+.authority-impact-dialog__heading h3 {
+  margin: 0 0 4px;
+}
+
+.authority-impact-dialog__heading p {
+  margin: 0;
+  color: var(--authority-muted);
+}
+
+.authority-impact-dialog__target {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  padding: 9px;
+  border: 1px solid var(--authority-border);
+  border-radius: 5px;
+  background: var(--authority-subtle);
+}
+
+.authority-impact-dialog__target span {
+  color: var(--authority-muted);
+  font-size: 0.8em;
+}
+
+.authority-impact-dialog__target code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.authority-impact-dialog__effects {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 22px;
+}
+
 .authority-loading {
   display: grid;
   place-items: center;
@@ -1752,6 +2047,7 @@
   }
 
   .authority-overview-layout,
+  .authority-governance-dashboard__split,
   .authority-log-layout,
   .authority-diagnostics-grid,
   .authority-maintenance-workspace {
@@ -1803,6 +2099,11 @@
 
   .authority-governance-layout {
     grid-template-columns: 1fr;
+  }
+
+  .authority-system-import {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .authority-section[data-section='agent'] {
@@ -1885,6 +2186,7 @@
   .authority-page-header,
   .authority-agent-header,
   .authority-agent-run-header,
+  .authority-system-section__intro,
   .authority-governance-header,
   .authority-page-hero,
   .authority-list-card,
@@ -1893,6 +2195,11 @@
     display: grid;
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .authority-system-section > summary,
+  .authority-system-subsection > summary {
+    align-items: flex-start;
   }
 
   .authority-page-actions,

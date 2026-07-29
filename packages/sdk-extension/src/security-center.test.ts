@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 describe('Security Center tab interaction', () => {
     const source = fs.readFileSync(path.resolve(__dirname, 'security-center.ts'), 'utf8');
     const constants = fs.readFileSync(path.resolve(__dirname, 'security-center/constants.ts'), 'utf8');
+    const impactConfirmation = fs.readFileSync(path.resolve(__dirname, 'security-center/impact-confirmation.ts'), 'utf8');
     const html = fs.readFileSync(path.resolve(__dirname, '../static/security-center.html'), 'utf8');
     const css = fs.readFileSync(path.resolve(__dirname, '../static/style.css'), 'utf8');
 
@@ -148,5 +149,14 @@ describe('Security Center tab interaction', () => {
         expect(css).toContain('.authority-tab__icon,');
         expect(css).toContain('.authority-tab__icon * {');
         expect(css).toContain('pointer-events: none;');
+    });
+
+    it('routes destructive actions through the themed impact confirmation flow', () => {
+        expect(source).not.toMatch(/\b(?:window\.|globalThis\.)?confirm\s*\(/);
+        expect(source.match(/showImpactConfirmation\(/g)?.length).toBeGreaterThanOrEqual(10);
+        expect(impactConfirmation).toContain("import { Popup, POPUP_RESULT, POPUP_TYPE } from '/scripts/popup.js'");
+        expect(impactConfirmation).toContain("cancelButton: '取消'");
+        expect(impactConfirmation).toContain('options.effects');
+        expect(impactConfirmation).toContain('value.textContent = options.target');
     });
 });
