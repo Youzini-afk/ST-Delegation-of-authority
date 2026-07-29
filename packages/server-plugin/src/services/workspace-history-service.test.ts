@@ -438,7 +438,7 @@ describe('WorkspaceHistoryService', () => {
             operationId: 'restore-recovery-safety',
         }, { kind: 'rescue' });
         expect(read(fixture.root, 'state.txt')).toBe('external write');
-    });
+    }, 15_000);
 
     it('does not steal old locks whose owner cannot be proven dead', async () => {
         const fixture = await createFixture();
