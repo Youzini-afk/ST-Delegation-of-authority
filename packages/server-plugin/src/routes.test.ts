@@ -133,6 +133,7 @@ describe('registerRoutes', () => {
             '/jobs/:id',
             '/events/stream',
             '/admin/agent/workspaces',
+            '/admin/agent/workspaces/default',
             '/admin/agent/workspaces/:workspaceId',
             '/admin/agent/workspaces/:workspaceId/status',
             '/admin/agent/workspaces/:workspaceId/commits',
