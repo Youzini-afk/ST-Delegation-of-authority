@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import type {
-    AgentRunMessage,
+    AgentLlmMessage,
     AgentToolDescriptor,
 } from '@stdo/shared-types';
 import { AgentHostToolService } from './agent-host-tools.js';
+import { AgentProfileStoreService } from './agent-profile-store-service.js';
 import type {
     AgentCompletionRequester,
     AgentLlmCompletionResponse,
@@ -18,7 +19,6 @@ import type {
 import { AgentSessionJournalService } from './agent-session-journal-service.js';
 import { AgentSessionRecoveryService } from './agent-session-recovery-service.js';
 import type { AgentSessionWriter } from './agent-session-store-service.js';
-import { AgentStoreService } from './agent-store-service.js';
 import { AgentSessionToolExecutor, type AgentSessionToolExecutorHost } from './agent-session-tool-executor.js';
 import { AgentToolRegistryService } from './agent-tool-registry-service.js';
 import {
@@ -53,7 +53,7 @@ export interface AgentSessionRunExecutorOptions {
 
 interface PreparedGeneration {
     profileId: string;
-    messages: AgentRunMessage[];
+    messages: AgentLlmMessage[];
     tools: AgentLlmToolDefinition[];
     stepId: string;
     generationId: string;
@@ -69,7 +69,7 @@ export class AgentSessionRunExecutor {
     private readonly approvalTimeoutMs: number;
 
     constructor(
-        private readonly profileStore: AgentStoreService,
+        private readonly profileStore: AgentProfileStoreService,
         private readonly hostTools: AgentHostToolService,
         private readonly tools: AgentToolRegistryService,
         private readonly toolExecutor: AgentSessionToolExecutor,

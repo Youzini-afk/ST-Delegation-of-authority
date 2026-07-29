@@ -1,9 +1,9 @@
 import { SseBroker } from './events/sse-broker.js';
 import { AdminPackageService } from './services/admin-package-service.js';
 import { AgentHostToolService } from './services/agent-host-tools.js';
+import { AgentProfileStoreService } from './services/agent-profile-store-service.js';
 import { AgentSessionRuntimeService } from './services/agent-session-runtime-service.js';
 import { AgentSessionStoreService } from './services/agent-session-store-service.js';
-import { AgentStoreService } from './services/agent-store-service.js';
 import { AuditService } from './services/audit-service.js';
 import { CompanionModuleLoaderService } from './services/companion-module-loader-service.js';
 import { CoreService } from './services/core-service.js';
@@ -74,7 +74,7 @@ export interface AuthorityRuntime {
      */
     companionLoader: CompanionModuleLoaderService;
     workspaceHistory: WorkspaceHistoryService;
-    agentProfiles: AgentStoreService;
+    agentProfiles: AgentProfileStoreService;
     agentSessions: AgentSessionRuntimeService;
 }
 
@@ -104,11 +104,11 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
     const globalPaths = getGlobalAuthorityPaths();
     const workspaceHistory = new WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
-    const agentStore = new AgentStoreService(globalPaths.agentStateDir);
+    const agentProfiles = new AgentProfileStoreService(globalPaths.agentStateDir);
     const agentHostTools = new AgentHostToolService(workspaceHistory);
     const agentSessions = new AgentSessionRuntimeService(
         new AgentSessionStoreService(globalPaths.agentStateDir),
-        agentStore,
+        agentProfiles,
         workspaceHistory,
         agentHostTools,
         { moduleHost: modules },
@@ -139,7 +139,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         idempotency,
         companionLoader,
         workspaceHistory,
-        agentProfiles: agentStore,
+        agentProfiles,
         agentSessions,
     };
 }

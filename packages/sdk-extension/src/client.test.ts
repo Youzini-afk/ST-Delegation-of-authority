@@ -2129,6 +2129,90 @@ describe('AuthorityClient', () => {
             .rejects.toThrow('did not complete within 20ms');
     });
 
+    it('reconnects generic event streams with fresh one-time tickets', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const { buildEventStreamUrl } = await import('./api.js');
+        const sources: FakeEventSource[] = [];
+        const openedUrls: string[] = [];
+        const close = vi.fn();
+        const listeners = new Map<string, (event: unknown) => void>();
+
+        class FakeMessageEvent {
+            readonly data: string;
+
+            constructor(_type: string, init: { data: string }) {
+                this.data = init.data;
+            }
+        }
+
+        class FakeEventSource {
+            onerror: (() => void) | null = null;
+            onmessage: ((event: MessageEvent) => void) | null = null;
+
+            constructor(url: string | URL, _init?: EventSourceInit) {
+                openedUrls.push(String(url));
+                sources.push(this);
+            }
+
+            addEventListener(type: string, listener: (event: never) => void): void {
+                listeners.set(type, listener as (event: unknown) => void);
+            }
+
+            close(): void {
+                close();
+            }
+        }
+
+        vi.stubGlobal('MessageEvent', FakeMessageEvent);
+        vi.stubGlobal('EventSource', FakeEventSource);
+        vi.useFakeTimers();
+        try {
+            authorityRequestMock
+                .mockResolvedValueOnce(buildSession())
+                .mockResolvedValueOnce({ ticket: 'a'.repeat(43) })
+                .mockResolvedValueOnce({ ticket: 'b'.repeat(43) });
+            const client = new AuthorityClient({
+                extensionId: 'third-party/ext-a',
+                displayName: 'Ext A',
+                version: AUTHORITY_VERSION,
+                installType: 'local',
+                declaredPermissions: {},
+            });
+            vi.spyOn(client, 'ensurePermission').mockResolvedValue({
+                decision: 'granted',
+                key: 'events.stream:extension:third-party/ext-a',
+                riskLevel: 'low',
+                target: 'extension:third-party/ext-a',
+                resource: 'events.stream',
+            });
+            const onEvent = vi.fn();
+            const subscription = await client.events.subscribe({
+                channel: 'extension:third-party/ext-a',
+                eventNames: ['authority.job'],
+                onEvent,
+            });
+
+            listeners.get('authority.job')?.(new FakeMessageEvent('message', { data: '{"id":"job-1"}' }));
+            expect(onEvent).toHaveBeenCalledWith({ name: 'authority.job', data: { id: 'job-1' } });
+            expect(authorityRequestMock).toHaveBeenNthCalledWith(2, '/events/ticket', expect.objectContaining({
+                method: 'POST',
+                body: { channel: 'extension:third-party/ext-a' },
+            }));
+            expect(buildEventStreamUrl).toHaveBeenCalledWith('a'.repeat(43));
+            expect(openedUrls).toEqual(['http://localhost/events']);
+
+            sources[0]!.onerror?.();
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(buildEventStreamUrl).toHaveBeenNthCalledWith(2, 'b'.repeat(43));
+            expect(openedUrls).toEqual(['http://localhost/events', 'http://localhost/events']);
+            subscription.close();
+            expect(close).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('subscribes to Agent session snapshots and journal signals over SSE', async () => {
         const { AuthorityClient } = await import('./client.js');
         const { buildAgentSessionStreamUrl } = await import('./api.js');

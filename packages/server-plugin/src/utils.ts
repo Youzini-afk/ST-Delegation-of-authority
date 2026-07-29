@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import type { AuthorityErrorCategory, AuthorityErrorCode, AuthorityErrorPayload, PermissionResource } from '@stdo/shared-types';
-import { RESOURCE_RISK, SESSION_HEADER, SESSION_QUERY, SUPPORTED_RESOURCES } from './constants.js';
+import { RESOURCE_RISK, SESSION_HEADER, SUPPORTED_RESOURCES } from './constants.js';
 import type { AuthorityRequest, PermissionDescriptor, RequestUser, UserContext } from './types.js';
 
 export class AuthorityServiceError extends Error {
@@ -132,12 +132,6 @@ export function getSessionToken(request: AuthorityRequest): string | null {
     if (typeof headerValue === 'string' && headerValue.trim()) {
         return headerValue.trim();
     }
-
-    const queryValue = request.query?.[SESSION_QUERY];
-    if (typeof queryValue === 'string' && queryValue.trim()) {
-        return queryValue.trim();
-    }
-
     return null;
 }
 

@@ -3,16 +3,6 @@ import type { RiskLevel } from './permissions.js';
 
 export type AgentExecutionMode = 'plan' | 'ask' | 'auto';
 
-export type AgentRunStatus =
-    | 'queued'
-    | 'running'
-    | 'waiting_approval'
-    | 'waiting_browser_tool'
-    | 'completed'
-    | 'failed'
-    | 'cancelled'
-    | 'interrupted';
-
 export type AgentToolExecution = 'host' | 'module' | 'browser';
 
 export type AgentToolApprovalPolicy = 'never' | 'on-mutation' | 'always';
@@ -325,86 +315,7 @@ export interface AgentSessionBrowserToolClaimResponse {
     invocation: AgentSessionToolInvocation | null;
 }
 
-export interface AgentRunCreateRequest {
-    goal: string;
-    context?: unknown;
-    instructions?: string;
-    workspaceId: string;
-    profileId?: string;
-    mode?: AgentExecutionMode;
-    allowedTools?: string[];
-    maxSteps?: number;
-}
-
-export interface AgentRunRecord {
-    id: string;
-    callerUserHandle: string;
-    callerExtensionId: string;
-    workspaceId: string;
-    profileId: string;
-    goal: string;
-    mode: AgentExecutionMode;
-    status: AgentRunStatus;
-    allowedTools: string[];
-    stepCount: number;
-    maxSteps: number;
-    createdAt: string;
-    updatedAt: string;
-    startedAt?: string;
-    finishedAt?: string;
-    finalText?: string;
-    error?: string;
-    headCommitId?: string;
-    pendingApprovalId?: string;
-}
-
-export interface AgentRunListRequest {
-    page?: CursorPageRequest;
-    status?: AgentRunStatus;
-}
-
-export interface AgentRunListResponse {
-    runs: AgentRunRecord[];
-    page: CursorPageInfo;
-}
-
-export interface AgentRunPruneRequest {
-    retainLatest?: number;
-}
-
-export interface AgentRunPruneResponse {
-    deletedRuns: number;
-    reclaimedBytes: number;
-    retainedTerminalRuns: number;
-    activeRuns: number;
-}
-
-export type AgentRunEventType =
-    | 'run.created'
-    | 'run.started'
-    | 'assistant.message'
-    | 'tool.requested'
-    | 'tool.waiting_approval'
-    | 'tool.waiting_browser'
-    | 'tool.approval_resolved'
-    | 'tool.started'
-    | 'tool.completed'
-    | 'tool.failed'
-    | 'workspace.checkpoint'
-    | 'run.completed'
-    | 'run.failed'
-    | 'run.cancelled'
-    | 'run.interrupted';
-
-export interface AgentRunEvent {
-    sequence: number;
-    runId: string;
-    type: AgentRunEventType;
-    timestamp: string;
-    payload?: unknown;
-}
-
-export interface AgentRunMessage {
+export interface AgentLlmMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
     content: string | null;
     toolCallId?: string;
@@ -413,16 +324,6 @@ export interface AgentRunMessage {
         name: string;
         arguments: string;
     }>;
-}
-
-export interface AgentRunDetail {
-    run: AgentRunRecord;
-    messages: AgentRunMessage[];
-    events: AgentRunEvent[];
-    invocations: AgentToolInvocation[];
-    approvals: AgentApprovalRecord[];
-    context?: unknown;
-    instructions?: string;
 }
 
 export type AgentToolInvocationStatus =
@@ -435,23 +336,7 @@ export type AgentToolInvocationStatus =
     | 'outcome_unknown'
     | 'timed_out';
 
-export interface AgentToolInvocation {
-    callId: string;
-    runId: string;
-    toolId: string;
-    execution: AgentToolExecution;
-    arguments: unknown;
-    status: AgentToolInvocationStatus;
-    createdAt: string;
-    updatedAt: string;
-    deadlineAt: string;
-    browserInstanceId?: string;
-    claimId?: string;
-    result?: unknown;
-    error?: string;
-}
-
-export interface AgentToolResultRequest {
+export interface AgentBrowserToolResultRequest {
     runId: string;
     callId: string;
     claimId: string;
@@ -462,23 +347,6 @@ export interface AgentToolResultRequest {
 }
 
 export type AgentApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'cancelled';
-
-export interface AgentApprovalRecord {
-    id: string;
-    runId: string;
-    callId: string;
-    toolId: string;
-    title: string;
-    summary: string;
-    arguments: unknown;
-    riskLevel: RiskLevel;
-    status: AgentApprovalStatus;
-    createdAt: string;
-    updatedAt: string;
-    expiresAt?: string;
-    resolvedAt?: string;
-    resolvedByUserHandle?: string;
-}
 
 export interface AgentApprovalResolveRequest {
     decision: 'approve' | 'deny';
@@ -501,8 +369,4 @@ export interface AgentBrowserToolClaimRequest {
     browserInstanceId: string;
     claimId: string;
     callId?: string;
-}
-
-export interface AgentBrowserToolClaimResponse {
-    invocation: AgentToolInvocation | null;
 }

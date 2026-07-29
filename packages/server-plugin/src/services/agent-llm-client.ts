@@ -1,5 +1,5 @@
-import type { AgentRunMessage } from '@stdo/shared-types';
-import type { StoredAgentLlmProfile } from './agent-store-service.js';
+import type { AgentLlmMessage } from '@stdo/shared-types';
+import type { StoredAgentLlmProfile } from './agent-profile-store-service.js';
 
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -18,13 +18,13 @@ export interface AgentLlmToolDefinition {
 }
 
 export interface AgentLlmCompletionRequest {
-    messages: AgentRunMessage[];
+    messages: AgentLlmMessage[];
     tools: AgentLlmToolDefinition[];
     signal: AbortSignal;
 }
 
 export interface AgentLlmCompletionResponse {
-    message: AgentRunMessage;
+    message: AgentLlmMessage;
     finishReason: string | null;
     usage?: unknown;
     providerRequestId?: string;
@@ -132,7 +132,7 @@ function completionUrl(baseUrl: string): string {
     return baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
 }
 
-function toOpenAiMessage(message: AgentRunMessage): Record<string, unknown> {
+function toOpenAiMessage(message: AgentLlmMessage): Record<string, unknown> {
     if (message.role === 'tool') {
         return {
             role: 'tool',
@@ -192,7 +192,7 @@ function providerRequestId(headerValue: string | null, payloadValue: unknown): s
     return value && value.length <= 500 ? value : undefined;
 }
 
-function parseToolCalls(value: unknown): NonNullable<AgentRunMessage['toolCalls']> {
+function parseToolCalls(value: unknown): NonNullable<AgentLlmMessage['toolCalls']> {
     if (!Array.isArray(value) || value.length > 32) {
         throw new Error('LLM response contained invalid tool calls');
     }

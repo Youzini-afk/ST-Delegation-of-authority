@@ -241,6 +241,7 @@ describe('registerRoutes', () => {
             '/jobs/list',
             '/jobs/:id/cancel',
             '/jobs/:id/requeue',
+            '/events/ticket',
             '/admin/agent/workspaces',
             '/admin/agent/workspaces/:workspaceId/checkpoints',
             '/admin/agent/workspaces/:workspaceId/rollback',

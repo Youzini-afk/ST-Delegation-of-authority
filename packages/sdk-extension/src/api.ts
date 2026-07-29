@@ -123,10 +123,9 @@ export function isInvalidSessionError(error: unknown): boolean {
     return error instanceof AuthoritySessionError && error.code === 'invalid_session';
 }
 
-export function buildEventStreamUrl(sessionToken: string, channel: string): string {
+export function buildEventStreamUrl(ticket: string): string {
     const url = new URL(`${AUTHORITY_API_BASE}/events/stream`, window.location.origin);
-    url.searchParams.set('authoritySessionToken', sessionToken);
-    url.searchParams.set('channel', channel);
+    url.searchParams.set('ticket', ticket);
     return url.toString();
 }
 

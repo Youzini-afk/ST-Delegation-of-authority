@@ -28,21 +28,28 @@ export class SseBroker {
             timer: null,
         };
         this.clients.add(client);
-        this.emitToClient(client, 'authority.connected', {
-            timestamp: nowIso(),
-            ...(channel.startsWith('extension:') ? { extensionId: channel.slice('extension:'.length) } : { channel }),
-        });
-        void this.pollClient(client);
-        client.timer = setInterval(() => {
-            void this.pollClient(client);
-        }, 500);
-
-        return () => {
+        const cleanup = () => {
             if (client.timer) {
                 clearInterval(client.timer);
+                client.timer = null;
             }
             this.clients.delete(client);
         };
+        try {
+            this.emitToClient(client, 'authority.connected', {
+                timestamp: nowIso(),
+                ...(channel.startsWith('extension:') ? { extensionId: channel.slice('extension:'.length) } : { channel }),
+            });
+            void this.pollClient(client);
+            client.timer = setInterval(() => {
+                void this.pollClient(client);
+            }, 500);
+            client.timer.unref?.();
+            return cleanup;
+        } catch (error) {
+            cleanup();
+            throw error;
+        }
     }
 
     private async pollClient(client: ClientRecord): Promise<void> {
@@ -51,19 +58,27 @@ export class SseBroker {
         }
 
         client.polling = true;
+        let result: Awaited<ReturnType<CoreService['pollControlEvents']>>;
         try {
-            const { events, cursor } = await this.core.pollControlEvents(client.dbPath, {
+            result = await this.core.pollControlEvents(client.dbPath, {
                 userHandle: client.userHandle,
                 channel: client.channel,
                 ...(client.cursor !== null ? { afterId: client.cursor } : {}),
             });
-            client.cursor = cursor;
-            for (const event of events) {
+        } catch {
+            client.polling = false;
+            return;
+        }
+        try {
+            client.cursor = result.cursor;
+            for (const event of result.events) {
                 this.emitToClient(client, event.name, event.payload);
                 client.cursor = event.id;
             }
         } catch {
-            return;
+            if (client.timer) clearInterval(client.timer);
+            client.timer = null;
+            this.clients.delete(client);
         } finally {
             client.polling = false;
         }

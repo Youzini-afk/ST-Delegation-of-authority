@@ -1,14 +1,17 @@
 import crypto from 'node:crypto';
 import type {
+    AgentBrowserToolResultRequest,
     AgentBrowserToolClaimRequest,
     AgentBrowserToolRegistrationRequest,
     AgentBrowserToolRegistrationResponse,
-    AgentExecutionMode,
+    AgentSessionCreateRequest,
+    AgentSessionSendRequest,
     AgentSessionUpdateRequest,
     AgentToolDescriptor,
 } from '@stdo/shared-types';
 import type { SessionRecord, UserContext } from '../types.js';
 import { AgentHostToolService } from './agent-host-tools.js';
+import { AgentProfileStoreService } from './agent-profile-store-service.js';
 import {
     AgentLlmClient,
     type AgentCompletionRequester,
@@ -25,7 +28,6 @@ import { AgentSessionJournalService } from './agent-session-journal-service.js';
 import { AgentSessionRecoveryService } from './agent-session-recovery-service.js';
 import { AgentSessionRunExecutor } from './agent-session-run-executor.js';
 import { AgentSessionStoreService, type AgentSessionWriter } from './agent-session-store-service.js';
-import { AgentStoreService } from './agent-store-service.js';
 import { AgentSessionToolExecutor } from './agent-session-tool-executor.js';
 import { AgentToolRegistryService } from './agent-tool-registry-service.js';
 import type { ModuleHostService } from './module-host-service.js';
@@ -58,24 +60,6 @@ export interface AgentSessionCallerContext {
     session: SessionRecord;
 }
 
-export interface AgentSessionCreateRequest {
-    workspaceId: string;
-    profileId?: string;
-    title?: string;
-    mode?: AgentExecutionMode;
-    allowedTools?: string[];
-    maxSteps?: number;
-    message?: string;
-    instructions?: string;
-    context?: unknown;
-}
-
-export interface AgentSessionSendRequest {
-    content: string;
-    ref?: string;
-    delivery?: 'auto' | 'steer' | 'follow_up';
-}
-
 export interface AgentSessionSendResult {
     snapshot: AgentSessionSnapshot;
     runId: string | null;
@@ -91,16 +75,6 @@ export interface AgentSessionStartResult {
 export interface AgentSessionBrowserClaimResult {
     sessionId: string;
     invocation: AgentSessionToolInvocationState;
-}
-
-export interface AgentSessionBrowserResultRequest {
-    runId: string;
-    callId: string;
-    claimId: string;
-    browserInstanceId: string;
-    status: 'completed' | 'failed' | 'cancelled';
-    result?: unknown;
-    error?: string;
 }
 
 export interface AgentSessionRuntimeOptions {
@@ -168,7 +142,7 @@ export class AgentSessionRuntimeService {
 
     constructor(
         private readonly sessionStore: AgentSessionStoreService,
-        private readonly profileStore: AgentStoreService,
+        private readonly profileStore: AgentProfileStoreService,
         private readonly history: WorkspaceHistoryService,
         hostTools: AgentHostToolService,
         options: AgentSessionRuntimeOptions = {},
@@ -649,7 +623,7 @@ export class AgentSessionRuntimeService {
     async submitBrowserToolResult(
         userHandle: string,
         extensionId: string,
-        request: AgentSessionBrowserResultRequest,
+        request: AgentBrowserToolResultRequest,
     ): Promise<AgentSessionToolInvocationState> {
         this.assertRunning();
         if (request.status !== 'completed' && request.status !== 'failed' && request.status !== 'cancelled') {

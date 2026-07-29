@@ -9,7 +9,6 @@ export const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
 export const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
 
 export const SESSION_HEADER = 'x-authority-session-token';
-export const SESSION_QUERY = 'authoritySessionToken';
 
 export const MAX_KV_VALUE_BYTES = 128 * 1024;
 export const MAX_BLOB_BYTES = 16 * 1024 * 1024;

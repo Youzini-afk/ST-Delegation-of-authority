@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { AgentExecutionMode, AgentRunMessage, AgentToolDescriptor } from '@stdo/shared-types';
+import type { AgentExecutionMode, AgentLlmMessage, AgentToolDescriptor } from '@stdo/shared-types';
 import type { AgentLlmToolDefinition } from './agent-llm-client.js';
 import type {
     AgentSessionGenerationState,
@@ -45,11 +45,11 @@ export function requireRef(snapshot: AgentSessionSnapshot, refName: string) {
     return ref;
 }
 
-export function conversationMessages(snapshot: AgentSessionSnapshot, run: AgentSessionRunState): AgentRunMessage[] {
+export function conversationMessages(snapshot: AgentSessionSnapshot, run: AgentSessionRunState): AgentLlmMessage[] {
     const path = new Set(snapshot.activePaths[run.ref] ?? []);
     const active = snapshot.conversation.filter(entry => path.has(entry.id));
     const lastCompaction = [...active].reverse().find(entry => entry.kind === 'compaction');
-    const messages: AgentRunMessage[] = [{ role: 'system', content: systemPrompt(snapshot.session.workspaceId, run.mode) }];
+    const messages: AgentLlmMessage[] = [{ role: 'system', content: systemPrompt(snapshot.session.workspaceId, run.mode) }];
     if (lastCompaction?.kind === 'compaction') {
         messages.push({ role: 'system', content: `Conversation summary:\n${lastCompaction.summary}` });
         const keep = new Set(lastCompaction.retainedEntryIds);
@@ -63,7 +63,7 @@ export function conversationMessages(snapshot: AgentSessionSnapshot, run: AgentS
     return messages;
 }
 
-function appendProjectedMessage(messages: AgentRunMessage[], entry: AgentSessionSnapshot['conversation'][number]): void {
+function appendProjectedMessage(messages: AgentLlmMessage[], entry: AgentSessionSnapshot['conversation'][number]): void {
     if (entry.kind === 'branch_summary') {
         messages.push({ role: 'system', content: `Earlier branch summary:\n${entry.summary}` });
     } else if (entry.kind === 'message') {

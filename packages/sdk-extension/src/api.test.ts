@@ -95,4 +95,16 @@ describe('authorityRequest', () => {
         expect(url.searchParams.get('ticket')).toBe('one-time-ticket');
         expect(url.searchParams.has('authoritySessionToken')).toBe(false);
     });
+
+    it('builds the generic event stream URL without a session credential or channel', async () => {
+        vi.stubGlobal('window', { location: { origin: 'https://st.example.test' } });
+        const { buildEventStreamUrl } = await import('./api.js');
+
+        const url = new URL(buildEventStreamUrl('generic-one-time-ticket'));
+
+        expect(url.pathname).toBe('/api/plugins/authority/events/stream');
+        expect(url.searchParams.get('ticket')).toBe('generic-one-time-ticket');
+        expect(url.searchParams.has('authoritySessionToken')).toBe(false);
+        expect(url.searchParams.has('channel')).toBe(false);
+    });
 });

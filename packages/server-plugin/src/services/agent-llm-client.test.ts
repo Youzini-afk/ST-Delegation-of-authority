@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { StoredAgentLlmProfile } from './agent-store-service.js';
+import type { StoredAgentLlmProfile } from './agent-profile-store-service.js';
 import { AgentLlmClient } from './agent-llm-client.js';
 
 describe('AgentLlmClient', () => {

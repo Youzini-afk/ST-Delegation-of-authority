@@ -9,7 +9,7 @@ import {
     type AgentSessionRuntimeOptions,
 } from './agent-session-runtime-service.js';
 import { AgentSessionStoreService } from './agent-session-store-service.js';
-import { AgentStoreService } from './agent-store-service.js';
+import { AgentProfileStoreService } from './agent-profile-store-service.js';
 import type { ModuleHostService } from './module-host-service.js';
 import { WorkspaceHistoryService } from './workspace-history-service.js';
 
@@ -847,7 +847,7 @@ async function createBase() {
     fs.mkdirSync(root);
     const history = new WorkspaceHistoryService(path.join(base, 'history'));
     await history.registerWorkspace({ id: 'workspace', rootPath: root, allowedUserHandles: ['authority'] });
-    const profileStore = new AgentStoreService(path.join(base, 'agent'));
+    const profileStore = new AgentProfileStoreService(path.join(base, 'agent'));
     profileStore.upsertProfile({
         id: 'profile',
         displayName: 'Test',

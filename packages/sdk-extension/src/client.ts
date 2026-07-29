@@ -18,7 +18,7 @@ import type {
     AgentSessionToolInvocation,
     AgentSessionUpdateRequest,
     AgentToolDescriptor,
-    AgentToolResultRequest,
+    AgentBrowserToolResultRequest,
     AgentWorkspaceListResponse,
     AgentWorkspaceRecord,
     AgentWorkspaceRegisterRequest,
@@ -644,7 +644,7 @@ export class AuthorityClient {
         browser: {
             registerTools: (request: AgentBrowserToolRegistrationRequest) => Promise<AgentBrowserToolRegistrationResponse>;
             claim: (request: AgentBrowserToolClaimRequest) => Promise<AgentSessionBrowserToolClaimResponse>;
-            submitResult: (request: AgentToolResultRequest) => Promise<AgentSessionToolInvocation>;
+            submitResult: (request: AgentBrowserToolResultRequest) => Promise<AgentSessionToolInvocation>;
         };
         admin: {
             profiles: {
@@ -1763,7 +1763,6 @@ export class AuthorityClient {
                         onEvent: channelOrOptions?.onEvent ?? handler,
                     };
 
-                const session = await this.ensureInitialized();
                 const channel = options.channel ?? `extension:${this.config.extensionId}`;
                 const eventNames = options.eventNames ?? ['authority.connected', 'authority.job'];
 
@@ -1773,31 +1772,72 @@ export class AuthorityClient {
                     reason: `订阅事件流 ${channel}`,
                 });
 
-                const source = new EventSource(buildEventStreamUrl(session.sessionToken, channel), {
-                    withCredentials: true,
-                });
-
                 const notify = (name: string, data: unknown) => {
                     options.onEvent?.({ name, data });
                 };
-
-                for (const name of eventNames) {
-                    source.addEventListener(name, event => {
-                        const payload = event instanceof MessageEvent ? safeParse(event.data) : undefined;
-                        notify(name, payload);
-                    });
-                }
-
-                source.onmessage = event => {
-                    notify('message', safeParse(event.data));
+                let closed = false;
+                let source: EventSource | null = null;
+                let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+                let connectController: AbortController | null = null;
+                let openSource!: () => Promise<void>;
+                const scheduleReconnect = () => {
+                    if (closed || reconnectTimer !== null) return;
+                    reconnectTimer = setTimeout(() => {
+                        reconnectTimer = null;
+                        void openSource().catch(error => {
+                            if (closed) return;
+                            console.warn('Authority event stream reconnect failed', error);
+                            scheduleReconnect();
+                        });
+                    }, 1_000);
+                };
+                openSource = async () => {
+                    const controller = new AbortController();
+                    connectController = controller;
+                    let ticket: string;
+                    try {
+                        const response = await this.requestWithSession<{ ticket: string }>('/events/ticket', {
+                            method: 'POST',
+                            body: { channel },
+                            signal: controller.signal,
+                        });
+                        ticket = oneTimeTicket(response.ticket);
+                    } finally {
+                        if (connectController === controller) connectController = null;
+                    }
+                    if (closed) return;
+                    const nextSource = new EventSource(buildEventStreamUrl(ticket), { withCredentials: true });
+                    source = nextSource;
+                    for (const name of eventNames) {
+                        nextSource.addEventListener(name, event => {
+                            const payload = event instanceof MessageEvent ? safeParse(event.data) : undefined;
+                            notify(name, payload);
+                        });
+                    }
+                    nextSource.onmessage = event => {
+                        notify('message', safeParse(event.data));
+                    };
+                    nextSource.onerror = () => {
+                        if (closed || source !== nextSource) return;
+                        nextSource.close();
+                        source = null;
+                        console.warn('Authority event stream disconnected for', this.config.extensionId, channel);
+                        scheduleReconnect();
+                    };
                 };
 
-                source.onerror = () => {
-                    console.warn('Authority event stream disconnected for', this.config.extensionId, channel);
-                };
-
+                await openSource();
                 return {
-                    close: () => source.close(),
+                    close: () => {
+                        if (closed) return;
+                        closed = true;
+                        connectController?.abort();
+                        connectController = null;
+                        if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+                        reconnectTimer = null;
+                        source?.close();
+                        source = null;
+                    },
                 };
             },
         };
@@ -3175,6 +3215,13 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEvent {
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function oneTimeTicket(value: unknown): string {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(value)) {
+        throw new Error('Authority event stream returned an invalid one-time ticket');
+    }
+    return value;
 }
 
 function agentPathId(value: unknown, label: string): string {
