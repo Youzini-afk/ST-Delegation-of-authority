@@ -9,6 +9,7 @@ import type {
     DataTransferReadResponse,
     NativeMigrationApplyMode,
     NativeMigrationTarget,
+    DeclaredPermissions,
     PermissionResource,
     PermissionStatus,
     SessionInitResponse,
@@ -26,7 +27,6 @@ import {
     renderJobTable,
     renderPolicyRows,
     renderStorageSummary,
-    renderStringList,
     type AlertItem,
 } from './security-center/components.js';
 import {
@@ -71,6 +71,7 @@ import type {
     SecurityCenterOpenOptions,
     SecurityCenterState,
     UsageSummaryResponse,
+    ExtensionStorageSummary,
 } from './security-center/types.js';
 import {
     buildStManagerBridgePayload,
@@ -106,6 +107,81 @@ function getCenterArea(tab: CenterTab): CenterArea {
     if (tab === 'updates') return 'system';
     if (tab === 'settings') return 'settings';
     return 'governance';
+}
+
+function getDeclaredPermissionValue(
+    declared: DeclaredPermissions,
+    resource: PermissionResource,
+): boolean | string[] | undefined {
+    switch (resource) {
+        case 'storage.kv': return declared.storage?.kv;
+        case 'storage.blob': return declared.storage?.blob;
+        case 'fs.private': return declared.fs?.private;
+        case 'sql.private': return declared.sql?.private;
+        case 'trivium.private': return declared.trivium?.private;
+        case 'http.fetch': return declared.http?.allow;
+        case 'jobs.background': return declared.jobs?.background;
+        case 'events.stream': return declared.events?.channels;
+        case 'module.execute': return declared.modules?.execute;
+        case 'agent.run': return declared.agent?.run;
+        case 'agent.browser': return declared.agent?.browser;
+        default: return undefined;
+    }
+}
+
+function renderDeclaredCapabilityRows(declared: DeclaredPermissions): string {
+    const entries = RESOURCE_OPTIONS.flatMap(resource => {
+        const value = getDeclaredPermissionValue(declared, resource);
+        if (!value || (Array.isArray(value) && value.length === 0)) return [];
+        return [{
+            resource,
+            target: Array.isArray(value) ? value.join(' · ') : '扩展私有范围',
+        }];
+    });
+
+    if (entries.length === 0) {
+        return '<div class="authority-empty">该扩展还没有声明任何权限。</div>';
+    }
+
+    return `
+        <div class="authority-capability-list">
+            ${entries.map(({ resource, target }) => {
+        const risk = getRiskLevel(resource);
+        return `
+                    <div class="authority-capability-row">
+                        <span class="authority-capability-row__mark authority-capability-row__mark--${risk}" aria-hidden="true"></span>
+                        <span class="authority-capability-row__body">
+                            <strong>${escapeHtml(getResourceLabel(resource))}</strong>
+                            <code>${escapeHtml(resource)}</code>
+                            <small>${escapeHtml(target)}</small>
+                        </span>
+                        <span class="authority-risk-label authority-risk-label--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
+                    </div>
+                `;
+    }).join('')}
+        </div>
+    `;
+}
+
+function renderCompactStorageSummary(storage: ExtensionStorageSummary): string {
+    const items = [
+        ['KV', `${storage.kvEntries} 项`, '键值数据'],
+        ['Blob', formatBytes(storage.blobBytes), `${storage.blobCount} 个对象`],
+        ['SQL', `${storage.sqlDatabaseCount} 个`, formatBytes(storage.sqlDatabaseBytes)],
+        ['Trivium', `${storage.triviumDatabaseCount} 个`, formatBytes(storage.triviumDatabaseBytes)],
+        ['私有文件', formatBytes(storage.files.totalSizeBytes), `${storage.files.fileCount} 个文件`],
+    ];
+    return `
+        <div class="authority-storage-strip">
+            ${items.map(([label, value, meta]) => `
+                <span>
+                    <small>${escapeHtml(label)}</small>
+                    <strong>${escapeHtml(value)}</strong>
+                    <em>${escapeHtml(meta)}</em>
+                </span>
+            `).join('')}
+        </div>
+    `;
 }
 
 export function bootstrapSecurityCenter(): Promise<void> {
@@ -1987,13 +2063,16 @@ class SecurityCenterView {
         }
 
         if (extensions.length === 0) {
-            container.innerHTML = '<div class="authority-empty">还没有扩展接入权限中心。</div>';
+            container.innerHTML = '<div class="authority-extension-nav__empty">没有匹配的扩展。</div>';
             return;
         }
 
+        const group = document.createElement('div');
+        group.className = 'authority-extension-group';
+        group.innerHTML = '<div class="authority-extension-group__label">已接入</div>';
+
         for (const extension of extensions) {
             const detail = this.state.details.get(extension.id);
-            const declared = getDeclaredPermissionLabels(extension.declaredPermissions);
             const risk = getExtensionRiskLevel(extension);
             const errorCount = (detail?.activity.errors.length ?? 0) + (detail?.activity.warnings.length ?? 0);
             const item = document.createElement('button');
@@ -2003,24 +2082,23 @@ class SecurityCenterView {
             item.innerHTML = `
                 <span class="authority-extension-item__top">
                     <span class="authority-extension-item__title">${escapeHtml(extension.displayName)}</span>
-                    <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
+                    <span class="authority-extension-item__signal authority-extension-item__signal--${errorCount > 0 ? 'attention' : risk}" aria-hidden="true"></span>
                 </span>
-                <span class="authority-extension-item__meta">${escapeHtml(extension.id)}</span>
+                <span class="authority-extension-item__meta">
+                    <code>${escapeHtml(extension.id)}</code>
+                    <span aria-hidden="true">·</span>
+                    <span class="authority-risk-label authority-risk-label--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
+                </span>
                 <span class="authority-extension-item__stats">
-                    <span class="authority-pill authority-pill--runtime">${escapeHtml(getInstallTypeLabel(extension.installType))}</span>
-                    <span class="authority-pill authority-pill--prompt">v${escapeHtml(extension.version)}</span>
-                    <span class="authority-pill authority-pill--granted">允许 ${extension.grantedCount}</span>
-                    <span class="authority-pill authority-pill--denied">拒绝 ${extension.deniedCount}</span>
-                    <span class="authority-pill authority-pill--prompt">声明 ${declared.length}</span>
-                    ${errorCount > 0 ? `<span class="authority-pill authority-pill--error">异常 ${errorCount}</span>` : ''}
-                </span>
-                <span class="authority-permission-map" aria-hidden="true">
-                    ${['SQL', 'Trivium', '私有文件', 'HTTP'].map(label => `<span>${label}</span>`).join('')}
+                    <span>允许 ${extension.grantedCount}</span>
+                    <span>拒绝 ${extension.deniedCount}</span>
+                    ${errorCount > 0 ? `<span class="authority-extension-item__attention">异常 ${errorCount}</span>` : `<span>v${escapeHtml(extension.version)}</span>`}
                 </span>
             `;
             item.classList.toggle('authority-extension-item--active', extension.id === this.state.selectedExtensionId);
-            container.appendChild(item);
+            group.appendChild(item);
         }
+        container.appendChild(group);
     }
 
     private async renderOverviewSection(): Promise<void> {
@@ -2041,45 +2119,59 @@ class SecurityCenterView {
         ].sort(sortByTimestampDesc).slice(0, 12);
 
         container.innerHTML = `
-            <div class="authority-page-stack authority-governance-overview">
-                <header class="authority-page-header">
+            <div class="authority-governance-page authority-governance-overview">
+                <header class="authority-governance-page__header">
                     <div>
                         <h2>治理概览</h2>
-                        <p>这里仅保留跨扩展信号；权限、数据和活动都跟随具体扩展查看。</p>
+                        <p>跨扩展查看授权状态、后台任务与需要处理的异常。</p>
                     </div>
                     <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-tab="detail">打开扩展目录</button>
-                        <button type="button" class="authority-action-button" data-tab="activity">查看审计</button>
+                        <button type="button" class="authority-action-button" data-tab="activity">打开完整审计</button>
                     </div>
                 </header>
 
                 <div class="authority-governance-glance" aria-label="治理摘要">
-                    <span><strong>${this.state.extensions.length}</strong><small>接入扩展</small></span>
-                    <span><strong>${grantedCount}</strong><small>允许授权</small></span>
-                    <span class="${deniedCount > 0 ? 'authority-governance-glance--warning' : ''}"><strong>${deniedCount}</strong><small>拒绝 / 封锁</small></span>
-                    <span><strong>${overview.totalPolicyCount}</strong><small>策略规则</small></span>
-                    <span><strong>${databaseCount}</strong><small>数据库</small></span>
+                    <span><small>接入扩展</small><strong>${this.state.extensions.length}</strong></span>
+                    <span><small>允许授权</small><strong>${grantedCount}</strong></span>
+                    <span class="${deniedCount > 0 ? 'authority-governance-glance--warning' : ''}"><small>拒绝 / 封锁</small><strong>${deniedCount}</strong></span>
+                    <span><small>策略规则</small><strong>${overview.totalPolicyCount}</strong></span>
+                    <span><small>数据资产</small><strong>${databaseCount} 个库</strong></span>
                 </div>
 
                 <div class="authority-governance-overview-grid">
-                    <section class="authority-section-block">
+                    <main class="authority-governance-overview__main">
+                      <section class="authority-pane-section">
                         <div class="authority-section-heading">
-                            <div><h3>需要关注</h3><div class="authority-muted">${attention.length} 条近期信号</div></div>
+                            <div><h3>需要关注</h3><div class="authority-muted">最近的权限拒绝、告警与错误</div></div>
+                            <span class="authority-section-count">${attention.length}</span>
                         </div>
                         ${renderActivityLogRows(attention, '当前没有需要处理的权限拒绝、告警或错误。')}
-                    </section>
-                    <section class="authority-section-block">
+                      </section>
+
+                      <details class="authority-collapsible-section">
+                        <summary><strong>Authority 可治理的能力</strong><span class="authority-muted">${RESOURCE_OPTIONS.length} 类资源</span></summary>
+                        <div class="authority-collapsible-section__body">${renderCapabilityMatrix(RESOURCE_OPTIONS)}</div>
+                      </details>
+                    </main>
+
+                    <aside class="authority-context-rail">
+                      <div class="authority-context-rail__header"><strong>运行状态</strong></div>
+                      <section class="authority-context-rail__section">
                         <div class="authority-section-heading">
-                            <div><h3>进行中的后台任务</h3><div class="authority-muted">${overview.activeJobs.length} 个排队或运行中的任务</div></div>
+                            <div><h3>后台任务</h3><div class="authority-muted">${overview.activeJobs.length} 个进行中</div></div>
                         </div>
                         ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
-                    </section>
+                      </section>
+                      <section class="authority-context-rail__section">
+                        <div class="authority-section-heading"><div><h3>继续查看</h3></div></div>
+                        <div class="authority-context-links">
+                          <button type="button" data-tab="detail"><span>扩展目录</span><small>逐个检查权限与数据</small></button>
+                          <button type="button" data-tab="databases"><span>数据资产</span><small>查看数据库与记忆库</small></button>
+                          ${this.state.isAdmin ? '<button type="button" data-tab="policies"><span>全局策略</span><small>修改默认授权规则</small></button>' : ''}
+                        </div>
+                      </section>
+                    </aside>
                 </div>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>Authority 可治理的能力</strong><span class="authority-muted">按需展开</span></summary>
-                    <div class="authority-collapsible-section__body">${renderCapabilityMatrix(RESOURCE_OPTIONS)}</div>
-                </details>
             </div>
         `;
     }
@@ -2107,85 +2199,107 @@ class SecurityCenterView {
         const storage = detail.storage;
         const risk = getExtensionRiskLevel(detail.extension);
         const databaseCount = detail.databases.length + detail.triviumDatabases.length;
+        const recentActivity = [...permissions, ...usage, ...warnings, ...errors]
+            .sort(sortByTimestampDesc)
+            .slice(0, 8);
 
         container.innerHTML = `
-            <div class="authority-page-stack authority-page-stack--detail">
-                <div class="authority-page-header authority-page-header--detail">
-                    <div class="authority-dossier-title">
-                        <h2>${escapeHtml(detail.extension.displayName)}</h2>
-                        <code class="authority-muted">${escapeHtml(detail.extension.id)}</code>
-                    </div>
-                    <div class="authority-dossier-actions">
-                        <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                        <span class="authority-pill authority-pill--medium">${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</span>
-                        <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
-                    </div>
-                </div>
-
-                <div class="authority-extension-facts" aria-label="扩展摘要">
-                    <span><small>最近活跃</small><strong>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</strong></span>
-                    <span><small>能力</small><strong>${getDeclaredPermissionLabels(detail.extension.declaredPermissions).length}</strong></span>
-                    <span><small>授权</small><strong>${granted.length} 允许 · ${denied.length} 拒绝</strong></span>
-                    <span><small>数据</small><strong>${databaseCount} 个数据库</strong></span>
-                    <span><small>任务</small><strong>${detail.jobs.length}</strong></span>
-                </div>
-
-                <section class="authority-governance-primary">
-                    <div class="authority-section-heading">
-                        <div>
-                            <h3>权限与能力</h3>
-                            <div class="authority-muted">声明范围、当前决定与扩展策略</div>
+            <div class="authority-extension-dossier">
+                <main class="authority-extension-dossier__main">
+                    <header class="authority-dossier-header">
+                        <div class="authority-dossier-title">
+                            <div class="authority-dossier-title__line">
+                                <h2>${escapeHtml(detail.extension.displayName)}</h2>
+                                <span class="authority-connection-state"><i aria-hidden="true"></i>已接入</span>
+                            </div>
+                            <div class="authority-dossier-identity">
+                                <span>ID: <code>${escapeHtml(detail.extension.id)}</code></span>
+                                <span aria-hidden="true">|</span>
+                                <span>Version: <code>${escapeHtml(detail.extension.version)}</code></span>
+                            </div>
                         </div>
-                        <button type="button" class="authority-action-button authority-action-button--danger" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
-                    </div>
-                    <div class="authority-governance-permission-layout">
-                        <div>
-                            <h4>声明能力</h4>
-                            ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展还没有声明任何权限。')}
+                        <div class="authority-dossier-actions">
+                            <span class="authority-risk-label authority-risk-label--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
+                            ${this.state.isAdmin ? '<button type="button" class="authority-action-button" data-tab="policies">管理规则</button>' : ''}
                         </div>
-                        <div>
-                            <h4>当前决定</h4>
+                    </header>
+
+                    <div class="authority-extension-dossier__scroll">
+                        <div class="authority-extension-facts" aria-label="扩展摘要">
+                            <span><small>安装方式</small><strong>${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</strong></span>
+                            <span><small>首次接入</small><strong>${escapeHtml(formatDate(detail.extension.firstSeenAt))}</strong></span>
+                            <span><small>最近活跃</small><strong>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</strong></span>
+                            <span><small>当前授权</small><strong>${granted.length} 允许 · ${denied.length} 拒绝</strong></span>
+                        </div>
+
+                        <section class="authority-dossier-section">
+                            <div class="authority-section-heading">
+                                <div><h3>声明的能力</h3><div class="authority-muted">扩展向 Authority 声明的访问边界</div></div>
+                                <span class="authority-section-count">${getDeclaredPermissionLabels(detail.extension.declaredPermissions).length}</span>
+                            </div>
+                            ${renderDeclaredCapabilityRows(detail.extension.declaredPermissions)}
+                        </section>
+
+                        <section class="authority-dossier-section">
+                            <div class="authority-section-heading">
+                                <div><h3>数据占用</h3><div class="authority-muted">由 Authority 管理的扩展私有数据</div></div>
+                                <button type="button" class="authority-text-button" data-tab="databases">查看全部数据</button>
+                            </div>
+                            ${renderCompactStorageSummary(storage)}
+                        </section>
+
+                        <details class="authority-collapsible-section">
+                            <summary><strong>数据库明细</strong><span class="authority-muted">${databaseCount} 个数据库</span></summary>
+                            <div class="authority-collapsible-section__body authority-stack">
+                                ${renderStorageSummary(storage)}
+                                ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
+                            </div>
+                        </details>
+
+                        <details class="authority-collapsible-section">
+                            <summary><strong>任务与异常</strong><span class="authority-muted">任务 ${jobs.length} · 异常 ${warnings.length + errors.length}</span></summary>
+                            <div class="authority-collapsible-section__body authority-detail-grid">
+                                <div>
+                                    <div class="authority-section-heading"><div><h3>后台任务</h3></div></div>
+                                    ${renderJobTable(jobs, '暂无后台任务。')}
+                                </div>
+                                <div>
+                                    <div class="authority-section-heading"><div><h3>告警与错误</h3></div></div>
+                                    ${renderActivityLogRows([...warnings, ...errors].sort(sortByTimestampDesc), '暂无告警或错误记录。')}
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </main>
+
+                <aside class="authority-context-rail authority-extension-inspector">
+                    <div class="authority-context-rail__header">
+                        <strong>权限控制</strong>
+                        <span>${detail.grants.length + detail.policies.length} 条决定</span>
+                    </div>
+                    <div class="authority-context-rail__scroll">
+                        <section class="authority-context-rail__section">
+                            <div class="authority-decision-summary">
+                                <span><small>允许</small><strong class="authority-status-text--granted">${granted.length}</strong></span>
+                                <span><small>拒绝 / 封锁</small><strong class="authority-status-text--denied">${denied.length}</strong></span>
+                                <span><small>策略覆盖</small><strong>${detail.policies.length}</strong></span>
+                            </div>
+                        </section>
+                        <section class="authority-context-rail__section">
+                            <div class="authority-section-heading"><div><h3>持久授权</h3><div class="authority-muted">用户或系统已经做出的决定</div></div></div>
                             ${renderGrantSettingsRows(detail.extension.id, [...granted, ...denied], '当前没有持久化授权或拒绝记录。')}
+                            <button type="button" class="authority-text-button authority-text-button--danger" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
+                        </section>
+                        <section class="authority-context-rail__section">
+                            <div class="authority-section-heading"><div><h3>扩展策略</h3><div class="authority-muted">管理员规则会优先于用户授权</div></div></div>
                             ${renderPolicyRows(detail.policies, '当前没有针对该扩展的策略覆盖。')}
-                        </div>
+                        </section>
+                        <section class="authority-context-rail__section">
+                            <div class="authority-section-heading"><div><h3>近期活动</h3></div><button type="button" class="authority-text-button" data-tab="activity">完整审计</button></div>
+                            ${renderActivityLogRows(recentActivity, '该扩展还没有活动记录。')}
+                        </section>
                     </div>
-                </section>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>数据与存储</strong><span class="authority-muted">${databaseCount} 个数据库</span></summary>
-                    <div class="authority-collapsible-section__body authority-stack">
-                        ${renderStorageSummary(storage)}
-                        ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
-                    </div>
-                </details>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>最近活动</strong><span class="authority-muted">权限 ${permissions.length} · 调用 ${usage.length}</span></summary>
-                    <div class="authority-collapsible-section__body authority-detail-grid">
-                        <div class="authority-log-panel">
-                            <div class="authority-section-heading"><div><h3>权限活动</h3></div></div>
-                            ${renderActivityLogRows(permissions, '暂无权限活动。')}
-                        </div>
-                        <div class="authority-log-panel">
-                            <div class="authority-section-heading"><div><h3>能力调用</h3></div></div>
-                            ${renderActivityLogRows(usage, '暂无能力调用记录。')}
-                        </div>
-                    </div>
-                </details>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>任务与异常</strong><span class="authority-muted">任务 ${jobs.length} · 异常 ${warnings.length + errors.length}</span></summary>
-                    <div class="authority-collapsible-section__body authority-detail-grid">
-                        <div>
-                            <div class="authority-section-heading"><div><h3>后台任务</h3></div></div>
-                            ${renderJobTable(jobs, '暂无后台任务。')}
-                        </div>
-                        <div>
-                            <div class="authority-section-heading"><div><h3>告警与错误</h3></div></div>
-                            ${renderActivityLogRows([...warnings, ...errors].sort(sortByTimestampDesc), '暂无告警或错误记录。')}
-                        </div>
-                    </div>
-                </details>
+                </aside>
             </div>
         `;
     }
@@ -2201,19 +2315,33 @@ class SecurityCenterView {
         const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
 
         container.innerHTML = `
-            <div class="authority-page-stack">
-                <div class="authority-page-header">
+            <div class="authority-governance-page">
+                <header class="authority-governance-page__header">
                     <div>
-                        <div class="authority-eyebrow">Data Assets</div>
-                        <h2>各扩展的数据存储</h2>
-                        <p>按扩展查看 SQL 数据库与 Trivium 记忆库归档。</p>
+                        <h2>数据资产</h2>
+                        <p>由 Authority 隔离管理的 SQL 数据库、Trivium 记忆库与文件占用。</p>
                     </div>
-                    <div class="authority-list-card__actions">
-                        <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>
-                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(totalDatabaseSize))}</span>
+                    <div class="authority-page-actions">
+                        <span class="authority-inline-stat"><strong>${totalDatabaseCount}</strong> 个数据库</span>
+                        <span class="authority-inline-stat"><strong>${escapeHtml(formatBytes(totalDatabaseSize))}</strong> 总占用</span>
                     </div>
+                </header>
+                <div class="authority-data-workspace">
+                    <main class="authority-data-workspace__main">
+                        ${renderDatabaseGroupTable(databaseGroups, '当前没有发现任何扩展私有数据库。')}
+                    </main>
+                    <aside class="authority-context-rail">
+                        <div class="authority-context-rail__header"><strong>资产索引</strong><span>${databaseGroups.length} 个扩展</span></div>
+                        <div class="authority-context-rail__scroll">
+                            ${databaseGroups.length > 0 ? databaseGroups.map(item => `
+                                <button type="button" class="authority-extension-item authority-asset-index-row" data-extension-id="${escapeHtml(item.extension.id)}">
+                                    <span><strong>${escapeHtml(item.extension.displayName)}</strong><code>${escapeHtml(item.extension.id)}</code></span>
+                                    <span><strong>${item.databaseCount}</strong><small>${escapeHtml(formatBytes(item.totalSizeBytes))}</small></span>
+                                </button>
+                            `).join('') : '<div class="authority-empty">暂无数据资产。</div>'}
+                        </div>
+                    </aside>
                 </div>
-                ${renderDatabaseGroupTable(databaseGroups, '当前没有发现任何扩展私有数据库。')}
             </div>
         `;
     }
@@ -2238,16 +2366,16 @@ class SecurityCenterView {
             .slice(0, 40);
 
         container.innerHTML = `
-            <div class="authority-page-stack">
-                <div class="authority-page-header">
+            <div class="authority-governance-page">
+                <header class="authority-governance-page__header">
                     <div>
-                        <div class="authority-eyebrow">Audit Log</div>
-                        <h2>活动记录</h2>
-                        <p>权限请求、功能调用与异常的全局审计日志。</p>
+                        <h2>审计记录</h2>
+                        <p>按时间追踪权限请求、能力调用、运行告警与错误。</p>
                     </div>
-                </div>
-                <div class="authority-log-layout">
-                    <section class="authority-log-panel">
+                    <span class="authority-inline-stat"><strong>${items.length}</strong> 条近期记录</span>
+                </header>
+                <div class="authority-audit-workspace">
+                    <main class="authority-audit-workspace__main">
                         <div class="authority-section-heading">
                             <div>
                                 <h3>最近活动</h3>
@@ -2255,25 +2383,20 @@ class SecurityCenterView {
                             </div>
                         </div>
                         ${renderActivityLogRows(items, '暂无活动记录。')}
-                    </section>
-                    <section class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>运行告警</h3>
-                                <div class="authority-muted">例如任务变慢、排队过多或反复重试</div>
-                            </div>
+                    </main>
+                    <aside class="authority-context-rail authority-audit-inspector">
+                        <div class="authority-context-rail__header"><strong>需要关注</strong><span>${warnings.length + errors.length}</span></div>
+                        <div class="authority-context-rail__scroll">
+                            <section class="authority-context-rail__section">
+                                <div class="authority-section-heading"><div><h3>运行告警</h3><div class="authority-muted">任务变慢、排队或反复重试</div></div></div>
+                                ${renderActivityLogRows(warnings, '暂无告警记录。')}
+                            </section>
+                            <section class="authority-context-rail__section">
+                                <div class="authority-section-heading"><div><h3>错误记录</h3><div class="authority-muted">需要排查的失败事件</div></div></div>
+                                ${renderActivityLogRows(errors, '暂无错误记录。')}
+                            </section>
                         </div>
-                        ${renderActivityLogRows(warnings, '暂无告警记录。')}
-                    </section>
-                    <section class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>错误记录</h3>
-                                <div class="authority-muted">这里只显示错误类型的记录</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(errors, '暂无错误记录。')}
-                    </section>
+                    </aside>
                 </div>
             </div>
         `;
@@ -2337,79 +2460,113 @@ class SecurityCenterView {
 
         const extensionId = this.state.policyEditorExtensionId ?? this.state.selectedExtensionId ?? this.state.extensions[0]?.id ?? '';
         const overrides = extensionId ? Object.values(policies.extensions[extensionId] ?? {}) : [];
+        const totalOverrides = Object.values(policies.extensions)
+            .reduce((sum, extensionPolicies) => sum + Object.keys(extensionPolicies).length, 0);
+        const defaultCounts = STATUS_OPTIONS.reduce<Record<PermissionStatus, number>>((counts, status) => {
+            counts[status] = RESOURCE_OPTIONS.filter(resource => policies.defaults[resource] === status).length;
+            return counts;
+        }, { granted: 0, denied: 0, prompt: 0, blocked: 0 });
         container.innerHTML = `
-            <div class="authority-page-stack">
-                <div class="authority-page-header">
-                    <div>
-                        <div class="authority-eyebrow">Compliance Rules</div>
-                        <h2>管理员统一规则</h2>
-                        <p>全局策略会覆盖扩展请求与用户授权决策，请谨慎修改。</p>
-                    </div>
-                    <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button" data-action="add-policy-row">新增单独规则</button>
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="save-policies">保存策略</button>
-                    </div>
-                </div>
-                <section class="authority-card authority-card--flat">
-                    <div class="authority-card__header">
+            <div class="authority-policy-workspace">
+                <main class="authority-policy-workspace__main">
+                    <header class="authority-governance-page__header">
                         <div>
-                            <h3>默认处理规则</h3>
-                            <div class="authority-muted">先给每类功能设一个默认处理方式</div>
+                            <h2>全局策略</h2>
+                            <p>设置每类能力的默认决定，并为单个扩展添加精确覆盖。</p>
                         </div>
-                        <span class="authority-pill authority-pill--admin">默认规则 ${RESOURCE_OPTIONS.length}</span>
-                    </div>
-                    <div class="authority-table-wrap">
-                        <table class="authority-data-table authority-policy-matrix">
-                            <thead>
-                                <tr>
-                                    <th>能力</th>
-                                    <th>内部名称</th>
-                                    <th>风险</th>
-                                    <th>默认处理</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${RESOURCE_OPTIONS.map(resource => `
+                        <span class="authority-inline-stat"><strong>${RESOURCE_OPTIONS.length}</strong> 类资源</span>
+                    </header>
+
+                    <div class="authority-policy-workspace__scroll">
+                      <section class="authority-pane-section">
+                        <div class="authority-section-heading">
+                            <div><h3>默认处理规则</h3><div class="authority-muted">没有更具体的扩展覆盖或持久授权时使用</div></div>
+                            <span class="authority-section-count">${RESOURCE_OPTIONS.length}</span>
+                        </div>
+                        <div class="authority-table-wrap">
+                            <table class="authority-data-table authority-policy-matrix">
+                                <thead>
                                     <tr>
-                                        <td><strong>${escapeHtml(getResourceLabel(resource))}</strong></td>
-                                        <td>${escapeHtml(resource)}</td>
-                                        <td><span class="authority-pill authority-pill--${getRiskLevel(resource)}">${escapeHtml(getRiskLabel(getRiskLevel(resource)))}</span></td>
-                                        <td>
-                                            <select data-policy-default="${escapeHtml(resource)}">
-                                                ${STATUS_OPTIONS.map(status => `<option value="${status}" ${policies.defaults[resource] === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
-                                            </select>
-                                        </td>
+                                        <th>能力</th>
+                                        <th>内部名称</th>
+                                        <th>风险</th>
+                                        <th>默认决定</th>
                                     </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-                <section class="authority-card authority-card--flat">
-                    <div class="authority-card__header">
+                                </thead>
+                                <tbody>
+                                    ${RESOURCE_OPTIONS.map(resource => `
+                                        <tr>
+                                            <td><strong>${escapeHtml(getResourceLabel(resource))}</strong></td>
+                                            <td><code>${escapeHtml(resource)}</code></td>
+                                            <td><span class="authority-risk-label authority-risk-label--${getRiskLevel(resource)}">${escapeHtml(getRiskLabel(getRiskLevel(resource)))}</span></td>
+                                            <td>
+                                                <select data-policy-default="${escapeHtml(resource)}">
+                                                    ${STATUS_OPTIONS.map(status => `<option value="${status}" ${policies.defaults[resource] === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
+                                                </select>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                      </section>
+
+                      <section class="authority-pane-section">
+                        <div class="authority-section-heading">
                         <div>
-                            <h3>按扩展单独设置</h3>
-                            <div class="authority-muted">可以按扩展、按目标单独覆盖上面的默认规则</div>
+                            <h3>扩展覆盖</h3>
+                            <div class="authority-muted">按扩展、能力与目标覆盖默认决定</div>
                         </div>
-                        <label class="authority-policy-field authority-policy-field--inline">
-                            <span>选择扩展</span>
-                            <select data-policy-editor-extension>
-                                ${this.state.extensions.map(extension => `<option value="${escapeHtml(extension.id)}" ${extension.id === extensionId ? 'selected' : ''}>${escapeHtml(extension.displayName)}</option>`).join('')}
-                            </select>
-                        </label>
-                    </div>
-                    <div class="authority-policy-rows" data-role="policy-rows">
-                        ${overrides.map(entry => this.buildPolicyRowMarkup(entry)).join('')}
-                    </div>
-                    <div class="authority-policy-footer">
-                        <div class="authority-chip-row">
-                            <span class="authority-pill authority-pill--granted">默认允许</span>
-                            <span class="authority-pill authority-pill--prompt">需要询问</span>
-                            <span class="authority-pill authority-pill--blocked">管理员封锁</span>
+                        <div class="authority-policy-toolbar">
+                            <label class="authority-policy-field authority-policy-field--inline">
+                                <span>扩展</span>
+                                <select data-policy-editor-extension>
+                                    ${this.state.extensions.map(extension => `<option value="${escapeHtml(extension.id)}" ${extension.id === extensionId ? 'selected' : ''}>${escapeHtml(extension.displayName)}</option>`).join('')}
+                                </select>
+                            </label>
+                            <button type="button" class="authority-text-button" data-action="add-policy-row">＋ 新增覆盖</button>
                         </div>
-                        <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>
+                        </div>
+                        <div class="authority-policy-rows" data-role="policy-rows">
+                            ${overrides.map(entry => this.buildPolicyRowMarkup(entry)).join('')}
+                        </div>
+                      </section>
                     </div>
-                </section>
+
+                    <footer class="authority-policy-savebar">
+                        <span>最后保存：${escapeHtml(formatDate(policies.updatedAt))}</span>
+                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="save-policies">保存策略</button>
+                    </footer>
+                </main>
+
+                <aside class="authority-context-rail authority-policy-inspector">
+                    <div class="authority-context-rail__header"><strong>影响预览</strong></div>
+                    <div class="authority-context-rail__scroll">
+                        <section class="authority-context-rail__section">
+                            <div class="authority-policy-impact-grid">
+                                <span><small>默认允许</small><strong class="authority-status-text--granted">${defaultCounts.granted}</strong></span>
+                                <span><small>每次询问</small><strong class="authority-status-text--prompt">${defaultCounts.prompt}</strong></span>
+                                <span><small>默认拒绝</small><strong class="authority-status-text--denied">${defaultCounts.denied}</strong></span>
+                                <span><small>管理员封锁</small><strong class="authority-status-text--denied">${defaultCounts.blocked}</strong></span>
+                            </div>
+                        </section>
+                        <section class="authority-context-rail__section">
+                            <div class="authority-policy-warning">
+                                <strong>策略影响全部扩展</strong>
+                                <span>拒绝或封锁可能覆盖已有持久授权；保存前仍会执行影响确认。</span>
+                            </div>
+                        </section>
+                        <section class="authority-context-rail__section">
+                            <div class="authority-section-heading"><div><h3>判定顺序</h3></div></div>
+                            <ol class="authority-evaluation-order">
+                                <li><span>1</span><div><strong>管理员封锁</strong><small>不可被其他决定覆盖</small></div></li>
+                                <li><span>2</span><div><strong>扩展覆盖</strong><small>${totalOverrides} 条精确规则</small></div></li>
+                                <li><span>3</span><div><strong>持久授权</strong><small>用户已经做出的决定</small></div></li>
+                                <li><span>4</span><div><strong>默认规则</strong><small>当前资源没有更具体规则时</small></div></li>
+                            </ol>
+                        </section>
+                    </div>
+                </aside>
             </div>
         `;
     }

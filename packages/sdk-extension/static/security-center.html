@@ -43,34 +43,30 @@
 
           <section class="authority-area-panel authority-area-panel--governance" data-area-panel="governance">
             <div class="authority-governance-shell">
-              <header class="authority-governance-header">
-                <div>
-                  <h2>扩展治理</h2>
-                  <p>围绕扩展查看权限、数据与真实活动。</p>
-                </div>
-                <div class="authority-governance-tools">
-                  <span class="authority-pill authority-pill--prompt" data-role="extension-count">0</span>
-                  <input class="text_pole authority-search" type="search" data-role="extension-search" placeholder="搜索扩展" aria-label="搜索扩展" />
-                </div>
-              </header>
-
               <div class="authority-governance-layout">
                 <aside class="authority-extension-nav" aria-label="扩展目录">
-                  <div class="authority-extension-nav__header"><strong>扩展</strong></div>
+                  <div class="authority-extension-nav__header">
+                    <strong>扩展治理</strong>
+                    <span class="authority-directory-count" data-role="extension-count">0</span>
+                  </div>
+                  <label class="authority-extension-search">
+                    <span class="authority-extension-search__icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    </span>
+                    <span class="sr-only">搜索扩展</span>
+                    <input class="text_pole authority-search" type="search" data-role="extension-search" placeholder="搜索扩展…" aria-label="搜索扩展" />
+                  </label>
                   <div class="authority-extension-nav__list" data-role="extension-list"></div>
-                </aside>
-
-                <div class="authority-governance-stage">
-                  <div class="authority-context-bar" data-role="governance-tabs">
-                    <nav class="authority-tabs" role="tablist" aria-label="扩展治理视图">
+                  <nav class="authority-tabs" role="tablist" aria-label="扩展治理视图" data-role="governance-tabs">
                       <button type="button" class="authority-tab" data-tab="detail" role="tab" id="security-center-tab-detail" aria-selected="false" aria-controls="security-center-tabpanel-detail">扩展</button>
                       <button type="button" class="authority-tab" data-tab="overview" role="tab" id="security-center-tab-overview" aria-selected="false" aria-controls="security-center-tabpanel-overview">概览</button>
                       <button type="button" class="authority-tab" data-tab="databases" role="tab" id="security-center-tab-databases" aria-selected="false" aria-controls="security-center-tabpanel-databases">数据</button>
                       <button type="button" class="authority-tab" data-tab="activity" role="tab" id="security-center-tab-activity" aria-selected="false" aria-controls="security-center-tabpanel-activity">审计</button>
                       <button type="button" class="authority-tab" data-tab="policies" role="tab" id="security-center-tab-policies" aria-selected="false" aria-controls="security-center-tabpanel-policies">策略</button>
-                    </nav>
-                  </div>
+                  </nav>
+                </aside>
 
+                <div class="authority-governance-stage">
                   <div class="authority-view-canvas">
                     <section class="authority-section" data-section="detail" role="tabpanel" id="security-center-tabpanel-detail" aria-labelledby="security-center-tab-detail">
                       <div class="authority-governance-detail" data-role="detail-view"></div>

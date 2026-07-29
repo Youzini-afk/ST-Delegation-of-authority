@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('Security Center tab interaction', () => {
     const source = fs.readFileSync(path.resolve(__dirname, 'security-center.ts'), 'utf8');
+    const components = fs.readFileSync(path.resolve(__dirname, 'security-center/components.ts'), 'utf8');
     const constants = fs.readFileSync(path.resolve(__dirname, 'security-center/constants.ts'), 'utf8');
     const impactConfirmation = fs.readFileSync(path.resolve(__dirname, 'security-center/impact-confirmation.ts'), 'utf8');
     const html = fs.readFileSync(path.resolve(__dirname, '../static/security-center.html'), 'utf8');
@@ -155,6 +156,30 @@ describe('Security Center tab interaction', () => {
         const overviewBody = source.slice(overviewStart, overviewEnd);
         expect(overviewBody).toContain('authority-governance-glance');
         expect(overviewBody).not.toContain('renderMetricTile(');
+    });
+
+    it('keeps extension governance as a directory-first multi-pane workspace', () => {
+        expect(html).toContain('<aside class="authority-extension-nav" aria-label="扩展目录">');
+        expect(html).toContain('data-role="extension-search"');
+        expect(html).toContain('data-role="extension-list"');
+        expect(html).toContain('data-role="governance-tabs"');
+        expect(source).toContain('authority-extension-dossier');
+        expect(source).toContain('authority-context-rail authority-extension-inspector');
+        expect(source).toContain('authority-policy-workspace');
+        expect(source).toContain('authority-context-rail authority-policy-inspector');
+        expect(css).toContain('grid-template-columns: 226px minmax(0, 1fr)');
+        expect(css).toContain('.authority-extension-dossier,');
+        expect(css).toContain('.authority-policy-workspace {');
+    });
+
+    it('preserves governance actions and policy fields through the visual reorganization', () => {
+        expect(components).toContain('data-action="reset-grant"');
+        expect(source).toContain('data-action="reset-all-grants"');
+        expect(source).toContain('data-action="add-policy-row"');
+        expect(source).toContain('data-action="save-policies"');
+        expect(source).toContain('data-policy-default=');
+        expect(source).toContain('data-policy-editor-extension');
+        expect(source).toContain('data-role="policy-rows"');
     });
 
     it('declares agent.run before the built-in workbench creates runs', () => {
