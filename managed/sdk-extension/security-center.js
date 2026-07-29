@@ -1,17 +1,20 @@
 import { authorityRequest } from './api.js';
-import { clearChildren, escapeHtml, formatDate } from './dom.js';
-import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseAssetSections, renderDatabaseGroupTable, renderGrantSettingsRows, renderJobTable, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
-import { RESOURCE_OPTIONS, SECURITY_CENTER_CONFIG, STATUS_OPTIONS, } from './security-center/constants.js';
-import { getActiveAgentSessionRun, isActiveAgentSession, renderAgentSessionMain, renderAgentWorkbench, } from './security-center/agent-workbench.js';
+import { escapeHtml } from './dom.js';
+import { renderAlertStack } from './security-center/components.js';
+import { SECURITY_CENTER_CONFIG } from './security-center/constants.js';
+import { getAgentStatusAnnouncement, getActiveAgentSessionRun, isActiveAgentSession, renderAgentWorkbench, } from './security-center/agent-workbench.js';
+import { renderAgentSettings } from './security-center/agent-settings.js';
+import { renderAuditWorkspace, renderDataAssets, renderExtensionDirectory, renderExtensionDossier, renderGovernanceOverview, renderPolicyOverrideRow, renderPolicyWorkbench, } from './security-center/governance-workbench.js';
 import { showImpactConfirmation } from './security-center/impact-confirmation.js';
-import { formatBytes, getCoreStateLabel, getDeclaredPermissionLabels, getExtensionRiskLevel, getInstallStatusLabel, getInstallTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, sortByTimestampDesc, } from './security-center/formatters.js';
-import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, renderStManagerBridgeSection, ST_MANAGER_RESOURCE_OPTIONS, } from './security-center/st-manager-bridge.js';
-import { buildStManagerControlPayload, normalizeStManagerControlConfig, renderStManagerControlSection, } from './security-center/st-manager-control.js';
+import { formatBytes, getCoreStateLabel, getRiskLevel, getSystemMessageLabel, } from './security-center/formatters.js';
+import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, ST_MANAGER_RESOURCE_OPTIONS, } from './security-center/st-manager-bridge.js';
+import { buildStManagerControlPayload, normalizeStManagerControlConfig, } from './security-center/st-manager-control.js';
 import { bootstrapSecurityCenter as bootstrapSecurityCenterHost, openSecurityCenter as openSecurityCenterHost, } from './security-center/host.js';
-import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
+import { renderSystemWorkbench } from './security-center/system-workbench.js';
 const TOAST_TITLE = '权限中心';
-const MISSING_TEXT = '未获取';
-const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates'];
+const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings'];
+const SYSTEM_VIEW_NAMES = ['runtime', 'recovery', 'migration', 'diagnostics', 'backup'];
+const AGENT_FOCUS_DATA_KEYS = ['inspectorTab', 'sessionId', 'runId', 'approvalId', 'decision', 'commitId', 'profileId'];
 function isValidCenterTab(value) {
     return typeof value === 'string' && PRIMARY_TAB_NAMES.includes(value);
 }
@@ -20,7 +23,12 @@ function getCenterArea(tab) {
         return 'agent';
     if (tab === 'updates')
         return 'system';
+    if (tab === 'settings')
+        return 'settings';
     return 'governance';
+}
+function isSystemView(value) {
+    return typeof value === 'string' && SYSTEM_VIEW_NAMES.includes(value);
 }
 export function bootstrapSecurityCenter() {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
@@ -65,19 +73,31 @@ class SecurityCenterView {
                 busy: false,
                 error: null,
                 profiles: [],
-                tools: [],
                 workspaces: [],
                 sessions: {
                     sessions: [],
                     page: { nextCursor: null, limit: 50, hasMore: false, totalCount: 0 },
                 },
                 selectedProfileId: null,
+                defaultWorkspaceId: null,
                 selectedWorkspaceId: null,
                 selectedSession: null,
                 creatingSession: true,
                 inspectorTab: 'activity',
                 workspaceStatus: null,
                 workspaceCommits: [],
+                workspaceDiff: null,
+            },
+            system: {
+                selectedView: 'runtime',
+                recoveryLoaded: false,
+                recoveryLoading: false,
+                recoveryBusy: false,
+                recoveryError: null,
+                workspace: null,
+                workspaceStatus: null,
+                workspaceCommits: [],
+                selectedCommitId: null,
                 workspaceDiff: null,
             },
             policyEditorExtensionId: focusExtensionId ?? null,
@@ -124,6 +144,36 @@ class SecurityCenterView {
             const refreshButton = target.closest('[data-action="refresh"]');
             if (refreshButton) {
                 void this.refresh();
+                return;
+            }
+            const systemViewButton = target.closest('[data-action="system-select-view"]');
+            if (systemViewButton && isSystemView(systemViewButton.dataset.systemView)) {
+                this.selectSystemView(systemViewButton.dataset.systemView);
+                return;
+            }
+            const systemRecoveryRefresh = target.closest('[data-action="system-recovery-refresh"]');
+            if (systemRecoveryRefresh) {
+                void this.refreshSystemRecovery();
+                return;
+            }
+            const systemRecoveryCheckpoint = target.closest('[data-action="system-recovery-checkpoint"]');
+            if (systemRecoveryCheckpoint) {
+                void this.checkpointSystemWorkspace();
+                return;
+            }
+            const systemCheckpoint = target.closest('[data-action="system-select-checkpoint"]');
+            if (systemCheckpoint?.dataset.commitId) {
+                void this.selectSystemCheckpoint(systemCheckpoint.dataset.commitId);
+                return;
+            }
+            const systemRecoveryRollback = target.closest('[data-action="system-recovery-rollback"]');
+            if (systemRecoveryRollback?.dataset.commitId) {
+                void this.rollbackSystemWorkspace(systemRecoveryRollback.dataset.commitId);
+                return;
+            }
+            const systemRecoveryResume = target.closest('[data-action="system-recovery-resume"]');
+            if (systemRecoveryResume) {
+                void this.resumeSystemWorkspaceRollback();
                 return;
             }
             const agentAction = target.closest('[data-action^="agent-"]');
@@ -313,6 +363,11 @@ class SecurityCenterView {
             const nextTab = tabs[nextIndex];
             if (nextTab) {
                 nextTab.focus();
+                const inspectorTab = nextTab.dataset.inspectorTab;
+                if (inspectorTab === 'activity' || inspectorTab === 'workspace') {
+                    this.selectAgentInspectorTab(inspectorTab);
+                    return;
+                }
                 const tab = nextTab.dataset.tab;
                 if (tab) {
                     this.switchTab(tab);
@@ -327,6 +382,13 @@ class SecurityCenterView {
             if (target.matches('[data-role="extension-search"]')) {
                 this.state.extensionFilter = target.value.trim().toLowerCase();
                 this.renderExtensionList();
+                return;
+            }
+            if (target.matches('[data-role="agent-session-filter"]')) {
+                const query = target.value.trim().toLowerCase();
+                for (const item of this.root.querySelectorAll('[data-action="agent-select-session"]')) {
+                    item.hidden = Boolean(query) && !item.textContent?.toLowerCase().includes(query);
+                }
             }
         });
         this.root.addEventListener('change', event => {
@@ -338,14 +400,6 @@ class SecurityCenterView {
                 this.state.policyEditorExtensionId = target.value || null;
                 void this.renderPoliciesSection();
                 return;
-            }
-            if (target.matches('[data-role="agent-workspace-select"], [data-role="agent-new-workspace"]')) {
-                this.state.agent.selectedWorkspaceId = target.value || null;
-                void this.refreshSelectedAgentWorkspace();
-                return;
-            }
-            if (target.matches('[data-role="agent-new-profile"]')) {
-                this.state.agent.selectedProfileId = target.value || null;
             }
         });
     }
@@ -401,11 +455,14 @@ class SecurityCenterView {
                 this.state.stManagerControlConfig = null;
                 this.state.stManagerControlBackups = [];
             }
-            if (!this.state.isAdmin && (this.state.selectedTab === 'agent' || this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
+            if (!this.state.isAdmin && (this.state.selectedTab === 'agent' || this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates' || this.state.selectedTab === 'settings')) {
                 this.state.selectedTab = 'detail';
             }
             if (this.state.isAdmin && this.state.selectedTab === 'agent') {
                 await this.refreshAgentWorkbench();
+            }
+            if (this.state.isAdmin && this.state.selectedTab === 'updates' && this.state.system.selectedView === 'recovery') {
+                await this.refreshSystemRecovery();
             }
         }
         catch (error) {
@@ -423,6 +480,9 @@ class SecurityCenterView {
                 return;
             case 'agent-new-session':
                 this.beginAgentSession();
+                return;
+            case 'agent-use-prompt':
+                this.applyAgentPrompt(element.dataset.prompt ?? '');
                 return;
             case 'agent-create-session':
                 void this.createAgentSession();
@@ -459,19 +519,17 @@ class SecurityCenterView {
                 return;
             case 'agent-inspector-tab':
                 if (element.dataset.inspectorTab === 'activity'
-                    || element.dataset.inspectorTab === 'workspace'
-                    || element.dataset.inspectorTab === 'settings') {
-                    this.state.agent.inspectorTab = element.dataset.inspectorTab;
-                    void this.renderAgentSection();
+                    || element.dataset.inspectorTab === 'workspace') {
+                    this.selectAgentInspectorTab(element.dataset.inspectorTab);
                 }
                 return;
             case 'agent-edit-profile':
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
-                void this.renderAgentSection();
+                this.renderSettingsSection();
                 return;
             case 'agent-new-profile':
                 this.state.agent.selectedProfileId = null;
-                void this.renderAgentSection();
+                this.renderSettingsSection();
                 return;
             case 'agent-save-profile':
                 void this.saveAgentProfile();
@@ -479,9 +537,6 @@ class SecurityCenterView {
             case 'agent-delete-profile':
                 if (element.dataset.profileId)
                     void this.deleteAgentProfile(element.dataset.profileId);
-                return;
-            case 'agent-register-workspace':
-                void this.registerAgentWorkspace();
                 return;
             case 'agent-workspace-refresh':
                 void this.refreshSelectedAgentWorkspace();
@@ -496,6 +551,12 @@ class SecurityCenterView {
             case 'agent-workspace-resume':
                 void this.resumeAgentWorkspaceRollback();
         }
+    }
+    selectAgentInspectorTab(tab) {
+        if (this.state.agent.inspectorTab === tab)
+            return;
+        this.state.agent.inspectorTab = tab;
+        this.renderAgentSurfaces();
     }
     async getAgentClient() {
         this.agentClientPromise ??= import('./sdk.js')
@@ -513,18 +574,18 @@ class SecurityCenterView {
         const generation = ++this.agentRefreshGeneration;
         this.state.agent.loading = true;
         this.state.agent.error = null;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const client = await this.getAgentClient();
             const sessionRequest = {
                 page: { ...(options.cursor ? { cursor: options.cursor } : {}), limit: 50 },
             };
-            const [profiles, tools, workspaces, sessions] = await Promise.all([
+            const [profiles, defaultWorkspace, sessions] = await Promise.all([
                 client.agent.admin.profiles.list(),
-                client.agent.listTools(),
-                client.agent.admin.workspaces.list(),
+                client.agent.admin.workspaces.default(),
                 client.agent.sessions.listPage(sessionRequest),
             ]);
+            const workspaces = await client.agent.admin.workspaces.list();
             if (generation !== this.agentRefreshGeneration)
                 return;
             const selectedProfileId = profiles.some(profile => profile.id === this.state.agent.selectedProfileId)
@@ -539,9 +600,7 @@ class SecurityCenterView {
             const sessionWorkspaceId = selectedSession?.session.workspaceId ?? null;
             const selectedWorkspaceId = workspaces.some(workspace => workspace.id === sessionWorkspaceId)
                 ? sessionWorkspaceId
-                : workspaces.some(workspace => workspace.id === this.state.agent.selectedWorkspaceId)
-                    ? this.state.agent.selectedWorkspaceId
-                    : workspaces[0]?.id ?? null;
+                : defaultWorkspace.id;
             const workspaceResult = await (selectedWorkspaceId
                 ? this.fetchAgentWorkspace(client, selectedWorkspaceId)
                     .then(value => ({ value, error: null }))
@@ -550,12 +609,12 @@ class SecurityCenterView {
             if (generation !== this.agentRefreshGeneration)
                 return;
             this.state.agent.profiles = profiles;
-            this.state.agent.tools = tools;
             this.state.agent.workspaces = workspaces;
             this.state.agent.sessions = options.append
                 ? { sessions: mergeAgentSessions(this.state.agent.sessions.sessions, sessions.sessions), page: sessions.page }
                 : sessions;
             this.state.agent.selectedProfileId = selectedProfileId;
+            this.state.agent.defaultWorkspaceId = defaultWorkspace.id;
             this.state.agent.selectedWorkspaceId = selectedWorkspaceId;
             this.state.agent.workspaceStatus = workspaceResult.value?.status ?? null;
             this.state.agent.workspaceCommits = workspaceResult.value?.commits ?? [];
@@ -577,7 +636,7 @@ class SecurityCenterView {
             if (generation !== this.agentRefreshGeneration)
                 return;
             this.state.agent.loading = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
             void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
@@ -595,12 +654,180 @@ class SecurityCenterView {
             : null;
         return { status, commits: history.commits, diff };
     }
+    selectSystemView(view) {
+        this.state.system.selectedView = view;
+        this.renderUpdatesSection();
+        const activeButton = this.root.querySelector(`[data-action="system-select-view"][data-system-view="${view}"]`);
+        activeButton?.focus({ preventScroll: true });
+        activeButton?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        if (view === 'recovery' && !this.state.system.recoveryLoaded && !this.state.system.recoveryLoading) {
+            void this.refreshSystemRecovery();
+        }
+    }
+    async refreshSystemRecovery() {
+        if (!this.state.isAdmin || this.state.system.recoveryLoading || this.state.system.recoveryBusy)
+            return;
+        this.state.system.recoveryLoading = true;
+        this.state.system.recoveryError = null;
+        void this.renderUpdatesSection();
+        try {
+            const client = await this.getAgentClient();
+            const workspace = await client.agent.admin.workspaces.default();
+            const [status, history] = await Promise.all([
+                client.agent.admin.workspaces.status(workspace.id),
+                client.agent.admin.workspaces.commits(workspace.id, 200),
+            ]);
+            const selectedCommit = history.commits.find(commit => commit.id === this.state.system.selectedCommitId)
+                ?? history.commits.find(commit => commit.id === status.workspace.headCommitId)
+                ?? history.commits[0]
+                ?? null;
+            const diff = selectedCommit
+                ? await client.agent.admin.workspaces.diff(workspace.id, {
+                    from: selectedCommit.parents[0] ?? null,
+                    to: selectedCommit.id,
+                })
+                : null;
+            this.state.system.workspace = status.workspace;
+            this.state.system.workspaceStatus = status;
+            this.state.system.workspaceCommits = history.commits;
+            this.state.system.selectedCommitId = selectedCommit?.id ?? null;
+            this.state.system.workspaceDiff = diff;
+            this.state.system.recoveryLoaded = true;
+        }
+        catch (error) {
+            this.state.system.recoveryError = error instanceof Error ? error.message : String(error);
+        }
+        finally {
+            this.state.system.recoveryLoading = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async selectSystemCheckpoint(commitId) {
+        const workspace = this.state.system.workspace;
+        const commit = this.state.system.workspaceCommits.find(item => item.id === commitId);
+        if (!workspace || !commit || this.state.system.recoveryLoading || this.state.system.recoveryBusy)
+            return;
+        this.state.system.selectedCommitId = commitId;
+        this.state.system.recoveryLoading = true;
+        void this.renderUpdatesSection();
+        try {
+            this.state.system.workspaceDiff = await (await this.getAgentClient()).agent.admin.workspaces.diff(workspace.id, {
+                from: commit.parents[0] ?? null,
+                to: commit.id,
+            });
+            this.state.system.recoveryError = null;
+        }
+        catch (error) {
+            this.state.system.recoveryError = error instanceof Error ? error.message : String(error);
+            toastr.error(getSystemMessageLabel(this.state.system.recoveryError), TOAST_TITLE);
+        }
+        finally {
+            this.state.system.recoveryLoading = false;
+            void this.renderUpdatesSection();
+        }
+    }
+    async checkpointSystemWorkspace() {
+        const workspace = this.state.system.workspace;
+        if (!workspace || this.state.system.recoveryBusy)
+            return;
+        const message = this.root.querySelector('[data-role="system-checkpoint-message"]')?.value.trim()
+            || 'Manual checkpoint from Authority recovery';
+        this.state.system.recoveryBusy = true;
+        void this.renderUpdatesSection();
+        try {
+            const result = await (await this.getAgentClient()).agent.admin.workspaces.checkpoint(workspace.id, { message });
+            toastr.success(`检查点已建立，记录 ${result.changedPaths} 个路径`, TOAST_TITLE);
+            this.state.system.selectedCommitId = result.commit.id;
+        }
+        catch (error) {
+            this.reportSystemRecoveryError(error);
+        }
+        finally {
+            this.state.system.recoveryBusy = false;
+        }
+        await this.refreshSystemRecovery();
+    }
+    async rollbackSystemWorkspace(commitId) {
+        const workspace = this.state.system.workspace;
+        const commit = this.state.system.workspaceCommits.find(item => item.id === commitId);
+        if (!workspace || !commit || this.state.system.recoveryBusy)
+            return;
+        const hasUnrecordedChanges = Boolean(this.state.system.workspaceStatus?.dirty);
+        if (!await showImpactConfirmation({
+            title: '恢复 SillyTavern 检查点',
+            description: '将 Authority 跟踪的文件恢复到选定检查点。',
+            confirmLabel: '建立保护并恢复',
+            target: `${workspace.displayName} @ ${commit.id.slice(0, 12)}`,
+            effects: [
+                '恢复前会自动建立安全检查点，当前状态可以再次找回。',
+                hasUnrecordedChanges ? '当前未记录变更会先进入安全检查点，再执行强制恢复。' : '当前工作树干净，不需要覆盖未记录变更。',
+                '未跟踪文件以及 .git、node_modules 和 Authority 历史库保持不变。',
+                '中断时会留下事务记录，可从本页或离线救援入口继续。',
+            ],
+            tone: 'danger',
+        }))
+            return;
+        this.state.system.recoveryBusy = true;
+        void this.renderUpdatesSection();
+        try {
+            const result = await (await this.getAgentClient()).agent.admin.workspaces.rollback(workspace.id, {
+                targetCommitId: commitId,
+                operationId: globalThis.crypto.randomUUID(),
+                force: hasUnrecordedChanges,
+                message: `Restore ${commit.id.slice(0, 12)} from Authority recovery`,
+            });
+            toastr.success(`恢复完成，处理 ${result.changedPaths} 个路径`, TOAST_TITLE);
+            if (result.warnings.length)
+                toastr.warning(result.warnings.join('；'), TOAST_TITLE);
+            this.state.system.selectedCommitId = null;
+        }
+        catch (error) {
+            this.reportSystemRecoveryError(error);
+        }
+        finally {
+            this.state.system.recoveryBusy = false;
+        }
+        await this.refreshSystemRecovery();
+    }
+    async resumeSystemWorkspaceRollback() {
+        const workspace = this.state.system.workspace;
+        if (!workspace || this.state.system.recoveryBusy || !await showImpactConfirmation({
+            title: '继续未完成的恢复',
+            description: '继续执行 Authority 已持久化的恢复事务。',
+            confirmLabel: '继续恢复',
+            target: workspace.displayName,
+            effects: ['只继续已经记录的恢复操作。', '若文件再次发生冲突，事务会保留并可再次继续。'],
+            tone: 'warning',
+        }))
+            return;
+        this.state.system.recoveryBusy = true;
+        void this.renderUpdatesSection();
+        try {
+            const result = await (await this.getAgentClient()).agent.admin.workspaces.resumeRollback(workspace.id);
+            toastr.success(`恢复事务已完成，处理 ${result.changedPaths} 个路径`, TOAST_TITLE);
+            if (result.warnings.length)
+                toastr.warning(result.warnings.join('；'), TOAST_TITLE);
+            this.state.system.selectedCommitId = null;
+        }
+        catch (error) {
+            this.reportSystemRecoveryError(error);
+        }
+        finally {
+            this.state.system.recoveryBusy = false;
+        }
+        await this.refreshSystemRecovery();
+    }
+    reportSystemRecoveryError(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.state.system.recoveryError = message;
+        toastr.error(getSystemMessageLabel(message), TOAST_TITLE);
+    }
     async refreshSelectedAgentWorkspace() {
         if (!this.state.isAdmin || this.state.agent.busy) {
             return;
         }
         this.state.agent.busy = true;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const workspaceId = this.state.agent.selectedWorkspaceId;
             const snapshot = workspaceId
@@ -616,7 +843,7 @@ class SecurityCenterView {
         }
         finally {
             this.state.agent.busy = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
         }
     }
     scheduleAgentPoll() {
@@ -652,12 +879,7 @@ class SecurityCenterView {
         }
     }
     renderSelectedAgentSession() {
-        const container = this.root.querySelector('[data-role="agent-session-main"]');
-        if (container) {
-            const draft = this.captureAgentFormDraft(container);
-            container.innerHTML = renderAgentSessionMain(this.state.agent, this.state.agent.busy ? 'disabled' : '');
-            this.restoreAgentFormDraft(container, draft);
-        }
+        this.renderAgentSurfaces();
     }
     async subscribeSelectedAgentSession() {
         this.closeAgentSessionSubscription();
@@ -732,13 +954,19 @@ class SecurityCenterView {
         this.state.agent.selectedWorkspaceId = snapshot.session.workspaceId;
         this.state.agent.sessions.sessions = mergeAgentSessions(this.state.agent.sessions.sessions, [summarizeAgentSession(snapshot)]);
     }
+    resolveDefaultAgentWorkspaceId() {
+        return this.state.agent.defaultWorkspaceId
+            ?? this.state.agent.selectedWorkspaceId
+            ?? this.state.agent.workspaces[0]?.id
+            ?? null;
+    }
     async performAgentMutation(action, refresh = true) {
         if (!this.state.isAdmin || this.state.agent.busy) {
             return;
         }
         this.state.agent.busy = true;
         this.state.agent.error = null;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const message = await action(await this.getAgentClient());
             if (refresh) {
@@ -753,7 +981,7 @@ class SecurityCenterView {
         }
         finally {
             this.state.agent.busy = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
             this.scheduleAgentPoll();
         }
     }
@@ -761,19 +989,37 @@ class SecurityCenterView {
         this.closeAgentSessionSubscription();
         this.state.agent.creatingSession = true;
         this.state.agent.selectedSession = null;
-        this.state.agent.inspectorTab = 'settings';
-        void this.renderAgentSection();
+        this.state.agent.inspectorTab = 'activity';
+        this.renderAgentSurfaces();
+    }
+    applyAgentPrompt(prompt) {
+        const field = this.root.querySelector('[data-role="agent-new-message"]');
+        if (!field)
+            return;
+        field.value = prompt;
+        field.focus();
     }
     async createAgentSession() {
         const message = this.agentFieldValue('agent-new-message');
-        const workspaceId = this.agentFieldValue('agent-new-workspace');
-        const profileId = this.agentFieldValue('agent-new-profile');
+        const workspaceId = this.resolveDefaultAgentWorkspaceId();
+        const profileId = this.state.agent.profiles.some(profile => profile.id === this.state.agent.selectedProfileId)
+            ? this.state.agent.selectedProfileId
+            : this.state.agent.profiles[0]?.id ?? null;
+        if (!message || !workspaceId || !profileId) {
+            this.reportAgentError(new Error(!message
+                ? '请先描述你想让 Agent 完成的事情。'
+                : !profileId
+                    ? '请先在设置中配置模型连接。'
+                    : 'SillyTavern 默认作用域尚未初始化，请刷新后重试。'));
+            this.renderAgentSurfaces();
+            return;
+        }
         const mode = this.agentFieldValue('agent-new-mode');
         const maxSteps = Number(this.agentFieldValue('agent-new-max-steps'));
         const request = {
             message,
             workspaceId,
-            ...(profileId ? { profileId } : {}),
+            profileId,
             mode,
             maxSteps,
         };
@@ -792,7 +1038,7 @@ class SecurityCenterView {
             return;
         this.closeAgentSessionSubscription();
         this.state.agent.busy = true;
-        void this.renderAgentSection();
+        this.renderAgentSurfaces();
         try {
             const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
             this.state.agent.selectedSession = snapshot;
@@ -809,7 +1055,7 @@ class SecurityCenterView {
         }
         finally {
             this.state.agent.busy = false;
-            void this.renderAgentSection();
+            this.renderAgentSurfaces();
             void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
@@ -910,26 +1156,6 @@ class SecurityCenterView {
                 this.state.agent.selectedProfileId = null;
             }
             return 'LLM 配置已删除';
-        });
-    }
-    async registerAgentWorkspace() {
-        const users = this.agentFieldValue('agent-workspace-users')
-            .split(',')
-            .map(value => value.trim())
-            .filter(Boolean);
-        const id = this.agentFieldValue('agent-workspace-id');
-        const displayName = this.agentFieldValue('agent-workspace-name');
-        const request = {
-            ...(id ? { id } : {}),
-            ...(displayName ? { displayName } : {}),
-            rootPath: this.agentFieldValue('agent-workspace-root'),
-            ...(users.length > 0 ? { allowedUserHandles: users } : {}),
-        };
-        await this.performAgentMutation(async (client) => {
-            const workspace = await client.agent.admin.workspaces.register(request);
-            this.state.agent.selectedWorkspaceId = workspace.id;
-            this.clearAgentFields('agent-workspace-name', 'agent-workspace-root', 'agent-workspace-id', 'agent-workspace-users');
-            return 'Agent 工作区已注册';
         });
     }
     async checkpointAgentWorkspace() {
@@ -1663,7 +1889,7 @@ class SecurityCenterView {
         if (!PRIMARY_TAB_NAMES.includes(tab)) {
             return;
         }
-        if ((tab === 'agent' || tab === 'policies' || tab === 'updates') && !this.state.isAdmin) {
+        if ((tab === 'agent' || tab === 'policies' || tab === 'updates' || tab === 'settings') && !this.state.isAdmin) {
             return;
         }
         if (this.state.selectedTab === tab) {
@@ -1672,14 +1898,12 @@ class SecurityCenterView {
         this.state.selectedTab = tab;
         this.renderTabs();
         this.toggleSections();
-        if (tab === 'agent') {
-            if (!this.state.agent.loaded) {
-                void this.refreshAgentWorkbench();
-            }
-            else {
-                void this.subscribeSelectedAgentSession();
-                this.scheduleAgentPoll();
-            }
+        if ((tab === 'agent' || tab === 'settings') && !this.state.agent.loaded) {
+            void this.refreshAgentWorkbench();
+        }
+        if (tab === 'agent' && this.state.agent.loaded) {
+            void this.subscribeSelectedAgentSession();
+            this.scheduleAgentPoll();
         }
         else {
             this.closeAgentSessionSubscription();
@@ -1688,18 +1912,22 @@ class SecurityCenterView {
                 this.agentPollTimer = null;
             }
         }
+        if (tab === 'updates' && this.state.system.selectedView === 'recovery' && !this.state.system.recoveryLoaded) {
+            void this.refreshSystemRecovery();
+        }
     }
-    async render() {
+    render() {
         this.renderHeader();
         this.renderTabs();
         this.renderExtensionList();
-        await this.renderOverviewSection();
-        await this.renderDetailSection();
-        await this.renderDatabasesSection();
-        await this.renderActivitySection();
-        await this.renderAgentSection();
-        await this.renderPoliciesSection();
-        await this.renderUpdatesSection();
+        this.renderOverviewSection();
+        this.renderDetailSection();
+        this.renderDatabasesSection();
+        this.renderActivitySection();
+        this.renderAgentSection();
+        this.renderPoliciesSection();
+        this.renderUpdatesSection();
+        this.renderSettingsSection();
         this.toggleSections();
     }
     renderHeader() {
@@ -1750,7 +1978,7 @@ class SecurityCenterView {
             if (!area)
                 continue;
             const isActive = area === activeArea;
-            const requiresAdmin = area === 'agent' || area === 'system';
+            const requiresAdmin = area === 'agent' || area === 'system' || area === 'settings';
             areaTab.hidden = requiresAdmin && !this.state.isAdmin;
             areaTab.classList.toggle('authority-area-tab--active', isActive);
             if (isActive) {
@@ -1780,309 +2008,77 @@ class SecurityCenterView {
             }
         }
     }
+    renderSettingsSection() {
+        const container = this.root.querySelector('[data-role="settings-view"]');
+        if (!container) {
+            return;
+        }
+        if (!this.state.isAdmin) {
+            container.innerHTML = `
+                <div class="authority-empty">
+                    <strong>需要管理员权限</strong>
+                    <span>全局连接与模型配置仅对管理员开放。</span>
+                </div>
+            `;
+            return;
+        }
+        const draft = this.captureAgentFormDraft(container);
+        container.innerHTML = renderAgentSettings(this.state.agent);
+        this.restoreAgentFormDraft(container, draft);
+    }
     renderExtensionList() {
         const container = this.root.querySelector('[data-role="extension-list"]');
         const count = this.root.querySelector('[data-role="extension-count"]');
         if (!container) {
             return;
         }
-        clearChildren(container);
-        const filter = this.state.extensionFilter;
-        const extensions = filter
-            ? this.state.extensions.filter(extension => `${extension.displayName} ${extension.id}`.toLowerCase().includes(filter))
-            : this.state.extensions;
-        if (count) {
-            count.textContent = String(extensions.length);
-        }
-        if (extensions.length === 0) {
-            container.innerHTML = '<div class="authority-empty">还没有扩展接入权限中心。</div>';
-            return;
-        }
-        for (const extension of extensions) {
-            const detail = this.state.details.get(extension.id);
-            const declared = getDeclaredPermissionLabels(extension.declaredPermissions);
-            const risk = getExtensionRiskLevel(extension);
-            const errorCount = (detail?.activity.errors.length ?? 0) + (detail?.activity.warnings.length ?? 0);
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = 'authority-extension-item';
-            item.dataset.extensionId = extension.id;
-            item.innerHTML = `
-                <span class="authority-extension-item__top">
-                    <span class="authority-extension-item__title">${escapeHtml(extension.displayName)}</span>
-                    <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                </span>
-                <span class="authority-extension-item__meta">${escapeHtml(extension.id)}</span>
-                <span class="authority-extension-item__stats">
-                    <span class="authority-pill authority-pill--runtime">${escapeHtml(getInstallTypeLabel(extension.installType))}</span>
-                    <span class="authority-pill authority-pill--prompt">v${escapeHtml(extension.version)}</span>
-                    <span class="authority-pill authority-pill--granted">允许 ${extension.grantedCount}</span>
-                    <span class="authority-pill authority-pill--denied">拒绝 ${extension.deniedCount}</span>
-                    <span class="authority-pill authority-pill--prompt">声明 ${declared.length}</span>
-                    ${errorCount > 0 ? `<span class="authority-pill authority-pill--error">异常 ${errorCount}</span>` : ''}
-                </span>
-                <span class="authority-permission-map" aria-hidden="true">
-                    ${['SQL', 'Trivium', '私有文件', 'HTTP'].map(label => `<span>${label}</span>`).join('')}
-                </span>
-            `;
-            item.classList.toggle('authority-extension-item--active', extension.id === this.state.selectedExtensionId);
-            container.appendChild(item);
-        }
+        const directory = renderExtensionDirectory(this.state);
+        container.innerHTML = directory.html;
+        if (count)
+            count.textContent = String(directory.count);
     }
-    async renderOverviewSection() {
+    renderOverviewSection() {
         const container = this.root.querySelector('[data-role="overview-view"]');
-        if (!container) {
-            return;
-        }
-        const overview = buildOverviewModel(this.state);
-        const grants = [...this.state.details.values()].flatMap(detail => detail.grants);
-        const grantedCount = grants.filter(grant => grant.status === 'granted').length;
-        const deniedCount = grants.filter(grant => grant.status === 'denied' || grant.status === 'blocked').length;
-        const databaseCount = overview.databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
-        const attention = [
-            ...overview.recentPermissionDenials,
-            ...overview.recentWarnings,
-            ...overview.recentErrors,
-        ].sort(sortByTimestampDesc).slice(0, 12);
-        container.innerHTML = `
-            <div class="authority-page-stack authority-governance-overview">
-                <header class="authority-page-header">
-                    <div>
-                        <h2>治理概览</h2>
-                        <p>这里仅保留跨扩展信号；权限、数据和活动都跟随具体扩展查看。</p>
-                    </div>
-                    <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-tab="detail">打开扩展目录</button>
-                        <button type="button" class="authority-action-button" data-tab="activity">查看审计</button>
-                    </div>
-                </header>
-
-                <div class="authority-governance-glance" aria-label="治理摘要">
-                    <span><strong>${this.state.extensions.length}</strong><small>接入扩展</small></span>
-                    <span><strong>${grantedCount}</strong><small>允许授权</small></span>
-                    <span class="${deniedCount > 0 ? 'authority-governance-glance--warning' : ''}"><strong>${deniedCount}</strong><small>拒绝 / 封锁</small></span>
-                    <span><strong>${overview.totalPolicyCount}</strong><small>策略规则</small></span>
-                    <span><strong>${databaseCount}</strong><small>数据库</small></span>
-                </div>
-
-                <div class="authority-governance-overview-grid">
-                    <section class="authority-section-block">
-                        <div class="authority-section-heading">
-                            <div><h3>需要关注</h3><div class="authority-muted">${attention.length} 条近期信号</div></div>
-                        </div>
-                        ${renderActivityLogRows(attention, '当前没有需要处理的权限拒绝、告警或错误。')}
-                    </section>
-                    <section class="authority-section-block">
-                        <div class="authority-section-heading">
-                            <div><h3>进行中的后台任务</h3><div class="authority-muted">${overview.activeJobs.length} 个排队或运行中的任务</div></div>
-                        </div>
-                        ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
-                    </section>
-                </div>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>Authority 可治理的能力</strong><span class="authority-muted">按需展开</span></summary>
-                    <div class="authority-collapsible-section__body">${renderCapabilityMatrix(RESOURCE_OPTIONS)}</div>
-                </details>
-            </div>
-        `;
+        if (container)
+            container.innerHTML = renderGovernanceOverview(this.state);
     }
-    async renderDetailSection() {
+    renderDetailSection() {
         const container = this.root.querySelector('[data-role="detail-view"]');
-        if (!container) {
-            return;
-        }
-        const detail = this.getSelectedDetail();
-        if (!detail) {
-            container.innerHTML = '<div class="authority-empty">先从左侧选一个扩展，再看它的权限、数据和运行情况。</div>';
-            return;
-        }
-        const granted = detail.grants.filter(item => item.status === 'granted');
-        const denied = detail.grants.filter(item => item.status === 'denied' || item.status === 'blocked');
-        const permissions = [...detail.activity.permissions].sort(sortByTimestampDesc).slice(0, 10);
-        const usage = [...detail.activity.usage].sort(sortByTimestampDesc).slice(0, 10);
-        const warnings = [...detail.activity.warnings].sort(sortByTimestampDesc).slice(0, 10);
-        const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
-        const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
-        const databases = [...detail.databases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
-        const triviumDatabases = [...detail.triviumDatabases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
-        const storage = detail.storage;
-        const risk = getExtensionRiskLevel(detail.extension);
-        const databaseCount = detail.databases.length + detail.triviumDatabases.length;
-        container.innerHTML = `
-            <div class="authority-page-stack authority-page-stack--detail">
-                <div class="authority-page-header authority-page-header--detail">
-                    <div class="authority-dossier-title">
-                        <h2>${escapeHtml(detail.extension.displayName)}</h2>
-                        <code class="authority-muted">${escapeHtml(detail.extension.id)}</code>
-                    </div>
-                    <div class="authority-dossier-actions">
-                        <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                        <span class="authority-pill authority-pill--medium">${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</span>
-                        <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
-                    </div>
-                </div>
-
-                <div class="authority-extension-facts" aria-label="扩展摘要">
-                    <span><small>最近活跃</small><strong>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</strong></span>
-                    <span><small>能力</small><strong>${getDeclaredPermissionLabels(detail.extension.declaredPermissions).length}</strong></span>
-                    <span><small>授权</small><strong>${granted.length} 允许 · ${denied.length} 拒绝</strong></span>
-                    <span><small>数据</small><strong>${databaseCount} 个数据库</strong></span>
-                    <span><small>任务</small><strong>${detail.jobs.length}</strong></span>
-                </div>
-
-                <section class="authority-governance-primary">
-                    <div class="authority-section-heading">
-                        <div>
-                            <h3>权限与能力</h3>
-                            <div class="authority-muted">声明范围、当前决定与扩展策略</div>
-                        </div>
-                        <button type="button" class="authority-action-button authority-action-button--danger" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
-                    </div>
-                    <div class="authority-governance-permission-layout">
-                        <div>
-                            <h4>声明能力</h4>
-                            ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展还没有声明任何权限。')}
-                        </div>
-                        <div>
-                            <h4>当前决定</h4>
-                            ${renderGrantSettingsRows(detail.extension.id, [...granted, ...denied], '当前没有持久化授权或拒绝记录。')}
-                            ${renderPolicyRows(detail.policies, '当前没有针对该扩展的策略覆盖。')}
-                        </div>
-                    </div>
-                </section>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>数据与存储</strong><span class="authority-muted">${databaseCount} 个数据库</span></summary>
-                    <div class="authority-collapsible-section__body authority-stack">
-                        ${renderStorageSummary(storage)}
-                        ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
-                    </div>
-                </details>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>最近活动</strong><span class="authority-muted">权限 ${permissions.length} · 调用 ${usage.length}</span></summary>
-                    <div class="authority-collapsible-section__body authority-detail-grid">
-                        <div class="authority-log-panel">
-                            <div class="authority-section-heading"><div><h3>权限活动</h3></div></div>
-                            ${renderActivityLogRows(permissions, '暂无权限活动。')}
-                        </div>
-                        <div class="authority-log-panel">
-                            <div class="authority-section-heading"><div><h3>能力调用</h3></div></div>
-                            ${renderActivityLogRows(usage, '暂无能力调用记录。')}
-                        </div>
-                    </div>
-                </details>
-
-                <details class="authority-collapsible-section">
-                    <summary><strong>任务与异常</strong><span class="authority-muted">任务 ${jobs.length} · 异常 ${warnings.length + errors.length}</span></summary>
-                    <div class="authority-collapsible-section__body authority-detail-grid">
-                        <div>
-                            <div class="authority-section-heading"><div><h3>后台任务</h3></div></div>
-                            ${renderJobTable(jobs, '暂无后台任务。')}
-                        </div>
-                        <div>
-                            <div class="authority-section-heading"><div><h3>告警与错误</h3></div></div>
-                            ${renderActivityLogRows([...warnings, ...errors].sort(sortByTimestampDesc), '暂无告警或错误记录。')}
-                        </div>
-                    </div>
-                </details>
-            </div>
-        `;
+        if (container)
+            container.innerHTML = renderExtensionDossier(this.state);
     }
-    async renderDatabasesSection() {
+    renderDatabasesSection() {
         const container = this.root.querySelector('[data-role="databases-view"]');
-        if (!container) {
-            return;
-        }
-        const databaseGroups = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
-        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
-        const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
-        container.innerHTML = `
-            <div class="authority-page-stack">
-                <div class="authority-page-header">
-                    <div>
-                        <div class="authority-eyebrow">Data Assets</div>
-                        <h2>各扩展的数据存储</h2>
-                        <p>按扩展查看 SQL 数据库与 Trivium 记忆库归档。</p>
-                    </div>
-                    <div class="authority-list-card__actions">
-                        <span class="authority-pill authority-pill--prompt">${totalDatabaseCount} 个数据库</span>
-                        <span class="authority-pill authority-pill--prompt">${escapeHtml(formatBytes(totalDatabaseSize))}</span>
-                    </div>
-                </div>
-                ${renderDatabaseGroupTable(databaseGroups, '当前没有发现任何扩展私有数据库。')}
-            </div>
-        `;
+        if (container)
+            container.innerHTML = renderDataAssets(this.state);
     }
-    async renderActivitySection() {
+    renderActivitySection() {
         const container = this.root.querySelector('[data-role="activity-view"]');
-        if (!container) {
-            return;
-        }
-        const items = [...this.state.details.values()]
-            .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors, ...detail.activity.warnings])
-            .sort(sortByTimestampDesc)
-            .slice(0, 80);
-        const warnings = [...this.state.details.values()]
-            .flatMap(detail => detail.activity.warnings)
-            .sort(sortByTimestampDesc)
-            .slice(0, 40);
-        const errors = [...this.state.details.values()]
-            .flatMap(detail => detail.activity.errors)
-            .sort(sortByTimestampDesc)
-            .slice(0, 40);
-        container.innerHTML = `
-            <div class="authority-page-stack">
-                <div class="authority-page-header">
-                    <div>
-                        <div class="authority-eyebrow">Audit Log</div>
-                        <h2>活动记录</h2>
-                        <p>权限请求、功能调用与异常的全局审计日志。</p>
-                    </div>
-                </div>
-                <div class="authority-log-layout">
-                    <section class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近活动</h3>
-                                <div class="authority-muted">按时间倒序显示最近发生的事情</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(items, '暂无活动记录。')}
-                    </section>
-                    <section class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>运行告警</h3>
-                                <div class="authority-muted">例如任务变慢、排队过多或反复重试</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(warnings, '暂无告警记录。')}
-                    </section>
-                    <section class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>错误记录</h3>
-                                <div class="authority-muted">这里只显示错误类型的记录</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(errors, '暂无错误记录。')}
-                    </section>
-                </div>
-            </div>
-        `;
+        if (container)
+            container.innerHTML = renderAuditWorkspace(this.state);
     }
-    async renderAgentSection() {
+    renderAgentSection() {
         const container = this.root.querySelector('[data-role="agent-view"]');
         if (!container) {
             return;
         }
+        const liveStatus = this.root.querySelector('[data-role="agent-live-status"]');
+        const announcement = this.state.isAdmin
+            ? getAgentStatusAnnouncement(this.state.agent)
+            : '只有管理员可以使用 Agent 工作台';
+        if (liveStatus && liveStatus.textContent !== announcement)
+            liveStatus.textContent = announcement;
         const draft = this.captureAgentFormDraft(container);
+        const focus = this.captureAgentFocus(container);
         container.innerHTML = this.state.isAdmin
             ? renderAgentWorkbench(this.state.agent)
             : '<div class="authority-empty">只有管理员可以使用 Agent 工作台。</div>';
         this.restoreAgentFormDraft(container, draft);
+        this.restoreAgentFocus(container, focus);
+    }
+    renderAgentSurfaces() {
+        this.renderAgentSection();
+        this.renderSettingsSection();
     }
     captureAgentFormDraft(container) {
         const values = new Map();
@@ -2091,6 +2087,46 @@ class SecurityCenterView {
                 values.set(field.dataset.role, field.value);
         }
         return { profileId: values.get('agent-profile-id') ?? '', values };
+    }
+    captureAgentFocus(container) {
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement) || !container.contains(active))
+            return null;
+        const data = {};
+        for (const key of AGENT_FOCUS_DATA_KEYS) {
+            const value = active.dataset[key];
+            if (value)
+                data[key] = value;
+        }
+        const selection = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+        return {
+            action: active.dataset.action ?? null,
+            role: active.dataset.role ?? null,
+            data,
+            selectionStart: selection ? active.selectionStart : null,
+            selectionEnd: selection ? active.selectionEnd : null,
+        };
+    }
+    restoreAgentFocus(container, snapshot) {
+        if (!snapshot)
+            return;
+        const candidates = container.querySelectorAll('[data-action], [data-role]');
+        const target = Array.from(candidates).find(element => {
+            if (snapshot.action && element.dataset.action !== snapshot.action)
+                return false;
+            if (snapshot.role && element.dataset.role !== snapshot.role)
+                return false;
+            if (!snapshot.action && !snapshot.role)
+                return false;
+            return Object.entries(snapshot.data).every(([key, value]) => element.dataset[key] === value);
+        });
+        if (!target || (target instanceof HTMLButtonElement && target.disabled))
+            return;
+        target.focus({ preventScroll: true });
+        if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+            && snapshot.selectionStart !== null && snapshot.selectionEnd !== null) {
+            target.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+        }
     }
     restoreAgentFormDraft(container, draft) {
         const selectedProfileId = this.state.agent.selectedProfileId ?? '';
@@ -2104,468 +2140,19 @@ class SecurityCenterView {
             field.value = value;
         }
     }
-    async renderPoliciesSection() {
+    renderPoliciesSection() {
         const container = this.root.querySelector('[data-role="policies-view"]');
-        if (!container) {
-            return;
-        }
-        if (!this.state.isAdmin) {
-            container.innerHTML = '<div class="authority-empty">只有管理员可查看和修改全局策略。</div>';
-            return;
-        }
-        const policies = this.state.policies;
-        if (!policies) {
-            container.innerHTML = '<div class="authority-empty">策略尚未加载。</div>';
-            return;
-        }
-        const extensionId = this.state.policyEditorExtensionId ?? this.state.selectedExtensionId ?? this.state.extensions[0]?.id ?? '';
-        const overrides = extensionId ? Object.values(policies.extensions[extensionId] ?? {}) : [];
-        container.innerHTML = `
-            <div class="authority-page-stack">
-                <div class="authority-page-header">
-                    <div>
-                        <div class="authority-eyebrow">Compliance Rules</div>
-                        <h2>管理员统一规则</h2>
-                        <p>全局策略会覆盖扩展请求与用户授权决策，请谨慎修改。</p>
-                    </div>
-                    <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button" data-action="add-policy-row">新增单独规则</button>
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="save-policies">保存策略</button>
-                    </div>
-                </div>
-                <section class="authority-card authority-card--flat">
-                    <div class="authority-card__header">
-                        <div>
-                            <h3>默认处理规则</h3>
-                            <div class="authority-muted">先给每类功能设一个默认处理方式</div>
-                        </div>
-                        <span class="authority-pill authority-pill--admin">默认规则 ${RESOURCE_OPTIONS.length}</span>
-                    </div>
-                    <div class="authority-table-wrap">
-                        <table class="authority-data-table authority-policy-matrix">
-                            <thead>
-                                <tr>
-                                    <th>能力</th>
-                                    <th>内部名称</th>
-                                    <th>风险</th>
-                                    <th>默认处理</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${RESOURCE_OPTIONS.map(resource => `
-                                    <tr>
-                                        <td><strong>${escapeHtml(getResourceLabel(resource))}</strong></td>
-                                        <td>${escapeHtml(resource)}</td>
-                                        <td><span class="authority-pill authority-pill--${getRiskLevel(resource)}">${escapeHtml(getRiskLabel(getRiskLevel(resource)))}</span></td>
-                                        <td>
-                                            <select data-policy-default="${escapeHtml(resource)}">
-                                                ${STATUS_OPTIONS.map(status => `<option value="${status}" ${policies.defaults[resource] === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
-                                            </select>
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-                <section class="authority-card authority-card--flat">
-                    <div class="authority-card__header">
-                        <div>
-                            <h3>按扩展单独设置</h3>
-                            <div class="authority-muted">可以按扩展、按目标单独覆盖上面的默认规则</div>
-                        </div>
-                        <label class="authority-policy-field authority-policy-field--inline">
-                            <span>选择扩展</span>
-                            <select data-policy-editor-extension>
-                                ${this.state.extensions.map(extension => `<option value="${escapeHtml(extension.id)}" ${extension.id === extensionId ? 'selected' : ''}>${escapeHtml(extension.displayName)}</option>`).join('')}
-                            </select>
-                        </label>
-                    </div>
-                    <div class="authority-policy-rows" data-role="policy-rows">
-                        ${overrides.map(entry => this.buildPolicyRowMarkup(entry)).join('')}
-                    </div>
-                    <div class="authority-policy-footer">
-                        <div class="authority-chip-row">
-                            <span class="authority-pill authority-pill--granted">默认允许</span>
-                            <span class="authority-pill authority-pill--prompt">需要询问</span>
-                            <span class="authority-pill authority-pill--blocked">管理员封锁</span>
-                        </div>
-                        <div class="authority-muted">最后更新：${escapeHtml(formatDate(policies.updatedAt))}</div>
-                    </div>
-                </section>
-            </div>
-        `;
+        if (container)
+            container.innerHTML = renderPolicyWorkbench(this.state);
     }
-    async renderUpdatesSection() {
+    renderUpdatesSection() {
         const container = this.root.querySelector('[data-role="updates-view"]');
         if (!container) {
             return;
         }
-        if (!this.state.isAdmin) {
-            container.innerHTML = '<div class="authority-empty">只有管理员可以使用这里的维护、备份和迁移功能。</div>';
-            return;
-        }
-        const probe = this.state.probe;
-        const core = probe?.core;
-        const result = this.state.updateResult;
-        const usageSummary = this.state.usageSummary;
-        const packageOperations = [...this.state.packageOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        const nativeMigrationOperations = [...this.state.nativeMigrationOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        const installPath = result?.git?.pluginRoot ?? '未获取';
-        const pullButtonLabel = this.state.updateInProgress ? '处理中…' : '拉取最新代码';
-        const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端界面';
-        const packageButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导出数据包';
-        const diagnosticArchiveLabel = this.state.packageActionInProgress ? '处理中…' : '导出诊断压缩包';
-        const importButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导入数据包';
-        const nativeMigrationButtonLabel = this.state.nativeMigrationActionInProgress ? '处理中…' : '上传并预览';
-        const systemAttentionCount = Number(Boolean(core?.health?.lastError))
-            + Number(Boolean(probe && ['conflict', 'error', 'missing'].includes(probe.installStatus)));
-        const updateResultMarkup = result ? `
-            <section class="authority-system-result" aria-label="最近一次更新结果">
-                <div class="authority-section-heading">
-                    <div>
-                        <h3>最近一次更新</h3>
-                        <div class="authority-muted">${escapeHtml(result.message)}</div>
-                    </div>
-                    <div class="authority-page-actions authority-page-actions--inline">
-                        <span class="authority-pill authority-pill--${result.requiresRestart ? 'warning' : 'granted'}">${escapeHtml(result.requiresRestart ? '需要重启 ST' : '无需重启 ST')}</span>
-                        <span class="authority-pill authority-pill--runtime">${escapeHtml(result.action === 'git-pull' ? '代码更新' : '前端部署')}</span>
-                    </div>
-                </div>
-                <div class="authority-system-result__facts">
-                    <span><strong>${escapeHtml(result.before.pluginVersion)}</strong> → <strong>${escapeHtml(result.after.pluginVersion)}</strong><small>插件版本</small></span>
-                    <span><strong>${escapeHtml(result.before.sdkDeployedVersion ?? '未部署')}</strong> → <strong>${escapeHtml(result.after.sdkDeployedVersion ?? '未部署')}</strong><small>前端版本</small></span>
-                    <span><strong>${escapeHtml(getCoreStateLabel(result.core.state))}</strong><small>${escapeHtml(result.coreRestartMessage ?? '后台服务正常')}</small></span>
-                </div>
-                ${result.git ? `
-                    <details class="authority-system-subsection">
-                        <summary><span>Git 输出</span><span>${escapeHtml(result.git.branch ?? '未获取')} · ${escapeHtml(result.git.previousRevision ?? '未知')} → ${escapeHtml(result.git.currentRevision ?? '未知')}</span></summary>
-                        <div class="authority-system-subsection__body">
-                            ${result.git.stdout ? `<pre class="authority-code-block">${escapeHtml(result.git.stdout)}</pre>` : ''}
-                            ${result.git.stderr ? `<pre class="authority-code-block">${escapeHtml(result.git.stderr)}</pre>` : ''}
-                        </div>
-                    </details>
-                ` : ''}
-            </section>
-        ` : '';
-        const packageOperationsMarkup = packageOperations.length > 0 ? `
-            <div class="authority-table-wrap">
-                <table class="authority-data-table authority-policy-matrix">
-                    <thead><tr><th>任务</th><th>状态</th><th>进度</th><th>结果</th><th>更新时间</th><th>动作</th></tr></thead>
-                    <tbody>
-                        ${packageOperations.map(operation => `
-                            <tr>
-                                <td>
-                                    <strong>${escapeHtml(operation.kind === 'export' ? '导出' : '导入')}</strong>
-                                    <div class="authority-muted">${escapeHtml(operation.id)}</div>
-                                    ${operation.sourceFileName ? `<div class="authority-muted">来源文件：${escapeHtml(operation.sourceFileName)}</div>` : ''}
-                                </td>
-                                <td><span class="authority-pill authority-pill--${escapeHtml(this.getPackageOperationPill(operation.status))}">${escapeHtml(this.getPackageOperationStatusLabel(operation.status))}</span></td>
-                                <td>${escapeHtml(String(operation.progress))}%</td>
-                                <td>
-                                    <div>${escapeHtml(operation.summary ?? '未开始')}</div>
-                                    ${operation.error ? `<div class="authority-muted">${escapeHtml(operation.error)}</div>` : ''}
-                                    ${operation.artifact ? `<div class="authority-muted">${escapeHtml(operation.artifact.fileName)} · ${escapeHtml(formatBytes(operation.artifact.sizeBytes))}</div>` : ''}
-                                    ${operation.importSummary ? `<div class="authority-muted">扩展 ${escapeHtml(String(operation.importSummary.extensionCount))} 个 · 存储文件 ${escapeHtml(String(operation.importSummary.blobCount))} 个 · 私有文件 ${escapeHtml(String(operation.importSummary.fileCount))} 个</div>` : ''}
-                                </td>
-                                <td>${escapeHtml(formatDate(operation.updatedAt))}</td>
-                                <td>
-                                    <div class="authority-page-actions authority-page-actions--inline">
-                                        ${operation.artifact ? `<button type="button" class="authority-action-button" data-action="download-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>下载</button>` : ''}
-                                        ${operation.status === 'failed' ? `<button type="button" class="authority-action-button" data-action="resume-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>恢复</button>` : ''}
-                                    </div>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>
-        ` : '<div class="authority-empty">暂时还没有导入或导出任务。</div>';
-        const usageMarkup = usageSummary ? `
-            <div class="authority-system-usage-summary">
-                <span><strong>${escapeHtml(String(usageSummary.totals.extensionCount))}</strong><small>扩展</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.blobCount))} · ${escapeHtml(formatBytes(usageSummary.totals.blobBytes))}</strong><small>存储文件</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.databaseCount))} · ${escapeHtml(formatBytes(usageSummary.totals.databaseBytes))}</strong><small>SQL / Trivium</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.files.fileCount))} · ${escapeHtml(formatBytes(usageSummary.totals.files.totalSizeBytes))}</strong><small>私有文件</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.kvEntries))}</strong><small>键值条目</small></span>
-            </div>
-            <details class="authority-system-subsection">
-                <summary><span>按扩展查看占用</span><span>${escapeHtml(formatDate(usageSummary.generatedAt))}</span></summary>
-                <div class="authority-system-subsection__body">
-                    <div class="authority-table-wrap">
-                        <table class="authority-data-table authority-policy-matrix">
-                            <thead><tr><th>扩展</th><th>键值</th><th>存储文件</th><th>SQL / Trivium</th><th>私有文件</th><th>授权</th></tr></thead>
-                            <tbody>
-                                ${usageSummary.extensions.map(entry => `
-                                    <tr>
-                                        <td><strong>${escapeHtml(entry.extension.displayName || entry.extension.id)}</strong><div class="authority-muted">${escapeHtml(entry.extension.id)}</div></td>
-                                        <td>${escapeHtml(String(entry.storage.kvEntries))}</td>
-                                        <td>${escapeHtml(String(entry.storage.blobCount))} · ${escapeHtml(formatBytes(entry.storage.blobBytes))}</td>
-                                        <td>${escapeHtml(String(entry.storage.databaseCount))} · ${escapeHtml(formatBytes(entry.storage.databaseBytes))}</td>
-                                        <td>${escapeHtml(String(entry.storage.files.fileCount))} · ${escapeHtml(formatBytes(entry.storage.files.totalSizeBytes))}</td>
-                                        <td>${escapeHtml(String(entry.grantedCount))} / ${escapeHtml(String(entry.deniedCount))}</td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </details>
-        ` : '<div class="authority-empty">暂时还没拿到数据占用概览。</div>';
-        const nativeMigrationMarkup = `
-            <div class="authority-system-section__intro">
-                <div>
-                    <h3>从旧 SillyTavern 导入原生目录</h3>
-                    <p>上传 data 或 third-party 插件 ZIP，生成影响预览后再决定跳过或覆盖。最大 12 GB。</p>
-                </div>
-                <span class="authority-pill authority-pill--warning">管理员高风险操作</span>
-            </div>
-            <div class="authority-migration-grid">
-                <div class="authority-upload-tile">
-                    <strong>导入旧酒馆 data 目录</strong>
-                    <div class="authority-muted">支持压缩包内为 <code>data/default-user/...</code> 或直接 <code>default-user/...</code>。</div>
-                    <div class="authority-page-actions">
-                        <input type="file" data-role="native-migration-file" data-target="data" accept=".zip,application/zip" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''} />
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="data" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
-                    </div>
-                </div>
-                <div class="authority-upload-tile">
-                    <strong>导入旧酒馆第三方插件目录</strong>
-                    <div class="authority-muted">支持 public/scripts/extensions/third-party、extensions/third-party、third-party 或直接插件文件夹。</div>
-                    <div class="authority-page-actions">
-                        <input type="file" data-role="native-migration-file" data-target="third-party" accept=".zip,application/zip" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''} />
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="third-party" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
-                    </div>
-                </div>
-            </div>
-            <div class="authority-guardrail-band">
-                <span>不删除缺失文件</span><span>不运行 npm install</span><span>不重启</span><span>不自动启用脚本</span>
-            </div>
-            ${nativeMigrationOperations.length > 0 ? `
-                <div class="authority-table-wrap">
-                    <table class="authority-data-table authority-policy-matrix">
-                        <thead><tr><th>迁移任务</th><th>状态</th><th>预览统计</th><th>执行结果</th><th>更新时间</th><th>动作</th></tr></thead>
-                        <tbody>${nativeMigrationOperations.map(operation => this.renderNativeMigrationOperationRow(operation)).join('')}</tbody>
-                    </table>
-                </div>
-            ` : '<div class="authority-empty">暂时还没有原生迁移任务。上传 ZIP 后会先生成预览。</div>'}
-        `;
-        container.innerHTML = `
-            <div class="authority-page-stack authority-system-workspace">
-                <header class="authority-page-header authority-page-header--updates">
-                    <div>
-                        <div class="authority-eyebrow">System & recovery</div>
-                        <h2>系统与恢复</h2>
-                        <p>日常运行状态、更新、备份恢复与高风险迁移分层管理。</p>
-                    </div>
-                    <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button" data-action="export-diagnostic-archive" ${this.state.packageActionInProgress ? 'disabled' : ''}>${diagnosticArchiveLabel}</button>
-                        <button type="button" class="authority-action-button" data-action="export-diagnostic-bundle">导出诊断 JSON</button>
-                    </div>
-                </header>
-
-                <div class="authority-system-health-grid" aria-label="系统状态摘要">
-                    <div><small>Authority 服务</small><strong>${escapeHtml(getCoreStateLabel(core?.state))}</strong><span>Core ${escapeHtml(core?.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</span></div>
-                    <div><small>部署状态</small><strong>${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : MISSING_TEXT)}</strong><span>SDK ${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</span></div>
-                    <div><small>需要处理</small><strong>${systemAttentionCount}</strong><span>${systemAttentionCount > 0 ? '展开下方项目查看' : '当前没有阻塞项'}</span></div>
-                </div>
-
-                <details class="authority-system-section" open>
-                    <summary>
-                        <span><strong>版本与部署</strong><small>更新插件、部署前端与检查 Core</small></span>
-                        <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
-                    </summary>
-                    <div class="authority-system-section__body authority-stack">
-                        <div class="authority-system-operation-list">
-                            <div class="authority-system-operation-row">
-                                <div><strong>插件更新</strong><span>当前 ${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)} · 仅允许快进更新</span></div>
-                                <button type="button" class="authority-action-button authority-action-button--primary" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
-                            </div>
-                            <div class="authority-system-operation-row">
-                                <div><strong>SDK 部署</strong><span>内置 ${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)} · 当前 ${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</span></div>
-                                <button type="button" class="authority-action-button" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
-                            </div>
-                            <div class="authority-system-operation-row">
-                                <div><strong>后台服务</strong><span>${escapeHtml(getCoreStateLabel(core?.state))} · ${escapeHtml(probe?.coreArtifactPlatform ?? MISSING_TEXT)} · 校验 ${escapeHtml(probe?.coreVerified ? '通过' : '未通过')}</span></div>
-                                <span class="authority-pill authority-pill--${escapeHtml(core?.state ?? 'starting')}">${escapeHtml(core?.version ?? MISSING_TEXT)}</span>
-                            </div>
-                        </div>
-                        <details class="authority-system-subsection">
-                            <summary><span>后台服务详细诊断</span><span>${escapeHtml(core?.port ? `127.0.0.1:${core.port}` : '端口未分配')}</span></summary>
-                            <div class="authority-system-subsection__body">
-                                <div class="authority-system-facts authority-system-facts--runtime">
-                                    <div><span>构建编号</span><strong>${escapeHtml(core?.health?.buildHash ?? probe?.coreBinarySha256 ?? MISSING_TEXT)}</strong></div>
-                                    <div><span>数据目录</span><strong>${escapeHtml(probe?.storageRoot ?? MISSING_TEXT)}</strong></div>
-                                    <div><span>插件目录</span><strong>${escapeHtml(installPath)}</strong></div>
-                                    <div><span>处理请求</span><strong>${escapeHtml(core?.health ? String(core.health.requestCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>累计错误</span><strong>${escapeHtml(core?.health ? String(core.health.errorCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>当前并发</span><strong>${escapeHtml(core?.health ? `${core.health.currentConcurrency} / ${core.health.maxConcurrency}` : MISSING_TEXT)}</strong></div>
-                                    <div><span>请求排队</span><strong>${escapeHtml(core?.health ? String(core.health.queuedRequestCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>任务排队</span><strong>${escapeHtml(core?.health ? String(core.health.queuedJobCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>工作线程</span><strong>${escapeHtml(core?.health ? String(core.health.workerCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>任务类型</span><strong>${escapeHtml(core?.health ? `${core.health.jobRegistrySummary.registered} · ${core.health.jobRegistrySummary.jobTypes.join(', ')}` : MISSING_TEXT)}</strong></div>
-                                    <div><span>最近操作</span><strong>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</strong></div>
-                                </div>
-                            </div>
-                        </details>
-                        ${updateResultMarkup}
-                        <details class="authority-system-subsection">
-                            <summary><span>更新说明</span><span>什么时候需要重启</span></summary>
-                            <div class="authority-system-subsection__body authority-stack">
-                                <div class="authority-inline-note"><strong>拉取最新代码</strong><div>仅适用于 Git 安装；执行 git pull --ff-only，再部署前端并尝试重启后台服务。</div></div>
-                                <div class="authority-inline-note"><strong>重新部署前端</strong><div>只替换 third-party/st-authority-sdk，不联网、不修改服务端代码。</div></div>
-                                <div class="authority-inline-note"><strong>重启提示</strong><div>若更新包含新的 Node 服务端代码，需要重启 SillyTavern 才会完全生效。</div></div>
-                            </div>
-                        </details>
-                    </div>
-                </details>
-
-                <details class="authority-system-section" open>
-                    <summary>
-                        <span><strong>ST-Manager 备份与恢复</strong><small>酒馆主动备份、恢复预览与恢复</small></span>
-                        <span class="authority-pill authority-pill--${this.state.stManagerControlConfig?.enabled ? 'granted' : 'warning'}">${this.state.stManagerControlConfig?.enabled ? '已配置' : '未配置'}</span>
-                    </summary>
-                    <div class="authority-system-section__body">
-                        ${renderStManagerControlSection(this.state.stManagerControlConfig, this.state.stManagerControlBackups, this.state.stManagerControlActionInProgress)}
-                    </div>
-                </details>
-
-                <details class="authority-system-section">
-                    <summary>
-                        <span><strong>Authority 数据包</strong><small>授权、规则、私有文件与数据库</small></span>
-                        <span class="authority-pill authority-pill--runtime">${packageOperations.length} 个任务</span>
-                    </summary>
-                    <div class="authority-system-section__body authority-stack">
-                        <div class="authority-system-section__intro">
-                            <div>
-                                <h3>备份与迁移 Authority 数据</h3>
-                                <p>导出完整数据包，或以覆盖/合并方式导入；后台任务进度会保留在下方。</p>
-                            </div>
-                            <button type="button" class="authority-action-button authority-action-button--primary" data-action="export-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${packageButtonLabel}</button>
-                        </div>
-                        ${usageMarkup}
-                        <div class="authority-system-import">
-                            <label>
-                                <span>导入方式</span>
-                                <select data-role="import-package-mode" ${this.state.packageActionInProgress ? 'disabled' : ''}>
-                                    <option value="replace">覆盖导入 · 清空现有数据后导入</option>
-                                    <option value="merge">合并导入 · 保留现有数据并补充</option>
-                                </select>
-                            </label>
-                            <input type="file" data-role="import-package-file" accept=".zip,.authoritypkg.zip,.json,.gz,.authoritypkg,.authoritypkg.json.gz,application/zip,application/json,application/gzip" ${this.state.packageActionInProgress ? 'disabled' : ''} />
-                            <button type="button" class="authority-action-button" data-action="import-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${importButtonLabel}</button>
-                        </div>
-                        ${packageOperationsMarkup}
-                    </div>
-                </details>
-
-                <details class="authority-system-section authority-system-section--danger">
-                    <summary>
-                        <span><strong>原生 SillyTavern 迁移</strong><small>从旧 data 或 third-party ZIP 导入</small></span>
-                        <span class="authority-pill authority-pill--warning">${nativeMigrationOperations.length} 个任务</span>
-                    </summary>
-                    <div class="authority-system-section__body authority-stack">${nativeMigrationMarkup}</div>
-                </details>
-
-                <details class="authority-system-section">
-                    <summary>
-                        <span><strong>高级远程桥接</strong><small>让 ST-Manager 回连酒馆的公网通道</small></span>
-                        <span class="authority-pill authority-pill--${this.state.stManagerBridgeConfig?.enabled ? 'granted' : 'warning'}">${this.state.stManagerBridgeConfig?.enabled ? '已启用' : '未启用'}</span>
-                    </summary>
-                    <div class="authority-system-section__body">
-                        <div class="authority-inline-note">通常只需要上面的 ST-Manager 控制配置。仅当 ST-Manager 必须主动回连酒馆时才启用桥接。</div>
-                        ${renderStManagerBridgeSection(this.state.stManagerBridgeConfig, this.state.stManagerBridgeGeneratedKey, this.state.stManagerBridgeActionInProgress)}
-                    </div>
-                </details>
-            </div>
-        `;
-    }
-    getPackageOperationPill(status) {
-        switch (status) {
-            case 'completed':
-                return 'granted';
-            case 'failed':
-                return 'warning';
-            case 'running':
-                return 'runtime';
-            default:
-                return 'prompt';
-        }
-    }
-    renderNativeMigrationOperationRow(operation) {
-        const rejectedCount = operation.entries?.filter(entry => entry.action === 'reject').length ?? 0;
-        const createCount = operation.entries?.filter(entry => entry.action === 'create').length ?? 0;
-        const overwriteCount = operation.entries?.filter(entry => entry.action === 'overwrite').length ?? 0;
-        const canApply = operation.status === 'previewed' && rejectedCount === 0;
-        const canRollback = operation.status === 'applied' || operation.status === 'needs_rollback';
-        return `
-            <tr>
-                <td>
-                    <strong>${escapeHtml(operation.target === 'data' ? 'Data 目录' : '第三方插件')}</strong>
-                    <div class="authority-muted">${escapeHtml(operation.id)}</div>
-                    <div class="authority-muted">${escapeHtml(operation.sourceFileName)} · ${escapeHtml(formatBytes(operation.sourceSizeBytes))}</div>
-                </td>
-                <td><span class="authority-pill authority-pill--${escapeHtml(this.getNativeMigrationOperationPill(operation.status))}">${escapeHtml(this.getNativeMigrationOperationStatusLabel(operation.status))}</span></td>
-                <td>
-                    <div>${escapeHtml(String(operation.entryCount))} 个文件 · ${escapeHtml(formatBytes(operation.totalSizeBytes))}</div>
-                    <div class="authority-muted">新增 ${escapeHtml(String(createCount))} · 覆盖候选 ${escapeHtml(String(overwriteCount))} · 拒绝 ${escapeHtml(String(rejectedCount))}</div>
-                    ${operation.warnings.length > 0 ? `<div class="authority-muted">${escapeHtml(operation.warnings.join('；'))}</div>` : ''}
-                </td>
-                <td>
-                    <div>已创建 ${escapeHtml(String(operation.createdCount))} · 已覆盖 ${escapeHtml(String(operation.overwrittenCount))} · 已跳过 ${escapeHtml(String(operation.skippedCount))}</div>
-                    ${operation.error ? `<div class="authority-muted">${escapeHtml(operation.error)}</div>` : ''}
-                </td>
-                <td>${escapeHtml(formatDate(operation.updatedAt))}</td>
-                <td>
-                    <div class="authority-page-actions authority-page-actions--inline">
-                        ${canApply ? `
-                            <select data-role="native-migration-mode" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>
-                                <option value="skip">跳过已有文件</option>
-                                <option value="overwrite">覆盖已有文件并保留回滚备份</option>
-                            </select>
-                            <button type="button" class="authority-action-button authority-action-button--primary" data-action="apply-native-migration" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>应用</button>
-                        ` : ''}
-                        ${canRollback ? `<button type="button" class="authority-action-button" data-action="rollback-native-migration" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>回滚</button>` : ''}
-                        ${rejectedCount > 0 ? '<span class="authority-muted">存在被拒绝文件，不能应用。</span>' : ''}
-                    </div>
-                </td>
-            </tr>
-        `;
-    }
-    getNativeMigrationOperationPill(status) {
-        switch (status) {
-            case 'applied':
-            case 'rolled_back':
-                return 'granted';
-            case 'failed':
-            case 'needs_rollback':
-                return 'warning';
-            case 'applying':
-            case 'rolling_back':
-                return 'runtime';
-            default:
-                return 'prompt';
-        }
-    }
-    getNativeMigrationOperationStatusLabel(status) {
-        switch (status) {
-            case 'previewed':
-                return '已预览';
-            case 'applying':
-                return '导入中';
-            case 'applied':
-                return '已导入';
-            case 'rolling_back':
-                return '回滚中';
-            case 'rolled_back':
-                return '已回滚';
-            case 'needs_rollback':
-                return '需要回滚';
-            case 'failed':
-                return '失败';
-            default:
-                return '未知';
-        }
+        container.innerHTML = this.state.isAdmin
+            ? renderSystemWorkbench(this.state)
+            : '<div class="authority-empty">只有管理员可以使用这里的维护、备份和迁移功能。</div>';
     }
     getRequiredSessionToken() {
         const sessionToken = this.state.session?.sessionToken;
@@ -2623,30 +2210,7 @@ class SecurityCenterView {
         }
     }
     buildPolicyRowMarkup(entry) {
-        return `
-            <div class="authority-policy-row">
-                <select data-policy-field="resource">
-                    ${RESOURCE_OPTIONS.map(resource => `<option value="${resource}" ${entry?.resource === resource ? 'selected' : ''}>${escapeHtml(getResourceLabel(resource))}</option>`).join('')}
-                </select>
-                <input data-policy-field="target" type="text" value="${escapeHtml(entry?.target ?? '*')}" placeholder="目标，例如网站域名或频道名" />
-                <select data-policy-field="status">
-                    ${STATUS_OPTIONS.map(status => `<option value="${status}" ${entry?.status === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
-                </select>
-                <button type="button" class="menu_button" data-action="remove-policy-row">移除</button>
-            </div>
-        `;
-    }
-    getPackageOperationStatusLabel(status) {
-        switch (status) {
-            case 'completed':
-                return '已完成';
-            case 'failed':
-                return '失败';
-            case 'running':
-                return '处理中';
-            default:
-                return '排队中';
-        }
+        return renderPolicyOverrideRow(entry);
     }
     toggleSections() {
         const activeArea = getCenterArea(this.state.selectedTab);

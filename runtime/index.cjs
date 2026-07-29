@@ -1284,13 +1284,15 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   registerAgentHistoryRoutes: () => (/* binding */ registerAgentHistoryRoutes)
 /* harmony export */ });
-/* harmony import */ var _authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./authority-route-context.js */ "./src/routes/authority-route-context.ts");
+/* harmony import */ var _services_default_agent_workspace_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../services/default-agent-workspace.js */ "./src/services/default-agent-workspace.ts");
+/* harmony import */ var _authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./authority-route-context.js */ "./src/routes/authority-route-context.ts");
+
 
 function registerAgentHistoryRoutes(router, runtime, fail) {
-    router.get('/admin/agent/workspaces', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (_req, res) => {
+    router.get('/admin/agent/workspaces', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (_req, res) => {
         res.json({ workspaces: runtime.workspaceHistory.listWorkspaces() });
     }));
-    router.post('/admin/agent/workspaces', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+    router.post('/admin/agent/workspaces', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
         const request = (req.body ?? {});
         const workspace = await runtime.workspaceHistory.registerWorkspace({
             ...request,
@@ -1301,13 +1303,20 @@ function registerAgentHistoryRoutes(router, runtime, fail) {
         }).catch(() => undefined);
         res.json(workspace);
     }));
-    router.get('/admin/agent/workspaces/:workspaceId', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+    router.get('/admin/agent/workspaces/default', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (_req, res) => {
+        const workspace = await (0,_services_default_agent_workspace_js__WEBPACK_IMPORTED_MODULE_0__.ensureDefaultAgentWorkspace)(runtime);
+        if (!workspace) {
+            throw new Error('SillyTavern root could not be resolved for the default Agent scope');
+        }
+        res.json(workspace);
+    }));
+    router.get('/admin/agent/workspaces/:workspaceId', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
         res.json(runtime.workspaceHistory.getWorkspace(workspaceId(req)));
     }));
-    router.get('/admin/agent/workspaces/:workspaceId/status', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+    router.get('/admin/agent/workspaces/:workspaceId/status', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
         res.json(await runtime.workspaceHistory.status(workspaceId(req)));
     }));
-    router.get('/admin/agent/workspaces/:workspaceId/commits', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+    router.get('/admin/agent/workspaces/:workspaceId/commits', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
         const id = workspaceId(req);
         const limit = Number(req.query?.limit ?? 100);
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
@@ -1319,12 +1328,12 @@ function registerAgentHistoryRoutes(router, runtime, fail) {
         };
         res.json(response);
     }));
-    router.get('/admin/agent/workspaces/:workspaceId/diff', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+    router.get('/admin/agent/workspaces/:workspaceId/diff', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
         const id = workspaceId(req);
         const workspace = runtime.workspaceHistory.getWorkspace(id);
         res.json(runtime.workspaceHistory.diff(id, resolveCommit(req.query?.from, workspace.headCommitId), resolveCommit(req.query?.to, workspace.headCommitId)));
     }));
-    router.post('/admin/agent/workspaces/:workspaceId/checkpoints', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+    router.post('/admin/agent/workspaces/:workspaceId/checkpoints', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
         const response = await runtime.workspaceHistory.checkpoint(workspaceId(req), (req.body ?? {}), { kind: 'user', id: context.user.handle });
         void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace checkpoint created', {
             workspaceId: response.workspace.id,
@@ -1333,7 +1342,7 @@ function registerAgentHistoryRoutes(router, runtime, fail) {
         }).catch(() => undefined);
         res.json(response);
     }));
-    router.post('/admin/agent/workspaces/:workspaceId/rollback', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+    router.post('/admin/agent/workspaces/:workspaceId/rollback', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
         const response = await runtime.workspaceHistory.rollback(workspaceId(req), (req.body ?? {}), { kind: 'user', id: context.user.handle });
         void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace rolled back', {
             workspaceId: response.workspace.id,
@@ -1343,7 +1352,7 @@ function registerAgentHistoryRoutes(router, runtime, fail) {
         }).catch(() => undefined);
         res.json(response);
     }));
-    router.post('/admin/agent/workspaces/:workspaceId/rollback/resume', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+    router.post('/admin/agent/workspaces/:workspaceId/rollback/resume', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
         const response = await runtime.workspaceHistory.resumeRollback(workspaceId(req));
         void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace rollback resumed', {
             workspaceId: response.workspace.id,
@@ -13278,6 +13287,38 @@ function pruneEmptyTransferDirs(dirPath) {
 
 /***/ },
 
+/***/ "./src/services/default-agent-workspace.ts"
+/*!*************************************************!*\
+  !*** ./src/services/default-agent-workspace.ts ***!
+  \*************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   DEFAULT_AGENT_WORKSPACE_ID: () => (/* binding */ DEFAULT_AGENT_WORKSPACE_ID),
+/* harmony export */   ensureDefaultAgentWorkspace: () => (/* binding */ ensureDefaultAgentWorkspace)
+/* harmony export */ });
+const DEFAULT_AGENT_WORKSPACE_ID = 'sillytavern';
+/**
+ * Resolves and idempotently registers the built-in Agent scope. The history
+ * registry deduplicates by canonical root path, so existing installations
+ * keep their original workspace id while the UI still receives the real
+ * record to use.
+ */
+async function ensureDefaultAgentWorkspace(services) {
+    const sillyTavernRoot = services.install.getSillyTavernRoot();
+    if (!sillyTavernRoot)
+        return null;
+    return await services.workspaceHistory.registerWorkspace({
+        id: DEFAULT_AGENT_WORKSPACE_ID,
+        displayName: 'SillyTavern',
+        rootPath: sillyTavernRoot,
+    });
+}
+
+
+/***/ },
+
 /***/ "./src/services/extension-service.ts"
 /*!*******************************************!*\
   !*** ./src/services/extension-service.ts ***!
@@ -23372,12 +23413,14 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   exit: () => (/* binding */ exit),
 /* harmony export */   info: () => (/* binding */ info),
 /* harmony export */   init: () => (/* binding */ init),
-/* harmony export */   loadCompanionModuleFromDisk: () => (/* reexport safe */ _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__.loadCompanionModuleFromDisk)
+/* harmony export */   loadCompanionModuleFromDisk: () => (/* reexport safe */ _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_4__.loadCompanionModuleFromDisk)
 /* harmony export */ });
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./constants.js */ "./src/constants.ts");
 /* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
 /* harmony import */ var _routes_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./routes.js */ "./src/routes.ts");
-/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
+/* harmony import */ var _services_default_agent_workspace_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/default-agent-workspace.js */ "./src/services/default-agent-workspace.ts");
+/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
+
 
 
 
@@ -23399,6 +23442,15 @@ async function init(router) {
     runtime ??= (0,_runtime_js__WEBPACK_IMPORTED_MODULE_1__.createAuthorityRuntime)();
     (0,_routes_js__WEBPACK_IMPORTED_MODULE_2__.registerRoutes)(router, runtime);
     await runtime.install.bootstrap();
+    try {
+        const workspace = await (0,_services_default_agent_workspace_js__WEBPACK_IMPORTED_MODULE_3__.ensureDefaultAgentWorkspace)(runtime);
+        if (!workspace) {
+            console.warn('[authority] SillyTavern root could not be resolved; the default Agent scope was not registered.');
+        }
+    }
+    catch (error) {
+        console.warn(`[authority] Default Agent scope registration failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     // Phase 1+2: discover companion module manifests and then load their
     // server.cjs at startup. Discovery failures must never block DOA
     // startup; they are recorded as diagnostics on the affected records and

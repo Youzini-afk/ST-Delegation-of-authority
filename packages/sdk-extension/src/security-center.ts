@@ -9,50 +9,40 @@ import type {
     DataTransferReadResponse,
     NativeMigrationApplyMode,
     NativeMigrationTarget,
-    DeclaredPermissions,
     PermissionResource,
     PermissionStatus,
     SessionInitResponse,
 } from '@stdo/shared-types';
 import { authorityRequest } from './api.js';
 import type { AuthorityClient, AuthorityEventsSubscription } from './client.js';
-import { clearChildren, escapeHtml, formatDate } from './dom.js';
+import { escapeHtml, formatDate } from './dom.js';
+import { renderAlertStack, type AlertItem } from './security-center/components.js';
+import { SECURITY_CENTER_CONFIG } from './security-center/constants.js';
+import { RESOURCE_OPTIONS, STATUS_OPTIONS } from './security-center/options.js';
 import {
-    renderActivityLogRows,
-    renderAlertStack,
-    renderCapabilityMatrix,
-    renderDatabaseAssetSections,
-    renderDatabaseGroupTable,
-    renderGrantSettingsRows,
-    renderJobTable,
-    renderPolicyRows,
-    renderStorageSummary,
-    type AlertItem,
-} from './security-center/components.js';
-import {
-    RESOURCE_OPTIONS,
-    SECURITY_CENTER_CONFIG,
-    STATUS_OPTIONS,
-} from './security-center/constants.js';
-import {
+    getAgentStatusAnnouncement,
     getActiveAgentSessionRun,
     isActiveAgentSession,
     renderAgentWorkbench,
 } from './security-center/agent-workbench.js';
 import { renderAgentSettings } from './security-center/agent-settings.js';
+import {
+    renderAuditWorkspace,
+    renderDataAssets,
+    renderExtensionDirectory,
+    renderExtensionDossier,
+    renderGovernanceOverview,
+    renderPolicyOverrideRow,
+    renderPolicyWorkbench,
+} from './security-center/governance-workbench.js';
 import { showImpactConfirmation } from './security-center/impact-confirmation.js';
 import {
     formatBytes,
     getCoreStateLabel,
-    getDeclaredPermissionLabels,
-    getExtensionRiskLevel,
-    getInstallTypeLabel,
     getResourceLabel,
-    getRiskLabel,
     getRiskLevel,
     getStatusLabel,
     getSystemMessageLabel,
-    sortByTimestampDesc,
 } from './security-center/formatters.js';
 import type {
     CenterTab,
@@ -71,7 +61,6 @@ import type {
     SecurityCenterState,
     SystemView,
     UsageSummaryResponse,
-    ExtensionStorageSummary,
 } from './security-center/types.js';
 import {
     buildStManagerBridgePayload,
@@ -89,13 +78,23 @@ import {
     bootstrapSecurityCenter as bootstrapSecurityCenterHost,
     openSecurityCenter as openSecurityCenterHost,
 } from './security-center/host.js';
-import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
 import { renderSystemWorkbench } from './security-center/system-workbench.js';
 
 const TOAST_TITLE = '权限中心';
 const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings'];
 const SYSTEM_VIEW_NAMES: readonly SystemView[] = ['runtime', 'recovery', 'migration', 'diagnostics', 'backup'];
 type CenterArea = 'agent' | 'governance' | 'system' | 'settings';
+type AgentInspectorTab = SecurityCenterState['agent']['inspectorTab'];
+
+interface AgentFocusSnapshot {
+    action: string | null;
+    role: string | null;
+    data: Record<string, string>;
+    selectionStart: number | null;
+    selectionEnd: number | null;
+}
+
+const AGENT_FOCUS_DATA_KEYS = ['inspectorTab', 'sessionId', 'runId', 'approvalId', 'decision', 'commitId', 'profileId'] as const;
 
 function isValidCenterTab(value: string | undefined): value is CenterTab {
     return typeof value === 'string' && (PRIMARY_TAB_NAMES as readonly string[]).includes(value);
@@ -110,81 +109,6 @@ function getCenterArea(tab: CenterTab): CenterArea {
 
 function isSystemView(value: string | undefined): value is SystemView {
     return typeof value === 'string' && (SYSTEM_VIEW_NAMES as readonly string[]).includes(value);
-}
-
-function getDeclaredPermissionValue(
-    declared: DeclaredPermissions,
-    resource: PermissionResource,
-): boolean | string[] | undefined {
-    switch (resource) {
-        case 'storage.kv': return declared.storage?.kv;
-        case 'storage.blob': return declared.storage?.blob;
-        case 'fs.private': return declared.fs?.private;
-        case 'sql.private': return declared.sql?.private;
-        case 'trivium.private': return declared.trivium?.private;
-        case 'http.fetch': return declared.http?.allow;
-        case 'jobs.background': return declared.jobs?.background;
-        case 'events.stream': return declared.events?.channels;
-        case 'module.execute': return declared.modules?.execute;
-        case 'agent.run': return declared.agent?.run;
-        case 'agent.browser': return declared.agent?.browser;
-        default: return undefined;
-    }
-}
-
-function renderDeclaredCapabilityRows(declared: DeclaredPermissions): string {
-    const entries = RESOURCE_OPTIONS.flatMap(resource => {
-        const value = getDeclaredPermissionValue(declared, resource);
-        if (!value || (Array.isArray(value) && value.length === 0)) return [];
-        return [{
-            resource,
-            target: Array.isArray(value) ? value.join(' · ') : '扩展私有范围',
-        }];
-    });
-
-    if (entries.length === 0) {
-        return '<div class="authority-empty">该扩展还没有声明任何权限。</div>';
-    }
-
-    return `
-        <div class="authority-capability-list">
-            ${entries.map(({ resource, target }) => {
-        const risk = getRiskLevel(resource);
-        return `
-                    <div class="authority-capability-row">
-                        <span class="authority-capability-row__mark authority-capability-row__mark--${risk}" aria-hidden="true"></span>
-                        <span class="authority-capability-row__body">
-                            <strong>${escapeHtml(getResourceLabel(resource))}</strong>
-                            <code>${escapeHtml(resource)}</code>
-                            <small>${escapeHtml(target)}</small>
-                        </span>
-                        <span class="authority-risk-label authority-risk-label--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                    </div>
-                `;
-    }).join('')}
-        </div>
-    `;
-}
-
-function renderCompactStorageSummary(storage: ExtensionStorageSummary): string {
-    const items = [
-        ['KV', `${storage.kvEntries} 项`, '键值数据'],
-        ['Blob', formatBytes(storage.blobBytes), `${storage.blobCount} 个对象`],
-        ['SQL', `${storage.sqlDatabaseCount} 个`, formatBytes(storage.sqlDatabaseBytes)],
-        ['Trivium', `${storage.triviumDatabaseCount} 个`, formatBytes(storage.triviumDatabaseBytes)],
-        ['私有文件', formatBytes(storage.files.totalSizeBytes), `${storage.files.fileCount} 个文件`],
-    ];
-    return `
-        <div class="authority-storage-strip">
-            ${items.map(([label, value, meta]) => `
-                <span>
-                    <small>${escapeHtml(label)}</small>
-                    <strong>${escapeHtml(value)}</strong>
-                    <em>${escapeHtml(meta)}</em>
-                </span>
-            `).join('')}
-        </div>
-    `;
 }
 
 export function bootstrapSecurityCenter(): Promise<void> {
@@ -564,6 +488,11 @@ class SecurityCenterView {
             const nextTab = tabs[nextIndex];
             if (nextTab) {
                 nextTab.focus();
+                const inspectorTab = nextTab.dataset.inspectorTab;
+                if (inspectorTab === 'activity' || inspectorTab === 'workspace') {
+                    this.selectAgentInspectorTab(inspectorTab);
+                    return;
+                }
                 const tab = nextTab.dataset.tab as CenterTab | undefined;
                 if (tab) {
                     this.switchTab(tab);
@@ -725,8 +654,7 @@ class SecurityCenterView {
             case 'agent-inspector-tab':
                 if (element.dataset.inspectorTab === 'activity'
                     || element.dataset.inspectorTab === 'workspace') {
-                    this.state.agent.inspectorTab = element.dataset.inspectorTab;
-                    this.renderAgentSurfaces();
+                    this.selectAgentInspectorTab(element.dataset.inspectorTab);
                 }
                 return;
             case 'agent-edit-profile':
@@ -755,6 +683,12 @@ class SecurityCenterView {
             case 'agent-workspace-resume':
                 void this.resumeAgentWorkspaceRollback();
         }
+    }
+
+    private selectAgentInspectorTab(tab: AgentInspectorTab): void {
+        if (this.state.agent.inspectorTab === tab) return;
+        this.state.agent.inspectorTab = tab;
+        this.renderAgentSurfaces();
     }
 
     private async getAgentClient(): Promise<AuthorityClient> {
@@ -853,7 +787,10 @@ class SecurityCenterView {
 
     private selectSystemView(view: SystemView): void {
         this.state.system.selectedView = view;
-        void this.renderUpdatesSection();
+        this.renderUpdatesSection();
+        const activeButton = this.root.querySelector<HTMLElement>(`[data-action="system-select-view"][data-system-view="${view}"]`);
+        activeButton?.focus({ preventScroll: true });
+        activeButton?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         if (view === 'recovery' && !this.state.system.recoveryLoaded && !this.state.system.recoveryLoading) {
             void this.refreshSystemRecovery();
         }
@@ -2138,17 +2075,17 @@ class SecurityCenterView {
         }
     }
 
-    private async render(): Promise<void> {
+    private render(): void {
         this.renderHeader();
         this.renderTabs();
         this.renderExtensionList();
-        await this.renderOverviewSection();
-        await this.renderDetailSection();
-        await this.renderDatabasesSection();
-        await this.renderActivitySection();
+        this.renderOverviewSection();
+        this.renderDetailSection();
+        this.renderDatabasesSection();
+        this.renderActivitySection();
         this.renderAgentSection();
-        await this.renderPoliciesSection();
-        await this.renderUpdatesSection();
+        this.renderPoliciesSection();
+        this.renderUpdatesSection();
         this.renderSettingsSection();
         this.toggleSections();
     }
@@ -2264,365 +2201,43 @@ class SecurityCenterView {
             return;
         }
 
-        clearChildren(container);
-        const filter = this.state.extensionFilter;
-        const extensions = filter
-            ? this.state.extensions.filter(extension => `${extension.displayName} ${extension.id}`.toLowerCase().includes(filter))
-            : this.state.extensions;
-        if (count) {
-            count.textContent = String(extensions.length);
-        }
-
-        if (extensions.length === 0) {
-            container.innerHTML = '<div class="authority-extension-nav__empty">没有匹配的扩展。</div>';
-            return;
-        }
-
-        const group = document.createElement('div');
-        group.className = 'authority-extension-group';
-        group.innerHTML = '<div class="authority-extension-group__label">已接入</div>';
-
-        for (const extension of extensions) {
-            const detail = this.state.details.get(extension.id);
-            const risk = getExtensionRiskLevel(extension);
-            const errorCount = (detail?.activity.errors.length ?? 0) + (detail?.activity.warnings.length ?? 0);
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = 'authority-extension-item';
-            item.dataset.extensionId = extension.id;
-            item.innerHTML = `
-                <span class="authority-extension-item__top">
-                    <span class="authority-extension-item__title">${escapeHtml(extension.displayName)}</span>
-                    <span class="authority-extension-item__signal authority-extension-item__signal--${errorCount > 0 ? 'attention' : risk}" aria-hidden="true"></span>
-                </span>
-                <span class="authority-extension-item__meta">
-                    <code>${escapeHtml(extension.id)}</code>
-                    <span aria-hidden="true">·</span>
-                    <span class="authority-risk-label authority-risk-label--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                </span>
-                <span class="authority-extension-item__stats">
-                    <span>允许 ${extension.grantedCount}</span>
-                    <span>拒绝 ${extension.deniedCount}</span>
-                    ${errorCount > 0 ? `<span class="authority-extension-item__attention">异常 ${errorCount}</span>` : `<span>v${escapeHtml(extension.version)}</span>`}
-                </span>
-            `;
-            item.classList.toggle('authority-extension-item--active', extension.id === this.state.selectedExtensionId);
-            group.appendChild(item);
-        }
-        container.appendChild(group);
+        const directory = renderExtensionDirectory(this.state);
+        container.innerHTML = directory.html;
+        if (count) count.textContent = String(directory.count);
     }
-
-    private async renderOverviewSection(): Promise<void> {
+    private renderOverviewSection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="overview-view"]');
-        if (!container) {
-            return;
-        }
-
-        const overview = buildOverviewModel(this.state);
-        const grants = [...this.state.details.values()].flatMap(detail => detail.grants);
-        const grantedCount = grants.filter(grant => grant.status === 'granted').length;
-        const deniedCount = grants.filter(grant => grant.status === 'denied' || grant.status === 'blocked').length;
-        const databaseCount = overview.databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
-        const attention = [
-            ...overview.recentPermissionDenials,
-            ...overview.recentWarnings,
-            ...overview.recentErrors,
-        ].sort(sortByTimestampDesc).slice(0, 12);
-
-        container.innerHTML = `
-            <div class="authority-governance-page authority-governance-overview">
-                <header class="authority-governance-page__header">
-                    <div>
-                        <h2>治理概览</h2>
-                        <p>跨扩展查看授权状态、后台任务与需要处理的异常。</p>
-                    </div>
-                    <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button" data-tab="activity">打开完整审计</button>
-                    </div>
-                </header>
-
-                <div class="authority-governance-glance" aria-label="治理摘要">
-                    <span><small>接入扩展</small><strong>${this.state.extensions.length}</strong></span>
-                    <span><small>允许授权</small><strong>${grantedCount}</strong></span>
-                    <span class="${deniedCount > 0 ? 'authority-governance-glance--warning' : ''}"><small>拒绝 / 封锁</small><strong>${deniedCount}</strong></span>
-                    <span><small>策略规则</small><strong>${overview.totalPolicyCount}</strong></span>
-                    <span><small>数据资产</small><strong>${databaseCount} 个库</strong></span>
-                </div>
-
-                <div class="authority-governance-overview-grid">
-                    <main class="authority-governance-overview__main">
-                      <section class="authority-pane-section">
-                        <div class="authority-section-heading">
-                            <div><h3>需要关注</h3><div class="authority-muted">最近的权限拒绝、告警与错误</div></div>
-                            <span class="authority-section-count">${attention.length}</span>
-                        </div>
-                        ${renderActivityLogRows(attention, '当前没有需要处理的权限拒绝、告警或错误。')}
-                      </section>
-
-                      <details class="authority-collapsible-section">
-                        <summary><strong>Authority 可治理的能力</strong><span class="authority-muted">${RESOURCE_OPTIONS.length} 类资源</span></summary>
-                        <div class="authority-collapsible-section__body">${renderCapabilityMatrix(RESOURCE_OPTIONS)}</div>
-                      </details>
-                    </main>
-
-                    <aside class="authority-context-rail">
-                      <div class="authority-context-rail__header"><strong>运行状态</strong></div>
-                      <section class="authority-context-rail__section">
-                        <div class="authority-section-heading">
-                            <div><h3>后台任务</h3><div class="authority-muted">${overview.activeJobs.length} 个进行中</div></div>
-                        </div>
-                        ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
-                      </section>
-                      <section class="authority-context-rail__section">
-                        <div class="authority-section-heading"><div><h3>继续查看</h3></div></div>
-                        <div class="authority-context-links">
-                          <button type="button" data-tab="detail"><span>扩展目录</span><small>逐个检查权限与数据</small></button>
-                          <button type="button" data-tab="databases"><span>数据资产</span><small>查看数据库与记忆库</small></button>
-                          ${this.state.isAdmin ? '<button type="button" data-tab="policies"><span>全局策略</span><small>修改默认授权规则</small></button>' : ''}
-                        </div>
-                      </section>
-                    </aside>
-                </div>
-            </div>
-        `;
+        if (container) container.innerHTML = renderGovernanceOverview(this.state);
     }
-    private async renderDetailSection(): Promise<void> {
+    private renderDetailSection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="detail-view"]');
-        if (!container) {
-            return;
-        }
-
-        const detail = this.getSelectedDetail();
-        if (!detail) {
-            container.innerHTML = '<div class="authority-empty">先从左侧选一个扩展，再看它的权限、数据和运行情况。</div>';
-            return;
-        }
-
-        const granted = detail.grants.filter(item => item.status === 'granted');
-        const denied = detail.grants.filter(item => item.status === 'denied' || item.status === 'blocked');
-        const permissions = [...detail.activity.permissions].sort(sortByTimestampDesc).slice(0, 10);
-        const usage = [...detail.activity.usage].sort(sortByTimestampDesc).slice(0, 10);
-        const warnings = [...detail.activity.warnings].sort(sortByTimestampDesc).slice(0, 10);
-        const errors = [...detail.activity.errors].sort(sortByTimestampDesc).slice(0, 10);
-        const jobs = [...detail.jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
-        const databases = [...detail.databases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
-        const triviumDatabases = [...detail.triviumDatabases].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
-        const storage = detail.storage;
-        const risk = getExtensionRiskLevel(detail.extension);
-        const databaseCount = detail.databases.length + detail.triviumDatabases.length;
-        const recentActivity = [...permissions, ...usage, ...warnings, ...errors]
-            .sort(sortByTimestampDesc)
-            .slice(0, 8);
-
-        container.innerHTML = `
-            <div class="authority-extension-dossier">
-                <main class="authority-extension-dossier__main">
-                    <header class="authority-dossier-header">
-                        <div class="authority-dossier-title">
-                            <div class="authority-dossier-title__line">
-                                <h2>${escapeHtml(detail.extension.displayName)}</h2>
-                                <span class="authority-connection-state"><i aria-hidden="true"></i>已接入</span>
-                            </div>
-                            <div class="authority-dossier-identity">
-                                <span>ID: <code>${escapeHtml(detail.extension.id)}</code></span>
-                                <span aria-hidden="true">|</span>
-                                <span>Version: <code>${escapeHtml(detail.extension.version)}</code></span>
-                            </div>
-                        </div>
-                        <div class="authority-dossier-actions">
-                            <span class="authority-risk-label authority-risk-label--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
-                            ${this.state.isAdmin ? '<button type="button" class="authority-action-button" data-tab="policies">管理规则</button>' : ''}
-                        </div>
-                    </header>
-
-                    <div class="authority-extension-dossier__scroll">
-                        <div class="authority-extension-facts" aria-label="扩展摘要">
-                            <span><small>安装方式</small><strong>${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</strong></span>
-                            <span><small>首次接入</small><strong>${escapeHtml(formatDate(detail.extension.firstSeenAt))}</strong></span>
-                            <span><small>最近活跃</small><strong>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</strong></span>
-                            <span><small>当前授权</small><strong>${granted.length} 允许 · ${denied.length} 拒绝</strong></span>
-                        </div>
-
-                        <section class="authority-dossier-section">
-                            <div class="authority-section-heading">
-                                <div><h3>声明的能力</h3><div class="authority-muted">扩展向 Authority 声明的访问边界</div></div>
-                                <span class="authority-section-count">${getDeclaredPermissionLabels(detail.extension.declaredPermissions).length}</span>
-                            </div>
-                            ${renderDeclaredCapabilityRows(detail.extension.declaredPermissions)}
-                        </section>
-
-                        <section class="authority-dossier-section">
-                            <div class="authority-section-heading">
-                                <div><h3>数据占用</h3><div class="authority-muted">由 Authority 管理的扩展私有数据</div></div>
-                                <button type="button" class="authority-text-button" data-tab="databases">查看全部数据</button>
-                            </div>
-                            ${renderCompactStorageSummary(storage)}
-                        </section>
-
-                        <details class="authority-collapsible-section">
-                            <summary><strong>数据库明细</strong><span class="authority-muted">${databaseCount} 个数据库</span></summary>
-                            <div class="authority-collapsible-section__body authority-stack">
-                                ${renderStorageSummary(storage)}
-                                ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
-                            </div>
-                        </details>
-
-                        <details class="authority-collapsible-section">
-                            <summary><strong>任务与异常</strong><span class="authority-muted">任务 ${jobs.length} · 异常 ${warnings.length + errors.length}</span></summary>
-                            <div class="authority-collapsible-section__body authority-detail-grid">
-                                <div>
-                                    <div class="authority-section-heading"><div><h3>后台任务</h3></div></div>
-                                    ${renderJobTable(jobs, '暂无后台任务。')}
-                                </div>
-                                <div>
-                                    <div class="authority-section-heading"><div><h3>告警与错误</h3></div></div>
-                                    ${renderActivityLogRows([...warnings, ...errors].sort(sortByTimestampDesc), '暂无告警或错误记录。')}
-                                </div>
-                            </div>
-                        </details>
-                    </div>
-                </main>
-
-                <aside class="authority-context-rail authority-extension-inspector">
-                    <div class="authority-context-rail__header">
-                        <strong>权限控制</strong>
-                        <span>${detail.grants.length + detail.policies.length} 条决定</span>
-                    </div>
-                    <div class="authority-context-rail__scroll">
-                        <section class="authority-context-rail__section">
-                            <div class="authority-decision-summary">
-                                <span><small>允许</small><strong class="authority-status-text--granted">${granted.length}</strong></span>
-                                <span><small>拒绝 / 封锁</small><strong class="authority-status-text--denied">${denied.length}</strong></span>
-                                <span><small>策略覆盖</small><strong>${detail.policies.length}</strong></span>
-                            </div>
-                        </section>
-                        <section class="authority-context-rail__section">
-                            <div class="authority-section-heading"><div><h3>持久授权</h3><div class="authority-muted">用户或系统已经做出的决定</div></div></div>
-                            ${renderGrantSettingsRows(detail.extension.id, [...granted, ...denied], '当前没有持久化授权或拒绝记录。')}
-                            <button type="button" class="authority-text-button authority-text-button--danger" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
-                        </section>
-                        <section class="authority-context-rail__section">
-                            <div class="authority-section-heading"><div><h3>扩展策略</h3><div class="authority-muted">管理员规则会优先于用户授权</div></div></div>
-                            ${renderPolicyRows(detail.policies, '当前没有针对该扩展的策略覆盖。')}
-                        </section>
-                        <section class="authority-context-rail__section">
-                            <div class="authority-section-heading"><div><h3>近期活动</h3></div><button type="button" class="authority-text-button" data-tab="activity">完整审计</button></div>
-                            ${renderActivityLogRows(recentActivity, '该扩展还没有活动记录。')}
-                        </section>
-                    </div>
-                </aside>
-            </div>
-        `;
+        if (container) container.innerHTML = renderExtensionDossier(this.state);
     }
-
-    private async renderDatabasesSection(): Promise<void> {
+    private renderDatabasesSection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="databases-view"]');
-        if (!container) {
-            return;
-        }
-
-        const databaseGroups = getDatabaseGroupSummaries(this.state.extensions, this.state.details);
-        const totalDatabaseCount = databaseGroups.reduce((sum, item) => sum + item.databaseCount, 0);
-        const totalDatabaseSize = databaseGroups.reduce((sum, item) => sum + item.totalSizeBytes, 0);
-
-        container.innerHTML = `
-            <div class="authority-governance-page">
-                <header class="authority-governance-page__header">
-                    <div>
-                        <h2>数据资产</h2>
-                        <p>由 Authority 隔离管理的 SQL 数据库、Trivium 记忆库与文件占用。</p>
-                    </div>
-                    <div class="authority-page-actions">
-                        <span class="authority-inline-stat"><strong>${totalDatabaseCount}</strong> 个数据库</span>
-                        <span class="authority-inline-stat"><strong>${escapeHtml(formatBytes(totalDatabaseSize))}</strong> 总占用</span>
-                    </div>
-                </header>
-                <div class="authority-data-workspace">
-                    <main class="authority-data-workspace__main">
-                        ${renderDatabaseGroupTable(databaseGroups, '当前没有发现任何扩展私有数据库。')}
-                    </main>
-                    <aside class="authority-context-rail">
-                        <div class="authority-context-rail__header"><strong>资产索引</strong><span>${databaseGroups.length} 个扩展</span></div>
-                        <div class="authority-context-rail__scroll">
-                            ${databaseGroups.length > 0 ? databaseGroups.map(item => `
-                                <button type="button" class="authority-extension-item authority-asset-index-row" data-extension-id="${escapeHtml(item.extension.id)}">
-                                    <span><strong>${escapeHtml(item.extension.displayName)}</strong><code>${escapeHtml(item.extension.id)}</code></span>
-                                    <span><strong>${item.databaseCount}</strong><small>${escapeHtml(formatBytes(item.totalSizeBytes))}</small></span>
-                                </button>
-                            `).join('') : '<div class="authority-empty">暂无数据资产。</div>'}
-                        </div>
-                    </aside>
-                </div>
-            </div>
-        `;
+        if (container) container.innerHTML = renderDataAssets(this.state);
     }
-
-    private async renderActivitySection(): Promise<void> {
+    private renderActivitySection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="activity-view"]');
-        if (!container) {
-            return;
-        }
-
-        const items = [...this.state.details.values()]
-            .flatMap(detail => [...detail.activity.permissions, ...detail.activity.usage, ...detail.activity.errors, ...detail.activity.warnings])
-            .sort(sortByTimestampDesc)
-            .slice(0, 80);
-        const warnings = [...this.state.details.values()]
-            .flatMap(detail => detail.activity.warnings)
-            .sort(sortByTimestampDesc)
-            .slice(0, 40);
-        const errors = [...this.state.details.values()]
-            .flatMap(detail => detail.activity.errors)
-            .sort(sortByTimestampDesc)
-            .slice(0, 40);
-
-        container.innerHTML = `
-            <div class="authority-governance-page">
-                <header class="authority-governance-page__header">
-                    <div>
-                        <h2>审计记录</h2>
-                        <p>按时间追踪权限请求、能力调用、运行告警与错误。</p>
-                    </div>
-                    <span class="authority-inline-stat"><strong>${items.length}</strong> 条近期记录</span>
-                </header>
-                <div class="authority-audit-workspace">
-                    <main class="authority-audit-workspace__main">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近活动</h3>
-                                <div class="authority-muted">按时间倒序显示最近发生的事情</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(items, '暂无活动记录。')}
-                    </main>
-                    <aside class="authority-context-rail authority-audit-inspector">
-                        <div class="authority-context-rail__header"><strong>需要关注</strong><span>${warnings.length + errors.length}</span></div>
-                        <div class="authority-context-rail__scroll">
-                            <section class="authority-context-rail__section">
-                                <div class="authority-section-heading"><div><h3>运行告警</h3><div class="authority-muted">任务变慢、排队或反复重试</div></div></div>
-                                ${renderActivityLogRows(warnings, '暂无告警记录。')}
-                            </section>
-                            <section class="authority-context-rail__section">
-                                <div class="authority-section-heading"><div><h3>错误记录</h3><div class="authority-muted">需要排查的失败事件</div></div></div>
-                                ${renderActivityLogRows(errors, '暂无错误记录。')}
-                            </section>
-                        </div>
-                    </aside>
-                </div>
-            </div>
-        `;
+        if (container) container.innerHTML = renderAuditWorkspace(this.state);
     }
-
     private renderAgentSection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="agent-view"]');
         if (!container) {
             return;
         }
+        const liveStatus = this.root.querySelector<HTMLElement>('[data-role="agent-live-status"]');
+        const announcement = this.state.isAdmin
+            ? getAgentStatusAnnouncement(this.state.agent)
+            : '只有管理员可以使用 Agent 工作台';
+        if (liveStatus && liveStatus.textContent !== announcement) liveStatus.textContent = announcement;
         const draft = this.captureAgentFormDraft(container);
+        const focus = this.captureAgentFocus(container);
         container.innerHTML = this.state.isAdmin
             ? renderAgentWorkbench(this.state.agent)
             : '<div class="authority-empty">只有管理员可以使用 Agent 工作台。</div>';
         this.restoreAgentFormDraft(container, draft);
+        this.restoreAgentFocus(container, focus);
     }
 
     private renderAgentSurfaces(): void {
@@ -2636,6 +2251,41 @@ class SecurityCenterView {
             if (field.dataset.role) values.set(field.dataset.role, field.value);
         }
         return { profileId: values.get('agent-profile-id') ?? '', values };
+    }
+
+    private captureAgentFocus(container: HTMLElement): AgentFocusSnapshot | null {
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement) || !container.contains(active)) return null;
+        const data: Record<string, string> = {};
+        for (const key of AGENT_FOCUS_DATA_KEYS) {
+            const value = active.dataset[key];
+            if (value) data[key] = value;
+        }
+        const selection = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+        return {
+            action: active.dataset.action ?? null,
+            role: active.dataset.role ?? null,
+            data,
+            selectionStart: selection ? active.selectionStart : null,
+            selectionEnd: selection ? active.selectionEnd : null,
+        };
+    }
+
+    private restoreAgentFocus(container: HTMLElement, snapshot: AgentFocusSnapshot | null): void {
+        if (!snapshot) return;
+        const candidates = container.querySelectorAll<HTMLElement>('[data-action], [data-role]');
+        const target = Array.from(candidates).find(element => {
+            if (snapshot.action && element.dataset.action !== snapshot.action) return false;
+            if (snapshot.role && element.dataset.role !== snapshot.role) return false;
+            if (!snapshot.action && !snapshot.role) return false;
+            return Object.entries(snapshot.data).every(([key, value]) => element.dataset[key] === value);
+        });
+        if (!target || (target instanceof HTMLButtonElement && target.disabled)) return;
+        target.focus({ preventScroll: true });
+        if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+            && snapshot.selectionStart !== null && snapshot.selectionEnd !== null) {
+            target.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+        }
     }
 
     private restoreAgentFormDraft(
@@ -2652,137 +2302,11 @@ class SecurityCenterView {
         }
     }
 
-    private async renderPoliciesSection(): Promise<void> {
+    private renderPoliciesSection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="policies-view"]');
-        if (!container) {
-            return;
-        }
-
-        if (!this.state.isAdmin) {
-            container.innerHTML = '<div class="authority-empty">只有管理员可查看和修改全局策略。</div>';
-            return;
-        }
-
-        const policies = this.state.policies;
-        if (!policies) {
-            container.innerHTML = '<div class="authority-empty">策略尚未加载。</div>';
-            return;
-        }
-
-        const extensionId = this.state.policyEditorExtensionId ?? this.state.selectedExtensionId ?? this.state.extensions[0]?.id ?? '';
-        const overrides = extensionId ? Object.values(policies.extensions[extensionId] ?? {}) : [];
-        const totalOverrides = Object.values(policies.extensions)
-            .reduce((sum, extensionPolicies) => sum + Object.keys(extensionPolicies).length, 0);
-        const defaultCounts = STATUS_OPTIONS.reduce<Record<PermissionStatus, number>>((counts, status) => {
-            counts[status] = RESOURCE_OPTIONS.filter(resource => policies.defaults[resource] === status).length;
-            return counts;
-        }, { granted: 0, denied: 0, prompt: 0, blocked: 0 });
-        container.innerHTML = `
-            <div class="authority-policy-workspace">
-                <main class="authority-policy-workspace__main">
-                    <header class="authority-governance-page__header">
-                        <div>
-                            <h2>全局策略</h2>
-                            <p>设置每类能力的默认决定，并为单个扩展添加精确覆盖。</p>
-                        </div>
-                        <span class="authority-inline-stat"><strong>${RESOURCE_OPTIONS.length}</strong> 类资源</span>
-                    </header>
-
-                    <div class="authority-policy-workspace__scroll">
-                      <section class="authority-pane-section">
-                        <div class="authority-section-heading">
-                            <div><h3>默认处理规则</h3><div class="authority-muted">没有更具体的扩展覆盖或持久授权时使用</div></div>
-                            <span class="authority-section-count">${RESOURCE_OPTIONS.length}</span>
-                        </div>
-                        <div class="authority-table-wrap">
-                            <table class="authority-data-table authority-policy-matrix">
-                                <thead>
-                                    <tr>
-                                        <th>能力</th>
-                                        <th>内部名称</th>
-                                        <th>风险</th>
-                                        <th>默认决定</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${RESOURCE_OPTIONS.map(resource => `
-                                        <tr>
-                                            <td><strong>${escapeHtml(getResourceLabel(resource))}</strong></td>
-                                            <td><code>${escapeHtml(resource)}</code></td>
-                                            <td><span class="authority-risk-label authority-risk-label--${getRiskLevel(resource)}">${escapeHtml(getRiskLabel(getRiskLevel(resource)))}</span></td>
-                                            <td>
-                                                <select data-policy-default="${escapeHtml(resource)}">
-                                                    ${STATUS_OPTIONS.map(status => `<option value="${status}" ${policies.defaults[resource] === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
-                                                </select>
-                                            </td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                      </section>
-
-                      <section class="authority-pane-section">
-                        <div class="authority-section-heading">
-                        <div>
-                            <h3>扩展覆盖</h3>
-                            <div class="authority-muted">按扩展、能力与目标覆盖默认决定</div>
-                        </div>
-                        <div class="authority-policy-toolbar">
-                            <label class="authority-policy-field authority-policy-field--inline">
-                                <span>扩展</span>
-                                <select data-policy-editor-extension>
-                                    ${this.state.extensions.map(extension => `<option value="${escapeHtml(extension.id)}" ${extension.id === extensionId ? 'selected' : ''}>${escapeHtml(extension.displayName)}</option>`).join('')}
-                                </select>
-                            </label>
-                            <button type="button" class="authority-text-button" data-action="add-policy-row">＋ 新增覆盖</button>
-                        </div>
-                        </div>
-                        <div class="authority-policy-rows" data-role="policy-rows">
-                            ${overrides.map(entry => this.buildPolicyRowMarkup(entry)).join('')}
-                        </div>
-                      </section>
-                    </div>
-
-                    <footer class="authority-policy-savebar">
-                        <span>最后保存：${escapeHtml(formatDate(policies.updatedAt))}</span>
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="save-policies">保存策略</button>
-                    </footer>
-                </main>
-
-                <aside class="authority-context-rail authority-policy-inspector">
-                    <div class="authority-context-rail__header"><strong>影响预览</strong></div>
-                    <div class="authority-context-rail__scroll">
-                        <section class="authority-context-rail__section">
-                            <div class="authority-policy-impact-grid">
-                                <span><small>默认允许</small><strong class="authority-status-text--granted">${defaultCounts.granted}</strong></span>
-                                <span><small>每次询问</small><strong class="authority-status-text--prompt">${defaultCounts.prompt}</strong></span>
-                                <span><small>默认拒绝</small><strong class="authority-status-text--denied">${defaultCounts.denied}</strong></span>
-                                <span><small>管理员封锁</small><strong class="authority-status-text--denied">${defaultCounts.blocked}</strong></span>
-                            </div>
-                        </section>
-                        <section class="authority-context-rail__section">
-                            <div class="authority-policy-warning">
-                                <strong>策略影响全部扩展</strong>
-                                <span>拒绝或封锁可能覆盖已有持久授权；保存前仍会执行影响确认。</span>
-                            </div>
-                        </section>
-                        <section class="authority-context-rail__section">
-                            <div class="authority-section-heading"><div><h3>判定顺序</h3></div></div>
-                            <ol class="authority-evaluation-order">
-                                <li><span>1</span><div><strong>管理员封锁</strong><small>不可被其他决定覆盖</small></div></li>
-                                <li><span>2</span><div><strong>扩展覆盖</strong><small>${totalOverrides} 条精确规则</small></div></li>
-                                <li><span>3</span><div><strong>持久授权</strong><small>用户已经做出的决定</small></div></li>
-                                <li><span>4</span><div><strong>默认规则</strong><small>当前资源没有更具体规则时</small></div></li>
-                            </ol>
-                        </section>
-                    </div>
-                </aside>
-            </div>
-        `;
+        if (container) container.innerHTML = renderPolicyWorkbench(this.state);
     }
-
-    private async renderUpdatesSection(): Promise<void> {
+    private renderUpdatesSection(): void {
         const container = this.root.querySelector<HTMLElement>('[data-role="updates-view"]');
         if (!container) {
             return;
@@ -2850,18 +2374,7 @@ class SecurityCenterView {
     }
 
     private buildPolicyRowMarkup(entry?: AuthorityPolicyEntry): string {
-        return `
-            <div class="authority-policy-row">
-                <select data-policy-field="resource">
-                    ${RESOURCE_OPTIONS.map(resource => `<option value="${resource}" ${entry?.resource === resource ? 'selected' : ''}>${escapeHtml(getResourceLabel(resource))}</option>`).join('')}
-                </select>
-                <input data-policy-field="target" type="text" value="${escapeHtml(entry?.target ?? '*')}" placeholder="目标，例如网站域名或频道名" />
-                <select data-policy-field="status">
-                    ${STATUS_OPTIONS.map(status => `<option value="${status}" ${entry?.status === status ? 'selected' : ''}>${escapeHtml(getStatusLabel(status))}</option>`).join('')}
-                </select>
-                <button type="button" class="menu_button" data-action="remove-policy-row">移除</button>
-            </div>
-        `;
+        return renderPolicyOverrideRow(entry);
     }
 
     private toggleSections(): void {

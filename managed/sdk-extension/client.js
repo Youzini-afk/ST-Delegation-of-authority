@@ -1635,6 +1635,9 @@ export class AuthorityClient {
                         const response = await this.requestWithSession('/admin/agent/workspaces');
                         return response.workspaces;
                     },
+                    default: async () => {
+                        return await this.requestWithSession('/admin/agent/workspaces/default');
+                    },
                     register: async (request) => {
                         return await this.requestWithSession('/admin/agent/workspaces', {
                             method: 'POST',

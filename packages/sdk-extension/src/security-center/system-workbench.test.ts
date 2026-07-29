@@ -16,6 +16,8 @@ describe('System and recovery workbench rendering', () => {
         expect(html.match(/data-action="system-select-view"/g)).toHaveLength(5);
         expect(html).toContain('data-action="admin-update"');
         expect(html).toContain('data-action="export-diagnostic-archive"');
+        expect(html).toContain('<strong title="未获取">未获取</strong>');
+        expect(html).toContain('<code title="未获取">未获取</code>');
     });
 
     it('keeps checkpoint, rollback, transaction resume, and offline rescue together', () => {

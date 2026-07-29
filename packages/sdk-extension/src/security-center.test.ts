@@ -7,6 +7,8 @@ describe('Security Center tab interaction', () => {
     const components = fs.readFileSync(path.resolve(__dirname, 'security-center/components.ts'), 'utf8');
     const constants = fs.readFileSync(path.resolve(__dirname, 'security-center/constants.ts'), 'utf8');
     const impactConfirmation = fs.readFileSync(path.resolve(__dirname, 'security-center/impact-confirmation.ts'), 'utf8');
+    const agentWorkbench = fs.readFileSync(path.resolve(__dirname, 'security-center/agent-workbench.ts'), 'utf8');
+    const governanceWorkbench = fs.readFileSync(path.resolve(__dirname, 'security-center/governance-workbench.ts'), 'utf8');
     const systemWorkbench = fs.readFileSync(path.resolve(__dirname, 'security-center/system-workbench.ts'), 'utf8');
     const html = fs.readFileSync(path.resolve(__dirname, '../static/security-center.html'), 'utf8');
     const css = fs.readFileSync(path.resolve(__dirname, '../static/style.css'), 'utf8');
@@ -32,7 +34,7 @@ describe('Security Center tab interaction', () => {
     it('validates tab values in switchTab against the primary tab whitelist', () => {
         const switchTabStart = source.indexOf('private switchTab(tab: CenterTab): void {');
         expect(switchTabStart).toBeGreaterThanOrEqual(0);
-        const switchTabEnd = source.indexOf('private async render(): Promise<void> {', switchTabStart);
+        const switchTabEnd = source.indexOf('private render(): void {', switchTabStart);
         const switchTabBody = source.slice(switchTabStart, switchTabEnd);
         expect(switchTabBody).toContain('PRIMARY_TAB_NAMES.includes(tab)');
         expect(switchTabBody).toContain("tab === 'agent' || tab === 'policies' || tab === 'updates' || tab === 'settings'");
@@ -61,7 +63,7 @@ describe('Security Center tab interaction', () => {
     it('maintains aria-hidden and tabindex for tab panels in toggleSections', () => {
         const toggleSectionsStart = source.indexOf('private toggleSections(): void {');
         expect(toggleSectionsStart).toBeGreaterThanOrEqual(0);
-        const toggleSectionsEnd = source.indexOf('private loadOverviewSectionState(', toggleSectionsStart);
+        const toggleSectionsEnd = source.indexOf('private resolveSelectedExtensionId(): string | null {', toggleSectionsStart);
         const toggleSectionsBody = source.slice(toggleSectionsStart, toggleSectionsEnd);
         expect(toggleSectionsBody).toContain("'[data-area-panel]'");
         expect(toggleSectionsBody).toContain('getCenterArea(this.state.selectedTab)');
@@ -78,6 +80,8 @@ describe('Security Center tab interaction', () => {
         expect(source).toContain('event.preventDefault();');
         expect(source).toContain('nextTab.focus();');
         expect(source).toContain('this.switchTab(tab);');
+        expect(source).toContain("inspectorTab === 'activity' || inspectorTab === 'workspace'");
+        expect(source).toContain('this.selectAgentInspectorTab(inspectorTab);');
     });
 
     it('preserves delegated click handling via Element.closest for SVG compatibility', () => {
@@ -139,6 +143,7 @@ describe('Security Center tab interaction', () => {
 
     it('static HTML has role=tablist on the tab container', () => {
         expect(html).toContain('<nav class="authority-tabs" role="tablist"');
+        expect(html).toContain('data-role="agent-live-status" role="status" aria-live="polite" aria-atomic="true"');
     });
 
     it('keeps the approved direction: compact product bar, persistent top navigation, and extension-first governance', () => {
@@ -153,11 +158,9 @@ describe('Security Center tab interaction', () => {
     });
 
     it('does not rebuild governance overview as a six-card metric wall', () => {
-        const overviewStart = source.indexOf('private async renderOverviewSection(): Promise<void> {');
-        const overviewEnd = source.indexOf('private async renderDetailSection(): Promise<void> {', overviewStart);
-        const overviewBody = source.slice(overviewStart, overviewEnd);
-        expect(overviewBody).toContain('authority-governance-glance');
-        expect(overviewBody).not.toContain('renderMetricTile(');
+        expect(source).toContain('renderGovernanceOverview(this.state)');
+        expect(governanceWorkbench).toContain('authority-governance-glance');
+        expect(governanceWorkbench).not.toContain('renderMetricTile(');
     });
 
     it('keeps extension governance as a directory-first multi-pane workspace', () => {
@@ -165,10 +168,10 @@ describe('Security Center tab interaction', () => {
         expect(html).toContain('data-role="extension-search"');
         expect(html).toContain('data-role="extension-list"');
         expect(html).toContain('data-role="governance-tabs"');
-        expect(source).toContain('authority-extension-dossier');
-        expect(source).toContain('authority-context-rail authority-extension-inspector');
-        expect(source).toContain('authority-policy-workspace');
-        expect(source).toContain('authority-context-rail authority-policy-inspector');
+        expect(governanceWorkbench).toContain('authority-extension-dossier');
+        expect(governanceWorkbench).toContain('authority-context-rail authority-extension-inspector');
+        expect(governanceWorkbench).toContain('authority-policy-workspace');
+        expect(governanceWorkbench).toContain('authority-context-rail authority-policy-inspector');
         expect(css).toContain('grid-template-columns: 226px minmax(0, 1fr)');
         expect(css).toContain('.authority-extension-dossier,');
         expect(css).toContain('.authority-policy-workspace {');
@@ -176,12 +179,12 @@ describe('Security Center tab interaction', () => {
 
     it('preserves governance actions and policy fields through the visual reorganization', () => {
         expect(components).toContain('data-action="reset-grant"');
-        expect(source).toContain('data-action="reset-all-grants"');
-        expect(source).toContain('data-action="add-policy-row"');
-        expect(source).toContain('data-action="save-policies"');
-        expect(source).toContain('data-policy-default=');
-        expect(source).toContain('data-policy-editor-extension');
-        expect(source).toContain('data-role="policy-rows"');
+        expect(governanceWorkbench).toContain('data-action="reset-all-grants"');
+        expect(governanceWorkbench).toContain('data-action="add-policy-row"');
+        expect(governanceWorkbench).toContain('data-action="save-policies"');
+        expect(governanceWorkbench).toContain('data-policy-default=');
+        expect(governanceWorkbench).toContain('data-policy-editor-extension');
+        expect(governanceWorkbench).toContain('data-role="policy-rows"');
     });
 
     it('uses a dedicated system workbench with maintenance, recovery, migration, diagnostics, and backup views', () => {
@@ -194,6 +197,7 @@ describe('Security Center tab interaction', () => {
         expect(systemWorkbench).toContain("{ id: 'backup', label: '远程备份'");
         expect(systemCss).toContain(".authority-section[data-section='updates'] > [data-role='updates-view']");
         expect(systemCss).toContain('grid-template-columns: 250px minmax(0, 1fr) 290px');
+        expect(source).toContain("activeButton?.scrollIntoView({ block: 'nearest', inline: 'nearest' })");
     });
 
     it('binds recovery to the default whole-ST workspace and protects destructive rollback', () => {
@@ -214,6 +218,10 @@ describe('Security Center tab interaction', () => {
     it('keeps Agent composer drafts across redraws and rejects stale session refreshes', () => {
         expect(source).toContain('const draft = this.captureAgentFormDraft(container);');
         expect(source).toContain('this.restoreAgentFormDraft(container, draft);');
+        expect(source).toContain('const focus = this.captureAgentFocus(container);');
+        expect(source).toContain('this.restoreAgentFocus(container, focus);');
+        expect(source).toContain('getAgentStatusAnnouncement(this.state.agent)');
+        expect(agentWorkbench).toContain('role="alert"');
         expect(source).toContain('const generation = ++this.agentRefreshGeneration;');
         expect(source).toContain('if (generation !== this.agentRefreshGeneration) return;');
         expect(source).toContain('if (this.state.agent.selectedSession?.session.id !== sessionId) return;');
@@ -224,6 +232,19 @@ describe('Security Center tab interaction', () => {
         expect(css).toContain('.authority-tab__icon,');
         expect(css).toContain('.authority-tab__icon * {');
         expect(css).toContain('pointer-events: none;');
+    });
+
+    it('removes superseded one-shot Agent and legacy system workspace styles', () => {
+        expect(css).not.toContain('.authority-agent-launch-options');
+        expect(css).not.toContain('.authority-agent-session-setup');
+        expect(css).not.toContain('.authority-agent-profile-item');
+        expect(css).not.toContain('.authority-agent-tool-item');
+        expect(css).not.toContain('.authority-system-health-grid');
+        expect(css).not.toContain('.authority-system-operation-row');
+        expect(css).not.toContain('.authority-system-section');
+        expect(css).not.toContain('.authority-system-import');
+        expect(css).not.toContain('.authority-system-usage-summary');
+        expect(systemCss).toContain('.authority-system-usage-summary');
     });
 
     it('routes destructive actions through the themed impact confirmation flow', () => {

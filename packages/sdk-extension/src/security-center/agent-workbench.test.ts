@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentSessionSnapshot } from '@stdo/shared-types';
 import {
+    getAgentStatusAnnouncement,
     isActiveAgentSession,
     renderAgentWorkbench,
 } from './agent-workbench.js';
@@ -84,6 +85,45 @@ describe('Agent session workbench rendering', () => {
         expect(changes).not.toContain('data-action="agent-register-workspace"');
         expect(activity).not.toContain('工具目录');
         expect(activity).not.toContain('data-action="agent-save-profile"');
+    });
+
+    it('implements the Inspector as a complete roving tab interface', () => {
+        const state = workbenchState();
+        const activity = renderAgentWorkbench(state);
+
+        state.inspectorTab = 'workspace';
+        const workspace = renderAgentWorkbench(state);
+
+        expect(activity).toContain('id="authority-agent-inspector-tab-activity"');
+        expect(activity).toContain('aria-controls="authority-agent-inspector-panel-activity"');
+        expect(activity).toContain('id="authority-agent-inspector-panel-activity" role="tabpanel"');
+        expect(activity).toContain('aria-labelledby="authority-agent-inspector-tab-activity"');
+        expect(activity).toContain('data-inspector-tab="activity" aria-selected="true" aria-controls="authority-agent-inspector-panel-activity" tabindex="0"');
+        expect(activity).toContain('data-inspector-tab="workspace" aria-selected="false" aria-controls="authority-agent-inspector-panel-workspace" tabindex="-1"');
+        expect(activity).toContain('id="authority-agent-inspector-panel-workspace" role="tabpanel" aria-labelledby="authority-agent-inspector-tab-workspace" tabindex="0" hidden');
+        expect(workspace).toContain('id="authority-agent-inspector-panel-activity" role="tabpanel" aria-labelledby="authority-agent-inspector-tab-activity" tabindex="0" hidden');
+        expect(workspace).not.toContain('id="authority-agent-inspector-panel-workspace" role="tabpanel" aria-labelledby="authority-agent-inspector-tab-workspace" tabindex="0" hidden');
+    });
+
+    it('announces run state, approvals, queues, and redacted errors concisely', () => {
+        const state = workbenchState();
+        state.selectedSession!.pendingMessages.push({
+            id: 'pending-1',
+            ref: 'main',
+            kind: 'follow_up',
+            content: 'Continue',
+            createdAt: '2026-01-01T00:00:00.000Z',
+        });
+
+        expect(getAgentStatusAnnouncement(state)).toContain('等待审批');
+        expect(getAgentStatusAnnouncement(state)).toContain('等待 1 项审批');
+        expect(getAgentStatusAnnouncement(state)).toContain('1 条消息排队');
+
+        state.error = 'Authorization: Bearer hidden-token';
+        const announcement = getAgentStatusAnnouncement(state);
+        expect(announcement).toContain('[REDACTED]');
+        expect(announcement).not.toContain('hidden-token');
+        expect(renderAgentWorkbench(state)).toContain('role="alert"');
     });
 
     it('uses the first message to create a durable session', () => {

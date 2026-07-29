@@ -35,7 +35,7 @@ export function renderAgentWorkbench(state: AgentWorkbenchState): string {
         return '<div class="authority-loading">正在载入 Agent 工作台…</div>';
     }
     if (state.error && !state.loaded) {
-        return `<div class="authority-empty">Agent 工作台载入失败：${escapeHtml(state.error)}</div>`;
+        return `<div class="authority-empty" role="alert">Agent 工作台载入失败：${escapeHtml(state.error)}</div>`;
     }
 
     const disabled = state.busy || state.loading ? 'disabled' : '';
@@ -44,7 +44,7 @@ export function renderAgentWorkbench(state: AgentWorkbenchState): string {
 
     return `
         <div class="authority-agent-workbench">
-            ${state.error ? `<div class="authority-agent-error">${escapeHtml(state.error)}</div>` : ''}
+            ${state.error ? `<div class="authority-agent-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <div class="authority-agent-ide ${hasSelectedSession ? '' : 'authority-agent-ide--new'}">
                 <aside class="authority-agent-rail" aria-label="Agent Sessions">
                     <header class="authority-agent-rail__header">
@@ -65,6 +65,22 @@ export function renderAgentWorkbench(state: AgentWorkbenchState): string {
             </div>
         </div>
     `;
+}
+
+export function getAgentStatusAnnouncement(state: AgentWorkbenchState): string {
+    if (state.error) return `Agent 错误：${redactSensitiveText(state.error)}`;
+    if (state.loading && !state.loaded) return '正在载入 Agent 工作台';
+    if (state.creatingSession || !state.selectedSession) return '新建 Session 已就绪';
+    const snapshot = state.selectedSession;
+    const run = getActiveAgentSessionRun(snapshot) ?? snapshot.runs.at(-1) ?? null;
+    const approvals = snapshot.approvals.filter(approval => approval.status === 'pending').length;
+    const queued = snapshot.pendingMessages.length;
+    return [
+        `Session ${snapshot.session.title}`,
+        `状态：${sessionStatusLabel(run?.status ?? 'idle')}`,
+        approvals ? `等待 ${approvals} 项审批` : '',
+        queued ? `${queued} 条消息排队` : '',
+    ].filter(Boolean).join('；');
 }
 
 export function renderAgentSessionMain(state: AgentWorkbenchState, disabled = ''): string {
@@ -251,12 +267,15 @@ function renderInspector(
     ];
     return `
         <div class="authority-agent-inspector__tabs" role="tablist" aria-label="Session 上下文">
-            ${tabs.map(([value, label]) => `<button type="button" role="tab" class="${state.inspectorTab === value ? 'is-active' : ''}" data-action="agent-inspector-tab" data-inspector-tab="${value}" aria-selected="${state.inspectorTab === value}" ${disabled}>${label}</button>`).join('')}
+            ${tabs.map(([value, label]) => `<button type="button" role="tab" id="authority-agent-inspector-tab-${value}" class="${state.inspectorTab === value ? 'is-active' : ''}" data-action="agent-inspector-tab" data-inspector-tab="${value}" aria-selected="${state.inspectorTab === value}" aria-controls="authority-agent-inspector-panel-${value}" tabindex="${state.inspectorTab === value ? '0' : '-1'}" ${disabled}>${label}</button>`).join('')}
         </div>
         <div class="authority-agent-inspector__body">
-            ${state.inspectorTab === 'activity'
-        ? renderActivityInspector(state, disabled)
-        : renderChangesInspector(state, selectedWorkspace, disabled)}
+            <div id="authority-agent-inspector-panel-activity" role="tabpanel" aria-labelledby="authority-agent-inspector-tab-activity" tabindex="0" ${state.inspectorTab === 'activity' ? '' : 'hidden'}>
+                ${renderActivityInspector(state, disabled)}
+            </div>
+            <div id="authority-agent-inspector-panel-workspace" role="tabpanel" aria-labelledby="authority-agent-inspector-tab-workspace" tabindex="0" ${state.inspectorTab === 'workspace' ? '' : 'hidden'}>
+                ${renderChangesInspector(state, selectedWorkspace, disabled)}
+            </div>
         </div>
     `;
 }

@@ -2,23 +2,15 @@ import { escapeHtml, formatDate } from '../dom.js';
 import { formatBytes, getCoreStateLabel, getInstallStatusLabel } from './formatters.js';
 import { renderStManagerBridgeSection } from './st-manager-bridge.js';
 import { renderStManagerControlSection } from './st-manager-control.js';
-import type {
-    PackageOperation,
-    SecurityCenterNativeMigrationOperation,
-    SecurityCenterState,
-    SystemView,
-} from './types.js';
-
 const MISSING_TEXT = '未获取';
-const SYSTEM_VIEWS: ReadonlyArray<{ id: SystemView; label: string; description: string }> = [
+const SYSTEM_VIEWS = [
     { id: 'runtime', label: '运行状态', description: 'Core、安装与部署' },
     { id: 'recovery', label: '版本与恢复', description: '检查点与安全回退' },
     { id: 'migration', label: '数据迁移', description: '数据包与原生目录' },
     { id: 'diagnostics', label: '诊断', description: '运行信息与诊断导出' },
     { id: 'backup', label: '远程备份', description: 'ST-Manager 与桥接' },
 ];
-
-export function renderSystemWorkbench(state: SecurityCenterState): string {
+export function renderSystemWorkbench(state) {
     return `
         <div class="authority-system-shell">
             ${renderNavigation(state)}
@@ -26,8 +18,7 @@ export function renderSystemWorkbench(state: SecurityCenterState): string {
         </div>
     `;
 }
-
-function renderNavigation(state: SecurityCenterState): string {
+function renderNavigation(state) {
     const activeOperations = state.packageOperations.filter(item => item.status === 'queued' || item.status === 'running').length
         + state.nativeMigrationOperations.filter(item => item.status === 'applying' || item.status === 'rolling_back').length;
     return `
@@ -50,8 +41,7 @@ function renderNavigation(state: SecurityCenterState): string {
         </aside>
     `;
 }
-
-function renderSelectedView(state: SecurityCenterState): string {
+function renderSelectedView(state) {
     switch (state.system.selectedView) {
         case 'recovery': return renderRecovery(state);
         case 'migration': return renderMigration(state);
@@ -60,8 +50,7 @@ function renderSelectedView(state: SecurityCenterState): string {
         default: return renderRuntime(state);
     }
 }
-
-function renderRuntime(state: SecurityCenterState): string {
+function renderRuntime(state) {
     const probe = state.probe;
     const core = probe?.core;
     const health = core?.health;
@@ -72,13 +61,8 @@ function renderRuntime(state: SecurityCenterState): string {
     return `
         <div class="authority-system-view">
             <main class="authority-system-view__main">
-                ${viewHeader(
-        '运行状态',
-        'Authority Core、前端 SDK 与服务端插件的当前状态。',
-        `<button type="button" class="authority-text-button" data-action="refresh">刷新</button>
-         <button type="button" class="authority-action-button" data-action="export-diagnostic-archive" ${state.packageActionInProgress ? 'disabled' : ''}>导出诊断</button>`,
-        runtimeState(core?.state === 'running' ? 'ready' : 'attention', core?.state === 'running' ? '系统正常' : '需要检查'),
-    )}
+                ${viewHeader('运行状态', 'Authority Core、前端 SDK 与服务端插件的当前状态。', `<button type="button" class="authority-text-button" data-action="refresh">刷新</button>
+         <button type="button" class="authority-action-button" data-action="export-diagnostic-archive" ${state.packageActionInProgress ? 'disabled' : ''}>导出诊断</button>`, runtimeState(core?.state === 'running' ? 'ready' : 'attention', core?.state === 'running' ? '系统正常' : '需要检查'))}
                 <div class="authority-system-view__scroll">
                     <section class="authority-runtime-section">
                         <div class="authority-section-heading"><div><h3>运行时</h3></div></div>
@@ -147,8 +131,7 @@ function renderRuntime(state: SecurityCenterState): string {
         </div>
     `;
 }
-
-function renderRecovery(state: SecurityCenterState): string {
+function renderRecovery(state) {
     const recovery = state.system;
     if (!recovery.recoveryLoaded && !recovery.recoveryError) {
         return `<div class="authority-system-view authority-system-view--empty">${viewHeader('版本与恢复', '正在读取检查点、当前变更与恢复事务。')}<div class="authority-empty">正在初始化 SillyTavern 的默认恢复范围…</div></div>`;
@@ -198,8 +181,7 @@ function renderRecovery(state: SecurityCenterState): string {
         </div>
     `;
 }
-
-function renderMigration(state: SecurityCenterState): string {
+function renderMigration(state) {
     const packages = [...state.packageOperations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     const native = [...state.nativeMigrationOperations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     const current = packages.find(item => item.status === 'running' || item.status === 'queued') ?? packages[0] ?? null;
@@ -218,8 +200,7 @@ function renderMigration(state: SecurityCenterState): string {
         </div>
     `;
 }
-
-function renderDiagnostics(state: SecurityCenterState): string {
+function renderDiagnostics(state) {
     const probe = state.probe;
     const health = probe?.core.health;
     return `
@@ -236,8 +217,7 @@ function renderDiagnostics(state: SecurityCenterState): string {
         </div>
     `;
 }
-
-function renderBackup(state: SecurityCenterState): string {
+function renderBackup(state) {
     return `
         <div class="authority-system-view">
             <main class="authority-system-view__main">
@@ -248,53 +228,45 @@ function renderBackup(state: SecurityCenterState): string {
         </div>
     `;
 }
-
-function viewHeader(title: string, description: string, actions = '', status = ''): string {
+function viewHeader(title, description, actions = '', status = '') {
     return `<header class="authority-system-view__header"><div><div class="authority-system-view__title"><h2>${escapeHtml(title)}</h2>${status}</div><p>${escapeHtml(description)}</p></div>${actions ? `<div class="authority-page-actions">${actions}</div>` : ''}</header>`;
 }
-
-function runtimeState(tone: 'ready' | 'attention' | 'working', label: string): string {
+function runtimeState(tone, label) {
     return `<span class="authority-runtime-state authority-runtime-state--${tone}"><i></i>${escapeHtml(label)}</span>`;
 }
-
-function fact(label: string, value: string): string {
+function fact(label, value) {
     return `<span><small>${escapeHtml(label)}</small><strong title="${escapeHtml(value)}">${escapeHtml(value)}</strong></span>`;
 }
-
-function detailFact(label: string, value: string): string {
+function detailFact(label, value) {
     return `<span><small>${escapeHtml(label)}</small><code title="${escapeHtml(value)}">${escapeHtml(value)}</code></span>`;
 }
-
-function okState(label: string): string {
+function okState(label) {
     return `<div class="authority-system-ok"><i></i><span>${escapeHtml(label)}</span></div>`;
 }
-
-function renderUpdateResult(result: SecurityCenterState['updateResult']): string {
-    if (!result) return '';
+function renderUpdateResult(result) {
+    if (!result)
+        return '';
     return `<section class="authority-runtime-section"><div class="authority-section-heading"><div><h3>最近一次更新</h3><div class="authority-muted">${escapeHtml(result.message)}</div></div>${runtimeState(result.requiresRestart ? 'attention' : 'ready', result.requiresRestart ? '需要重启 ST' : '无需重启 ST')}</div><div class="authority-update-result">${fact('插件版本', `${result.before.pluginVersion} → ${result.after.pluginVersion}`)}${fact('前端版本', `${result.before.sdkDeployedVersion ?? '未部署'} → ${result.after.sdkDeployedVersion ?? '未部署'}`)}${fact('后台服务', getCoreStateLabel(result.core.state))}</div>${result.git ? `<details class="authority-system-inline-details"><summary>Git 输出 <span>${escapeHtml(result.git.branch ?? '未获取')} · ${escapeHtml(result.git.previousRevision ?? '未知')} → ${escapeHtml(result.git.currentRevision ?? '未知')}</span></summary><div>${result.git.stdout ? `<pre class="authority-code-block">${escapeHtml(result.git.stdout)}</pre>` : ''}${result.git.stderr ? `<pre class="authority-code-block">${escapeHtml(result.git.stderr)}</pre>` : ''}</div></details>` : ''}</section>`;
 }
-
-function usageSummary(state: SecurityCenterState): string {
+function usageSummary(state) {
     const usage = state.usageSummary;
-    if (!usage) return '<div class="authority-empty">暂时还没拿到数据占用概览。</div>';
+    if (!usage)
+        return '<div class="authority-empty">暂时还没拿到数据占用概览。</div>';
     return `<div class="authority-system-usage-summary">${fact('扩展', String(usage.totals.extensionCount))}${fact('存储文件', `${usage.totals.blobCount} · ${formatBytes(usage.totals.blobBytes)}`)}${fact('SQL / Trivium', `${usage.totals.databaseCount} · ${formatBytes(usage.totals.databaseBytes)}`)}${fact('私有文件', `${usage.totals.files.fileCount} · ${formatBytes(usage.totals.files.totalSizeBytes)}`)}${fact('键值条目', String(usage.totals.kvEntries))}</div>`;
 }
-
-function packageTable(items: PackageOperation[], busy: boolean): string {
-    if (!items.length) return '<div class="authority-empty">暂时还没有导入或导出任务。</div>';
+function packageTable(items, busy) {
+    if (!items.length)
+        return '<div class="authority-empty">暂时还没有导入或导出任务。</div>';
     return `<div class="authority-table-wrap"><table class="authority-data-table"><thead><tr><th>操作</th><th>内容</th><th>状态</th><th>进度</th><th>更新时间</th><th>结果</th></tr></thead><tbody>${items.map(item => `<tr><td><strong>${item.kind === 'export' ? '导出' : '导入'}</strong><div class="authority-muted">${escapeHtml(item.id)}</div></td><td>${escapeHtml(item.sourceFileName ?? item.summary ?? 'Authority 数据包')}${item.artifact ? `<div class="authority-muted">${escapeHtml(item.artifact.fileName)} · ${escapeHtml(formatBytes(item.artifact.sizeBytes))}</div>` : ''}</td><td>${runtimeState(item.status === 'completed' ? 'ready' : item.status === 'failed' ? 'attention' : 'working', packageStatus(item.status))}</td><td><span class="authority-operation-progress"><i style="--progress:${Math.max(0, Math.min(100, item.progress))}%"></i></span><small>${item.progress}%</small></td><td>${escapeHtml(formatDate(item.updatedAt))}</td><td><div class="authority-page-actions authority-page-actions--inline">${item.artifact ? `<button type="button" class="authority-text-button" data-action="download-package-operation" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>下载</button>` : ''}${item.status === 'failed' ? `<button type="button" class="authority-text-button" data-action="resume-package-operation" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>恢复</button>` : ''}</div></td></tr>`).join('')}</tbody></table></div>`;
 }
-
-function packageSummary(item: PackageOperation): string {
+function packageSummary(item) {
     return `<div class="authority-operation-summary"><div><code>${escapeHtml(item.id)}</code>${runtimeState(item.status === 'completed' ? 'ready' : item.status === 'failed' ? 'attention' : 'working', packageStatus(item.status))}</div><strong>${item.kind === 'export' ? 'Authority 数据包导出' : 'Authority 数据包导入'}</strong><div class="authority-operation-progress authority-operation-progress--wide"><i style="--progress:${Math.max(0, Math.min(100, item.progress))}%"></i></div><span>${item.progress}% · ${escapeHtml(formatDate(item.updatedAt))}</span>${item.error ? `<div class="authority-inline-note authority-inline-note--error">${escapeHtml(item.error)}</div>` : ''}${item.artifact ? `<button type="button" class="authority-action-button" data-action="download-package-operation" data-operation-id="${escapeHtml(item.id)}">下载 ${escapeHtml(item.artifact.fileName)}</button>` : ''}</div>`;
 }
-
-function nativeMigration(state: SecurityCenterState, items: SecurityCenterNativeMigrationOperation[]): string {
+function nativeMigration(state, items) {
     const disabled = state.nativeMigrationActionInProgress ? 'disabled' : '';
     return `<div class="authority-native-migration-inputs"><label><span><strong>旧酒馆 data 目录</strong><small>支持 data/default-user 或直接 default-user。</small></span><input type="file" data-role="native-migration-file" data-target="data" accept=".zip,application/zip" ${disabled}/><button type="button" class="authority-action-button" data-action="preview-native-migration" data-target="data" ${disabled}>上传并预览</button></label><label><span><strong>第三方插件目录</strong><small>支持 extensions/third-party 或直接插件文件夹。</small></span><input type="file" data-role="native-migration-file" data-target="third-party" accept=".zip,application/zip" ${disabled}/><button type="button" class="authority-action-button" data-action="preview-native-migration" data-target="third-party" ${disabled}>上传并预览</button></label></div><div class="authority-guardrail-band"><span>不删除缺失文件</span><span>不运行 npm install</span><span>不重启</span><span>不自动启用脚本</span></div>${items.length ? `<div class="authority-table-wrap"><table class="authority-data-table"><thead><tr><th>迁移任务</th><th>状态</th><th>预览统计</th><th>执行结果</th><th>更新时间</th><th>动作</th></tr></thead><tbody>${items.map(item => nativeRow(item, state.nativeMigrationActionInProgress)).join('')}</tbody></table></div>` : '<div class="authority-empty">暂时还没有原生迁移任务。上传 ZIP 后会先生成预览。</div>'}`;
 }
-
-function nativeRow(item: SecurityCenterNativeMigrationOperation, busy: boolean): string {
+function nativeRow(item, busy) {
     const rejected = item.entries?.filter(entry => entry.action === 'reject').length ?? 0;
     const created = item.entries?.filter(entry => entry.action === 'create').length ?? 0;
     const overwritten = item.entries?.filter(entry => entry.action === 'overwrite').length ?? 0;
@@ -302,24 +274,23 @@ function nativeRow(item: SecurityCenterNativeMigrationOperation, busy: boolean):
     const canRollback = item.status === 'applied' || item.status === 'needs_rollback';
     return `<tr><td><strong>${item.target === 'data' ? 'Data 目录' : '第三方插件'}</strong><div class="authority-muted">${escapeHtml(item.id)}</div><div class="authority-muted">${escapeHtml(item.sourceFileName)} · ${escapeHtml(formatBytes(item.sourceSizeBytes))}</div></td><td>${runtimeState(item.status === 'applied' || item.status === 'rolled_back' ? 'ready' : item.status === 'failed' || item.status === 'needs_rollback' ? 'attention' : 'working', nativeStatus(item.status))}</td><td><div>${item.entryCount} 个文件 · ${escapeHtml(formatBytes(item.totalSizeBytes))}</div><div class="authority-muted">新增 ${created} · 覆盖候选 ${overwritten} · 拒绝 ${rejected}</div>${item.warnings.length ? `<div class="authority-muted">${escapeHtml(item.warnings.join('；'))}</div>` : ''}</td><td><div>已创建 ${item.createdCount} · 已覆盖 ${item.overwrittenCount} · 已跳过 ${item.skippedCount}</div>${item.error ? `<div class="authority-muted">${escapeHtml(item.error)}</div>` : ''}</td><td>${escapeHtml(formatDate(item.updatedAt))}</td><td><div class="authority-page-actions authority-page-actions--inline">${canApply ? `<select data-role="native-migration-mode" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}><option value="skip">跳过已有文件</option><option value="overwrite">覆盖并保留回滚备份</option></select><button type="button" class="authority-text-button" data-action="apply-native-migration" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>应用</button>` : ''}${canRollback ? `<button type="button" class="authority-text-button authority-text-button--danger" data-action="rollback-native-migration" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>回滚</button>` : ''}${rejected ? '<span class="authority-muted">存在被拒绝文件</span>' : ''}</div></td></tr>`;
 }
-
-function renderDiff(items: Array<{ path: string; status: string }>): string {
-    return `<div class="authority-recovery-file-list">${items.map(item => `<div><span class="authority-recovery-file-status authority-recovery-file-status--${escapeHtml(item.status)}">${escapeHtml(({ added: 'A', modified: 'M', deleted: 'D', type_changed: 'T' } as Record<string, string>)[item.status] ?? '?')}</span><code>${escapeHtml(item.path)}</code></div>`).join('')}</div>`;
+function renderDiff(items) {
+    return `<div class="authority-recovery-file-list">${items.map(item => `<div><span class="authority-recovery-file-status authority-recovery-file-status--${escapeHtml(item.status)}">${escapeHtml({ added: 'A', modified: 'M', deleted: 'D', type_changed: 'T' }[item.status] ?? '?')}</span><code>${escapeHtml(item.path)}</code></div>`).join('')}</div>`;
 }
-
-function packageStatus(status: PackageOperation['status']): string {
+function packageStatus(status) {
     return status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'running' ? '处理中' : '排队中';
 }
-
-function nativeStatus(status: SecurityCenterNativeMigrationOperation['status']): string {
-    return ({ previewed: '已预览', applying: '导入中', applied: '已导入', rolling_back: '回滚中', rolled_back: '已回滚', needs_rollback: '需要回滚', failed: '失败' } satisfies Record<SecurityCenterNativeMigrationOperation['status'], string>)[status];
+function nativeStatus(status) {
+    return { previewed: '已预览', applying: '导入中', applied: '已导入', rolling_back: '回滚中', rolled_back: '已回滚', needs_rollback: '需要回滚', failed: '失败' }[status];
 }
-
-function formatDuration(milliseconds: number): string {
+function formatDuration(milliseconds) {
     const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
     const days = Math.floor(minutes / 1_440);
     const hours = Math.floor((minutes % 1_440) / 60);
-    if (days) return `${days} 天 ${hours} 小时`;
-    if (hours) return `${hours} 小时 ${minutes % 60} 分`;
+    if (days)
+        return `${days} 天 ${hours} 小时`;
+    if (hours)
+        return `${hours} 小时 ${minutes % 60} 分`;
     return `${minutes} 分钟`;
 }
+//# sourceMappingURL=system-workbench.js.map
