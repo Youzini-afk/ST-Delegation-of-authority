@@ -1,4 +1,5 @@
 import { renderExtensionTemplateAsync } from '/scripts/extensions.js';
+import { Popup, POPUP_TYPE } from '/scripts/popup.js';
 import { AUTHORITY_EXTENSION_NAME } from '../api.js';
 import { clearChildren, htmlToElement, waitForElement } from '../dom.js';
 import {
@@ -38,24 +39,13 @@ async function openSecurityCenterPopup(createView: SecurityCenterViewFactory, op
     const html = await renderExtensionTemplateAsync(AUTHORITY_EXTENSION_NAME, 'security-center', {}, false, false);
     const root = htmlToElement(html);
     root.classList.add('authority-panel--popup');
+    root.tabIndex = -1;
+    root.setAttribute('autofocus', '');
 
-    const overlay = document.createElement('div');
-    overlay.className = 'authority-floating-overlay';
-    overlay.appendChild(root);
-    document.body.appendChild(overlay);
+    const popup = new Popup(root, POPUP_TYPE.DISPLAY ?? 4, '', { large: true });
+    void popup.show();
 
     const view = createView(root, options.focusExtensionId);
-
-    const close = (): void => {
-        document.removeEventListener('keydown', onKeyDown);
-        overlay.remove();
-    };
-    const onKeyDown = (e: KeyboardEvent): void => {
-        if (e.key === 'Escape') close();
-    };
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    document.addEventListener('keydown', onKeyDown);
-
     await view.initialize();
 }
 
@@ -119,17 +109,16 @@ function mountSecurityCenterTopBarButton(createView: SecurityCenterViewFactory):
 
     const drawer = htmlToElement(`
         <div id="${TOP_BAR_DRAWER_ID}" class="drawer authority-top-drawer">
-            <div class="drawer-toggle drawer-header authority-top-drawer__toggle">
-                <div id="${TOP_BAR_ICON_ID}" class="drawer-icon fa-solid fa-shield-halved fa-fw closedIcon" title="扩展权限中心" data-i18n="[title]扩展权限中心"></div>
+            <div class="drawer-toggle drawer-header interactable authority-top-drawer__toggle" role="button" aria-label="扩展权限中心" aria-controls="${TOP_BAR_CONTENT_ID}" aria-expanded="false">
+                <div id="${TOP_BAR_ICON_ID}" class="drawer-icon fa-solid fa-shield-halved fa-fw closedIcon" title="扩展权限中心" data-i18n="[title]扩展权限中心" aria-hidden="true"></div>
             </div>
-            <div id="${TOP_BAR_CONTENT_ID}" class="drawer-content closedDrawer authority-drawer-content">
+            <div id="${TOP_BAR_CONTENT_ID}" class="drawer-content closedDrawer authority-drawer-content" aria-hidden="true">
                 <div class="authority-drawer-content__body" data-role="security-center-content"></div>
             </div>
         </div>
     `);
 
     const toggle = drawer.querySelector<HTMLElement>('.authority-top-drawer__toggle');
-    const icon = drawer.querySelector<HTMLElement>(`#${TOP_BAR_ICON_ID}`);
     if (toggle) {
         toggle.tabIndex = 0;
         const stopPointerPropagation = (event: Event) => {
@@ -169,8 +158,11 @@ function mountSecurityCenterTopBarButton(createView: SecurityCenterViewFactory):
         });
     }
 
-    if (icon) {
-        icon.tabIndex = 0;
+    const content = drawer.querySelector<HTMLElement>(`#${TOP_BAR_CONTENT_ID}`);
+    if (content) {
+        new MutationObserver(() => {
+            setSecurityCenterIconOpenState(content.classList.contains('openDrawer'));
+        }).observe(content, { attributes: true, attributeFilter: ['class'] });
     }
 
     const anchor = holder.querySelector('#extensions-settings-button') ?? holder.querySelector('#WI-SP-button');
@@ -241,4 +233,13 @@ function setSecurityCenterIconOpenState(isOpen: boolean): void {
 
     icon.classList.toggle('openIcon', isOpen);
     icon.classList.toggle('closedIcon', !isOpen);
+
+    const toggle = icon.closest<HTMLElement>('.authority-top-drawer__toggle');
+    toggle?.setAttribute('aria-expanded', String(isOpen));
+
+    const drawer = document.getElementById(TOP_BAR_CONTENT_ID);
+    drawer?.setAttribute('aria-hidden', String(!isOpen));
+    if (!isOpen && drawer?.contains(document.activeElement)) {
+        toggle?.focus();
+    }
 }
