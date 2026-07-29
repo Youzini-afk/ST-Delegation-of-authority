@@ -35,7 +35,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES: () => (/* binding */ NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES),
 /* harmony export */   RESOURCE_RISK: () => (/* binding */ RESOURCE_RISK),
 /* harmony export */   SESSION_HEADER: () => (/* binding */ SESSION_HEADER),
-/* harmony export */   SESSION_QUERY: () => (/* binding */ SESSION_QUERY),
 /* harmony export */   SUPPORTED_RESOURCES: () => (/* binding */ SUPPORTED_RESOURCES),
 /* harmony export */   UNMANAGED_TRANSFER_MAX_BYTES: () => (/* binding */ UNMANAGED_TRANSFER_MAX_BYTES),
 /* harmony export */   buildAuthorityFeatureFlags: () => (/* binding */ buildAuthorityFeatureFlags)
@@ -48,7 +47,6 @@ const AUTHORITY_RELEASE_FILE = '.authority-release.json';
 const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
 const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
 const SESSION_HEADER = 'x-authority-session-token';
-const SESSION_QUERY = 'authoritySessionToken';
 const MAX_KV_VALUE_BYTES = 128 * 1024;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_AUDIT_LINES = 200;
@@ -361,31 +359,43 @@ class WorkspaceHistoryService {
             return this.checkpointLocked(workspace, request, actor);
         });
     }
-    async runMutation(workspaceId, request, actor, mutate) {
+    async runMutation(workspaceId, request, actor, mutate, hooks = {}) {
         return await this.withLock(`workspace-${workspaceId}`, async () => {
             this.assertNoPendingRollback(workspaceId);
             const workspace = this.getStoredWorkspace(workspaceId);
             this.recoverRefJournal(workspace);
             const { beforeMessage, afterMessage, failureMessage, ...checkpoint } = request;
-            const before = this.checkpointLocked(workspace, { ...checkpoint, message: beforeMessage }, actor);
+            const before = this.checkpointLocked(workspace, {
+                ...checkpoint,
+                message: beforeMessage,
+                metadata: { ...checkpoint.metadata, mutationPhase: 'before' },
+            }, actor);
+            await hooks.beforeCheckpoint?.(before);
+            let value;
             try {
-                const value = await mutate();
-                const after = this.checkpointLocked(workspace, { ...checkpoint, message: afterMessage }, actor);
-                return { value, before, after };
+                value = await mutate();
             }
             catch (error) {
                 try {
-                    this.checkpointLocked(workspace, {
+                    const failure = this.checkpointLocked(workspace, {
                         ...checkpoint,
                         message: failureMessage ?? `${afterMessage} (failed)`,
-                        metadata: { ...checkpoint.metadata, mutationFailed: true },
+                        metadata: { ...checkpoint.metadata, mutationFailed: true, mutationPhase: 'failure' },
                     }, actor);
+                    await hooks.failureCheckpoint?.(failure);
                 }
                 catch (checkpointError) {
                     throw new AggregateError([error, checkpointError], 'Workspace mutation and failure checkpoint both failed');
                 }
                 throw error;
             }
+            const after = this.checkpointLocked(workspace, {
+                ...checkpoint,
+                message: afterMessage,
+                metadata: { ...checkpoint.metadata, mutationPhase: 'after' },
+            }, actor);
+            await hooks.afterCheckpoint?.(after);
+            return { value, before, after };
         });
     }
     listCommits(workspaceId, limit = 100) {
@@ -402,6 +412,28 @@ class WorkspaceHistoryService {
             nextId = commit.parents[0] ?? null;
         }
         return commits;
+    }
+    findCommitsForToolCall(workspaceId, runId, toolCallId) {
+        const workspace = this.getStoredWorkspace(workspaceId);
+        const ref = this.readRef(workspace);
+        const matches = [];
+        const phases = new Set();
+        const visited = new Set();
+        let nextId = ref.head;
+        while (nextId && !(phases.has('before') && (phases.has('after') || phases.has('failure')))) {
+            if (visited.has(nextId))
+                throw new Error(`Workspace commit cycle detected: ${nextId}`);
+            visited.add(nextId);
+            const commit = this.readCommit(nextId, workspace.id);
+            if (commit.runId === runId && commit.toolCallId === toolCallId) {
+                matches.push(commit);
+                const phase = commit.metadata?.mutationPhase;
+                if (phase === 'before' || phase === 'after' || phase === 'failure')
+                    phases.add(phase);
+            }
+            nextId = commit.parents[0] ?? null;
+        }
+        return matches;
     }
     diff(workspaceId, fromCommitId, toCommitId) {
         const workspace = this.getStoredWorkspace(workspaceId);
@@ -2059,10 +2091,6 @@ function getSessionToken(request) {
     const headerValue = request.headers[_constants_js__WEBPACK_IMPORTED_MODULE_4__.SESSION_HEADER];
     if (typeof headerValue === 'string' && headerValue.trim()) {
         return headerValue.trim();
-    }
-    const queryValue = request.query?.[_constants_js__WEBPACK_IMPORTED_MODULE_4__.SESSION_QUERY];
-    if (typeof queryValue === 'string' && queryValue.trim()) {
-        return queryValue.trim();
     }
     return null;
 }

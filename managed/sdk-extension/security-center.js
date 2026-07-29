@@ -1,8 +1,8 @@
 import { authorityRequest } from './api.js';
 import { clearChildren, escapeHtml, formatDate } from './dom.js';
-import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseAssetSections, renderDatabaseGroupTable, renderGrantSettingsRows, renderJobTable, renderMetricTile, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
+import { renderActivityLogRows, renderAlertStack, renderCapabilityMatrix, renderDatabaseAssetSections, renderDatabaseGroupTable, renderGrantSettingsRows, renderJobTable, renderPolicyRows, renderStorageSummary, renderStringList, } from './security-center/components.js';
 import { RESOURCE_OPTIONS, SECURITY_CENTER_CONFIG, STATUS_OPTIONS, } from './security-center/constants.js';
-import { isActiveAgentRun, renderAgentRunDetail, renderAgentWorkbench, } from './security-center/agent-workbench.js';
+import { getActiveAgentSessionRun, isActiveAgentSession, renderAgentSessionMain, renderAgentWorkbench, } from './security-center/agent-workbench.js';
 import { showImpactConfirmation } from './security-center/impact-confirmation.js';
 import { formatBytes, getCoreStateLabel, getDeclaredPermissionLabels, getExtensionRiskLevel, getInstallStatusLabel, getInstallTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, sortByTimestampDesc, } from './security-center/formatters.js';
 import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, renderStManagerBridgeSection, ST_MANAGER_RESOURCE_OPTIONS, } from './security-center/st-manager-bridge.js';
@@ -11,12 +11,6 @@ import { bootstrapSecurityCenter as bootstrapSecurityCenterHost, openSecurityCen
 import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
 const TOAST_TITLE = '权限中心';
 const MISSING_TEXT = '未获取';
-const OVERVIEW_SECTION_STATE_STORAGE_KEY = 'authority.security-center.overview-section-state';
-const DEFAULT_OVERVIEW_SECTION_STATE = {
-    governance: true,
-    capabilityMatrix: true,
-    recentActivity: true,
-};
 const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates'];
 function isValidCenterTab(value) {
     return typeof value === 'string' && PRIMARY_TAB_NAMES.includes(value);
@@ -43,6 +37,9 @@ class SecurityCenterView {
     state;
     agentClientPromise = null;
     agentPollTimer = null;
+    agentSessionSubscription = null;
+    agentSessionSubscriptionGeneration = 0;
+    agentSessionRefreshTimer = null;
     agentRefreshGeneration = 0;
     initialTabPending;
     constructor(root, focusExtensionId) {
@@ -59,8 +56,7 @@ class SecurityCenterView {
             extensions: [],
             details: new Map(),
             selectedExtensionId: focusExtensionId ?? null,
-            selectedTab: focusExtensionId ? 'detail' : 'overview',
-            overviewSectionState: { ...DEFAULT_OVERVIEW_SECTION_STATE },
+            selectedTab: 'detail',
             extensionFilter: '',
             policies: null,
             agent: {
@@ -71,17 +67,18 @@ class SecurityCenterView {
                 profiles: [],
                 tools: [],
                 workspaces: [],
-                runs: {
-                    runs: [],
+                sessions: {
+                    sessions: [],
                     page: { nextCursor: null, limit: 50, hasMore: false, totalCount: 0 },
                 },
                 selectedProfileId: null,
                 selectedWorkspaceId: null,
-                selectedRun: null,
+                selectedSession: null,
+                creatingSession: true,
+                inspectorTab: 'activity',
                 workspaceStatus: null,
                 workspaceCommits: [],
                 workspaceDiff: null,
-                runStatus: '',
             },
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
@@ -106,15 +103,6 @@ class SecurityCenterView {
         this.root.addEventListener('click', event => {
             const target = event.target instanceof Element ? event.target : null;
             if (!target) {
-                return;
-            }
-            const overviewSummary = target.closest('summary.authority-section-heading--summary');
-            if (overviewSummary) {
-                const section = overviewSummary.closest('[data-overview-section]');
-                const key = section?.dataset.overviewSection;
-                if (section && key) {
-                    window.setTimeout(() => this.setOverviewSectionOpen(key, section.open), 0);
-                }
                 return;
             }
             const primaryTab = target.closest('.authority-tab[data-tab]');
@@ -351,14 +339,13 @@ class SecurityCenterView {
                 void this.renderPoliciesSection();
                 return;
             }
-            if (target.matches('[data-role="agent-workspace-select"]')) {
+            if (target.matches('[data-role="agent-workspace-select"], [data-role="agent-new-workspace"]')) {
                 this.state.agent.selectedWorkspaceId = target.value || null;
                 void this.refreshSelectedAgentWorkspace();
                 return;
             }
-            if (target.matches('[data-role="agent-run-status"]')) {
-                this.state.agent.runStatus = target.value;
-                void this.refreshAgentWorkbench();
+            if (target.matches('[data-role="agent-new-profile"]')) {
+                this.state.agent.selectedProfileId = target.value || null;
             }
         });
     }
@@ -381,10 +368,9 @@ class SecurityCenterView {
             this.state.session = session;
             this.state.isAdmin = session.user.isAdmin;
             if (this.initialTabPending) {
-                this.state.selectedTab = this.state.isAdmin ? 'agent' : 'overview';
+                this.state.selectedTab = this.state.isAdmin ? 'agent' : 'detail';
                 this.initialTabPending = false;
             }
-            this.state.overviewSectionState = this.loadOverviewSectionState(session.user.handle);
             this.state.extensions = extensions;
             this.state.details = new Map(detailEntries);
             this.state.selectedExtensionId = this.resolveSelectedExtensionId();
@@ -416,7 +402,7 @@ class SecurityCenterView {
                 this.state.stManagerControlBackups = [];
             }
             if (!this.state.isAdmin && (this.state.selectedTab === 'agent' || this.state.selectedTab === 'policies' || this.state.selectedTab === 'updates')) {
-                this.state.selectedTab = 'overview';
+                this.state.selectedTab = 'detail';
             }
             if (this.state.isAdmin && this.state.selectedTab === 'agent') {
                 await this.refreshAgentWorkbench();
@@ -435,27 +421,49 @@ class SecurityCenterView {
             case 'agent-refresh':
                 void this.refreshAgentWorkbench();
                 return;
-            case 'agent-create-run':
-                void this.createAgentRun();
+            case 'agent-new-session':
+                this.beginAgentSession();
                 return;
-            case 'agent-select-run':
-                if (element.dataset.runId)
-                    void this.selectAgentRun(element.dataset.runId);
+            case 'agent-create-session':
+                void this.createAgentSession();
+                return;
+            case 'agent-select-session':
+                if (element.dataset.sessionId)
+                    void this.selectAgentSession(element.dataset.sessionId);
+                return;
+            case 'agent-send-message':
+                if (element.dataset.sessionId)
+                    void this.sendAgentMessage(element.dataset.sessionId);
+                return;
+            case 'agent-update-session':
+                if (element.dataset.sessionId)
+                    void this.updateAgentSession(element.dataset.sessionId);
                 return;
             case 'agent-cancel-run':
-                if (element.dataset.runId)
-                    void this.cancelAgentRun(element.dataset.runId);
-                return;
-            case 'agent-resolve-approval':
-                if (element.dataset.runId && element.dataset.approvalId) {
-                    void this.resolveAgentApproval(element.dataset.runId, element.dataset.approvalId, element.dataset.decision === 'approve' ? 'approve' : 'deny');
+                if (element.dataset.sessionId && element.dataset.runId) {
+                    void this.cancelAgentRun(element.dataset.sessionId, element.dataset.runId);
                 }
                 return;
-            case 'agent-load-more-runs':
-                void this.loadMoreAgentRuns();
+            case 'agent-resume-run':
+                if (element.dataset.sessionId && element.dataset.runId) {
+                    void this.resumeAgentRun(element.dataset.sessionId, element.dataset.runId);
+                }
                 return;
-            case 'agent-prune-runs':
-                void this.pruneAgentRuns();
+            case 'agent-resolve-approval':
+                if (element.dataset.sessionId && element.dataset.approvalId) {
+                    void this.resolveAgentApproval(element.dataset.sessionId, element.dataset.approvalId, element.dataset.decision === 'approve' ? 'approve' : 'deny');
+                }
+                return;
+            case 'agent-load-more-sessions':
+                void this.loadMoreAgentSessions();
+                return;
+            case 'agent-inspector-tab':
+                if (element.dataset.inspectorTab === 'activity'
+                    || element.dataset.inspectorTab === 'workspace'
+                    || element.dataset.inspectorTab === 'settings') {
+                    this.state.agent.inspectorTab = element.dataset.inspectorTab;
+                    void this.renderAgentSection();
+                }
                 return;
             case 'agent-edit-profile':
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
@@ -503,55 +511,58 @@ class SecurityCenterView {
             return;
         }
         const generation = ++this.agentRefreshGeneration;
-        const runStatus = this.state.agent.runStatus;
         this.state.agent.loading = true;
         this.state.agent.error = null;
         void this.renderAgentSection();
         try {
             const client = await this.getAgentClient();
-            const runRequest = {
+            const sessionRequest = {
                 page: { ...(options.cursor ? { cursor: options.cursor } : {}), limit: 50 },
-                ...(runStatus ? { status: runStatus } : {}),
             };
-            const [profiles, tools, workspaces, runs] = await Promise.all([
+            const [profiles, tools, workspaces, sessions] = await Promise.all([
                 client.agent.admin.profiles.list(),
                 client.agent.listTools(),
                 client.agent.admin.workspaces.list(),
-                client.agent.admin.runs.listPage(runRequest),
+                client.agent.sessions.listPage(sessionRequest),
             ]);
             if (generation !== this.agentRefreshGeneration)
                 return;
             const selectedProfileId = profiles.some(profile => profile.id === this.state.agent.selectedProfileId)
                 ? this.state.agent.selectedProfileId
+                : profiles[0]?.id ?? null;
+            const selectedSessionId = this.state.agent.selectedSession?.session.id;
+            const selectedSession = selectedSessionId
+                ? await client.agent.sessions.get(selectedSessionId).catch(() => null)
                 : null;
-            const selectedWorkspaceId = workspaces.some(workspace => workspace.id === this.state.agent.selectedWorkspaceId)
-                ? this.state.agent.selectedWorkspaceId
-                : workspaces[0]?.id ?? null;
-            const selectedRunId = this.state.agent.selectedRun?.run.id;
-            const [workspaceResult, selectedRun] = await Promise.all([
-                selectedWorkspaceId
-                    ? this.fetchAgentWorkspace(client, selectedWorkspaceId)
-                        .then(value => ({ value, error: null }))
-                        .catch(error => ({ value: null, error }))
-                    : Promise.resolve({ value: null, error: null }),
-                selectedRunId
-                    ? client.agent.admin.runs.get(selectedRunId).catch(() => null)
-                    : Promise.resolve(null),
-            ]);
+            if (generation !== this.agentRefreshGeneration)
+                return;
+            const sessionWorkspaceId = selectedSession?.session.workspaceId ?? null;
+            const selectedWorkspaceId = workspaces.some(workspace => workspace.id === sessionWorkspaceId)
+                ? sessionWorkspaceId
+                : workspaces.some(workspace => workspace.id === this.state.agent.selectedWorkspaceId)
+                    ? this.state.agent.selectedWorkspaceId
+                    : workspaces[0]?.id ?? null;
+            const workspaceResult = await (selectedWorkspaceId
+                ? this.fetchAgentWorkspace(client, selectedWorkspaceId)
+                    .then(value => ({ value, error: null }))
+                    .catch(error => ({ value: null, error }))
+                : Promise.resolve({ value: null, error: null }));
             if (generation !== this.agentRefreshGeneration)
                 return;
             this.state.agent.profiles = profiles;
             this.state.agent.tools = tools;
             this.state.agent.workspaces = workspaces;
-            this.state.agent.runs = options.append
-                ? { runs: mergeAgentRuns(this.state.agent.runs.runs, runs.runs), page: runs.page }
-                : runs;
+            this.state.agent.sessions = options.append
+                ? { sessions: mergeAgentSessions(this.state.agent.sessions.sessions, sessions.sessions), page: sessions.page }
+                : sessions;
             this.state.agent.selectedProfileId = selectedProfileId;
             this.state.agent.selectedWorkspaceId = selectedWorkspaceId;
             this.state.agent.workspaceStatus = workspaceResult.value?.status ?? null;
             this.state.agent.workspaceCommits = workspaceResult.value?.commits ?? [];
             this.state.agent.workspaceDiff = workspaceResult.value?.diff ?? null;
-            this.state.agent.selectedRun = selectedRun;
+            this.state.agent.selectedSession = selectedSession;
+            if (selectedSession)
+                this.state.agent.creatingSession = false;
             this.state.agent.error = workspaceResult.error
                 ? `工作区状态读取失败：${workspaceResult.error instanceof Error ? workspaceResult.error.message : String(workspaceResult.error)}`
                 : null;
@@ -567,6 +578,7 @@ class SecurityCenterView {
                 return;
             this.state.agent.loading = false;
             void this.renderAgentSection();
+            void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
     }
@@ -612,27 +624,26 @@ class SecurityCenterView {
             window.clearTimeout(this.agentPollTimer);
             this.agentPollTimer = null;
         }
-        const selected = this.state.agent.selectedRun;
-        if (!selected || !isActiveAgentRun(selected.run.status) || this.state.selectedTab !== 'agent' || !this.root.isConnected) {
+        const selected = this.state.agent.selectedSession;
+        if (!selected || !isActiveAgentSession(selected) || this.state.selectedTab !== 'agent' || !this.root.isConnected) {
             return;
         }
-        this.agentPollTimer = window.setTimeout(() => void this.pollSelectedAgentRun(), 1_500);
+        this.agentPollTimer = window.setTimeout(() => void this.pollSelectedAgentSession(), 5_000);
     }
-    async pollSelectedAgentRun() {
+    async pollSelectedAgentSession() {
         this.agentPollTimer = null;
-        const selected = this.state.agent.selectedRun;
+        const selected = this.state.agent.selectedSession;
         if (!selected || !this.root.isConnected || this.state.agent.busy) {
             this.scheduleAgentPoll();
             return;
         }
-        const runId = selected.run.id;
+        const sessionId = selected.session.id;
         try {
-            const detail = await (await this.getAgentClient()).agent.admin.runs.get(runId);
-            if (this.state.agent.selectedRun?.run.id !== runId)
+            const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
+            if (this.state.agent.selectedSession?.session.id !== sessionId)
                 return;
-            this.state.agent.selectedRun = detail;
-            this.state.agent.runs.runs = mergeAgentRuns(this.state.agent.runs.runs, [detail.run]);
-            this.renderSelectedAgentRunDetail();
+            this.applySelectedAgentSession(snapshot);
+            this.renderSelectedAgentSession();
         }
         catch {
         }
@@ -640,11 +651,86 @@ class SecurityCenterView {
             this.scheduleAgentPoll();
         }
     }
-    renderSelectedAgentRunDetail() {
-        const container = this.root.querySelector('[data-role="agent-run-detail"]');
+    renderSelectedAgentSession() {
+        const container = this.root.querySelector('[data-role="agent-session-main"]');
         if (container) {
-            container.innerHTML = renderAgentRunDetail(this.state.agent.selectedRun, this.state.agent.busy);
+            const draft = this.captureAgentFormDraft(container);
+            container.innerHTML = renderAgentSessionMain(this.state.agent, this.state.agent.busy ? 'disabled' : '');
+            this.restoreAgentFormDraft(container, draft);
         }
+    }
+    async subscribeSelectedAgentSession() {
+        this.closeAgentSessionSubscription();
+        const generation = this.agentSessionSubscriptionGeneration;
+        const selected = this.state.agent.selectedSession;
+        if (!selected || this.state.agent.creatingSession || this.state.selectedTab !== 'agent' || !this.root.isConnected)
+            return;
+        const sessionId = selected.session.id;
+        try {
+            const subscription = await (await this.getAgentClient()).agent.sessions.subscribe(sessionId, {
+                onSnapshot: snapshot => {
+                    if (generation !== this.agentSessionSubscriptionGeneration
+                        || this.state.agent.selectedSession?.session.id !== sessionId)
+                        return;
+                    this.applySelectedAgentSession(snapshot);
+                    this.renderSelectedAgentSession();
+                },
+                onEvent: () => {
+                    if (generation === this.agentSessionSubscriptionGeneration) {
+                        this.scheduleAgentSessionRefresh(sessionId);
+                    }
+                },
+                onError: () => {
+                    if (generation === this.agentSessionSubscriptionGeneration)
+                        this.scheduleAgentPoll();
+                },
+            });
+            if (generation !== this.agentSessionSubscriptionGeneration
+                || this.state.agent.selectedSession?.session.id !== sessionId
+                || this.state.selectedTab !== 'agent'
+                || !this.root.isConnected) {
+                subscription.close();
+                return;
+            }
+            this.agentSessionSubscription = subscription;
+        }
+        catch {
+            if (generation === this.agentSessionSubscriptionGeneration)
+                this.scheduleAgentPoll();
+        }
+    }
+    scheduleAgentSessionRefresh(sessionId) {
+        if (this.agentSessionRefreshTimer !== null)
+            window.clearTimeout(this.agentSessionRefreshTimer);
+        this.agentSessionRefreshTimer = window.setTimeout(async () => {
+            this.agentSessionRefreshTimer = null;
+            if (this.state.agent.selectedSession?.session.id !== sessionId)
+                return;
+            try {
+                const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
+                if (this.state.agent.selectedSession?.session.id !== sessionId)
+                    return;
+                this.applySelectedAgentSession(snapshot);
+                this.renderSelectedAgentSession();
+            }
+            catch {
+                this.scheduleAgentPoll();
+            }
+        }, 120);
+    }
+    closeAgentSessionSubscription() {
+        this.agentSessionSubscriptionGeneration += 1;
+        this.agentSessionSubscription?.close();
+        this.agentSessionSubscription = null;
+        if (this.agentSessionRefreshTimer !== null) {
+            window.clearTimeout(this.agentSessionRefreshTimer);
+            this.agentSessionRefreshTimer = null;
+        }
+    }
+    applySelectedAgentSession(snapshot) {
+        this.state.agent.selectedSession = snapshot;
+        this.state.agent.selectedWorkspaceId = snapshot.session.workspaceId;
+        this.state.agent.sessions.sessions = mergeAgentSessions(this.state.agent.sessions.sessions, [summarizeAgentSession(snapshot)]);
     }
     async performAgentMutation(action, refresh = true) {
         if (!this.state.isAdmin || this.state.agent.busy) {
@@ -671,37 +757,52 @@ class SecurityCenterView {
             this.scheduleAgentPoll();
         }
     }
-    async createAgentRun() {
-        const goal = this.agentFieldValue('agent-run-goal');
-        const instructions = this.agentFieldValue('agent-run-instructions');
-        const workspaceId = this.agentFieldValue('agent-run-workspace');
-        const profileId = this.agentFieldValue('agent-run-profile');
-        const mode = this.agentFieldValue('agent-run-mode');
-        const maxSteps = Number(this.agentFieldValue('agent-run-max-steps'));
+    beginAgentSession() {
+        this.closeAgentSessionSubscription();
+        this.state.agent.creatingSession = true;
+        this.state.agent.selectedSession = null;
+        this.state.agent.inspectorTab = 'settings';
+        void this.renderAgentSection();
+    }
+    async createAgentSession() {
+        const message = this.agentFieldValue('agent-new-message');
+        const workspaceId = this.agentFieldValue('agent-new-workspace');
+        const profileId = this.agentFieldValue('agent-new-profile');
+        const mode = this.agentFieldValue('agent-new-mode');
+        const maxSteps = Number(this.agentFieldValue('agent-new-max-steps'));
         const request = {
-            goal,
+            message,
             workspaceId,
             ...(profileId ? { profileId } : {}),
             mode,
             maxSteps,
-            ...(instructions ? { instructions } : {}),
         };
         await this.performAgentMutation(async (client) => {
-            const run = await client.agent.createRun(request);
-            this.state.agent.selectedRun = await client.agent.admin.runs.get(run.id);
-            this.clearAgentFields('agent-run-goal', 'agent-run-instructions');
-            return 'Agent 已启动';
+            const snapshot = await client.agent.sessions.create(request);
+            this.state.agent.selectedSession = snapshot;
+            this.state.agent.creatingSession = false;
+            this.state.agent.inspectorTab = 'activity';
+            this.state.agent.selectedWorkspaceId = snapshot.session.workspaceId;
+            this.clearAgentFields('agent-new-message');
+            return 'Agent 会话已开始';
         });
     }
-    async selectAgentRun(runId) {
-        if (this.state.agent.busy) {
+    async selectAgentSession(sessionId) {
+        if (this.state.agent.busy)
             return;
-        }
+        this.closeAgentSessionSubscription();
         this.state.agent.busy = true;
         void this.renderAgentSection();
         try {
-            this.state.agent.selectedRun = await (await this.getAgentClient()).agent.admin.runs.get(runId);
+            const snapshot = await (await this.getAgentClient()).agent.sessions.get(sessionId);
+            this.state.agent.selectedSession = snapshot;
+            this.state.agent.creatingSession = false;
+            this.state.agent.selectedWorkspaceId = snapshot.session.workspaceId;
             this.state.agent.error = null;
+            const workspace = await this.fetchAgentWorkspace(await this.getAgentClient(), snapshot.session.workspaceId);
+            this.state.agent.workspaceStatus = workspace.status;
+            this.state.agent.workspaceCommits = workspace.commits;
+            this.state.agent.workspaceDiff = workspace.diff;
         }
         catch (error) {
             this.reportAgentError(error);
@@ -709,53 +810,66 @@ class SecurityCenterView {
         finally {
             this.state.agent.busy = false;
             void this.renderAgentSection();
+            void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
     }
-    async cancelAgentRun(runId) {
-        const run = this.state.agent.selectedRun?.run.id === runId ? this.state.agent.selectedRun.run : null;
+    async sendAgentMessage(sessionId) {
+        const content = this.agentFieldValue('agent-message');
+        const delivery = this.agentFieldValue('agent-message-delivery');
+        await this.performAgentMutation(async (client) => {
+            const result = await client.agent.sessions.send(sessionId, { content, delivery });
+            this.applySelectedAgentSession(result.snapshot);
+            this.clearAgentFields('agent-message');
+        }, false);
+    }
+    async updateAgentSession(sessionId) {
+        const request = {
+            title: this.agentFieldValue('agent-session-title'),
+            profileId: this.agentFieldValue('agent-session-profile'),
+            mode: this.agentFieldValue('agent-session-mode'),
+            maxSteps: Number(this.agentFieldValue('agent-session-max-steps')),
+        };
+        await this.performAgentMutation(async (client) => {
+            this.applySelectedAgentSession(await client.agent.sessions.update(sessionId, request));
+            return '会话设置已保存';
+        }, false);
+    }
+    async cancelAgentRun(sessionId, runId) {
+        const snapshot = this.state.agent.selectedSession?.session.id === sessionId
+            ? this.state.agent.selectedSession
+            : null;
         if (!await showImpactConfirmation({
             title: '取消 Agent 运行',
-            description: '运行会停止继续规划和调用工具。',
+            description: '运行会停止继续规划和调用工具，但会话仍可继续。',
             confirmLabel: '取消运行',
-            target: run ? run.goal : runId,
-            effects: ['已经完成的工具副作用不会自动撤销。', '需要恢复文件时，可以在右侧工作区检查器回退到检查点。'],
+            target: snapshot?.session.title ?? runId,
+            effects: ['已经完成的工具副作用不会自动撤销。', '需要恢复文件时，可以在右侧“变更”中回退到检查点。'],
             tone: 'warning',
-        })) {
+        }))
             return;
-        }
         await this.performAgentMutation(async (client) => {
-            await client.agent.admin.runs.cancel(runId);
-            return 'Agent 运行已取消';
-        });
+            this.applySelectedAgentSession(await client.agent.sessions.cancelRun(sessionId, runId));
+            return '当前运行已取消';
+        }, false);
     }
-    async resolveAgentApproval(runId, approvalId, decision) {
+    async resumeAgentRun(sessionId, runId) {
         await this.performAgentMutation(async (client) => {
-            await client.agent.admin.runs.resolveApproval(runId, approvalId, { decision });
+            this.applySelectedAgentSession(await client.agent.sessions.resumeRun(sessionId, runId));
+            return 'Agent 运行已恢复';
+        }, false);
+    }
+    async resolveAgentApproval(sessionId, approvalId, decision) {
+        await this.performAgentMutation(async (client) => {
+            this.applySelectedAgentSession(await client.agent.admin.sessions.resolveApproval(sessionId, approvalId, { decision }));
             return decision === 'approve' ? '已批准工具调用' : '已拒绝工具调用';
-        });
+        }, false);
     }
-    async loadMoreAgentRuns() {
-        const cursor = this.state.agent.runs.page.nextCursor;
-        if (!cursor || this.state.agent.loading) {
+    async loadMoreAgentSessions() {
+        const cursor = this.state.agent.sessions.page.nextCursor;
+        if (!cursor || this.state.agent.loading)
             return;
-        }
         await this.refreshAgentWorkbench({ cursor, append: true });
-    }
-    async pruneAgentRuns() {
-        if (!await showImpactConfirmation({
-            title: '清理 Agent 运行记录',
-            description: '删除较旧的终态记录，只保留最近 200 条。',
-            confirmLabel: '清理记录',
-            effects: ['进行中的运行不会被删除。', '工作区检查点与版本历史不会被删除。', '已删除的对话和工具记录无法从工作台恢复。'],
-            tone: 'danger',
-        })) {
-            return;
-        }
-        await this.performAgentMutation(async (client) => {
-            const result = await client.agent.admin.runs.prune({ retainLatest: 200 });
-            return `已删除 ${result.deletedRuns} 条记录，回收 ${formatBytes(result.reclaimedBytes)}`;
-        });
     }
     async saveAgentProfile() {
         const id = this.agentFieldValue('agent-profile-id');
@@ -1563,12 +1677,16 @@ class SecurityCenterView {
                 void this.refreshAgentWorkbench();
             }
             else {
+                void this.subscribeSelectedAgentSession();
                 this.scheduleAgentPoll();
             }
         }
-        else if (this.agentPollTimer !== null) {
-            window.clearTimeout(this.agentPollTimer);
-            this.agentPollTimer = null;
+        else {
+            this.closeAgentSessionSubscription();
+            if (this.agentPollTimer !== null) {
+                window.clearTimeout(this.agentPollTimer);
+                this.agentPollTimer = null;
+            }
         }
     }
     async render() {
@@ -1593,14 +1711,13 @@ class SecurityCenterView {
         if (badges) {
             const probe = this.state.probe;
             badges.innerHTML = `
-                <span class="authority-header-health"><i class="authority-status-dot authority-status-dot--${escapeHtml(probe?.core.state ?? 'starting')}"></i>后台 ${escapeHtml(getCoreStateLabel(probe?.core.state))}</span>
-                <span class="authority-header-health">接入 ${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '同步中')}</span>
+                <span class="authority-header-health"><i class="authority-status-dot authority-status-dot--${escapeHtml(probe?.core.state ?? 'starting')}"></i>服务 ${escapeHtml(getCoreStateLabel(probe?.core.state))}</span>
                 <span class="authority-header-health">${escapeHtml(this.state.isAdmin ? '管理员' : '普通用户')}</span>
             `;
         }
         if (this.state.loading) {
             status.innerHTML = renderAlertStack([
-                { tone: 'info', title: '归档同步中', message: '正在同步权限中心状态、扩展记录与策略数据。' },
+                { tone: 'info', title: '状态同步中', message: '正在读取 Authority 状态与扩展记录。' },
             ]);
             return;
         }
@@ -1642,6 +1759,9 @@ class SecurityCenterView {
             else {
                 areaTab.removeAttribute('aria-current');
             }
+        }
+        for (const adminOnly of this.root.querySelectorAll('[data-admin-only]')) {
+            adminOnly.hidden = !this.state.isAdmin;
         }
         const governanceTabs = this.root.querySelector('[data-role="governance-tabs"]');
         if (governanceTabs) {
@@ -1725,64 +1845,45 @@ class SecurityCenterView {
             ...overview.recentErrors,
         ].sort(sortByTimestampDesc).slice(0, 12);
         container.innerHTML = `
-            <div class="authority-page-stack authority-governance-dashboard">
+            <div class="authority-page-stack authority-governance-overview">
                 <header class="authority-page-header">
                     <div>
-                        <div class="authority-eyebrow">Extension governance</div>
-                        <h2>扩展治理总览</h2>
-                        <p>从扩展出发查看权限、数据与真实活动；系统更新和恢复已移到“系统与恢复”。</p>
+                        <h2>治理概览</h2>
+                        <p>这里仅保留跨扩展信号；权限、数据和活动都跟随具体扩展查看。</p>
                     </div>
                     <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-tab="detail">查看扩展</button>
+                        <button type="button" class="authority-action-button authority-action-button--primary" data-tab="detail">打开扩展目录</button>
                         <button type="button" class="authority-action-button" data-tab="activity">查看审计</button>
-                        ${this.state.isAdmin ? '<button type="button" class="authority-action-button" data-tab="policies">统一策略</button>' : ''}
                     </div>
                 </header>
 
-                <section class="authority-governance-summary" aria-label="治理摘要">
-                    ${renderMetricTile('接入扩展', String(this.state.extensions.length), '已登记到 Authority', 'primary')}
-                    ${renderMetricTile('允许授权', String(grantedCount), '持久允许记录', 'success')}
-                    ${renderMetricTile('拒绝 / 封锁', String(deniedCount), '需要复核的访问', deniedCount > 0 ? 'warning' : 'neutral')}
-                    ${renderMetricTile('策略覆盖', String(overview.totalPolicyCount), '默认与扩展规则', 'neutral')}
-                    ${renderMetricTile('活跃任务', String(overview.activeJobs.length), '排队或执行中', overview.activeJobs.length > 0 ? 'runtime' : 'neutral')}
-                    ${renderMetricTile('近期错误', String(overview.recentErrors.length), '需要排查的异常', overview.recentErrors.length > 0 ? 'error' : 'neutral')}
-                </section>
+                <div class="authority-governance-glance" aria-label="治理摘要">
+                    <span><strong>${this.state.extensions.length}</strong><small>接入扩展</small></span>
+                    <span><strong>${grantedCount}</strong><small>允许授权</small></span>
+                    <span class="${deniedCount > 0 ? 'authority-governance-glance--warning' : ''}"><strong>${deniedCount}</strong><small>拒绝 / 封锁</small></span>
+                    <span><strong>${overview.totalPolicyCount}</strong><small>策略规则</small></span>
+                    <span><strong>${databaseCount}</strong><small>数据库</small></span>
+                </div>
 
-                ${this.renderOverviewCollapsibleSection('governance', 'authority-section-block', '治理信号', '需要注意的权限决策、运行告警与后台任务', `<div class="authority-governance-dashboard__split">
-                        <section class="authority-governance-focus">
-                            <div class="authority-section-heading">
-                                <div>
-                                    <h3>需要关注</h3>
-                                    <div class="authority-muted">${attention.length} 条近期信号</div>
-                                </div>
-                                <button type="button" class="authority-action-button" data-tab="activity">打开完整审计</button>
-                            </div>
-                            ${renderActivityLogRows(attention, '当前没有需要处理的权限拒绝、告警或错误。')}
-                        </section>
-                        <section class="authority-governance-assets">
-                            <div class="authority-section-heading">
-                                <div>
-                                    <h3>数据与任务</h3>
-                                    <div class="authority-muted">所有接入扩展的当前规模</div>
-                                </div>
-                                <button type="button" class="authority-action-button" data-tab="databases">查看数据</button>
-                            </div>
-                            <div class="authority-resource-stack">
-                                <div class="authority-resource-row"><span>键值条目</span><strong>${this.state.extensions.reduce((sum, item) => sum + item.storage.kvEntries, 0)}</strong></div>
-                                <div class="authority-resource-row"><span>存储文件</span><strong>${escapeHtml(formatBytes(overview.totalBlobBytes))}</strong></div>
-                                <div class="authority-resource-row"><span>数据库</span><strong>${databaseCount} 个 · ${escapeHtml(formatBytes(overview.totalDatabaseSize))}</strong></div>
-                                <div class="authority-resource-row"><span>私有文件</span><strong>${escapeHtml(formatBytes(overview.totalPrivateFileBytes))}</strong></div>
-                            </div>
-                            <div class="authority-governance-jobs">
-                                <h3>进行中的后台任务</h3>
-                                ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
-                            </div>
-                        </section>
-                    </div>`)}
+                <div class="authority-governance-overview-grid">
+                    <section class="authority-section-block">
+                        <div class="authority-section-heading">
+                            <div><h3>需要关注</h3><div class="authority-muted">${attention.length} 条近期信号</div></div>
+                        </div>
+                        ${renderActivityLogRows(attention, '当前没有需要处理的权限拒绝、告警或错误。')}
+                    </section>
+                    <section class="authority-section-block">
+                        <div class="authority-section-heading">
+                            <div><h3>进行中的后台任务</h3><div class="authority-muted">${overview.activeJobs.length} 个排队或运行中的任务</div></div>
+                        </div>
+                        ${renderJobTable(overview.activeJobs.slice(0, 5), '当前没有排队或运行中的任务。')}
+                    </section>
+                </div>
 
-                ${this.renderOverviewCollapsibleSection('capabilityMatrix', 'authority-section-block', '可治理的能力', '扩展可以向 Authority 申请的系统能力', renderCapabilityMatrix(RESOURCE_OPTIONS))}
-
-                ${this.renderOverviewCollapsibleSection('recentActivity', 'authority-log-panel', '近期活动', '权限请求、能力调用与异常记录', renderActivityLogRows(overview.recentActivity, '暂无活动记录。'))}
+                <details class="authority-collapsible-section">
+                    <summary><strong>Authority 可治理的能力</strong><span class="authority-muted">按需展开</span></summary>
+                    <div class="authority-collapsible-section__body">${renderCapabilityMatrix(RESOURCE_OPTIONS)}</div>
+                </details>
             </div>
         `;
     }
@@ -1812,108 +1913,80 @@ class SecurityCenterView {
             <div class="authority-page-stack authority-page-stack--detail">
                 <div class="authority-page-header authority-page-header--detail">
                     <div class="authority-dossier-title">
-                        <div class="authority-eyebrow">Selected extension</div>
                         <h2>${escapeHtml(detail.extension.displayName)}</h2>
-                        <div class="authority-muted">${escapeHtml(detail.extension.id)}</div>
+                        <code class="authority-muted">${escapeHtml(detail.extension.id)}</code>
                     </div>
                     <div class="authority-dossier-actions">
                         <span class="authority-pill authority-pill--${risk}">${escapeHtml(getRiskLabel(risk))}</span>
                         <span class="authority-pill authority-pill--medium">${escapeHtml(getInstallTypeLabel(detail.extension.installType))}</span>
                         <span class="authority-pill authority-pill--prompt">v${escapeHtml(detail.extension.version)}</span>
-                        <button type="button" class="authority-action-button authority-back-button" data-tab="overview">返回总览</button>
                     </div>
                 </div>
-                <div class="authority-detail-metrics">
-                    ${renderMetricTile('授权记录', String(detail.grants.length), `${granted.length} 允许 · ${denied.length} 拒绝/封锁`, detail.grants.length > 0 ? 'primary' : 'neutral')}
-                    ${renderMetricTile('策略覆盖', String(detail.policies.length), '管理员覆盖规则', detail.policies.length > 0 ? 'warning' : 'neutral')}
-                    ${renderMetricTile('数据库', String(databaseCount), `SQL ${detail.databases.length} · Trivium ${detail.triviumDatabases.length}`, databaseCount > 0 ? 'runtime' : 'neutral')}
-                    ${renderMetricTile('后台任务', String(detail.jobs.length), `${errors.length} 条近期错误`, errors.length > 0 ? 'error' : 'neutral')}
+
+                <div class="authority-extension-facts" aria-label="扩展摘要">
+                    <span><small>最近活跃</small><strong>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</strong></span>
+                    <span><small>能力</small><strong>${getDeclaredPermissionLabels(detail.extension.declaredPermissions).length}</strong></span>
+                    <span><small>授权</small><strong>${granted.length} 允许 · ${denied.length} 拒绝</strong></span>
+                    <span><small>数据</small><strong>${databaseCount} 个数据库</strong></span>
+                    <span><small>任务</small><strong>${detail.jobs.length}</strong></span>
                 </div>
-                <section class="authority-section-block">
+
+                <section class="authority-governance-primary">
                     <div class="authority-section-heading">
                         <div>
-                            <h3>扩展概况</h3>
-                            <div class="authority-muted">接入时间、最近活跃、声明权限与数据占用</div>
-                        </div>
-                    </div>
-                    <div class="authority-kv-grid">
-                        <div><strong>首次见到</strong><div>${escapeHtml(formatDate(detail.extension.firstSeenAt))}</div></div>
-                        <div><strong>最近活跃</strong><div>${escapeHtml(formatDate(detail.extension.lastSeenAt))}</div></div>
-                        <div><strong>声明权限</strong><div>${getDeclaredPermissionLabels(detail.extension.declaredPermissions).length}</div></div>
-                        <div><strong>后台任务</strong><div>${detail.jobs.length}</div></div>
-                    </div>
-                    ${renderStorageSummary(storage)}
-                </section>
-                <section class="authority-section-block">
-                    <div class="authority-section-heading">
-                        <div>
-                            <h3>权限情况</h3>
-                            <div class="authority-muted">已声明权限、持久化授权记录与策略覆盖</div>
+                            <h3>权限与能力</h3>
+                            <div class="authority-muted">声明范围、当前决定与扩展策略</div>
                         </div>
                         <button type="button" class="authority-action-button authority-action-button--danger" data-action="reset-all-grants" data-extension-id="${escapeHtml(detail.extension.id)}">重置全部授权</button>
                     </div>
-                    ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展还没有声明任何权限。')}
-                    ${renderGrantSettingsRows(detail.extension.id, [...granted, ...denied], '当前没有持久化授权或拒绝记录。')}
-                    ${renderPolicyRows(detail.policies, '当前没有针对该扩展的策略覆盖。')}
-                </section>
-                <section class="authority-section-block">
-                    <div class="authority-section-heading">
+                    <div class="authority-governance-permission-layout">
                         <div>
-                            <h3>数据占用</h3>
-                            <div class="authority-muted">SQL 数据库与 Trivium 记忆库归档</div>
+                            <h4>声明能力</h4>
+                            ${renderStringList(getDeclaredPermissionLabels(detail.extension.declaredPermissions), '该扩展还没有声明任何权限。')}
                         </div>
-                    </div>
-                    ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
-                </section>
-                <section class="authority-detail-grid">
-                    <div class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近权限活动</h3>
-                                <div class="authority-muted">权限请求与授权决策轨迹</div>
-                            </div>
+                        <div>
+                            <h4>当前决定</h4>
+                            ${renderGrantSettingsRows(detail.extension.id, [...granted, ...denied], '当前没有持久化授权或拒绝记录。')}
+                            ${renderPolicyRows(detail.policies, '当前没有针对该扩展的策略覆盖。')}
                         </div>
-                        ${renderActivityLogRows(permissions, '暂无权限活动。')}
-                    </div>
-                    <div class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近能力调用</h3>
-                                <div class="authority-muted">实际功能调用与资源访问记录</div>
-                            </div>
-                        </div>
-                        ${renderActivityLogRows(usage, '暂无能力调用记录。')}
                     </div>
                 </section>
-                <div class="authority-detail-grid">
-                    <div class="authority-card">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近后台任务</h3>
-                                <div class="authority-muted">已调度后台作业记录</div>
-                            </div>
-                        </div>
-                        ${renderJobTable(jobs, '暂无后台任务。')}
+
+                <details class="authority-collapsible-section">
+                    <summary><strong>数据与存储</strong><span class="authority-muted">${databaseCount} 个数据库</span></summary>
+                    <div class="authority-collapsible-section__body authority-stack">
+                        ${renderStorageSummary(storage)}
+                        ${renderDatabaseAssetSections(databases, triviumDatabases, '该扩展还没有私有数据库。')}
                     </div>
-                    <div class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近告警</h3>
-                                <div class="authority-muted">排队压力、执行延迟与自动重试</div>
-                            </div>
+                </details>
+
+                <details class="authority-collapsible-section">
+                    <summary><strong>最近活动</strong><span class="authority-muted">权限 ${permissions.length} · 调用 ${usage.length}</span></summary>
+                    <div class="authority-collapsible-section__body authority-detail-grid">
+                        <div class="authority-log-panel">
+                            <div class="authority-section-heading"><div><h3>权限活动</h3></div></div>
+                            ${renderActivityLogRows(permissions, '暂无权限活动。')}
                         </div>
-                        ${renderActivityLogRows(warnings, '暂无运行告警记录。')}
-                    </div>
-                    <div class="authority-log-panel">
-                        <div class="authority-section-heading">
-                            <div>
-                                <h3>最近错误</h3>
-                                <div class="authority-muted">需要优先排查的异常记录</div>
-                            </div>
+                        <div class="authority-log-panel">
+                            <div class="authority-section-heading"><div><h3>能力调用</h3></div></div>
+                            ${renderActivityLogRows(usage, '暂无能力调用记录。')}
                         </div>
-                        ${renderActivityLogRows(errors, '暂无内部错误记录。')}
                     </div>
-                </div>
+                </details>
+
+                <details class="authority-collapsible-section">
+                    <summary><strong>任务与异常</strong><span class="authority-muted">任务 ${jobs.length} · 异常 ${warnings.length + errors.length}</span></summary>
+                    <div class="authority-collapsible-section__body authority-detail-grid">
+                        <div>
+                            <div class="authority-section-heading"><div><h3>后台任务</h3></div></div>
+                            ${renderJobTable(jobs, '暂无后台任务。')}
+                        </div>
+                        <div>
+                            <div class="authority-section-heading"><div><h3>告警与错误</h3></div></div>
+                            ${renderActivityLogRows([...warnings, ...errors].sort(sortByTimestampDesc), '暂无告警或错误记录。')}
+                        </div>
+                    </div>
+                </details>
             </div>
         `;
     }
@@ -2145,6 +2218,8 @@ class SecurityCenterView {
         const diagnosticArchiveLabel = this.state.packageActionInProgress ? '处理中…' : '导出诊断压缩包';
         const importButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导入数据包';
         const nativeMigrationButtonLabel = this.state.nativeMigrationActionInProgress ? '处理中…' : '上传并预览';
+        const systemAttentionCount = Number(Boolean(core?.health?.lastError))
+            + Number(Boolean(probe && ['conflict', 'error', 'missing'].includes(probe.installStatus)));
         const updateResultMarkup = result ? `
             <section class="authority-system-result" aria-label="最近一次更新结果">
                 <div class="authority-section-heading">
@@ -2289,43 +2364,39 @@ class SecurityCenterView {
                     </div>
                 </header>
 
-                <div class="authority-system-status" aria-label="系统状态摘要">
-                    <span><i class="authority-status-dot authority-status-dot--${escapeHtml(core?.state ?? 'starting')}"></i><strong>后台服务</strong>${escapeHtml(getCoreStateLabel(core?.state))}</span>
-                    <span><strong>接入</strong>${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : MISSING_TEXT)}</span>
-                    <span><strong>前端</strong>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</span>
-                    <span><strong>平台</strong>${escapeHtml(probe?.coreArtifactPlatform ?? MISSING_TEXT)}</span>
+                <div class="authority-system-health-grid" aria-label="系统状态摘要">
+                    <div><small>Authority 服务</small><strong>${escapeHtml(getCoreStateLabel(core?.state))}</strong><span>Core ${escapeHtml(core?.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</span></div>
+                    <div><small>部署状态</small><strong>${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : MISSING_TEXT)}</strong><span>SDK ${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</span></div>
+                    <div><small>需要处理</small><strong>${systemAttentionCount}</strong><span>${systemAttentionCount > 0 ? '展开下方项目查看' : '当前没有阻塞项'}</span></div>
                 </div>
 
                 <details class="authority-system-section" open>
                     <summary>
-                        <span><strong>运行与更新</strong><small>版本、后台服务与部署</small></span>
+                        <span><strong>版本与部署</strong><small>更新插件、部署前端与检查 Core</small></span>
                         <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
                     </summary>
                     <div class="authority-system-section__body authority-stack">
-                        <div class="authority-system-section__intro">
-                            <div>
-                                <h3>更新 Authority</h3>
-                                <p>先查看当前版本；执行前会显示影响确认，结果与 Git 输出保留在本页。</p>
-                            </div>
-                            <div class="authority-page-actions">
+                        <div class="authority-system-operation-list">
+                            <div class="authority-system-operation-row">
+                                <div><strong>插件更新</strong><span>当前 ${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)} · 仅允许快进更新</span></div>
                                 <button type="button" class="authority-action-button authority-action-button--primary" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
+                            </div>
+                            <div class="authority-system-operation-row">
+                                <div><strong>SDK 部署</strong><span>内置 ${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)} · 当前 ${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</span></div>
                                 <button type="button" class="authority-action-button" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
                             </div>
-                        </div>
-                        <div class="authority-system-facts">
-                            <div><span>服务端插件</span><strong>${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)}</strong></div>
-                            <div><span>插件内置前端</span><strong>${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)}</strong></div>
-                            <div><span>当前前端</span><strong>${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</strong></div>
-                            <div><span>后台服务</span><strong>${escapeHtml(core?.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</strong></div>
-                            <div><span>后台校验</span><strong>${escapeHtml(probe?.coreVerified ? '已通过' : '未通过')}</strong></div>
-                            <div><span>构建编号</span><strong>${escapeHtml(core?.health?.buildHash ?? probe?.coreBinarySha256 ?? MISSING_TEXT)}</strong></div>
-                            <div><span>数据目录</span><strong>${escapeHtml(probe?.storageRoot ?? MISSING_TEXT)}</strong></div>
-                            <div><span>插件目录</span><strong>${escapeHtml(installPath)}</strong></div>
+                            <div class="authority-system-operation-row">
+                                <div><strong>后台服务</strong><span>${escapeHtml(getCoreStateLabel(core?.state))} · ${escapeHtml(probe?.coreArtifactPlatform ?? MISSING_TEXT)} · 校验 ${escapeHtml(probe?.coreVerified ? '通过' : '未通过')}</span></div>
+                                <span class="authority-pill authority-pill--${escapeHtml(core?.state ?? 'starting')}">${escapeHtml(core?.version ?? MISSING_TEXT)}</span>
+                            </div>
                         </div>
                         <details class="authority-system-subsection">
                             <summary><span>后台服务详细诊断</span><span>${escapeHtml(core?.port ? `127.0.0.1:${core.port}` : '端口未分配')}</span></summary>
                             <div class="authority-system-subsection__body">
                                 <div class="authority-system-facts authority-system-facts--runtime">
+                                    <div><span>构建编号</span><strong>${escapeHtml(core?.health?.buildHash ?? probe?.coreBinarySha256 ?? MISSING_TEXT)}</strong></div>
+                                    <div><span>数据目录</span><strong>${escapeHtml(probe?.storageRoot ?? MISSING_TEXT)}</strong></div>
+                                    <div><span>插件目录</span><strong>${escapeHtml(installPath)}</strong></div>
                                     <div><span>处理请求</span><strong>${escapeHtml(core?.health ? String(core.health.requestCount) : MISSING_TEXT)}</strong></div>
                                     <div><span>累计错误</span><strong>${escapeHtml(core?.health ? String(core.health.errorCount) : MISSING_TEXT)}</strong></div>
                                     <div><span>当前并发</span><strong>${escapeHtml(core?.health ? `${core.health.currentConcurrency} / ${core.health.maxConcurrency}` : MISSING_TEXT)}</strong></div>
@@ -2565,22 +2636,6 @@ class SecurityCenterView {
             </div>
         `;
     }
-    renderOverviewCollapsibleSection(key, className, title, description, content) {
-        const isOpen = this.state.overviewSectionState[key];
-        return `
-            <details class="${className} authority-collapsible-section" data-overview-section="${key}" ${isOpen ? 'open' : ''}>
-                <summary class="authority-section-heading authority-section-heading--summary">
-                    <div>
-                        <h3>${escapeHtml(title)}</h3>
-                        <div class="authority-muted">${escapeHtml(description)}</div>
-                    </div>
-                </summary>
-                <div class="authority-collapsible-section__body">
-                    ${content}
-                </div>
-            </details>
-        `;
-    }
     getPackageOperationStatusLabel(status) {
         switch (status) {
             case 'completed':
@@ -2594,6 +2649,12 @@ class SecurityCenterView {
         }
     }
     toggleSections() {
+        const activeArea = getCenterArea(this.state.selectedTab);
+        for (const panel of this.root.querySelectorAll('[data-area-panel]')) {
+            const isActive = panel.dataset.areaPanel === activeArea;
+            panel.hidden = !isActive;
+            panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+        }
         for (const section of this.root.querySelectorAll('[data-section]')) {
             const name = section.dataset.section;
             if (!name || !PRIMARY_TAB_NAMES.includes(name)) {
@@ -2604,50 +2665,6 @@ class SecurityCenterView {
             section.setAttribute('aria-hidden', isActive ? 'false' : 'true');
             section.setAttribute('tabindex', isActive ? '0' : '-1');
         }
-    }
-    loadOverviewSectionState(userHandle) {
-        if (!userHandle) {
-            return { ...DEFAULT_OVERVIEW_SECTION_STATE };
-        }
-        try {
-            const raw = globalThis.localStorage?.getItem(this.getOverviewSectionStateStorageKey(userHandle));
-            if (!raw) {
-                return { ...DEFAULT_OVERVIEW_SECTION_STATE };
-            }
-            const parsed = JSON.parse(raw);
-            return {
-                governance: parsed.governance ?? DEFAULT_OVERVIEW_SECTION_STATE.governance,
-                capabilityMatrix: parsed.capabilityMatrix ?? DEFAULT_OVERVIEW_SECTION_STATE.capabilityMatrix,
-                recentActivity: parsed.recentActivity ?? DEFAULT_OVERVIEW_SECTION_STATE.recentActivity,
-            };
-        }
-        catch {
-            return { ...DEFAULT_OVERVIEW_SECTION_STATE };
-        }
-    }
-    setOverviewSectionOpen(key, isOpen) {
-        if (this.state.overviewSectionState[key] === isOpen) {
-            return;
-        }
-        this.state.overviewSectionState = {
-            ...this.state.overviewSectionState,
-            [key]: isOpen,
-        };
-        this.persistOverviewSectionState();
-    }
-    persistOverviewSectionState() {
-        const userHandle = this.state.session?.user.handle;
-        if (!userHandle) {
-            return;
-        }
-        try {
-            globalThis.localStorage?.setItem(this.getOverviewSectionStateStorageKey(userHandle), JSON.stringify(this.state.overviewSectionState));
-        }
-        catch {
-        }
-    }
-    getOverviewSectionStateStorageKey(userHandle) {
-        return `${OVERVIEW_SECTION_STATE_STORAGE_KEY}:${userHandle}`;
     }
     resolveSelectedExtensionId() {
         if (this.state.selectedExtensionId && this.state.extensions.some(item => item.id === this.state.selectedExtensionId)) {
@@ -2671,12 +2688,33 @@ class SecurityCenterView {
         return this.state.details.get(this.state.selectedExtensionId) ?? null;
     }
 }
-function mergeAgentRuns(existing, incoming) {
-    const runs = new Map(existing.map(run => [run.id, run]));
-    for (const run of incoming) {
-        runs.set(run.id, run);
+function mergeAgentSessions(existing, incoming) {
+    const sessions = new Map(existing.map(session => [session.id, session]));
+    for (const session of incoming) {
+        sessions.set(session.id, session);
     }
-    return [...runs.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return [...sessions.values()].sort((left, right) => {
+        const timestamp = right.updatedAt.localeCompare(left.updatedAt);
+        return timestamp || right.id.localeCompare(left.id);
+    });
+}
+function summarizeAgentSession(snapshot) {
+    const ref = snapshot.refs.find(item => item.name === 'main') ?? snapshot.refs[0];
+    const run = getActiveAgentSessionRun(snapshot);
+    const path = new Set(snapshot.activePaths[ref?.name ?? 'main'] ?? []);
+    const messages = snapshot.conversation.filter((entry) => entry.kind === 'message' && path.has(entry.id));
+    const lastMessage = [...messages].reverse().find(entry => entry.content?.trim());
+    return {
+        ...snapshot.session,
+        status: run?.status ?? 'idle',
+        activeRunId: run?.id ?? null,
+        activeRunStatus: run?.status ?? null,
+        messageCount: messages.length,
+        pendingApprovalCount: snapshot.approvals.filter(approval => approval.status === 'pending').length,
+        pendingMessageCount: snapshot.pendingMessages.length,
+        lastMessagePreview: lastMessage?.content?.replace(/\s+/g, ' ').trim().slice(0, 180) ?? null,
+        lastSequence: snapshot.lastSequence,
+    };
 }
 function base64ToBytes(content) {
     const binary = atob(content);

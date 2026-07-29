@@ -1,4 +1,4 @@
-import { authorityRequest, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError } from './api.js';
+import { authorityRequest, buildAgentSessionStreamUrl, buildEventStreamUrl, hostnameFromUrl, isInvalidSessionError, } from './api.js';
 import { showPermissionPrompt } from './permission-prompt.js';
 import { openSecurityCenter } from './security-center.js';
 import { splitAuthorityItemsIntoChunks } from './client/chunking.js';
@@ -32,8 +32,8 @@ export function isAuthorityPermissionError(error) {
 function isTerminalJobStatus(status) {
     return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
-function isTerminalAgentRunStatus(status) {
-    return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
+function isTerminalAgentSessionRunStatus(status) {
+    return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 function isJobRecord(value) {
     return typeof value === 'object'
@@ -146,6 +146,7 @@ export class AuthorityClient {
     probePromise = null;
     runtimeGrants = new Map();
     moduleManifests = new Map();
+    agentSessionWorkspaces = new Map();
     constructor(config) {
         this.config = config;
         this.storage = {
@@ -1209,7 +1210,6 @@ export class AuthorityClient {
                         eventNames: channelOrOptions?.eventNames,
                         onEvent: channelOrOptions?.onEvent ?? handler,
                     };
-                const session = await this.ensureInitialized();
                 const channel = options.channel ?? `extension:${this.config.extensionId}`;
                 const eventNames = options.eventNames ?? ['authority.connected', 'authority.job'];
                 await this.ensurePermission({
@@ -1217,26 +1217,79 @@ export class AuthorityClient {
                     target: channel,
                     reason: `订阅事件流 ${channel}`,
                 });
-                const source = new EventSource(buildEventStreamUrl(session.sessionToken, channel), {
-                    withCredentials: true,
-                });
                 const notify = (name, data) => {
                     options.onEvent?.({ name, data });
                 };
-                for (const name of eventNames) {
-                    source.addEventListener(name, event => {
-                        const payload = event instanceof MessageEvent ? safeParse(event.data) : undefined;
-                        notify(name, payload);
-                    });
-                }
-                source.onmessage = event => {
-                    notify('message', safeParse(event.data));
+                let closed = false;
+                let source = null;
+                let reconnectTimer = null;
+                let connectController = null;
+                let openSource;
+                const scheduleReconnect = () => {
+                    if (closed || reconnectTimer !== null)
+                        return;
+                    reconnectTimer = setTimeout(() => {
+                        reconnectTimer = null;
+                        void openSource().catch(error => {
+                            if (closed)
+                                return;
+                            console.warn('Authority event stream reconnect failed', error);
+                            scheduleReconnect();
+                        });
+                    }, 1_000);
                 };
-                source.onerror = () => {
-                    console.warn('Authority event stream disconnected for', this.config.extensionId, channel);
+                openSource = async () => {
+                    const controller = new AbortController();
+                    connectController = controller;
+                    let ticket;
+                    try {
+                        const response = await this.requestWithSession('/events/ticket', {
+                            method: 'POST',
+                            body: { channel },
+                            signal: controller.signal,
+                        });
+                        ticket = oneTimeTicket(response.ticket);
+                    }
+                    finally {
+                        if (connectController === controller)
+                            connectController = null;
+                    }
+                    if (closed)
+                        return;
+                    const nextSource = new EventSource(buildEventStreamUrl(ticket), { withCredentials: true });
+                    source = nextSource;
+                    for (const name of eventNames) {
+                        nextSource.addEventListener(name, event => {
+                            const payload = event instanceof MessageEvent ? safeParse(event.data) : undefined;
+                            notify(name, payload);
+                        });
+                    }
+                    nextSource.onmessage = event => {
+                        notify('message', safeParse(event.data));
+                    };
+                    nextSource.onerror = () => {
+                        if (closed || source !== nextSource)
+                            return;
+                        nextSource.close();
+                        source = null;
+                        console.warn('Authority event stream disconnected for', this.config.extensionId, channel);
+                        scheduleReconnect();
+                    };
                 };
+                await openSource();
                 return {
-                    close: () => source.close(),
+                    close: () => {
+                        if (closed)
+                            return;
+                        closed = true;
+                        connectController?.abort();
+                        connectController = null;
+                        if (reconnectTimer !== null)
+                            clearTimeout(reconnectTimer);
+                        reconnectTimer = null;
+                        source?.close();
+                        source = null;
+                    },
                 };
             },
         };
@@ -1305,75 +1358,189 @@ export class AuthorityClient {
                 const response = await this.requestWithSession('/agent/tools');
                 return response.tools;
             },
-            createRun: async (request) => {
-                const workspaceId = request.workspaceId?.trim();
-                if (!workspaceId) {
-                    throw new Error('Agent workspaceId is required');
-                }
-                await this.ensurePermission({
-                    resource: 'agent.run',
-                    target: workspaceId,
-                    reason: `在工作区 ${workspaceId} 启动 Agent`,
-                });
-                return await this.requestWithSession('/agent/runs', {
-                    method: 'POST',
-                    body: { ...request, workspaceId },
-                });
-            },
-            listRuns: async () => {
-                const response = await this.requestWithSession('/agent/runs');
-                return response.runs;
-            },
-            listRunsPage: async (request = {}) => {
-                return await this.requestWithSession('/agent/runs/list', {
-                    method: 'POST',
-                    body: request,
-                });
-            },
-            getRun: async (runId) => {
-                return await this.requestWithSession(`/agent/runs/${agentPathId(runId, 'runId')}`);
-            },
-            cancelRun: async (runId) => {
-                return await this.requestWithSession(`/agent/runs/${agentPathId(runId, 'runId')}/cancel`, {
-                    method: 'POST',
-                });
-            },
-            waitForCompletion: async (runId, options = {}) => {
-                const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'agent run');
-                const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'agent run');
-                const startedAt = Date.now();
-                while (true) {
-                    throwIfAborted(options.signal, 'agent run');
-                    const elapsedMs = Date.now() - startedAt;
-                    if (timeoutMs != null && elapsedMs >= timeoutMs) {
-                        throw new Error(`Authority agent run ${runId} did not complete within ${timeoutMs}ms`);
-                    }
-                    const timeoutSignal = timeoutMs == null
-                        ? undefined
-                        : AbortSignal.timeout(Math.max(1, timeoutMs - elapsedMs));
-                    const signal = options.signal && timeoutSignal
-                        ? AbortSignal.any([options.signal, timeoutSignal])
-                        : options.signal ?? timeoutSignal;
-                    let detail;
-                    try {
-                        detail = await this.requestWithSession(`/agent/runs/${agentPathId(runId, 'runId')}`, signal ? { signal } : {});
-                    }
-                    catch (error) {
-                        if (options.signal?.aborted) {
-                            throw new Error('Authority agent run wait aborted');
-                        }
-                        if (timeoutSignal?.aborted && !options.signal?.aborted) {
+            sessions: {
+                create: async (request) => {
+                    const workspaceId = request.workspaceId?.trim();
+                    if (!workspaceId)
+                        throw new Error('Agent workspaceId is required');
+                    await this.ensurePermission({
+                        resource: 'agent.run',
+                        target: workspaceId,
+                        reason: `在工作区 ${workspaceId} 创建 Agent 会话`,
+                    });
+                    const snapshot = await this.requestWithSession('/agent/sessions', {
+                        method: 'POST',
+                        body: { ...request, workspaceId },
+                    });
+                    this.rememberAgentSession(snapshot);
+                    return snapshot;
+                },
+                listPage: async (request = {}) => {
+                    const response = await this.requestWithSession('/agent/sessions/list', {
+                        method: 'POST',
+                        body: request,
+                    });
+                    this.rememberAgentSessionSummaries(response.sessions);
+                    return response;
+                },
+                get: async (sessionId) => {
+                    const snapshot = await this.requestWithSession(`/agent/sessions/${agentPathId(sessionId, 'sessionId')}`);
+                    this.rememberAgentSession(snapshot);
+                    return snapshot;
+                },
+                update: async (sessionId, request) => {
+                    const snapshot = await this.requestWithSession(`/agent/sessions/${agentPathId(sessionId, 'sessionId')}/update`, { method: 'POST', body: request });
+                    this.rememberAgentSession(snapshot);
+                    return snapshot;
+                },
+                send: async (sessionId, request) => {
+                    await this.ensureAgentSessionRunPermission(sessionId, '继续 Agent 会话');
+                    const response = await this.requestWithSession(`/agent/sessions/${agentPathId(sessionId, 'sessionId')}/messages`, { method: 'POST', body: request });
+                    this.rememberAgentSession(response.snapshot);
+                    return response;
+                },
+                cancelRun: async (sessionId, runId) => {
+                    const snapshot = await this.requestWithSession(`/agent/sessions/${agentPathId(sessionId, 'sessionId')}/runs/${agentPathId(runId, 'runId')}/cancel`, { method: 'POST' });
+                    this.rememberAgentSession(snapshot);
+                    return snapshot;
+                },
+                resumeRun: async (sessionId, runId) => {
+                    await this.ensureAgentSessionRunPermission(sessionId, '恢复 Agent 运行');
+                    const snapshot = await this.requestWithSession(`/agent/sessions/${agentPathId(sessionId, 'sessionId')}/runs/${agentPathId(runId, 'runId')}/resume`, { method: 'POST' });
+                    this.rememberAgentSession(snapshot);
+                    return snapshot;
+                },
+                waitForRun: async (sessionId, runId, options = {}) => {
+                    const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'agent run');
+                    const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'agent run');
+                    const startedAt = Date.now();
+                    while (true) {
+                        throwIfAborted(options.signal, 'agent run');
+                        const elapsedMs = Date.now() - startedAt;
+                        if (timeoutMs != null && elapsedMs >= timeoutMs) {
                             throw new Error(`Authority agent run ${runId} did not complete within ${timeoutMs}ms`);
                         }
-                        throw error;
+                        const timeoutSignal = timeoutMs == null
+                            ? undefined
+                            : AbortSignal.timeout(Math.max(1, timeoutMs - elapsedMs));
+                        const signal = options.signal && timeoutSignal
+                            ? AbortSignal.any([options.signal, timeoutSignal])
+                            : options.signal ?? timeoutSignal;
+                        let snapshot;
+                        try {
+                            snapshot = await this.requestWithSession(`/agent/sessions/${agentPathId(sessionId, 'sessionId')}`, signal ? { signal } : {});
+                        }
+                        catch (error) {
+                            if (options.signal?.aborted)
+                                throw new Error('Authority agent run wait aborted');
+                            if (timeoutSignal?.aborted && !options.signal?.aborted) {
+                                throw new Error(`Authority agent run ${runId} did not complete within ${timeoutMs}ms`);
+                            }
+                            throw error;
+                        }
+                        this.rememberAgentSession(snapshot);
+                        await options.onProgress?.(snapshot);
+                        const run = snapshot.runs.find(item => item.id === runId);
+                        if (!run)
+                            throw new Error(`Authority agent run not found: ${runId}`);
+                        if (isTerminalAgentSessionRunStatus(run.status) || run.status === 'suspended')
+                            return snapshot;
+                        const remainingMs = timeoutMs == null ? pollIntervalMs : timeoutMs - (Date.now() - startedAt);
+                        await waitForDelay(Math.max(1, Math.min(pollIntervalMs, remainingMs)), options.signal, 'agent run');
                     }
-                    await options.onProgress?.(detail);
-                    if (isTerminalAgentRunStatus(detail.run.status)) {
-                        return detail;
+                },
+                subscribe: async (sessionId, options) => {
+                    if (typeof options?.onSnapshot !== 'function') {
+                        throw new Error('Authority Agent session subscriptions require an onSnapshot handler');
                     }
-                    const remainingMs = timeoutMs == null ? pollIntervalMs : timeoutMs - (Date.now() - startedAt);
-                    await waitForDelay(Math.max(1, Math.min(pollIntervalMs, remainingMs)), options.signal, 'agent run');
-                }
+                    const id = agentValueId(sessionId, 'sessionId');
+                    let closed = false;
+                    let source = null;
+                    let reconnectTimer = null;
+                    let connectController = null;
+                    let openSource;
+                    const notifyError = () => {
+                        try {
+                            options.onError?.();
+                        }
+                        catch (error) {
+                            console.warn('Authority Agent session error handler failed', error);
+                        }
+                    };
+                    const scheduleReconnect = () => {
+                        if (closed || reconnectTimer !== null)
+                            return;
+                        reconnectTimer = setTimeout(() => {
+                            reconnectTimer = null;
+                            void openSource().catch(error => {
+                                if (closed)
+                                    return;
+                                console.warn('Authority Agent session reconnect failed', error);
+                                notifyError();
+                                scheduleReconnect();
+                            });
+                        }, 1_000);
+                    };
+                    openSource = async () => {
+                        const controller = new AbortController();
+                        connectController = controller;
+                        let ticket;
+                        try {
+                            const response = await this.requestWithSession(`/agent/sessions/${agentPathId(id, 'sessionId')}/events-ticket`, { method: 'POST', signal: controller.signal });
+                            ticket = agentValueId(response.ticket, 'stream ticket');
+                        }
+                        finally {
+                            if (connectController === controller)
+                                connectController = null;
+                        }
+                        if (closed)
+                            return;
+                        const nextSource = new EventSource(buildAgentSessionStreamUrl(ticket, id), {
+                            withCredentials: true,
+                        });
+                        source = nextSource;
+                        nextSource.addEventListener('authority.agent.session.snapshot', event => {
+                            const snapshot = event instanceof MessageEvent ? safeParse(event.data) : undefined;
+                            if (!isAgentSessionSnapshot(snapshot))
+                                return;
+                            this.rememberAgentSession(snapshot);
+                            void Promise.resolve(options.onSnapshot(snapshot)).catch(error => {
+                                console.warn('Authority Agent session snapshot handler failed', error);
+                            });
+                        });
+                        nextSource.addEventListener('authority.agent.session.event', event => {
+                            const update = event instanceof MessageEvent ? safeParse(event.data) : undefined;
+                            if (!isAgentSessionEvent(update))
+                                return;
+                            void Promise.resolve(options.onEvent?.(update)).catch(error => {
+                                console.warn('Authority Agent session event handler failed', error);
+                            });
+                        });
+                        nextSource.onerror = () => {
+                            if (closed || source !== nextSource)
+                                return;
+                            nextSource.close();
+                            source = null;
+                            notifyError();
+                            scheduleReconnect();
+                        };
+                    };
+                    await openSource();
+                    return {
+                        close: () => {
+                            if (closed)
+                                return;
+                            closed = true;
+                            connectController?.abort();
+                            connectController = null;
+                            if (reconnectTimer !== null)
+                                clearTimeout(reconnectTimer);
+                            reconnectTimer = null;
+                            source?.close();
+                            source = null;
+                        },
+                    };
+                },
             },
             browser: {
                 registerTools: async (request) => {
@@ -1392,15 +1559,27 @@ export class AuthorityClient {
                     });
                 },
                 claim: async (request) => {
+                    const browserInstanceId = agentValueId(request.browserInstanceId, 'browserInstanceId');
+                    await this.ensurePermission({
+                        resource: 'agent.browser',
+                        target: browserInstanceId,
+                        reason: '领取 Agent 浏览器工具任务',
+                    });
                     return await this.requestWithSession('/agent/browser-tools/claim', {
                         method: 'POST',
-                        body: request,
+                        body: { ...request, browserInstanceId },
                     });
                 },
                 submitResult: async (request) => {
+                    const browserInstanceId = agentValueId(request.browserInstanceId, 'browserInstanceId');
+                    await this.ensurePermission({
+                        resource: 'agent.browser',
+                        target: browserInstanceId,
+                        reason: '提交 Agent 浏览器工具结果',
+                    });
                     return await this.requestWithSession('/agent/browser-tools/result', {
                         method: 'POST',
-                        body: request,
+                        body: { ...request, browserInstanceId },
                     });
                 },
             },
@@ -1424,33 +1603,31 @@ export class AuthorityClient {
                         return response.deleted;
                     },
                 },
-                runs: {
-                    list: async () => {
-                        const response = await this.requestWithSession('/admin/agent/runs');
-                        return response.runs;
-                    },
+                sessions: {
                     listPage: async (request = {}) => {
-                        return await this.requestWithSession('/admin/agent/runs/list', {
+                        const response = await this.requestWithSession('/admin/agent/sessions/list', {
                             method: 'POST',
                             body: request,
                         });
+                        this.rememberAgentSessionSummaries(response.sessions);
+                        return response;
                     },
-                    get: async (runId) => {
-                        return await this.requestWithSession(`/admin/agent/runs/${agentPathId(runId, 'runId')}`);
+                    get: async (sessionId) => {
+                        const snapshot = await this.requestWithSession(`/admin/agent/sessions/${agentPathId(sessionId, 'sessionId')}`);
+                        this.rememberAgentSession(snapshot);
+                        return snapshot;
                     },
-                    cancel: async (runId) => {
-                        return await this.requestWithSession(`/admin/agent/runs/${agentPathId(runId, 'runId')}/cancel`, {
+                    cancelRun: async (sessionId, runId) => {
+                        const snapshot = await this.requestWithSession(`/admin/agent/sessions/${agentPathId(sessionId, 'sessionId')}/runs/${agentPathId(runId, 'runId')}/cancel`, {
                             method: 'POST',
                         });
+                        this.rememberAgentSession(snapshot);
+                        return snapshot;
                     },
-                    resolveApproval: async (runId, approvalId, request) => {
-                        return await this.requestWithSession(`/admin/agent/runs/${agentPathId(runId, 'runId')}/approvals/${agentPathId(approvalId, 'approvalId')}/resolve`, { method: 'POST', body: request });
-                    },
-                    prune: async (request = {}) => {
-                        return await this.requestWithSession('/admin/agent/runs/prune', {
-                            method: 'POST',
-                            body: request,
-                        });
+                    resolveApproval: async (sessionId, approvalId, request) => {
+                        const snapshot = await this.requestWithSession(`/admin/agent/sessions/${agentPathId(sessionId, 'sessionId')}/approvals/${agentPathId(approvalId, 'approvalId')}/resolve`, { method: 'POST', body: request });
+                        this.rememberAgentSession(snapshot);
+                        return snapshot;
                     },
                 },
                 workspaces: {
@@ -1936,6 +2113,28 @@ export class AuthorityClient {
             chunks: results,
         };
     }
+    rememberAgentSession(snapshot) {
+        this.agentSessionWorkspaces.set(snapshot.session.id, snapshot.session.workspaceId);
+    }
+    rememberAgentSessionSummaries(sessions) {
+        for (const session of sessions) {
+            this.agentSessionWorkspaces.set(session.id, session.workspaceId);
+        }
+    }
+    async ensureAgentSessionRunPermission(sessionId, reason) {
+        const id = agentValueId(sessionId, 'sessionId');
+        let workspaceId = this.agentSessionWorkspaces.get(id);
+        if (!workspaceId) {
+            const snapshot = await this.requestWithSession(`/agent/sessions/${agentPathId(id, 'sessionId')}`);
+            this.rememberAgentSession(snapshot);
+            workspaceId = snapshot.session.workspaceId;
+        }
+        await this.ensurePermission({
+            resource: 'agent.run',
+            target: workspaceId,
+            reason: `${reason}（${workspaceId}）`,
+        });
+    }
     async requestWithSession(path, options = {}, retried = false) {
         const session = await waitForSignal(this.ensureInitialized(), options.signal);
         try {
@@ -2261,11 +2460,45 @@ function safeParse(value) {
         return value;
     }
 }
+function isAgentSessionSnapshot(value) {
+    if (!isObjectRecord(value) || !isObjectRecord(value.session))
+        return false;
+    return typeof value.session.id === 'string'
+        && typeof value.session.workspaceId === 'string'
+        && typeof value.lastSequence === 'number'
+        && Array.isArray(value.refs)
+        && Array.isArray(value.conversation)
+        && Array.isArray(value.runs)
+        && Array.isArray(value.steps)
+        && Array.isArray(value.generations)
+        && Array.isArray(value.invocations)
+        && Array.isArray(value.approvals)
+        && Array.isArray(value.pendingMessages);
+}
+function isAgentSessionEvent(value) {
+    return isObjectRecord(value)
+        && typeof value.sessionId === 'string'
+        && typeof value.sequence === 'number'
+        && typeof value.type === 'string'
+        && typeof value.timestamp === 'string';
+}
+function isObjectRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function oneTimeTicket(value) {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(value)) {
+        throw new Error('Authority event stream returned an invalid one-time ticket');
+    }
+    return value;
+}
 function agentPathId(value, label) {
+    return encodeURIComponent(agentValueId(value, label));
+}
+function agentValueId(value, label) {
     if (typeof value !== 'string' || !value.trim()) {
         throw new Error(`Authority agent ${label} must be a non-empty string`);
     }
-    return encodeURIComponent(value.trim());
+    return value.trim();
 }
 function getSqlDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';

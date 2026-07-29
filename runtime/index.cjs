@@ -35,7 +35,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES: () => (/* binding */ NATIVE_MIGRATION_TRANSFER_CHUNK_BYTES),
 /* harmony export */   RESOURCE_RISK: () => (/* binding */ RESOURCE_RISK),
 /* harmony export */   SESSION_HEADER: () => (/* binding */ SESSION_HEADER),
-/* harmony export */   SESSION_QUERY: () => (/* binding */ SESSION_QUERY),
 /* harmony export */   SUPPORTED_RESOURCES: () => (/* binding */ SUPPORTED_RESOURCES),
 /* harmony export */   UNMANAGED_TRANSFER_MAX_BYTES: () => (/* binding */ UNMANAGED_TRANSFER_MAX_BYTES),
 /* harmony export */   buildAuthorityFeatureFlags: () => (/* binding */ buildAuthorityFeatureFlags)
@@ -48,7 +47,6 @@ const AUTHORITY_RELEASE_FILE = '.authority-release.json';
 const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
 const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
 const SESSION_HEADER = 'x-authority-session-token';
-const SESSION_QUERY = 'authoritySessionToken';
 const MAX_KV_VALUE_BYTES = 128 * 1024;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_AUDIT_LINES = 200;
@@ -255,40 +253,59 @@ class SseBroker {
             timer: null,
         };
         this.clients.add(client);
-        this.emitToClient(client, 'authority.connected', {
-            timestamp: (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.nowIso)(),
-            ...(channel.startsWith('extension:') ? { extensionId: channel.slice('extension:'.length) } : { channel }),
-        });
-        void this.pollClient(client);
-        client.timer = setInterval(() => {
-            void this.pollClient(client);
-        }, 500);
-        return () => {
+        const cleanup = () => {
             if (client.timer) {
                 clearInterval(client.timer);
+                client.timer = null;
             }
             this.clients.delete(client);
         };
+        try {
+            this.emitToClient(client, 'authority.connected', {
+                timestamp: (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.nowIso)(),
+                ...(channel.startsWith('extension:') ? { extensionId: channel.slice('extension:'.length) } : { channel }),
+            });
+            void this.pollClient(client);
+            client.timer = setInterval(() => {
+                void this.pollClient(client);
+            }, 500);
+            client.timer.unref?.();
+            return cleanup;
+        }
+        catch (error) {
+            cleanup();
+            throw error;
+        }
     }
     async pollClient(client) {
         if (client.polling || !this.clients.has(client)) {
             return;
         }
         client.polling = true;
+        let result;
         try {
-            const { events, cursor } = await this.core.pollControlEvents(client.dbPath, {
+            result = await this.core.pollControlEvents(client.dbPath, {
                 userHandle: client.userHandle,
                 channel: client.channel,
                 ...(client.cursor !== null ? { afterId: client.cursor } : {}),
             });
-            client.cursor = cursor;
-            for (const event of events) {
+        }
+        catch {
+            client.polling = false;
+            return;
+        }
+        try {
+            client.cursor = result.cursor;
+            for (const event of result.events) {
                 this.emitToClient(client, event.name, event.payload);
                 client.cursor = event.id;
             }
         }
         catch {
-            return;
+            if (client.timer)
+                clearInterval(client.timer);
+            client.timer = null;
+            this.clients.delete(client);
         }
         finally {
             client.polling = false;
@@ -1267,145 +1284,82 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   registerAgentHistoryRoutes: () => (/* binding */ registerAgentHistoryRoutes)
 /* harmony export */ });
-/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-
+/* harmony import */ var _authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./authority-route-context.js */ "./src/routes/authority-route-context.ts");
 
 function registerAgentHistoryRoutes(router, runtime, fail) {
-    router.get('/admin/agent/workspaces', (req, res) => {
-        try {
-            assertAdmin(req);
-            res.json({ workspaces: runtime.workspaceHistory.listWorkspaces() });
+    router.get('/admin/agent/workspaces', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (_req, res) => {
+        res.json({ workspaces: runtime.workspaceHistory.listWorkspaces() });
+    }));
+    router.post('/admin/agent/workspaces', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        const request = (req.body ?? {});
+        const workspace = await runtime.workspaceHistory.registerWorkspace({
+            ...request,
+            allowedUserHandles: request.allowedUserHandles ?? [context.user.handle],
+        });
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace registered', {
+            workspaceId: workspace.id,
+        }).catch(() => undefined);
+        res.json(workspace);
+    }));
+    router.get('/admin/agent/workspaces/:workspaceId', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        res.json(runtime.workspaceHistory.getWorkspace(workspaceId(req)));
+    }));
+    router.get('/admin/agent/workspaces/:workspaceId/status', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        res.json(await runtime.workspaceHistory.status(workspaceId(req)));
+    }));
+    router.get('/admin/agent/workspaces/:workspaceId/commits', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        const id = workspaceId(req);
+        const limit = Number(req.query?.limit ?? 100);
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+            throw new Error('limit must be an integer between 1 and 500');
         }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/workspaces', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            const request = (req.body ?? {});
-            const workspace = await runtime.workspaceHistory.registerWorkspace({
-                ...request,
-                allowedUserHandles: request.allowedUserHandles ?? [user.handle],
-            });
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace registered', {
-                workspaceId: workspace.id,
-            }).catch(() => undefined);
-            res.json(workspace);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/agent/workspaces/:workspaceId', (req, res) => {
-        try {
-            assertAdmin(req);
-            res.json(runtime.workspaceHistory.getWorkspace(workspaceId(req)));
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/agent/workspaces/:workspaceId/status', async (req, res) => {
-        try {
-            assertAdmin(req);
-            res.json(await runtime.workspaceHistory.status(workspaceId(req)));
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/agent/workspaces/:workspaceId/commits', (req, res) => {
-        try {
-            assertAdmin(req);
-            const id = workspaceId(req);
-            const limit = Number(req.query?.limit ?? 100);
-            if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
-                throw new Error('limit must be an integer between 1 and 500');
-            }
-            const response = {
-                workspace: runtime.workspaceHistory.getWorkspace(id),
-                commits: runtime.workspaceHistory.listCommits(id, limit),
-            };
-            res.json(response);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/agent/workspaces/:workspaceId/diff', (req, res) => {
-        try {
-            assertAdmin(req);
-            const id = workspaceId(req);
-            const workspace = runtime.workspaceHistory.getWorkspace(id);
-            res.json(runtime.workspaceHistory.diff(id, resolveCommit(req.query?.from, workspace.headCommitId), resolveCommit(req.query?.to, workspace.headCommitId)));
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/workspaces/:workspaceId/checkpoints', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            const response = await runtime.workspaceHistory.checkpoint(workspaceId(req), (req.body ?? {}), { kind: 'user', id: user.handle });
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace checkpoint created', {
-                workspaceId: response.workspace.id,
-                commitId: response.commit.id,
-                changedPaths: response.changedPaths,
-            }).catch(() => undefined);
-            res.json(response);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/workspaces/:workspaceId/rollback', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            const response = await runtime.workspaceHistory.rollback(workspaceId(req), (req.body ?? {}), { kind: 'user', id: user.handle });
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace rolled back', {
-                workspaceId: response.workspace.id,
-                operationId: response.operationId,
-                targetCommitId: response.restoredCommitId,
-                rollbackCommitId: response.rollbackCommit.id,
-            }).catch(() => undefined);
-            res.json(response);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/workspaces/:workspaceId/rollback/resume', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            const response = await runtime.workspaceHistory.resumeRollback(workspaceId(req));
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent workspace rollback resumed', {
-                workspaceId: response.workspace.id,
-                operationId: response.operationId,
-                rollbackCommitId: response.rollbackCommit.id,
-            }).catch(() => undefined);
-            res.json(response);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-}
-function assertAdmin(req) {
-    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-    if (!user.isAdmin) {
-        throw new Error('Forbidden');
-    }
-    return user;
+        const response = {
+            workspace: runtime.workspaceHistory.getWorkspace(id),
+            commits: runtime.workspaceHistory.listCommits(id, limit),
+        };
+        res.json(response);
+    }));
+    router.get('/admin/agent/workspaces/:workspaceId/diff', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        const id = workspaceId(req);
+        const workspace = runtime.workspaceHistory.getWorkspace(id);
+        res.json(runtime.workspaceHistory.diff(id, resolveCommit(req.query?.from, workspace.headCommitId), resolveCommit(req.query?.to, workspace.headCommitId)));
+    }));
+    router.post('/admin/agent/workspaces/:workspaceId/checkpoints', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        const response = await runtime.workspaceHistory.checkpoint(workspaceId(req), (req.body ?? {}), { kind: 'user', id: context.user.handle });
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace checkpoint created', {
+            workspaceId: response.workspace.id,
+            commitId: response.commit.id,
+            changedPaths: response.changedPaths,
+        }).catch(() => undefined);
+        res.json(response);
+    }));
+    router.post('/admin/agent/workspaces/:workspaceId/rollback', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        const response = await runtime.workspaceHistory.rollback(workspaceId(req), (req.body ?? {}), { kind: 'user', id: context.user.handle });
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace rolled back', {
+            workspaceId: response.workspace.id,
+            operationId: response.operationId,
+            targetCommitId: response.restoredCommitId,
+            rollbackCommitId: response.rollbackCommit.id,
+        }).catch(() => undefined);
+        res.json(response);
+    }));
+    router.post('/admin/agent/workspaces/:workspaceId/rollback/resume', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_0__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        const response = await runtime.workspaceHistory.resumeRollback(workspaceId(req));
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace rollback resumed', {
+            workspaceId: response.workspace.id,
+            operationId: response.operationId,
+            rollbackCommitId: response.rollbackCommit.id,
+        }).catch(() => undefined);
+        res.json(response);
+    }));
 }
 function workspaceId(req) {
-    try {
-        return decodeURIComponent(req.params?.workspaceId ?? '');
+    const value = req.params?.workspaceId;
+    if (typeof value !== 'string' || !value) {
+        throw new Error('Invalid workspace id');
     }
-    catch {
-        throw new Error('Invalid workspace id encoding');
-    }
+    // Express has already decoded route parameters once.
+    return value;
 }
 function resolveCommit(value, head) {
     const normalized = value?.trim();
@@ -1429,114 +1383,249 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   registerAgentRoutes: () => (/* binding */ registerAgentRoutes)
 /* harmony export */ });
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _services_one_time_ticket_store_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../services/one-time-ticket-store.js */ "./src/services/one-time-ticket-store.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./authority-route-context.js */ "./src/routes/authority-route-context.ts");
+/* harmony import */ var _agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./agent-session-presenter.js */ "./src/routes/agent-session-presenter.ts");
+
+
+
 
 
 function registerAgentRoutes(router, runtime, fail) {
+    const streamTickets = new _services_one_time_ticket_store_js__WEBPACK_IMPORTED_MODULE_1__.OneTimeTicketStore();
     router.get('/agent/tools', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
+            await runtime.agentSessions.start();
             const { user, session } = await caller(runtime, req);
             extensionId = session.extension.id;
-            res.json({ tools: runtime.agent.listTools(extensionId, user.handle) });
+            res.json({ tools: runtime.agentSessions.tools.list(user.handle, extensionId) });
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
-    router.get('/agent/runs', async (req, res) => {
+    router.get('/agent/sessions', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
+            await runtime.agentSessions.start();
             const { user, session } = await caller(runtime, req);
             extensionId = session.extension.id;
-            res.json(runtime.agent.listRunsPage({}, extensionId, user.handle));
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.pageAgentSessions)(runtime.agentSessions.listSessions(extensionId, user.handle)));
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
-    router.post('/agent/runs/list', async (req, res) => {
+    router.post('/agent/sessions/list', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
+            await runtime.agentSessions.start();
             const { user, session } = await caller(runtime, req);
             extensionId = session.extension.id;
-            res.json(runtime.agent.listRunsPage((req.body ?? {}), extensionId, user.handle));
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.pageAgentSessions)(runtime.agentSessions.listSessions(extensionId, user.handle), (req.body ?? {})));
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
-    router.post('/agent/runs', async (req, res) => {
+    router.post('/agent/sessions', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
+            await runtime.agentSessions.start();
             const request = (req.body ?? {});
-            const workspaceId = request.workspaceId?.trim();
-            if (!workspaceId) {
-                throw new Error('Agent workspaceId is required');
-            }
-            await runtime.agent.start();
+            const workspaceId = requiredWorkspaceId(request.workspaceId);
+            const context = await callerForWorkspace(runtime, req, workspaceId);
+            extensionId = context.session.extension.id;
+            const snapshot = await runtime.agentSessions.createSession({ ...request, workspaceId }, extensionId, context);
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session created', {
+                sessionId: snapshot.session.id,
+                workspaceId: snapshot.session.workspaceId,
+                mode: snapshot.session.mode,
+            }).catch(() => undefined);
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(snapshot));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/agent/sessions/:sessionId', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
             const context = await caller(runtime, req);
             extensionId = context.session.extension.id;
-            runtime.workspaceHistory.assertWorkspaceAccess(workspaceId, context.user.handle, context.user.isAdmin);
-            if (!await runtime.permissions.authorize(context.user, context.session, {
-                resource: 'agent.run',
-                target: workspaceId,
-            })) {
-                throw new Error(`Permission not granted: agent.run for ${workspaceId}`);
-            }
-            const run = runtime.agent.createRun({ ...request, workspaceId }, extensionId, context);
-            void runtime.audit.logUsage(context.user, extensionId, 'Agent run created', {
-                runId: run.id,
-                workspaceId: run.workspaceId,
-                mode: run.mode,
+            const snapshot = await ownedSession(runtime, sessionId(req), context);
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(snapshot));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/sessions/:sessionId/update', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const snapshot = await runtime.agentSessions.updateSession(sessionId(req), (req.body ?? {}), extensionId, context);
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(snapshot));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/sessions/:sessionId/messages', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const existing = await ownedSession(runtime, id, context, false);
+            await authorizeWorkspace(runtime, context, existing.session.workspaceId);
+            const result = await runtime.agentSessions.sendMessage(id, (req.body ?? {}), extensionId, context);
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session message accepted', {
+                sessionId: id,
+                runId: result.runId,
+                queuedMessageId: result.queuedMessageId,
             }).catch(() => undefined);
-            res.json(run);
+            res.json({
+                snapshot: (0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(result.snapshot),
+                runId: result.runId,
+                queuedMessageId: result.queuedMessageId,
+            });
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
-    router.get('/agent/runs/:runId', async (req, res) => {
+    router.post('/agent/sessions/:sessionId/runs/:runId/cancel', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
-            const { user, session } = await caller(runtime, req);
-            extensionId = session.extension.id;
-            res.json(ownedRun(runtime, runId(req), user.handle, extensionId));
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            await ownedSession(runtime, id, context);
+            const snapshot = await runtime.agentSessions.cancelRun(id, runId(req));
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session run cancelled', {
+                sessionId: id,
+                runId: runId(req),
+            }).catch(() => undefined);
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(snapshot));
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
-    router.post('/agent/runs/:runId/cancel', async (req, res) => {
+    router.post('/agent/sessions/:sessionId/runs/:runId/resume', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            await runtime.agent.start();
-            const { user, session } = await caller(runtime, req);
-            extensionId = session.extension.id;
-            const id = runId(req);
-            ownedRun(runtime, id, user.handle, extensionId);
-            const run = runtime.agent.cancelRun(id);
-            void runtime.audit.logUsage(user, extensionId, 'Agent run cancelled', { runId: id }).catch(() => undefined);
-            res.json(run);
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const existing = await ownedSession(runtime, id, context, false);
+            await authorizeWorkspace(runtime, context, existing.session.workspaceId);
+            const snapshot = await runtime.agentSessions.resumeRun(id, runId(req), extensionId, context);
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent session run resumed', {
+                sessionId: id,
+                runId: runId(req),
+            }).catch(() => undefined);
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(snapshot));
         }
         catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/agent/sessions/:sessionId/events-ticket', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            await ownedSession(runtime, id, context);
+            res.json(streamTickets.issue({ sessionId: id, context }));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/agent/sessions/:sessionId/events', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        let streamClose = null;
+        let heartbeat = null;
+        let disconnected = false;
+        const cleanup = () => {
+            disconnected = true;
+            if (heartbeat !== null)
+                clearInterval(heartbeat);
+            heartbeat = null;
+            streamClose?.();
+            streamClose = null;
+        };
+        res.on?.('close', cleanup);
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const ticket = streamTickets.consume(req.query?.ticket);
+            if (!ticket || ticket.sessionId !== id) {
+                throw new Error('Agent session stream ticket is invalid or expired');
+            }
+            const requestUser = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            if (requestUser.handle !== ticket.context.user.handle
+                || requestUser.isAdmin !== ticket.context.user.isAdmin) {
+                throw new Error('Agent session stream ticket owner mismatch');
+            }
+            const context = ticket.context;
+            extensionId = context.session.extension.id;
+            const buffered = [];
+            let ready = false;
+            const opened = await runtime.agentSessions.openSubscription(id, record => {
+                if (!ready) {
+                    buffered.push(record);
+                    return;
+                }
+                writeSse(res, 'authority.agent.session.event', (0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSessionEvent)(id, record));
+            }, extensionId, context);
+            streamClose = opened.close;
+            if (disconnected) {
+                cleanup();
+                return;
+            }
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.write('retry: 2000\n\n');
+            writeSse(res, 'authority.agent.session.snapshot', (0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(opened.snapshot));
+            ready = true;
+            for (const record of buffered) {
+                if (record.sequence > opened.snapshot.lastSequence) {
+                    writeSse(res, 'authority.agent.session.event', (0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSessionEvent)(id, record));
+                }
+            }
+            heartbeat = setInterval(() => res.write(': keepalive\n\n'), 15_000);
+            heartbeat.unref?.();
+        }
+        catch (error) {
+            cleanup();
             fail(runtime, req, res, extensionId, error);
         }
     });
     router.post('/agent/browser-tools/register', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
+            await runtime.agentSessions.start();
             const request = (req.body ?? {});
             const browserInstanceId = request.browserInstanceId?.trim();
-            if (!browserInstanceId) {
+            if (!browserInstanceId)
                 throw new Error('Browser instance id is required');
-            }
             const { user, session } = await caller(runtime, req, browserInstanceId, 'agent.browser');
             extensionId = session.extension.id;
-            res.json(runtime.agent.registerBrowserTools(user.handle, extensionId, { ...request, browserInstanceId }));
+            res.json(runtime.agentSessions.registerBrowserTools(user.handle, extensionId, { ...request, browserInstanceId }));
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
@@ -1545,9 +1634,16 @@ function registerAgentRoutes(router, runtime, fail) {
     router.post('/agent/browser-tools/claim', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            const { user, session } = await caller(runtime, req);
+            await runtime.agentSessions.start();
+            const request = (req.body ?? {});
+            const browserInstanceId = requiredBrowserInstanceId(request.browserInstanceId);
+            const { user, session } = await caller(runtime, req, browserInstanceId, 'agent.browser');
             extensionId = session.extension.id;
-            res.json(runtime.agent.claimBrowserTool(user.handle, extensionId, (req.body ?? {})));
+            const claimed = await runtime.agentSessions.claimBrowserTool(user.handle, extensionId, { ...request, browserInstanceId });
+            res.json({
+                sessionId: claimed?.sessionId ?? null,
+                invocation: claimed ? (0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSessionInvocation)(claimed.invocation) : null,
+            });
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
@@ -1556,184 +1652,359 @@ function registerAgentRoutes(router, runtime, fail) {
     router.post('/agent/browser-tools/result', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
-            const { user, session } = await caller(runtime, req);
+            await runtime.agentSessions.start();
+            const request = (req.body ?? {});
+            const browserInstanceId = requiredBrowserInstanceId(request.browserInstanceId);
+            const { user, session } = await caller(runtime, req, browserInstanceId, 'agent.browser');
             extensionId = session.extension.id;
-            res.json(runtime.agent.submitBrowserToolResult(user.handle, extensionId, (req.body ?? {})));
+            const invocation = await runtime.agentSessions.submitBrowserToolResult(user.handle, extensionId, { ...request, browserInstanceId });
+            res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSessionInvocation)(invocation));
         }
         catch (error) {
             fail(runtime, req, res, extensionId, error);
         }
     });
-    router.get('/admin/agent/profiles', (req, res) => {
-        try {
-            assertAdmin(req);
-            res.json({ profiles: runtime.agent.listProfiles() });
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/profiles', (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            const profile = runtime.agent.upsertProfile((req.body ?? {}));
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent LLM profile saved', {
-                profileId: profile.id,
-                baseUrl: profile.baseUrl,
-                model: profile.model,
-            }).catch(() => undefined);
-            res.json(profile);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/agent/profiles/:profileId', (req, res) => {
-        try {
-            assertAdmin(req);
-            res.json(runtime.agent.getProfile(decodeParam(req.params?.profileId, 'profile id')));
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/profiles/:profileId/delete', (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            const profileId = decodeParam(req.params?.profileId, 'profile id');
-            const deleted = runtime.agent.deleteProfile(profileId);
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent LLM profile deleted', {
-                profileId,
-                deleted,
-            }).catch(() => undefined);
-            res.json({ deleted });
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/agent/runs', async (req, res) => {
-        try {
-            assertAdmin(req);
-            await runtime.agent.start();
-            res.json(runtime.agent.listRunsPage());
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/runs/list', async (req, res) => {
-        try {
-            assertAdmin(req);
-            await runtime.agent.start();
-            res.json(runtime.agent.listRunsPage((req.body ?? {})));
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/runs/prune', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            await runtime.agent.start();
-            const request = (req.body ?? {});
-            const result = runtime.agent.pruneTerminalRuns(request.retainLatest);
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Terminal Agent runs pruned', {
-                deletedRuns: result.deletedRuns,
-                reclaimedBytes: result.reclaimedBytes,
-                retainLatest: request.retainLatest,
-            }).catch(() => undefined);
-            res.json(result);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.get('/admin/agent/runs/:runId', async (req, res) => {
-        try {
-            assertAdmin(req);
-            await runtime.agent.start();
-            res.json(runtime.agent.getRun(runId(req)));
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/runs/:runId/cancel', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            await runtime.agent.start();
-            const id = runId(req);
-            const run = runtime.agent.cancelRun(id);
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent run cancelled by admin', {
-                runId: id,
-            }).catch(() => undefined);
-            res.json(run);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
-    router.post('/admin/agent/runs/:runId/approvals/:approvalId/resolve', async (req, res) => {
-        try {
-            const user = assertAdmin(req);
-            await runtime.agent.start();
-            const id = runId(req);
-            const approvalId = decodeParam(req.params?.approvalId, 'approval id');
-            const request = (req.body ?? {});
-            const approval = runtime.agent.resolveApproval(id, approvalId, request, user.handle);
-            void runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, 'Agent approval resolved', {
-                runId: id,
-                approvalId,
-                decision: request.decision,
-            }).catch(() => undefined);
-            res.json(approval);
-        }
-        catch (error) {
-            fail(runtime, req, res, _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID, error);
-        }
-    });
+    registerAgentAdminRoutes(router, runtime, fail);
+}
+function registerAgentAdminRoutes(router, runtime, fail) {
+    router.get('/admin/agent/profiles', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (_req, res) => {
+        res.json({ profiles: runtime.agentProfiles.listProfiles() });
+    }));
+    router.post('/admin/agent/profiles', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        const profile = runtime.agentProfiles.upsertProfile((req.body ?? {}));
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent LLM profile saved', {
+            profileId: profile.id,
+            baseUrl: profile.baseUrl,
+            model: profile.model,
+        }).catch(() => undefined);
+        res.json(profile);
+    }));
+    router.get('/admin/agent/profiles/:profileId', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        res.json(runtime.agentProfiles.getProfile(decodeParam(req.params?.profileId, 'profile id')));
+    }));
+    router.post('/admin/agent/profiles/:profileId/delete', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        const profileId = decodeParam(req.params?.profileId, 'profile id');
+        const deleted = runtime.agentProfiles.deleteProfile(profileId);
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent LLM profile deleted', {
+            profileId,
+            deleted,
+        }).catch(() => undefined);
+        res.json({ deleted });
+    }));
+    router.get('/admin/agent/sessions', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (_req, res) => {
+        await runtime.agentSessions.start();
+        res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.pageAgentSessions)(runtime.agentSessions.listSessions()));
+    }));
+    router.post('/admin/agent/sessions/list', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        await runtime.agentSessions.start();
+        res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.pageAgentSessions)(runtime.agentSessions.listSessions(), (req.body ?? {})));
+    }));
+    router.get('/admin/agent/sessions/:sessionId', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        await runtime.agentSessions.start();
+        res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(await runtime.agentSessions.getSession(sessionId(req))));
+    }));
+    router.post('/admin/agent/sessions/:sessionId/runs/:runId/cancel', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        await runtime.agentSessions.start();
+        const id = sessionId(req);
+        const run = runId(req);
+        const snapshot = await runtime.agentSessions.cancelRun(id, run);
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent session run cancelled by admin', {
+            sessionId: id,
+            runId: run,
+        }).catch(() => undefined);
+        res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(snapshot));
+    }));
+    router.post('/admin/agent/sessions/:sessionId/approvals/:approvalId/resolve', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        await runtime.agentSessions.start();
+        const id = sessionId(req);
+        const approvalId = decodeParam(req.params?.approvalId, 'approval id');
+        const request = (req.body ?? {});
+        const decision = requiredApprovalDecision(request.decision);
+        const snapshot = await runtime.agentSessions.resolveApproval(id, approvalId, decision, context.user.handle);
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent approval resolved', {
+            sessionId: id,
+            approvalId,
+            decision,
+        }).catch(() => undefined);
+        res.json((0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(snapshot));
+    }));
 }
 async function caller(runtime, req, permissionTarget, permissionResource = 'agent.run') {
-    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-    const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+    const { user, session } = await (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.requireAuthorityCaller)(runtime, req);
     if (permissionTarget !== undefined
         && !await runtime.permissions.authorize(user, session, { resource: permissionResource, target: permissionTarget })) {
         throw new Error(`Permission not granted: ${permissionResource} for ${permissionTarget}`);
     }
     return { user, session };
 }
-function assertAdmin(req) {
-    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-    if (!user.isAdmin) {
-        throw new Error('Forbidden');
-    }
-    return user;
+async function callerForWorkspace(runtime, req, workspaceId) {
+    const context = await caller(runtime, req);
+    await authorizeWorkspace(runtime, context, workspaceId);
+    return context;
 }
-function ownedRun(runtime, id, userHandle, extensionId) {
-    const detail = runtime.agent.getRun(id);
-    if (detail.run.callerUserHandle !== userHandle || detail.run.callerExtensionId !== extensionId) {
-        throw new Error(`Agent run not found: ${id}`);
+async function authorizeWorkspace(runtime, context, workspaceId) {
+    runtime.workspaceHistory.assertWorkspaceAccess(workspaceId, context.user.handle, context.user.isAdmin);
+    if (!await runtime.permissions.authorize(context.user, context.session, {
+        resource: 'agent.run',
+        target: workspaceId,
+    })) {
+        throw new Error(`Permission not granted: agent.run for ${workspaceId}`);
     }
-    const result = structuredClone(detail);
-    for (const invocation of result.invocations) {
-        delete invocation.claimId;
+}
+async function ownedSession(runtime, id, context, attachContext = true) {
+    const snapshot = await runtime.agentSessions.getSession(id);
+    if (snapshot.session.callerUserHandle !== context.user.handle
+        || snapshot.session.callerExtensionId !== context.session.extension.id) {
+        throw new Error(`Agent session not found: ${id}`);
     }
-    return result;
+    if (attachContext) {
+        runtime.agentSessions.attachContext(id, context.session.extension.id, context);
+    }
+    return snapshot;
+}
+function requiredWorkspaceId(value) {
+    if (typeof value !== 'string' || !value.trim())
+        throw new Error('Agent workspaceId is required');
+    return value.trim();
+}
+function requiredBrowserInstanceId(value) {
+    if (typeof value !== 'string' || !value.trim())
+        throw new Error('Browser instance id is required');
+    return value.trim();
+}
+function requiredApprovalDecision(value) {
+    if (value !== 'approve' && value !== 'deny') {
+        throw new Error('Agent approval decision must be approve or deny');
+    }
+    return value;
+}
+function sessionId(req) {
+    return decodeParam(req.params?.sessionId, 'session id');
 }
 function runId(req) {
     return decodeParam(req.params?.runId, 'run id');
 }
 function decodeParam(value, label) {
+    if (typeof value !== 'string' || !value)
+        throw new Error(`Invalid ${label}`);
+    // Express has already decoded route parameters once. Decoding again would
+    // turn a literal "%2F" in an id into a different resource name.
+    return value;
+}
+function writeSse(res, event, data) {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+
+/***/ },
+
+/***/ "./src/routes/agent-session-presenter.ts"
+/*!***********************************************!*\
+  !*** ./src/routes/agent-session-presenter.ts ***!
+  \***********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   pageAgentSessions: () => (/* binding */ pageAgentSessions),
+/* harmony export */   presentAgentSession: () => (/* binding */ presentAgentSession),
+/* harmony export */   presentAgentSessionEvent: () => (/* binding */ presentAgentSessionEvent),
+/* harmony export */   presentAgentSessionInvocation: () => (/* binding */ presentAgentSessionInvocation),
+/* harmony export */   summarizeAgentSession: () => (/* binding */ summarizeAgentSession)
+/* harmony export */ });
+const DEFAULT_PAGE_LIMIT = 50;
+const MAX_PAGE_LIMIT = 200;
+const MAIN_REF = 'main';
+/**
+ * Converts the internal projection to the stable transport shape. Journal
+ * hashes, browser claim secrets and idempotency keys never cross this edge.
+ */
+function presentAgentSession(snapshot) {
+    return {
+        session: structuredClone(snapshot.session),
+        lastSequence: snapshot.lastSequence,
+        refs: structuredClone(snapshot.refs),
+        conversation: structuredClone(snapshot.conversation),
+        activePaths: structuredClone(snapshot.activePaths),
+        runs: structuredClone(snapshot.runs),
+        steps: structuredClone(snapshot.steps),
+        generations: structuredClone(snapshot.generations),
+        invocations: snapshot.invocations.map(presentAgentSessionInvocation),
+        approvals: structuredClone(snapshot.approvals),
+        pendingMessages: structuredClone(snapshot.pendingMessages),
+    };
+}
+function presentAgentSessionInvocation(invocation) {
+    const { claimId: _claimId, idempotencyKey: _idempotencyKey, ...publicInvocation } = invocation;
+    return structuredClone(publicInvocation);
+}
+function summarizeAgentSession(snapshot) {
+    const mainRef = snapshot.refs.find(ref => ref.name === MAIN_REF) ?? snapshot.refs[0];
+    const activeRun = mainRef?.activeRunId
+        ? snapshot.runs.find(run => run.id === mainRef.activeRunId) ?? null
+        : null;
+    const activeIds = new Set(snapshot.activePaths[mainRef?.name ?? MAIN_REF] ?? []);
+    const activeMessages = snapshot.conversation.filter((entry) => entry.kind === 'message' && activeIds.has(entry.id));
+    const lastMessage = [...activeMessages]
+        .reverse()
+        .find(entry => typeof entry.content === 'string' && entry.content.trim()) ?? null;
+    return {
+        ...structuredClone(snapshot.session),
+        status: activeRun?.status ?? 'idle',
+        activeRunId: activeRun?.id ?? null,
+        activeRunStatus: activeRun?.status ?? null,
+        messageCount: activeMessages.length,
+        pendingApprovalCount: snapshot.approvals.filter(approval => approval.status === 'pending').length,
+        pendingMessageCount: snapshot.pendingMessages.length,
+        lastMessagePreview: lastMessage ? preview(lastMessage.content ?? '', 180) : null,
+        lastSequence: snapshot.lastSequence,
+    };
+}
+function pageAgentSessions(snapshots, request = {}) {
+    const rawRequest = request;
+    if (!isObject(rawRequest))
+        throw new Error('Agent session list request must be an object');
+    const archivedValue = rawRequest.archived;
+    if (archivedValue !== undefined && typeof archivedValue !== 'boolean') {
+        throw new Error('Agent session archived filter must be boolean');
+    }
+    const pageValue = rawRequest.page;
+    if (pageValue !== undefined && !isObject(pageValue)) {
+        throw new Error('Agent session page must be an object');
+    }
+    const page = pageValue;
+    const cursorValue = page?.cursor;
+    if (cursorValue !== undefined && (typeof cursorValue !== 'string' || !cursorValue)) {
+        throw new Error('Invalid Agent session cursor');
+    }
+    const limitValue = page?.limit ?? DEFAULT_PAGE_LIMIT;
+    if (typeof limitValue !== 'number'
+        || !Number.isSafeInteger(limitValue)
+        || limitValue < 1
+        || limitValue > MAX_PAGE_LIMIT) {
+        throw new Error(`Agent session page limit must be an integer between 1 and ${MAX_PAGE_LIMIT}`);
+    }
+    const limit = limitValue;
+    const archived = archivedValue ?? false;
+    const cursor = typeof cursorValue === 'string' ? decodeCursor(cursorValue) : null;
+    if (cursor && cursor.archived !== archived) {
+        throw new Error('Agent session cursor does not match the requested archive scope');
+    }
+    const summaries = snapshots
+        .filter(snapshot => Boolean(snapshot.session.archivedAt) === archived)
+        .map(summarizeAgentSession)
+        .sort(compareNewestFirst);
+    const afterCursor = cursor
+        ? summaries.filter(summary => compareToCursor(summary, cursor) > 0)
+        : summaries;
+    const sessions = afterCursor.slice(0, limit);
+    const hasMore = afterCursor.length > sessions.length;
+    return {
+        sessions,
+        page: {
+            nextCursor: hasMore && sessions.length > 0
+                ? encodeCursor(sessions.at(-1), archived)
+                : null,
+            limit,
+            hasMore,
+            totalCount: summaries.length,
+        },
+    };
+}
+function presentAgentSessionEvent(sessionId, record) {
+    return {
+        sessionId,
+        sequence: record.sequence,
+        type: record.entry.type,
+        timestamp: record.entry.timestamp,
+    };
+}
+function compareNewestFirst(left, right) {
+    if (left.updatedAt !== right.updatedAt)
+        return left.updatedAt > right.updatedAt ? -1 : 1;
+    if (left.id !== right.id)
+        return left.id > right.id ? -1 : 1;
+    return 0;
+}
+function compareToCursor(summary, cursor) {
+    if (summary.updatedAt !== cursor.updatedAt)
+        return summary.updatedAt < cursor.updatedAt ? 1 : -1;
+    if (summary.id !== cursor.id)
+        return summary.id < cursor.id ? 1 : -1;
+    return 0;
+}
+function encodeCursor(summary, archived) {
+    const cursor = {
+        version: 1,
+        updatedAt: summary.updatedAt,
+        id: summary.id,
+        archived,
+    };
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+function decodeCursor(value) {
     try {
-        const result = decodeURIComponent(value ?? '');
-        if (!result)
+        const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+        if (parsed.version !== 1
+            || typeof parsed.updatedAt !== 'string'
+            || !parsed.updatedAt
+            || typeof parsed.id !== 'string'
+            || !parsed.id
+            || typeof parsed.archived !== 'boolean') {
             throw new Error();
-        return result;
+        }
+        return parsed;
     }
     catch {
-        throw new Error(`Invalid ${label}`);
+        throw new Error('Invalid Agent session cursor');
     }
+}
+function preview(value, maxLength) {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
+}
+function isObject(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+
+/***/ },
+
+/***/ "./src/routes/authority-route-context.ts"
+/*!***********************************************!*\
+  !*** ./src/routes/authority-route-context.ts ***!
+  \***********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   requireAuthorityCaller: () => (/* binding */ requireAuthorityCaller),
+/* harmony export */   withAuthorityAdmin: () => (/* binding */ withAuthorityAdmin)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+async function requireAuthorityCaller(runtime, req) {
+    const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+    const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+    return { user, session };
+}
+function withAuthorityAdmin(runtime, fail, handler) {
+    return async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const context = await requireAuthorityCaller(runtime, req);
+            extensionId = context.session.extension.id;
+            if (!context.user.isAdmin) {
+                throw new Error('Forbidden');
+            }
+            await handler(req, res, context);
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    };
 }
 
 
@@ -1884,18 +2155,21 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   registerJobsAndEventsRoutes: () => (/* binding */ registerJobsAndEventsRoutes)
 /* harmony export */ });
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _services_one_time_ticket_store_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../services/one-time-ticket-store.js */ "./src/services/one-time-ticket-store.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 function ok(res, data) {
     res.json(data);
 }
 function registerJobsAndEventsRoutes(router, runtime, fail) {
+    const streamTickets = new _services_one_time_ticket_store_js__WEBPACK_IMPORTED_MODULE_0__.OneTimeTicketStore();
     router.post('/jobs/create', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
             const jobType = String(req.body?.type ?? '');
             if (!await runtime.permissions.authorize(user, session, { resource: 'jobs.background', target: jobType })) {
                 throw new Error(`Permission not granted: jobs.background for ${jobType}`);
@@ -1917,8 +2191,8 @@ function registerJobsAndEventsRoutes(router, runtime, fail) {
     });
     router.get('/jobs', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
             ok(res, await runtime.jobs.list(user, session.extension.id));
         }
         catch (error) {
@@ -1927,8 +2201,8 @@ function registerJobsAndEventsRoutes(router, runtime, fail) {
     });
     router.post('/jobs/list', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             ok(res, await runtime.jobs.listPage(user, session.extension.id, payload));
         }
@@ -1938,8 +2212,8 @@ function registerJobsAndEventsRoutes(router, runtime, fail) {
     });
     router.get('/jobs/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
             const job = await runtime.jobs.get(user, String(req.params?.id ?? ''));
             if (!job || job.extensionId !== session.extension.id) {
                 throw new Error('Job not found');
@@ -1952,8 +2226,8 @@ function registerJobsAndEventsRoutes(router, runtime, fail) {
     });
     router.post('/jobs/:id/cancel', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
             const job = await runtime.jobs.cancel(user, session.extension.id, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, session.extension.id, 'Job cancelled', { jobId: job.id });
             ok(res, job);
@@ -1964,8 +2238,8 @@ function registerJobsAndEventsRoutes(router, runtime, fail) {
     });
     router.post('/jobs/:id/requeue', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
             const jobId = String(req.params?.id ?? '');
             const existing = await runtime.jobs.get(user, jobId);
             if (!existing || existing.extensionId !== session.extension.id) {
@@ -1986,27 +2260,65 @@ function registerJobsAndEventsRoutes(router, runtime, fail) {
             fail(runtime, req, res, 'jobs.background', error);
         }
     });
-    router.get('/events/stream', async (req, res) => {
+    router.post('/events/ticket', async (req, res) => {
+        let extensionId = 'events.stream';
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
-            const channel = String(req.query?.channel ?? `extension:${session.extension.id}`);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const channel = eventChannel(req.body?.channel, session.extension.id);
             if (!await runtime.permissions.authorize(user, session, { resource: 'events.stream', target: channel })) {
                 throw new Error(`Permission not granted: events.stream for ${channel}`);
+            }
+            ok(res, streamTickets.issue({ user, session, channel }));
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/events/stream', async (req, res) => {
+        let extensionId = 'events.stream';
+        let closeBroker = null;
+        let disconnected = false;
+        const cleanup = () => {
+            disconnected = true;
+            closeBroker?.();
+            closeBroker = null;
+        };
+        res.on?.('close', cleanup);
+        try {
+            const ticket = streamTickets.consume(req.query?.ticket);
+            if (!ticket) {
+                throw new Error('Event stream ticket is invalid or expired');
+            }
+            extensionId = ticket.session.extension.id;
+            const requestUser = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUserContext)(req);
+            if (requestUser.handle !== ticket.user.handle || requestUser.isAdmin !== ticket.user.isAdmin) {
+                throw new Error('Event stream ticket owner mismatch');
             }
             res.setHeader('Content-Type', 'text/event-stream');
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
             res.write(': connected\n\n');
-            const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_0__.getUserAuthorityPaths)(user);
-            const cleanup = runtime.events.register(paths.controlDbFile, user.handle, channel, res);
-            req.on?.('close', cleanup);
-            req.on?.('end', cleanup);
+            const paths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_1__.getUserAuthorityPaths)(ticket.user);
+            closeBroker = runtime.events.register(paths.controlDbFile, ticket.user.handle, ticket.channel, res);
+            if (disconnected)
+                cleanup();
         }
         catch (error) {
-            fail(runtime, req, res, 'events.stream', error);
+            cleanup();
+            fail(runtime, req, res, extensionId, error);
         }
     });
+}
+function eventChannel(value, extensionId) {
+    if (value === undefined || value === null) {
+        return `extension:${extensionId}`;
+    }
+    if (typeof value !== 'string' || !value.trim() || value.length > 512) {
+        throw new Error('Event channel must be a non-empty string of at most 512 characters');
+    }
+    return value.trim();
 }
 
 
@@ -3886,31 +4198,33 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./events/sse-broker.js */ "./src/events/sse-broker.ts");
 /* harmony import */ var _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/admin-package-service.js */ "./src/services/admin-package-service.ts");
 /* harmony import */ var _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/agent-host-tools.js */ "./src/services/agent-host-tools.ts");
-/* harmony import */ var _services_agent_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/agent-service.js */ "./src/services/agent-service.ts");
-/* harmony import */ var _services_agent_store_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/agent-store-service.js */ "./src/services/agent-store-service.ts");
-/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
-/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
-/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
-/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
-/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
-/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
-/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
-/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _services_agent_profile_store_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/agent-profile-store-service.js */ "./src/services/agent-profile-store-service.ts");
+/* harmony import */ var _services_agent_session_runtime_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./services/agent-session-runtime-service.js */ "./src/services/agent-session-runtime-service.ts");
+/* harmony import */ var _services_agent_session_store_service_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./services/agent-session-store-service.js */ "./src/services/agent-session-store-service.ts");
+/* harmony import */ var _services_audit_service_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./services/audit-service.js */ "./src/services/audit-service.ts");
+/* harmony import */ var _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./services/companion-module-loader-service.js */ "./src/services/companion-module-loader-service.ts");
+/* harmony import */ var _services_core_service_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./services/core-service.js */ "./src/services/core-service.ts");
+/* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
+/* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
+/* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
+/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
+/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+
 
 
 
@@ -3940,32 +4254,34 @@ __webpack_require__.r(__webpack_exports__);
 
 
 function createAuthorityRuntime() {
-    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_7__.CoreService();
+    const core = new _services_core_service_js__WEBPACK_IMPORTED_MODULE_8__.CoreService();
     const events = new _events_sse_broker_js__WEBPACK_IMPORTED_MODULE_0__.SseBroker(core);
-    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_5__.AuditService(core);
-    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_8__.DataTransferService();
-    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_9__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_12__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_19__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_18__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_21__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_22__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_23__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_24__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_20__.PrivateFsService(core);
-    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_10__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_13__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_25__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_17__.NativeMigrationService();
+    const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_6__.AuditService(core);
+    const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_9__.DataTransferService();
+    const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_10__.ExtensionService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_13__.InstallService();
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_20__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_19__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_22__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_23__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_24__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_25__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_21__.PrivateFsService(core);
+    const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_11__.HttpService(core);
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_14__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_26__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_18__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_16__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
-    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_15__.ModuleDiscoveryService(install);
-    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_14__.LockService();
-    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_11__.IdempotencyService(storage);
-    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_6__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
-    const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_27__.getGlobalAuthorityPaths)();
-    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_26__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
-    const agent = new _services_agent_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentService(new _services_agent_store_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentStoreService(globalPaths.agentStateDir), workspaceHistory, new _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__.AgentHostToolService(workspaceHistory), { moduleHost: modules });
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_17__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_16__.ModuleDiscoveryService(install);
+    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_15__.LockService();
+    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_12__.IdempotencyService(storage);
+    const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_7__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
+    const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_28__.getGlobalAuthorityPaths)();
+    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_27__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
+    const agentProfiles = new _services_agent_profile_store_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentProfileStoreService(globalPaths.agentStateDir);
+    const agentHostTools = new _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__.AgentHostToolService(workspaceHistory);
+    const agentSessions = new _services_agent_session_runtime_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentSessionRuntimeService(new _services_agent_session_store_service_js__WEBPACK_IMPORTED_MODULE_5__.AgentSessionStoreService(globalPaths.agentStateDir), agentProfiles, workspaceHistory, agentHostTools, { moduleHost: modules });
     return {
         adminPackages,
         events,
@@ -3991,7 +4307,8 @@ function createAuthorityRuntime() {
         idempotency,
         companionLoader,
         workspaceHistory,
-        agent,
+        agentProfiles,
+        agentSessions,
     };
 }
 
@@ -5910,7 +6227,7 @@ class AgentLlmClient {
             if (!response.ok) {
                 throw new Error(`LLM request failed (${response.status}): ${redact(text.slice(0, 4_000), profile.apiKey)}`);
             }
-            return parseCompletion(text);
+            return parseCompletion(text, response.headers.get('x-request-id'));
         }
         catch (error) {
             if (controller.signal.aborted && !request.signal.aborted) {
@@ -5983,7 +6300,7 @@ function toOpenAiMessage(message) {
     }
     return { role: message.role, content: message.content ?? '' };
 }
-function parseCompletion(text) {
+function parseCompletion(text, responseRequestId) {
     let payload;
     try {
         payload = JSON.parse(text);
@@ -6004,6 +6321,7 @@ function parseCompletion(text) {
     if ((content === null || !content.trim()) && !toolCalls?.length) {
         throw new Error('LLM assistant message was empty');
     }
+    const requestId = providerRequestId(responseRequestId, payload?.id);
     return {
         message: {
             role: 'assistant',
@@ -6012,7 +6330,12 @@ function parseCompletion(text) {
         },
         finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
         ...(payload.usage === undefined ? {} : { usage: boundedUsage(payload.usage) }),
+        ...(requestId ? { providerRequestId: requestId } : {}),
     };
+}
+function providerRequestId(headerValue, payloadValue) {
+    const value = headerValue || (typeof payloadValue === 'string' ? payloadValue : '');
+    return value && value.length <= 500 ? value : undefined;
 }
 function parseToolCalls(value) {
     if (!Array.isArray(value) || value.length > 32) {
@@ -6054,1440 +6377,15 @@ function boundedUsage(value) {
 
 /***/ },
 
-/***/ "./src/services/agent-service.ts"
-/*!***************************************!*\
-  !*** ./src/services/agent-service.ts ***!
-  \***************************************/
+/***/ "./src/services/agent-profile-store-service.ts"
+/*!*****************************************************!*\
+  !*** ./src/services/agent-profile-store-service.ts ***!
+  \*****************************************************/
 (__unused_webpack_module, __webpack_exports__, __webpack_require__) {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   AgentService: () => (/* binding */ AgentService)
-/* harmony export */ });
-/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
-/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
-/* harmony import */ var _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./agent-llm-client.js */ "./src/services/agent-llm-client.ts");
-
-
-
-const DEFAULT_MAX_STEPS = 24;
-const HARD_MAX_STEPS = 64;
-const MAX_CONTEXT_CHARS = 64 * 1024;
-const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
-const MAX_TOOL_RESULT_CHARS = 256 * 1024;
-const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 2 * 60_000;
-const DEFAULT_BROWSER_LEASE_MS = 60_000;
-const MIN_BROWSER_LEASE_MS = 5_000;
-const MAX_BROWSER_LEASE_MS = 5 * 60_000;
-const MAX_BROWSER_TOOLS = 64;
-const MAX_BROWSER_INSTANCES_PER_CALLER = 16;
-const MAX_BROWSER_TOOLS_PER_CALLER = 128;
-const MAX_BROWSER_REGISTRATION_BYTES = 256 * 1024;
-const MAX_TOOL_CALL_ID_CHARS = 256;
-const MAX_ACTIVE_RUNS = 100;
-const MAX_ACTIVE_RUNS_PER_USER = 32;
-const MAX_ACTIVE_RUNS_PER_CALLER = 16;
-const MAX_RUN_STARTS_PER_USER_PER_MINUTE = 30;
-const RUN_START_WINDOW_MS = 60_000;
-const DEFAULT_RUN_PAGE_LIMIT = 50;
-const MAX_RUN_PAGE_LIMIT = 200;
-const MAX_RETAINED_TERMINAL_RUNS = 1_000;
-const BROWSER_TOOL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/;
-const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
-const RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'waiting_browser_tool', ...TERMINAL_RUNS]);
-class AgentService {
-    store;
-    history;
-    hostTools;
-    requestCompletion;
-    maxConcurrentRuns;
-    maxConcurrentRunsPerUser;
-    approvalTimeoutMs;
-    browserToolTimeoutMs;
-    shutdownTimeoutMs;
-    moduleHost;
-    queue = [];
-    tasks = new Map();
-    controllers = new Map();
-    approvalWaiters = new Map();
-    browserWaiters = new Map();
-    browserRegistrations = new Map();
-    runContexts = new Map();
-    runStartsByUser = new Map();
-    startPromise = null;
-    started = false;
-    stopping = false;
-    stopped = false;
-    constructor(store, history, hostTools, options = {}) {
-        this.store = store;
-        this.history = history;
-        this.hostTools = hostTools;
-        const client = new _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_2__.AgentLlmClient();
-        this.requestCompletion = options.requestCompletion ?? client.complete.bind(client);
-        this.moduleHost = options.moduleHost;
-        this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
-        this.approvalTimeoutMs = options.approvalTimeoutMs ?? 10 * 60_000;
-        this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? DEFAULT_BROWSER_TOOL_TIMEOUT_MS;
-        this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
-        if (!Number.isSafeInteger(this.maxConcurrentRuns) || this.maxConcurrentRuns < 1 || this.maxConcurrentRuns > 16) {
-            throw new Error('maxConcurrentRuns must be an integer between 1 and 16');
-        }
-        this.maxConcurrentRunsPerUser = Math.max(1, this.maxConcurrentRuns - 1);
-        if (!Number.isSafeInteger(this.approvalTimeoutMs) || this.approvalTimeoutMs < 1 || this.approvalTimeoutMs > 24 * 60 * 60_000) {
-            throw new Error('approvalTimeoutMs must be an integer between 1 ms and 24 hours');
-        }
-        if (!Number.isSafeInteger(this.browserToolTimeoutMs) || this.browserToolTimeoutMs < 1_000 || this.browserToolTimeoutMs > 10 * 60_000) {
-            throw new Error('browserToolTimeoutMs must be an integer between 1000 and 600000 ms');
-        }
-        if (!Number.isSafeInteger(this.shutdownTimeoutMs) || this.shutdownTimeoutMs < 1 || this.shutdownTimeoutMs > 60_000) {
-            throw new Error('shutdownTimeoutMs must be an integer between 1 and 60000 ms');
-        }
-    }
-    start() {
-        if (this.stopped) {
-            return Promise.reject(new Error('Agent service cannot restart after it has stopped'));
-        }
-        if (this.started) {
-            return Promise.resolve([]);
-        }
-        if (this.startPromise) {
-            return this.startPromise;
-        }
-        this.stopping = false;
-        this.startPromise = (async () => {
-            await new Promise(resolve => setImmediate(resolve));
-            try {
-                if (this.stopping) {
-                    return [];
-                }
-                const interrupted = this.store.start();
-                this.started = true;
-                return interrupted;
-            }
-            finally {
-                this.startPromise = null;
-            }
-        })();
-        return this.startPromise;
-    }
-    async stop() {
-        this.stopping = true;
-        this.stopped = true;
-        await this.startPromise?.catch(() => []);
-        for (const runId of this.queue.splice(0)) {
-            this.interruptRun(runId, 'Agent host stopped before the run started');
-            this.runContexts.delete(runId);
-        }
-        for (const [runId, controller] of this.controllers) {
-            this.interruptRun(runId, 'Agent host stopped while the run was active');
-            controller.abort(new Error('Agent host stopped'));
-        }
-        for (const resolve of this.approvalWaiters.values()) {
-            resolve('cancelled');
-        }
-        for (const waiter of this.browserWaiters.values()) {
-            waiter.resolve('cancelled');
-        }
-        const settled = Promise.allSettled([...this.tasks.values()]);
-        const completed = await Promise.race([settled.then(() => true), delay(this.shutdownTimeoutMs).then(() => false)]);
-        if (!completed) {
-            console.warn(`[authority] ${this.tasks.size} Agent run(s) did not stop within ${this.shutdownTimeoutMs} ms`);
-        }
-        this.pruneRunStore();
-        this.started = false;
-    }
-    upsertProfile(input) {
-        return this.store.upsertProfile(input);
-    }
-    listProfiles() {
-        return this.store.listProfiles();
-    }
-    getProfile(profileId) {
-        return this.store.getProfile(profileId);
-    }
-    deleteProfile(profileId) {
-        if (this.store.listRuns().some(run => run.profileId === profileId && !TERMINAL_RUNS.has(run.status))) {
-            throw new Error(`LLM profile is in use by an active Agent run: ${profileId}`);
-        }
-        return this.store.deleteProfile(profileId);
-    }
-    listTools(callerExtensionId = 'authority', callerUserHandle = 'authority') {
-        const tools = [
-            ...this.hostTools.list(),
-            ...moduleToolDescriptors(this.moduleHost),
-            ...this.browserTools(callerUserHandle, callerExtensionId),
-        ];
-        const ids = new Set();
-        for (const tool of tools) {
-            if (ids.has(tool.id)) {
-                throw new Error(`Agent tool id collision: ${tool.id}`);
-            }
-            ids.add(tool.id);
-        }
-        return structuredClone(tools);
-    }
-    listRuns(callerExtensionId, callerUserHandle) {
-        const runs = this.store.listRuns();
-        if (callerExtensionId === undefined && callerUserHandle === undefined) {
-            return runs;
-        }
-        if (!callerExtensionId || !callerUserHandle) {
-            throw new Error('Agent run owner requires both user and extension identity');
-        }
-        return runs.filter(run => run.callerExtensionId === callerExtensionId && run.callerUserHandle === callerUserHandle);
-    }
-    listRunsPage(request = {}, callerExtensionId, callerUserHandle) {
-        const { cursor, limit } = normalizeRunPage(request);
-        const runs = this.listRuns(callerExtensionId, callerUserHandle)
-            .filter(run => request.status === undefined || run.status === request.status);
-        const firstIndex = cursor
-            ? runs.findIndex(run => isAfterRunCursor(run, cursor))
-            : 0;
-        const startIndex = firstIndex === -1 ? runs.length : firstIndex;
-        const pageRuns = runs.slice(startIndex, startIndex + limit);
-        const hasMore = startIndex + pageRuns.length < runs.length;
-        return {
-            runs: pageRuns,
-            page: {
-                nextCursor: hasMore ? encodeRunCursor(pageRuns.at(-1), request.status) : null,
-                limit,
-                hasMore,
-                totalCount: runs.length,
-            },
-        };
-    }
-    pruneTerminalRuns(retainLatest) {
-        if (retainLatest !== undefined
-            && (!Number.isSafeInteger(retainLatest) || retainLatest < 0 || retainLatest > MAX_RETAINED_TERMINAL_RUNS)) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Agent retainLatest must be an integer between 0 and ${MAX_RETAINED_TERMINAL_RUNS}`, 400, 'validation_error', 'validation');
-        }
-        return this.store.pruneTerminalRuns(retainLatest, this.executingRunIds());
-    }
-    getRun(runId) {
-        return this.store.getRun(runId);
-    }
-    createRun(request, callerExtensionId = 'authority', callerContext) {
-        if (!this.started || this.stopping) {
-            throw new Error('Agent service is not running');
-        }
-        const goal = requiredText(request.goal, 'Agent goal', 20_000);
-        const caller = requiredText(callerExtensionId, 'Agent caller extension id', 128);
-        if (callerContext && callerContext.session.extension.id !== caller) {
-            throw new Error('Agent caller context does not match the caller extension');
-        }
-        const callerUserHandle = requiredText(callerContext?.user.handle ?? 'authority', 'Agent caller user handle', 200);
-        const activeRuns = this.store.listRuns().filter(run => !TERMINAL_RUNS.has(run.status));
-        assertRunCapacity(activeRuns, callerUserHandle, caller);
-        const instructions = request.instructions === undefined
-            ? undefined
-            : requiredText(request.instructions, 'Agent instructions', 20_000);
-        const contextText = serializeContext(request.context);
-        const mode = normalizeMode(request.mode);
-        const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
-        if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > HARD_MAX_STEPS) {
-            throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
-        }
-        const workspace = selectOne(request.workspaceId, this.history.listWorkspaces(), item => item.id, 'workspace');
-        if (callerContext) {
-            this.history.assertWorkspaceAccess(workspace.id, callerUserHandle, callerContext.user.isAdmin);
-        }
-        const profile = selectOne(request.profileId, this.store.listProfiles(), item => item.id, 'LLM profile');
-        const availableTools = this.listTools(caller, callerUserHandle);
-        const allowedTools = normalizeAllowedTools(request.allowedTools, availableTools);
-        const timestamp = this.store.nowIso();
-        const id = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
-        const run = {
-            id,
-            callerUserHandle,
-            callerExtensionId: caller,
-            workspaceId: workspace.id,
-            profileId: profile.id,
-            goal,
-            mode,
-            status: 'queued',
-            allowedTools,
-            stepCount: 0,
-            maxSteps,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            ...(workspace.headCommitId ? { headCommitId: workspace.headCommitId } : {}),
-        };
-        const detail = {
-            run,
-            messages: [
-                { role: 'system', content: systemPrompt(workspace.id, mode) },
-                { role: 'user', content: userPrompt(goal, instructions, contextText) },
-            ],
-            events: [{ sequence: 1, runId: id, type: 'run.created', timestamp, payload: { mode, allowedTools } }],
-            invocations: [],
-            approvals: [],
-            ...(request.context === undefined ? {} : { context: structuredClone(request.context) }),
-            ...(instructions ? { instructions } : {}),
-        };
-        this.recordRunStart(callerUserHandle);
-        this.store.createRun(detail);
-        if (callerContext) {
-            this.runContexts.set(id, callerContext);
-        }
-        this.queue.push(id);
-        this.drainQueue();
-        return structuredClone(run);
-    }
-    cancelRun(runId) {
-        const current = this.store.getRun(runId);
-        if (TERMINAL_RUNS.has(current.run.status)) {
-            return current.run;
-        }
-        const timestamp = this.store.nowIso();
-        const detail = this.store.updateRun(runId, run => {
-            run.run.status = 'cancelled';
-            run.run.finishedAt = timestamp;
-            run.run.error = 'Cancelled by user';
-            delete run.run.pendingApprovalId;
-            cancelPendingRecords(run, timestamp, 'Cancelled by user');
-            appendEvent(run, 'run.cancelled', timestamp);
-        });
-        const queueIndex = this.queue.indexOf(runId);
-        if (queueIndex !== -1) {
-            this.queue.splice(queueIndex, 1);
-            this.runContexts.delete(runId);
-        }
-        this.controllers.get(runId)?.abort(new Error('Agent run cancelled'));
-        for (const [key, resolve] of this.approvalWaiters) {
-            if (key.startsWith(`${runId}:`)) {
-                resolve('cancelled');
-            }
-        }
-        for (const [key, waiter] of this.browserWaiters) {
-            if (key.startsWith(`${runId}:`)) {
-                waiter.resolve('cancelled');
-            }
-        }
-        this.pruneRunStore();
-        return detail.run;
-    }
-    registerBrowserTools(userHandle, extensionId, request) {
-        const user = requiredText(userHandle, 'Browser tool user handle', 200);
-        const owner = requiredText(extensionId, 'Browser tool extension id', 128);
-        const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
-        const leaseDurationMs = request.leaseDurationMs ?? DEFAULT_BROWSER_LEASE_MS;
-        if (!Number.isSafeInteger(leaseDurationMs) || leaseDurationMs < MIN_BROWSER_LEASE_MS || leaseDurationMs > MAX_BROWSER_LEASE_MS) {
-            throw new Error(`Browser tool leaseDurationMs must be between ${MIN_BROWSER_LEASE_MS} and ${MAX_BROWSER_LEASE_MS}`);
-        }
-        if (!Array.isArray(request.tools) || request.tools.length === 0 || request.tools.length > MAX_BROWSER_TOOLS) {
-            throw new Error(`Browser tool registration must contain between 1 and ${MAX_BROWSER_TOOLS} tools`);
-        }
-        let serializedTools;
-        try {
-            serializedTools = JSON.stringify(request.tools);
-        }
-        catch {
-            throw new Error('Browser tool registration must be JSON serializable');
-        }
-        if (Buffer.byteLength(serializedTools, 'utf8') > MAX_BROWSER_REGISTRATION_BYTES) {
-            throw new Error(`Browser tool registration exceeds ${MAX_BROWSER_REGISTRATION_BYTES} bytes`);
-        }
-        this.pruneBrowserRegistrations();
-        const registrationKey = browserRegistrationKey(user, owner, browserInstanceId);
-        const callerRegistrations = [...this.browserRegistrations.entries()]
-            .filter(([, registration]) => registration.userHandle === user && registration.extensionId === owner);
-        if (!this.browserRegistrations.has(registrationKey) && callerRegistrations.length >= MAX_BROWSER_INSTANCES_PER_CALLER) {
-            throw new Error(`Browser tool registration limit reached for ${owner}`);
-        }
-        const existingTools = callerRegistrations
-            .filter(([key]) => key !== registrationKey)
-            .reduce((total, [, registration]) => total + registration.tools.length, 0);
-        if (existingTools + request.tools.length > MAX_BROWSER_TOOLS_PER_CALLER) {
-            throw new Error(`Browser tool limit reached for ${owner}`);
-        }
-        const localIds = new Set();
-        const normalizedTools = request.tools.map(input => {
-            const normalized = normalizeBrowserTool(input);
-            const localId = normalized.id;
-            if (localIds.has(localId)) {
-                throw new Error(`Duplicate browser tool id: ${localId}`);
-            }
-            localIds.add(localId);
-            return normalized;
-        });
-        const registrationId = hashValue(JSON.stringify(normalizedTools));
-        const prefix = `browser_${shortHash(`${user}\0${owner}\0${browserInstanceId}\0${registrationId}`)}_`;
-        const tools = normalizedTools.map(normalized => {
-            const localId = normalized.id;
-            return {
-                ...normalized,
-                id: `${prefix}${localId}`,
-                execution: 'browser',
-                source: {
-                    kind: 'browser',
-                    userHandle: user,
-                    extensionId: owner,
-                    browserInstanceId,
-                    registrationId,
-                },
-            };
-        });
-        const leaseExpiresAt = new Date(Date.now() + leaseDurationMs).toISOString();
-        this.browserRegistrations.set(registrationKey, {
-            userHandle: user,
-            extensionId: owner,
-            browserInstanceId,
-            registrationId,
-            leaseExpiresAt,
-            tools,
-        });
-        return { browserInstanceId, registrationId, leaseExpiresAt, tools: structuredClone(tools) };
-    }
-    claimBrowserTool(userHandle, extensionId, request) {
-        const user = requiredText(userHandle, 'Browser tool user handle', 200);
-        const owner = requiredText(extensionId, 'Browser tool extension id', 128);
-        const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
-        const claimId = requiredText(request.claimId, 'Browser tool claim id', 128);
-        const registration = this.activeBrowserRegistration(user, owner, browserInstanceId);
-        const requestedCallId = request.callId === undefined
-            ? undefined
-            : requiredText(request.callId, 'Browser tool call id', MAX_TOOL_CALL_ID_CHARS);
-        const toolIds = new Set(registration.tools.map(tool => tool.id));
-        for (const waiter of this.browserWaiters.values()) {
-            if (requestedCallId && waiter.callId !== requestedCallId)
-                continue;
-            if (waiter.descriptor.source.kind !== 'browser'
-                || waiter.descriptor.source.userHandle !== user
-                || waiter.descriptor.source.extensionId !== owner
-                || waiter.descriptor.source.browserInstanceId !== browserInstanceId
-                || !toolIds.has(waiter.descriptor.id))
-                continue;
-            const detail = this.store.getRun(waiter.runId);
-            const invocation = findInvocation(detail, waiter.callId);
-            if (invocation.status === 'claimed'
-                && invocation.browserInstanceId === browserInstanceId
-                && invocation.claimId === claimId) {
-                return { invocation: structuredClone(invocation) };
-            }
-            if (invocation.status !== 'pending')
-                continue;
-            const timestamp = this.store.nowIso();
-            let claimed;
-            this.store.updateRun(waiter.runId, run => {
-                const stored = findInvocation(run, waiter.callId);
-                if (stored.status !== 'pending') {
-                    throw new Error(`Browser tool invocation is no longer pending: ${waiter.callId}`);
-                }
-                stored.status = 'claimed';
-                stored.browserInstanceId = browserInstanceId;
-                stored.claimId = claimId;
-                stored.updatedAt = timestamp;
-                appendEvent(run, 'tool.started', timestamp, { callId: waiter.callId, toolId: stored.toolId, browserInstanceId });
-                claimed = structuredClone(stored);
-            });
-            return { invocation: claimed };
-        }
-        if (requestedCallId) {
-            throw new Error(`Browser tool invocation is unavailable: ${requestedCallId}`);
-        }
-        return { invocation: null };
-    }
-    submitBrowserToolResult(userHandle, extensionId, request) {
-        const user = requiredText(userHandle, 'Browser tool user handle', 200);
-        const owner = requiredText(extensionId, 'Browser tool extension id', 128);
-        const runId = requiredText(request.runId, 'Agent run id', 128);
-        const callId = requiredText(request.callId, 'Browser tool call id', MAX_TOOL_CALL_ID_CHARS);
-        const claimId = requiredText(request.claimId, 'Browser tool claim id', 128);
-        const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
-        if (request.status !== 'completed' && request.status !== 'failed' && request.status !== 'cancelled') {
-            throw new Error('Browser tool result status must be completed, failed, or cancelled');
-        }
-        const waiter = this.browserWaiters.get(browserWaiterKey(runId, callId));
-        if (!waiter || waiter.descriptor.source.kind !== 'browser'
-            || waiter.descriptor.source.userHandle !== user
-            || waiter.descriptor.source.extensionId !== owner
-            || waiter.descriptor.source.browserInstanceId !== browserInstanceId) {
-            throw new Error(`Browser tool invocation is unavailable: ${callId}`);
-        }
-        const timestamp = this.store.nowIso();
-        const bounded = request.status === 'completed' ? boundedToolValue(request.result) : undefined;
-        const message = request.status === 'completed'
-            ? undefined
-            : requiredText(request.error ?? `Browser tool ${request.status}`, 'Browser tool error', 10_000);
-        let result;
-        this.store.updateRun(runId, detail => {
-            const invocation = findInvocation(detail, callId);
-            if (invocation.status !== 'claimed'
-                || invocation.browserInstanceId !== browserInstanceId
-                || invocation.claimId !== claimId) {
-                throw new Error(`Browser tool invocation is not claimed by this browser: ${callId}`);
-            }
-            invocation.status = request.status === 'completed' ? 'completed' : request.status;
-            invocation.updatedAt = timestamp;
-            if (request.status === 'completed') {
-                invocation.result = structuredClone(bounded);
-                detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: true, result: bounded }) });
-                appendEvent(detail, 'tool.completed', timestamp, { callId, toolId: invocation.toolId, result: bounded });
-            }
-            else {
-                invocation.error = message;
-                detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
-                appendEvent(detail, 'tool.failed', timestamp, { callId, toolId: invocation.toolId, error: message });
-            }
-            detail.run.status = 'running';
-            result = structuredClone(invocation);
-        });
-        waiter.resolve(request.status);
-        return result;
-    }
-    resolveApproval(runId, approvalId, request, resolvedByUserHandle) {
-        if (request.decision !== 'approve' && request.decision !== 'deny') {
-            throw new Error('Approval decision must be approve or deny');
-        }
-        const waiter = this.approvalWaiters.get(`${runId}:${approvalId}`);
-        if (!waiter) {
-            throw new Error(`Agent approval waiter is unavailable: ${approvalId}`);
-        }
-        const timestamp = this.store.nowIso();
-        const resolver = resolvedByUserHandle === undefined
-            ? undefined
-            : requiredText(resolvedByUserHandle, 'Approval resolver user handle', 200);
-        let resolved;
-        this.store.updateRun(runId, detail => {
-            const approval = detail.approvals.find(item => item.id === approvalId);
-            if (!approval) {
-                throw new Error(`Agent approval not found: ${approvalId}`);
-            }
-            if (approval.status !== 'pending' || detail.run.pendingApprovalId !== approvalId) {
-                throw new Error(`Agent approval is no longer pending: ${approvalId}`);
-            }
-            approval.status = request.decision === 'approve' ? 'approved' : 'denied';
-            approval.updatedAt = timestamp;
-            approval.resolvedAt = timestamp;
-            if (resolver) {
-                approval.resolvedByUserHandle = resolver;
-            }
-            detail.run.status = 'running';
-            delete detail.run.pendingApprovalId;
-            appendEvent(detail, 'tool.approval_resolved', timestamp, {
-                approvalId,
-                callId: approval.callId,
-                decision: request.decision,
-                ...(resolver ? { resolvedByUserHandle: resolver } : {}),
-            });
-            resolved = structuredClone(approval);
-        });
-        waiter(request.decision === 'approve' ? 'approved' : 'denied');
-        return resolved;
-    }
-    drainQueue() {
-        if (this.stopping) {
-            return;
-        }
-        while (this.tasks.size < this.maxConcurrentRuns && this.queue.length > 0) {
-            const queueIndex = this.nextRunnableQueueIndex();
-            if (queueIndex === -1) {
-                return;
-            }
-            const runId = this.queue.splice(queueIndex, 1)[0];
-            const task = this.executeRun(runId)
-                .catch(error => console.warn(`[authority] Agent run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`))
-                .finally(() => {
-                this.tasks.delete(runId);
-                this.controllers.delete(runId);
-                this.runContexts.delete(runId);
-                this.pruneRunStore();
-                this.drainQueue();
-            });
-            this.tasks.set(runId, task);
-        }
-    }
-    nextRunnableQueueIndex() {
-        const activeByUser = new Map();
-        for (const runId of this.tasks.keys()) {
-            const userHandle = this.store.getRun(runId).run.callerUserHandle;
-            activeByUser.set(userHandle, (activeByUser.get(userHandle) ?? 0) + 1);
-        }
-        return this.queue.findIndex(runId => {
-            const userHandle = this.store.getRun(runId).run.callerUserHandle;
-            return (activeByUser.get(userHandle) ?? 0) < this.maxConcurrentRunsPerUser;
-        });
-    }
-    recordRunStart(userHandle) {
-        const now = Date.now();
-        const recent = (this.runStartsByUser.get(userHandle) ?? []).filter(timestamp => now - timestamp < RUN_START_WINDOW_MS);
-        if (recent.length >= MAX_RUN_STARTS_PER_USER_PER_MINUTE) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Agent run rate limit reached', 429, 'limit_exceeded', 'limit', {
-                userHandle,
-                startsInWindow: recent.length,
-                windowMs: RUN_START_WINDOW_MS,
-            });
-        }
-        recent.push(now);
-        this.runStartsByUser.set(userHandle, recent);
-    }
-    async executeRun(runId) {
-        const controller = new AbortController();
-        this.controllers.set(runId, controller);
-        const startedAt = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            if (detail.run.status !== 'queued') {
-                throw new Error(`Agent run is not queued: ${runId}`);
-            }
-            detail.run.status = 'running';
-            detail.run.startedAt = startedAt;
-            appendEvent(detail, 'run.started', startedAt);
-        });
-        try {
-            while (!controller.signal.aborted) {
-                const detail = this.store.getRun(runId);
-                if (TERMINAL_RUNS.has(detail.run.status)) {
-                    return;
-                }
-                if (detail.run.stepCount >= detail.run.maxSteps) {
-                    throw new Error(`Agent reached the ${detail.run.maxSteps} step limit`);
-                }
-                const descriptors = this.allowedDescriptors(detail.run);
-                const llmTools = mapLlmTools(descriptors);
-                const profile = this.store.getProfileForRequest(detail.run.profileId);
-                const completion = await this.requestCompletion(profile, {
-                    messages: detail.messages,
-                    tools: llmTools.definitions,
-                    signal: controller.signal,
-                });
-                this.assertRunActive(runId, controller.signal);
-                const messageAt = this.store.nowIso();
-                this.store.updateRun(runId, run => {
-                    run.run.stepCount += 1;
-                    run.messages.push(completion.message);
-                    appendEvent(run, 'assistant.message', messageAt, {
-                        contentChars: completion.message.content?.length ?? 0,
-                        toolCallCount: completion.message.toolCalls?.length ?? 0,
-                        finishReason: completion.finishReason,
-                        usage: completion.usage,
-                    });
-                });
-                const calls = completion.message.toolCalls ?? [];
-                if (calls.length === 0) {
-                    this.completeRun(runId, completion.message.content ?? '');
-                    return;
-                }
-                for (const call of calls) {
-                    if (controller.signal.aborted) {
-                        throw abortError(controller.signal);
-                    }
-                    const toolId = llmTools.nameToId.get(call.name);
-                    if (!toolId) {
-                        this.appendToolProtocolError(runId, call.id, `Unknown tool requested by model: ${call.name}`);
-                        continue;
-                    }
-                    const descriptor = descriptors.find(tool => tool.id === toolId);
-                    let input;
-                    try {
-                        input = parseToolArguments(call.arguments);
-                    }
-                    catch (error) {
-                        this.appendToolProtocolError(runId, call.id, errorMessage(error));
-                        continue;
-                    }
-                    await this.executeTool(runId, call.id, descriptor, input, controller.signal);
-                }
-            }
-            throw abortError(controller.signal);
-        }
-        catch (error) {
-            const current = this.store.getRun(runId).run;
-            if (TERMINAL_RUNS.has(current.status)) {
-                return;
-            }
-            if (this.stopping) {
-                this.interruptRun(runId, 'Agent host stopped while the run was active');
-            }
-            else if (controller.signal.aborted) {
-                this.cancelRun(runId);
-            }
-            else {
-                this.failRun(runId, errorMessage(error));
-            }
-        }
-    }
-    async executeTool(runId, callId, descriptor, input, signal) {
-        const current = this.store.getRun(runId);
-        if (current.invocations.some(invocation => invocation.callId === callId)) {
-            this.appendToolProtocolError(runId, callId, `Duplicate tool call id: ${callId}`);
-            return;
-        }
-        if (current.run.mode === 'plan' && !isPlanSafeTool(descriptor)) {
-            this.appendToolProtocolError(runId, callId, `Tool is unavailable in plan mode: ${descriptor.id}`);
-            return;
-        }
-        const timestamp = this.store.nowIso();
-        const invocation = {
-            callId,
-            runId,
-            toolId: descriptor.id,
-            execution: descriptor.execution,
-            arguments: structuredClone(input),
-            status: 'pending',
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            deadlineAt: new Date(Date.parse(timestamp) + 10 * 60_000).toISOString(),
-        };
-        this.store.updateRun(runId, detail => {
-            detail.invocations.push(invocation);
-            appendEvent(detail, 'tool.requested', timestamp, { callId, toolId: descriptor.id, arguments: input });
-        });
-        const requiresApproval = descriptor.approvalPolicy === 'always'
-            || (current.run.mode === 'ask' && descriptor.approvalPolicy === 'on-mutation');
-        if (requiresApproval) {
-            const decision = await this.waitForApproval(runId, invocation, descriptor, input);
-            if (decision === 'cancelled') {
-                throw abortError(signal);
-            }
-            if (decision === 'denied') {
-                this.failTool(runId, callId, 'Tool execution was denied by the user', 'cancelled');
-                return;
-            }
-            if (decision === 'expired') {
-                this.failTool(runId, callId, 'Tool approval expired before the user responded', 'timed_out');
-                return;
-            }
-        }
-        this.assertRunActive(runId, signal);
-        if (descriptor.execution === 'browser') {
-            try {
-                await this.waitForBrowserTool(runId, invocation, descriptor);
-                this.assertRunActive(runId, signal);
-            }
-            catch (error) {
-                if (signal.aborted || TERMINAL_RUNS.has(this.store.getRun(runId).run.status)) {
-                    throw error;
-                }
-                const status = findInvocation(this.store.getRun(runId), callId).status;
-                if (status === 'pending' || status === 'claimed') {
-                    this.failTool(runId, callId, errorMessage(error), 'failed');
-                }
-            }
-            return;
-        }
-        const startedAt = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            const stored = findInvocation(detail, callId);
-            stored.status = 'claimed';
-            stored.updatedAt = startedAt;
-            appendEvent(detail, 'tool.started', startedAt, { callId, toolId: descriptor.id });
-        });
-        try {
-            const detail = this.store.getRun(runId);
-            const workspace = this.history.getWorkspace(detail.run.workspaceId);
-            let result;
-            if (descriptor.mutatesWorkspace) {
-                if (descriptor.execution !== 'host') {
-                    throw new Error(`Only host tools may declare workspace mutations: ${descriptor.id}`);
-                }
-                const paths = this.hostTools.checkpointPaths(descriptor.id, input);
-                const mutation = await this.history.runMutation(workspace.id, {
-                    beforeMessage: `Before ${descriptor.title}`,
-                    afterMessage: `After ${descriptor.title}`,
-                    failureMessage: `Partial changes from failed ${descriptor.title}`,
-                    paths,
-                    runId,
-                    toolCallId: callId,
-                    metadata: { agentToolId: descriptor.id },
-                }, { kind: 'agent', id: runId }, () => this.hostTools.execute(descriptor.id, input, {
-                    workspace,
-                    runId,
-                    signal,
-                }));
-                result = mutation.value;
-                const checkpointAt = this.store.nowIso();
-                this.store.updateRun(runId, run => {
-                    run.run.headCommitId = mutation.after.commit.id;
-                    appendEvent(run, 'workspace.checkpoint', checkpointAt, {
-                        callId,
-                        beforeCommitId: mutation.before.commit.id,
-                        afterCommitId: mutation.after.commit.id,
-                        changedPaths: mutation.after.changedPaths,
-                        paths,
-                    });
-                });
-            }
-            else if (descriptor.execution === 'host') {
-                result = await this.hostTools.execute(descriptor.id, input, { workspace, runId, signal });
-            }
-            else if (descriptor.execution === 'module' && descriptor.source.kind === 'module') {
-                const context = this.runContexts.get(runId);
-                if (!context || !this.moduleHost) {
-                    throw new Error(`Agent module execution context is unavailable: ${descriptor.id}`);
-                }
-                result = await this.moduleHost.execute(context.user, context.session, descriptor.source.moduleId, descriptor.source.transactionName, input, signal);
-            }
-            else {
-                throw new Error(`Unsupported Agent tool execution: ${descriptor.id}`);
-            }
-            this.assertRunActive(runId, signal);
-            this.completeTool(runId, callId, result);
-        }
-        catch (error) {
-            const failedHead = this.history.getWorkspace(current.run.workspaceId).headCommitId;
-            if (failedHead && failedHead !== this.store.getRun(runId).run.headCommitId) {
-                const checkpointAt = this.store.nowIso();
-                this.store.updateRun(runId, run => {
-                    run.run.headCommitId = failedHead;
-                    appendEvent(run, 'workspace.checkpoint', checkpointAt, {
-                        callId,
-                        afterCommitId: failedHead,
-                        failed: true,
-                    });
-                });
-            }
-            if (signal.aborted || TERMINAL_RUNS.has(this.store.getRun(runId).run.status)) {
-                throw error;
-            }
-            if (descriptor.execution === 'module' && isModuleTimeout(error)) {
-                this.interruptUnknownToolOutcome(runId, callId, 'Module transaction timed out after execution started; its side effects are unknown');
-                throw error;
-            }
-            this.failTool(runId, callId, errorMessage(error), 'failed');
-        }
-    }
-    async waitForApproval(runId, invocation, descriptor, input) {
-        const approvalId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
-        const timestamp = this.store.nowIso();
-        const approval = {
-            id: approvalId,
-            runId,
-            callId: invocation.callId,
-            toolId: descriptor.id,
-            title: descriptor.title,
-            summary: this.approvalSummary(descriptor, input),
-            arguments: structuredClone(input),
-            riskLevel: descriptor.riskLevel,
-            status: 'pending',
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            expiresAt: new Date(Date.parse(timestamp) + this.approvalTimeoutMs).toISOString(),
-        };
-        const key = `${runId}:${approvalId}`;
-        let resolveDecision;
-        const decision = new Promise(resolve => {
-            resolveDecision = resolve;
-            this.approvalWaiters.set(key, resolve);
-        });
-        this.store.updateRun(runId, detail => {
-            findInvocation(detail, invocation.callId).status = 'waiting_approval';
-            findInvocation(detail, invocation.callId).updatedAt = timestamp;
-            detail.approvals.push(approval);
-            detail.run.status = 'waiting_approval';
-            detail.run.pendingApprovalId = approvalId;
-            appendEvent(detail, 'tool.waiting_approval', timestamp, {
-                approvalId,
-                callId: invocation.callId,
-                toolId: descriptor.id,
-            });
-        });
-        const timer = setTimeout(() => {
-            const expiredAt = this.store.nowIso();
-            try {
-                this.store.updateRun(runId, detail => {
-                    const storedApproval = detail.approvals.find(item => item.id === approvalId);
-                    if (!storedApproval || storedApproval.status !== 'pending') {
-                        return;
-                    }
-                    storedApproval.status = 'expired';
-                    storedApproval.updatedAt = expiredAt;
-                    storedApproval.resolvedAt = expiredAt;
-                    const storedInvocation = findInvocation(detail, invocation.callId);
-                    storedInvocation.status = 'timed_out';
-                    storedInvocation.updatedAt = expiredAt;
-                    detail.run.status = 'running';
-                    delete detail.run.pendingApprovalId;
-                    appendEvent(detail, 'tool.approval_resolved', expiredAt, {
-                        approvalId,
-                        callId: invocation.callId,
-                        decision: 'expired',
-                    });
-                });
-                resolveDecision('expired');
-            }
-            catch (error) {
-                console.warn(`[authority] Unable to expire Agent approval ${approvalId}: ${errorMessage(error)}`);
-                resolveDecision('cancelled');
-            }
-        }, this.approvalTimeoutMs);
-        timer.unref();
-        try {
-            return await decision;
-        }
-        finally {
-            clearTimeout(timer);
-            this.approvalWaiters.delete(key);
-        }
-    }
-    completeTool(runId, callId, result) {
-        const timestamp = this.store.nowIso();
-        const bounded = boundedToolValue(result);
-        this.store.updateRun(runId, detail => {
-            const invocation = findInvocation(detail, callId);
-            invocation.status = 'completed';
-            invocation.updatedAt = timestamp;
-            invocation.result = structuredClone(bounded);
-            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: true, result: bounded }) });
-            appendEvent(detail, 'tool.completed', timestamp, { callId, toolId: invocation.toolId, result: bounded });
-        });
-    }
-    async waitForBrowserTool(runId, invocation, descriptor) {
-        if (descriptor.source.kind !== 'browser') {
-            throw new Error(`Browser tool source is invalid: ${descriptor.id}`);
-        }
-        const browserInstanceId = descriptor.source.browserInstanceId;
-        const registration = this.activeBrowserRegistration(descriptor.source.userHandle, descriptor.source.extensionId, browserInstanceId);
-        if (registration.registrationId !== descriptor.source.registrationId
-            || !registration.tools.some(tool => tool.id === descriptor.id)) {
-            throw new Error(`Browser tool registration changed before execution: ${descriptor.id}`);
-        }
-        const key = browserWaiterKey(runId, invocation.callId);
-        let resolveDecision;
-        const decision = new Promise(resolve => { resolveDecision = resolve; });
-        const timestamp = this.store.nowIso();
-        const deadlineAt = new Date(Date.parse(timestamp) + this.browserToolTimeoutMs).toISOString();
-        this.store.updateRun(runId, detail => {
-            const stored = findInvocation(detail, invocation.callId);
-            stored.status = 'pending';
-            stored.browserInstanceId = browserInstanceId;
-            stored.deadlineAt = deadlineAt;
-            stored.updatedAt = timestamp;
-            detail.run.status = 'waiting_browser_tool';
-            appendEvent(detail, 'tool.waiting_browser', timestamp, {
-                callId: invocation.callId,
-                toolId: descriptor.id,
-                browserInstanceId: stored.browserInstanceId,
-                deadlineAt,
-            });
-        });
-        this.browserWaiters.set(key, { runId, callId: invocation.callId, descriptor, resolve: resolveDecision });
-        const timer = setTimeout(() => {
-            const expiredAt = this.store.nowIso();
-            try {
-                this.store.updateRun(runId, detail => {
-                    const stored = findInvocation(detail, invocation.callId);
-                    if (stored.status !== 'pending' && stored.status !== 'claimed') {
-                        return;
-                    }
-                    const claimed = stored.status === 'claimed';
-                    const message = claimed
-                        ? 'Browser tool timed out after it was claimed; its side effects are unknown'
-                        : 'Browser tool timed out before it was claimed';
-                    if (claimed) {
-                        stored.status = 'outcome_unknown';
-                        stored.updatedAt = expiredAt;
-                        stored.error = message;
-                        detail.run.status = 'interrupted';
-                        detail.run.updatedAt = expiredAt;
-                        detail.run.finishedAt = expiredAt;
-                        detail.run.error = message;
-                        detail.messages.push({ role: 'tool', toolCallId: invocation.callId, content: JSON.stringify({ ok: false, error: message }) });
-                        appendEvent(detail, 'tool.failed', expiredAt, { callId: invocation.callId, toolId: descriptor.id, error: message, outcomeUnknown: true });
-                        appendEvent(detail, 'run.interrupted', expiredAt, { reason: message, callId: invocation.callId });
-                    }
-                    else {
-                        stored.status = 'timed_out';
-                        stored.updatedAt = expiredAt;
-                        stored.error = message;
-                        detail.run.status = 'running';
-                        detail.messages.push({ role: 'tool', toolCallId: invocation.callId, content: JSON.stringify({ ok: false, error: message }) });
-                        appendEvent(detail, 'tool.failed', expiredAt, { callId: invocation.callId, toolId: descriptor.id, error: message });
-                    }
-                });
-                resolveDecision('timed_out');
-            }
-            catch (error) {
-                console.warn(`[authority] Unable to expire browser tool ${invocation.callId}: ${errorMessage(error)}`);
-                resolveDecision('cancelled');
-            }
-        }, this.browserToolTimeoutMs);
-        timer.unref();
-        try {
-            const outcome = await decision;
-            if (outcome === 'cancelled' && TERMINAL_RUNS.has(this.store.getRun(runId).run.status)) {
-                throw new Error('Agent run ended before the browser tool completed');
-            }
-        }
-        finally {
-            clearTimeout(timer);
-            this.browserWaiters.delete(key);
-        }
-    }
-    failTool(runId, callId, message, status) {
-        const timestamp = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            const invocation = findInvocation(detail, callId);
-            invocation.status = status;
-            invocation.updatedAt = timestamp;
-            invocation.error = message;
-            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
-            appendEvent(detail, 'tool.failed', timestamp, { callId, toolId: invocation.toolId, error: message });
-        });
-    }
-    interruptUnknownToolOutcome(runId, callId, message) {
-        const timestamp = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            const invocation = findInvocation(detail, callId);
-            invocation.status = 'outcome_unknown';
-            invocation.updatedAt = timestamp;
-            invocation.error = message;
-            detail.run.status = 'interrupted';
-            detail.run.updatedAt = timestamp;
-            detail.run.finishedAt = timestamp;
-            detail.run.error = message;
-            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
-            appendEvent(detail, 'tool.failed', timestamp, { callId, toolId: invocation.toolId, error: message, outcomeUnknown: true });
-            appendEvent(detail, 'run.interrupted', timestamp, { reason: message, callId });
-        });
-    }
-    appendToolProtocolError(runId, callId, message) {
-        const timestamp = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            detail.messages.push({ role: 'tool', toolCallId: callId, content: JSON.stringify({ ok: false, error: message }) });
-            appendEvent(detail, 'tool.failed', timestamp, { callId, error: message });
-        });
-    }
-    allowedDescriptors(run) {
-        const allowed = new Set(run.allowedTools);
-        return this.listTools(run.callerExtensionId, run.callerUserHandle).filter(tool => allowed.has(tool.id) && (run.mode !== 'plan' || isPlanSafeTool(tool)));
-    }
-    approvalSummary(descriptor, input) {
-        if (descriptor.execution === 'host') {
-            return this.hostTools.approvalSummary(descriptor.id, input);
-        }
-        const preview = JSON.stringify(input);
-        return `${descriptor.title}; effects are outside workspace rollback: ${preview.slice(0, 500)}`;
-    }
-    browserTools(userHandle, extensionId) {
-        this.pruneBrowserRegistrations();
-        return [...this.browserRegistrations.values()]
-            .filter(registration => registration.userHandle === userHandle && registration.extensionId === extensionId)
-            .flatMap(registration => registration.tools);
-    }
-    activeBrowserRegistration(userHandle, extensionId, browserInstanceId) {
-        this.pruneBrowserRegistrations();
-        const registration = this.browserRegistrations.get(browserRegistrationKey(userHandle, extensionId, browserInstanceId));
-        if (!registration) {
-            throw new Error(`Browser tool registration is unavailable: ${browserInstanceId}`);
-        }
-        return registration;
-    }
-    pruneBrowserRegistrations() {
-        const now = Date.now();
-        for (const [key, registration] of this.browserRegistrations) {
-            if (Date.parse(registration.leaseExpiresAt) <= now) {
-                this.browserRegistrations.delete(key);
-            }
-        }
-    }
-    assertRunActive(runId, signal) {
-        if (signal.aborted) {
-            throw abortError(signal);
-        }
-        const status = this.store.getRun(runId).run.status;
-        if (status !== 'running') {
-            throw new Error(`Agent run is no longer active: ${status}`);
-        }
-    }
-    completeRun(runId, finalText) {
-        const timestamp = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            detail.run.status = 'completed';
-            detail.run.finalText = finalText;
-            detail.run.finishedAt = timestamp;
-            delete detail.run.error;
-            appendEvent(detail, 'run.completed', timestamp, { finalText });
-        });
-    }
-    failRun(runId, message) {
-        const timestamp = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            detail.run.status = 'failed';
-            detail.run.error = message;
-            detail.run.finishedAt = timestamp;
-            delete detail.run.pendingApprovalId;
-            cancelPendingRecords(detail, timestamp, message);
-            appendEvent(detail, 'run.failed', timestamp, { error: message });
-        });
-    }
-    interruptRun(runId, message) {
-        const current = this.store.getRun(runId);
-        if (TERMINAL_RUNS.has(current.run.status)) {
-            return;
-        }
-        const timestamp = this.store.nowIso();
-        this.store.updateRun(runId, detail => {
-            detail.run.status = 'interrupted';
-            detail.run.error = message;
-            detail.run.finishedAt = timestamp;
-            delete detail.run.pendingApprovalId;
-            cancelPendingRecords(detail, timestamp, message);
-            appendEvent(detail, 'run.interrupted', timestamp, { reason: message });
-        });
-    }
-    executingRunIds() {
-        return new Set([...this.tasks.keys(), ...this.controllers.keys()]);
-    }
-    pruneRunStore() {
-        try {
-            this.store.pruneTerminalRuns(undefined, this.executingRunIds());
-        }
-        catch (error) {
-            console.warn(`[authority] Unable to prune terminal Agent runs: ${errorMessage(error)}`);
-        }
-    }
-}
-function normalizeRunPage(request) {
-    if (request.status !== undefined && !RUN_STATUSES.has(request.status)) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Invalid Agent run status', 400, 'validation_error', 'validation');
-    }
-    const limit = request.page?.limit ?? DEFAULT_RUN_PAGE_LIMIT;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RUN_PAGE_LIMIT) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError(`Agent run page limit must be an integer between 1 and ${MAX_RUN_PAGE_LIMIT}`, 400, 'validation_error', 'validation');
-    }
-    const cursor = request.page?.cursor;
-    if (cursor === undefined) {
-        return { cursor: null, limit };
-    }
-    try {
-        if (typeof cursor !== 'string' || cursor.length > 512 || !/^[a-zA-Z0-9_-]+$/.test(cursor)) {
-            throw new Error('invalid cursor encoding');
-        }
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-        if (!Array.isArray(decoded)
-            || decoded.length !== 4
-            || decoded[0] !== 1
-            || typeof decoded[1] !== 'string'
-            || !Number.isFinite(Date.parse(decoded[1]))
-            || typeof decoded[2] !== 'string'
-            || !decoded[2]
-            || decoded[2].length > 128
-            || decoded[3] !== (request.status ?? null)) {
-            throw new Error('invalid cursor payload');
-        }
-        return { cursor: { createdAt: decoded[1], id: decoded[2] }, limit };
-    }
-    catch {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Invalid Agent run page cursor', 400, 'validation_error', 'validation');
-    }
-}
-function encodeRunCursor(run, status) {
-    return Buffer.from(JSON.stringify([1, run.createdAt, run.id, status ?? null]), 'utf8').toString('base64url');
-}
-function isAfterRunCursor(run, cursor) {
-    return run.createdAt < cursor.createdAt || (run.createdAt === cursor.createdAt && run.id < cursor.id);
-}
-function moduleToolDescriptors(moduleHost) {
-    if (!moduleHost) {
-        return [];
-    }
-    return moduleHost.listManifests().modules.flatMap(module => Object.entries(module.transactions).map(([name, transaction]) => ({
-        id: `module:${module.id}:${name}`,
-        title: `${module.displayName}: ${transaction.title}`,
-        description: `${transaction.description || transaction.title} This Authority module transaction may have effects outside workspace rollback.`,
-        inputSchema: moduleTransactionSchema(transaction),
-        ...(transaction.outputSchema ? { outputSchema: structuredClone(transaction.outputSchema) } : {}),
-        execution: 'module',
-        riskLevel: transaction.riskLevel,
-        approvalPolicy: transaction.riskLevel === 'high'
-            ? 'always'
-            : transaction.riskLevel === 'medium' ? 'on-mutation' : 'never',
-        mutatesWorkspace: false,
-        source: { kind: 'module', moduleId: module.id, transactionName: name },
-    })));
-}
-function isPlanSafeTool(tool) {
-    return tool.execution === 'host' && !tool.mutatesWorkspace && tool.approvalPolicy === 'never';
-}
-function moduleTransactionSchema(transaction) {
-    return {
-        type: 'object',
-        properties: {
-            input: transaction.inputSchema ?? { type: 'object' },
-            idempotencyKey: { type: 'string' },
-            options: {
-                type: 'object',
-                properties: { timeoutMs: { type: 'integer', minimum: 1, maximum: 600_000 } },
-                additionalProperties: false,
-            },
-        },
-        ...(transaction.idempotency === 'required' ? { required: ['idempotencyKey'] } : {}),
-        additionalProperties: false,
-    };
-}
-function normalizeBrowserTool(input) {
-    if (!input || typeof input !== 'object') {
-        throw new Error('Browser tool descriptor must be an object');
-    }
-    const id = requiredText(input.id, 'Browser tool id', 64);
-    if (!BROWSER_TOOL_ID_PATTERN.test(id)) {
-        throw new Error(`Browser tool id is invalid: ${id}`);
-    }
-    const title = requiredText(input.title, 'Browser tool title', 200);
-    const description = requiredText(input.description, 'Browser tool description', 2_000);
-    if (!isSchema(input.inputSchema) || (input.outputSchema !== undefined && !isSchema(input.outputSchema))) {
-        throw new Error(`Browser tool schema is invalid: ${id}`);
-    }
-    if (input.riskLevel !== 'low' && input.riskLevel !== 'medium' && input.riskLevel !== 'high') {
-        throw new Error(`Browser tool risk level is invalid: ${id}`);
-    }
-    if (input.approvalPolicy !== 'never' && input.approvalPolicy !== 'on-mutation' && input.approvalPolicy !== 'always') {
-        throw new Error(`Browser tool approval policy is invalid: ${id}`);
-    }
-    if (input.mutatesWorkspace !== false) {
-        throw new Error(`Browser tools cannot declare workspace mutations: ${id}`);
-    }
-    const riskLevel = input.riskLevel === 'high' ? 'high' : 'medium';
-    const approvalPolicy = riskLevel === 'high' || input.approvalPolicy === 'always'
-        ? 'always'
-        : 'on-mutation';
-    return {
-        id,
-        title,
-        description,
-        inputSchema: structuredClone(input.inputSchema),
-        ...(input.outputSchema ? { outputSchema: structuredClone(input.outputSchema) } : {}),
-        riskLevel,
-        approvalPolicy,
-        mutatesWorkspace: false,
-    };
-}
-function isSchema(value) {
-    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-function browserRegistrationKey(userHandle, extensionId, browserInstanceId) {
-    return `${userHandle}\0${extensionId}\0${browserInstanceId}`;
-}
-function browserWaiterKey(runId, callId) {
-    return `${runId}:${callId}`;
-}
-function shortHash(value) {
-    return hashValue(value).slice(0, 24);
-}
-function hashValue(value) {
-    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value).digest('hex');
-}
-function appendEvent(detail, type, timestamp, payload) {
-    detail.events.push({
-        sequence: (detail.events.at(-1)?.sequence ?? 0) + 1,
-        runId: detail.run.id,
-        type,
-        timestamp,
-        ...(payload === undefined ? {} : { payload }),
-    });
-}
-function findInvocation(detail, callId) {
-    const invocation = detail.invocations.find(item => item.callId === callId);
-    if (!invocation) {
-        throw new Error(`Agent tool invocation not found: ${callId}`);
-    }
-    return invocation;
-}
-function cancelPendingRecords(detail, timestamp, message) {
-    for (const approval of detail.approvals) {
-        if (approval.status === 'pending') {
-            approval.status = 'cancelled';
-            approval.updatedAt = timestamp;
-            approval.resolvedAt = timestamp;
-        }
-    }
-    for (const invocation of detail.invocations) {
-        if (invocation.status === 'pending' || invocation.status === 'waiting_approval') {
-            invocation.status = 'cancelled';
-            invocation.updatedAt = timestamp;
-            invocation.error = message;
-        }
-        else if (invocation.status === 'claimed') {
-            invocation.status = 'outcome_unknown';
-            invocation.updatedAt = timestamp;
-            invocation.error = `${message}; the claimed tool may still have produced side effects`;
-        }
-    }
-}
-function mapLlmTools(descriptors) {
-    const nameToId = new Map();
-    const definitions = descriptors.map(descriptor => {
-        const name = llmToolName(descriptor.id);
-        if (nameToId.has(name)) {
-            throw new Error(`Agent tool name collision: ${descriptor.id}`);
-        }
-        nameToId.set(name, descriptor.id);
-        return {
-            type: 'function',
-            function: {
-                name,
-                description: descriptor.description,
-                parameters: descriptor.inputSchema,
-            },
-        };
-    });
-    return { definitions, nameToId };
-}
-function llmToolName(toolId) {
-    const normalized = toolId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    if (normalized === toolId && normalized.length <= 64) {
-        return normalized;
-    }
-    return `${normalized.slice(0, 51)}_${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(toolId).digest('hex').slice(0, 12)}`;
-}
-function normalizeMode(value) {
-    if (value === undefined) {
-        return 'ask';
-    }
-    if (value !== 'plan' && value !== 'ask' && value !== 'auto') {
-        throw new Error('Agent mode must be plan, ask, or auto');
-    }
-    return value;
-}
-function normalizeAllowedTools(value, available) {
-    const ids = new Set(available.map(tool => tool.id));
-    if (value === undefined) {
-        return [...ids];
-    }
-    if (!Array.isArray(value) || value.length > 128 || value.some(item => typeof item !== 'string')) {
-        throw new Error('allowedTools must be an array of at most 128 tool ids');
-    }
-    const result = [...new Set(value)];
-    for (const id of result) {
-        if (!ids.has(id)) {
-            throw new Error(`Unknown Agent tool: ${id}`);
-        }
-    }
-    return result;
-}
-function assertRunCapacity(activeRuns, userHandle, extensionId) {
-    const userRuns = activeRuns.filter(run => run.callerUserHandle === userHandle);
-    const callerRuns = userRuns.filter(run => run.callerExtensionId === extensionId);
-    if (activeRuns.length >= MAX_ACTIVE_RUNS
-        || userRuns.length >= MAX_ACTIVE_RUNS_PER_USER
-        || callerRuns.length >= MAX_ACTIVE_RUNS_PER_CALLER) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError('Agent run queue limit reached', 429, 'limit_exceeded', 'limit', {
-            activeRuns: activeRuns.length,
-            userActiveRuns: userRuns.length,
-            callerActiveRuns: callerRuns.length,
-        });
-    }
-}
-function selectOne(requestedId, items, id, label) {
-    if (requestedId !== undefined) {
-        const selected = items.find(item => id(item) === requestedId);
-        if (!selected) {
-            throw new Error(`Agent ${label} not found: ${requestedId}`);
-        }
-        return selected;
-    }
-    if (items.length !== 1) {
-        throw new Error(items.length === 0
-            ? `No Agent ${label} is configured`
-            : `Agent ${label} must be selected because multiple are configured`);
-    }
-    return items[0];
-}
-function parseToolArguments(value) {
-    if (value.length > MAX_TOOL_ARGUMENT_CHARS) {
-        throw new Error('Tool arguments exceed the 128 KB limit');
-    }
-    let parsed;
-    try {
-        parsed = JSON.parse(value);
-    }
-    catch (error) {
-        throw new Error(`Tool arguments are invalid JSON: ${errorMessage(error)}`);
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('Tool arguments must be a JSON object');
-    }
-    return parsed;
-}
-function serializeContext(context) {
-    if (context === undefined) {
-        return undefined;
-    }
-    let value;
-    try {
-        value = JSON.stringify(context);
-    }
-    catch (error) {
-        throw new Error(`Agent context must be JSON serializable: ${errorMessage(error)}`);
-    }
-    if (value.length > MAX_CONTEXT_CHARS) {
-        throw new Error('Agent context exceeds the 64 KB limit');
-    }
-    return value;
-}
-function boundedToolValue(value) {
-    const normalized = value === undefined ? null : value;
-    const serialized = JSON.stringify(normalized);
-    if (serialized.length <= MAX_TOOL_RESULT_CHARS) {
-        return normalized;
-    }
-    return {
-        truncated: true,
-        originalChars: serialized.length,
-        preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS - 1_000),
-    };
-}
-function requiredText(value, label, maxLength) {
-    if (typeof value !== 'string' || !value.trim()) {
-        throw new Error(`${label} is required`);
-    }
-    const result = value.trim();
-    if (result.length > maxLength) {
-        throw new Error(`${label} exceeds ${maxLength} characters`);
-    }
-    return result;
-}
-function systemPrompt(workspaceId, mode) {
-    return [
-        'You are Authority Agent, an IDE-grade operator for a registered SillyTavern workspace.',
-        `Registered workspace: ${workspaceId}. All tool paths are relative to its private root.`,
-        `Execution mode: ${mode}.`,
-        'Inspect relevant files before changing them. Use registered tools for every action and rely on their returned results.',
-        'Keep writes narrow. Shell commands checkpoint the workspace except .git and node_modules, and always require approval because those paths and effects outside the workspace cannot be rolled back.',
-        mode === 'plan'
-            ? 'Plan mode is read-only: only Authority host inspection tools are available; browser and module tools are excluded because their external side effects cannot be verified or rolled back.'
-            : mode === 'ask'
-                ? 'Ask mode pauses before each workspace mutation so the user can approve or deny it.'
-                : 'Auto mode may execute workspace mutations without pausing; every mutation is still checkpointed for rollback.',
-        'When the goal is complete, return a concise final result and verification status.',
-    ].join('\n');
-}
-function userPrompt(goal, instructions, context) {
-    return [
-        `Goal:\n${goal}`,
-        ...(instructions ? [`Additional instructions:\n${instructions}`] : []),
-        ...(context ? [`Caller context (JSON):\n${context}`] : []),
-    ].join('\n\n');
-}
-function errorMessage(error) {
-    return error instanceof Error ? error.message : String(error);
-}
-function isModuleTimeout(error) {
-    if (!(error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_1__.AuthorityServiceError) || !error.details || typeof error.details !== 'object') {
-        return false;
-    }
-    return error.details.code === 'transaction_timeout';
-}
-function abortError(signal) {
-    return signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Agent run cancelled'), { name: 'AbortError' });
-}
-function delay(milliseconds) {
-    return new Promise(resolve => setTimeout(resolve, milliseconds));
-}
-
-
-/***/ },
-
-/***/ "./src/services/agent-store-service.ts"
-/*!*********************************************!*\
-  !*** ./src/services/agent-store-service.ts ***!
-  \*********************************************/
-(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
-
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   AgentStoreService: () => (/* binding */ AgentStoreService)
+/* harmony export */   AgentProfileStoreService: () => (/* binding */ AgentProfileStoreService)
 /* harmony export */ });
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
@@ -7501,64 +6399,20 @@ __webpack_require__.r(__webpack_exports__);
 
 
 const PROFILE_FORMAT = 'authority-agent-profiles/v1';
-const RUN_FORMAT = 'authority-agent-run/v1';
 const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
-const ACTIVE_RUNS = new Set(['queued', 'running', 'waiting_approval', 'waiting_browser_tool']);
-const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
-const MAX_STORED_RUN_BYTES = 16 * 1024 * 1024;
-const MAX_RETAINED_TERMINAL_RUNS = 1_000;
-const MAX_RETAINED_TERMINAL_BYTES = 512 * 1024 * 1024;
-class AgentStoreService {
+/**
+ * Owns only the model profiles used by durable Agent Sessions.
+ *
+ * Historical run-first files may still exist beside profiles.json, but this
+ * store deliberately neither discovers nor mutates them.
+ */
+class AgentProfileStoreService {
     stateDir;
     now;
-    runSummaries = new Map();
-    runSizes = new Map();
-    runIndexLoaded = false;
     constructor(stateDir, options = {}) {
         this.stateDir = stateDir;
         this.stateDir = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(stateDir);
         this.now = options.now ?? (() => new Date().toISOString());
-    }
-    start() {
-        protectDirectory(this.stateDir);
-        protectDirectory(this.runsDir());
-        const interrupted = [];
-        for (const summary of this.listRuns()) {
-            if (!ACTIVE_RUNS.has(summary.status)) {
-                continue;
-            }
-            const run = this.readRun(summary.id);
-            const timestamp = this.now();
-            run.run.status = 'interrupted';
-            run.run.updatedAt = timestamp;
-            run.run.finishedAt = timestamp;
-            run.run.error = 'Agent host restarted before the run reached a terminal state';
-            delete run.run.pendingApprovalId;
-            for (const approval of run.approvals) {
-                if (approval.status === 'pending') {
-                    approval.status = 'cancelled';
-                    approval.updatedAt = timestamp;
-                    approval.resolvedAt = timestamp;
-                }
-            }
-            for (const invocation of run.invocations) {
-                if (invocation.status === 'pending' || invocation.status === 'waiting_approval') {
-                    invocation.status = 'cancelled';
-                    invocation.updatedAt = timestamp;
-                    invocation.error = 'Agent host restarted';
-                }
-                else if (invocation.status === 'claimed') {
-                    invocation.status = 'outcome_unknown';
-                    invocation.updatedAt = timestamp;
-                    invocation.error = 'Agent host restarted while the tool was executing; its side effects are unknown';
-                }
-            }
-            run.events.push(this.event(run, 'run.interrupted', timestamp, { reason: run.run.error }));
-            this.writeRun(run);
-            interrupted.push(structuredClone(run.run));
-        }
-        this.pruneAutomatically();
-        return interrupted;
     }
     upsertProfile(input) {
         const profiles = this.readProfiles();
@@ -7633,75 +6487,6 @@ class AgentStoreService {
         protectFile(this.profilesPath());
         return true;
     }
-    createRun(detail) {
-        assertSafeId(detail.run.id, 'Agent run id');
-        const filePath = this.runPath(detail.run.id);
-        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
-            throw new Error(`Agent run already exists: ${detail.run.id}`);
-        }
-        this.writeRun({ format: RUN_FORMAT, ...structuredClone(detail) });
-        return structuredClone(detail);
-    }
-    getRun(runId) {
-        const { format: _format, ...detail } = this.readRun(runId);
-        return structuredClone(detail);
-    }
-    listRuns() {
-        this.loadRunIndex();
-        return [...this.runSummaries.values()]
-            .map(run => structuredClone(run))
-            .sort(compareRunsNewestFirst);
-    }
-    updateRun(runId, update) {
-        const stored = this.readRun(runId);
-        update(stored);
-        stored.run.updatedAt = this.now();
-        this.writeRun(stored);
-        const { format: _format, ...detail } = stored;
-        return structuredClone(detail);
-    }
-    pruneTerminalRuns(retainLatest = MAX_RETAINED_TERMINAL_RUNS, protectedRunIds = []) {
-        if (!Number.isSafeInteger(retainLatest) || retainLatest < 0 || retainLatest > MAX_RETAINED_TERMINAL_RUNS) {
-            throw new Error(`Agent retainLatest must be an integer between 0 and ${MAX_RETAINED_TERMINAL_RUNS}`);
-        }
-        this.loadRunIndex();
-        const protectedIds = new Set(protectedRunIds);
-        const activeRuns = [...this.runSummaries.values()].filter(run => ACTIVE_RUNS.has(run.status)).length;
-        const terminalRuns = [...this.runSummaries.values()]
-            .filter(run => TERMINAL_RUNS.has(run.status))
-            .sort((left, right) => compareNewestFirst(left.updatedAt, left.id, right.updatedAt, right.id));
-        let deletedRuns = 0;
-        let reclaimedBytes = 0;
-        let retainedBytes = 0;
-        let retainedTerminalRuns = 0;
-        for (const run of terminalRuns) {
-            const size = this.runSizes.get(run.id) ?? node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(this.runPath(run.id)).size;
-            if (protectedIds.has(run.id)
-                || (retainedTerminalRuns < retainLatest && retainedBytes + size <= MAX_RETAINED_TERMINAL_BYTES)) {
-                retainedTerminalRuns += 1;
-                retainedBytes += size;
-                continue;
-            }
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().unlinkSync(this.runPath(run.id));
-            this.runSummaries.delete(run.id);
-            this.runSizes.delete(run.id);
-            deletedRuns += 1;
-            reclaimedBytes += size;
-        }
-        return { deletedRuns, reclaimedBytes, retainedTerminalRuns, activeRuns };
-    }
-    nowIso() {
-        return this.now();
-    }
-    event(run, type, timestamp, payload) {
-        return {
-            sequence: (run.events.at(-1)?.sequence ?? 0) + 1,
-            runId: run.run.id,
-            type,
-            timestamp,
-            ...(payload === undefined ? {} : { payload }),
-        };
-    }
     readProfiles() {
         if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(this.profilesPath())) {
             return { format: PROFILE_FORMAT, profiles: [] };
@@ -7720,78 +6505,9 @@ class AgentStoreService {
         }
         return profile;
     }
-    loadRunIndex() {
-        if (this.runIndexLoaded) {
-            return;
-        }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(this.runsDir());
-        this.runSummaries.clear();
-        this.runSizes.clear();
-        for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(this.runsDir(), { withFileTypes: true })) {
-            if (!entry.isFile() || !entry.name.endsWith('.json')) {
-                continue;
-            }
-            try {
-                const run = this.readRun(entry.name.slice(0, -5));
-                this.runSummaries.set(run.run.id, structuredClone(run.run));
-                this.runSizes.set(run.run.id, node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(this.runPath(run.run.id)).size);
-            }
-            catch (error) {
-                console.warn(`[authority] Ignoring unreadable Agent run ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
-            }
-        }
-        this.runIndexLoaded = true;
-    }
-    readRun(runId) {
-        const filePath = this.runPath(runId);
-        if (node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(filePath).size > MAX_STORED_RUN_BYTES) {
-            throw new Error(`Agent run exceeds the ${MAX_STORED_RUN_BYTES} byte limit: ${runId}`);
-        }
-        const value = readJson(filePath, `Agent run ${runId}`);
-        if (value.format !== RUN_FORMAT || value.run?.id !== runId || !Array.isArray(value.events)) {
-            throw new Error(`Invalid Agent run: ${runId}`);
-        }
-        return value;
-    }
-    writeRun(run) {
-        protectDirectory(this.runsDir());
-        const serialized = `${JSON.stringify(run, null, 2)}\n`;
-        if (Buffer.byteLength(serialized, 'utf8') > MAX_STORED_RUN_BYTES) {
-            throw new Error(`Agent run exceeds the ${MAX_STORED_RUN_BYTES} byte limit: ${run.run.id}`);
-        }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteFile)(this.runPath(run.run.id), serialized);
-        protectFile(this.runPath(run.run.id));
-        this.runSummaries.set(run.run.id, structuredClone(run.run));
-        this.runSizes.set(run.run.id, Buffer.byteLength(serialized, 'utf8'));
-    }
-    pruneAutomatically() {
-        try {
-            this.pruneTerminalRuns();
-        }
-        catch (error) {
-            console.warn(`[authority] Unable to prune terminal Agent runs: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
     profilesPath() {
         return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.stateDir, 'profiles.json');
     }
-    runsDir() {
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.stateDir, 'runs');
-    }
-    runPath(runId) {
-        assertSafeId(runId, 'Agent run id');
-        return node_path__WEBPACK_IMPORTED_MODULE_2___default().join(this.runsDir(), `${runId}.json`);
-    }
-}
-function compareRunsNewestFirst(left, right) {
-    return compareNewestFirst(left.createdAt, left.id, right.createdAt, right.id);
-}
-function compareNewestFirst(leftTime, leftId, rightTime, rightId) {
-    if (leftTime !== rightTime)
-        return leftTime > rightTime ? -1 : 1;
-    if (leftId !== rightId)
-        return leftId > rightId ? -1 : 1;
-    return 0;
 }
 function publicProfile(profile) {
     const { apiKey: _apiKey, ...value } = profile;
@@ -7874,6 +6590,4016 @@ function protectFile(filePath) {
     if (process.platform !== 'win32') {
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(filePath, 0o600);
     }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-journal-service.ts"
+/*!*******************************************************!*\
+  !*** ./src/services/agent-session-journal-service.ts ***!
+  \*******************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentSessionJournalService: () => (/* binding */ AgentSessionJournalService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-session-runtime-support.js */ "./src/services/agent-session-runtime-support.ts");
+
+
+/**
+ * Owns reusable journal protocol transitions. It never opens a writer and
+ * never schedules work: callers must enter the per-session actor first.
+ */
+class AgentSessionJournalService {
+    host;
+    constructor(host) {
+        this.host = host;
+    }
+    appendToolStarted(writer, invocation) {
+        const idempotencyKey = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isObject)(invocation.arguments) && typeof invocation.arguments.idempotencyKey === 'string'
+            ? invocation.arguments.idempotencyKey
+            : undefined;
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'tool.started',
+            timestamp: this.host.now(),
+            invocationId: invocation.id,
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+        });
+    }
+    appendToolResultMessage(writer, invocation) {
+        const snapshot = writer.snapshot();
+        if (snapshot.conversation.some(entry => entry.kind === 'message'
+            && entry.role === 'tool'
+            && entry.stepId === invocation.stepId
+            && entry.toolCallId === invocation.callId))
+            return;
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, invocation.runId);
+        const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRef)(snapshot, run.ref);
+        const content = invocation.status === 'completed'
+            ? JSON.stringify({ ok: true, result: invocation.result ?? null })
+            : JSON.stringify({ ok: false, error: invocation.error ?? `Tool ${invocation.status}` });
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'conversation.message',
+            timestamp: this.host.now(),
+            ref: run.ref,
+            parentId: ref.leafEntryId,
+            role: 'tool',
+            content,
+            toolCallId: invocation.callId,
+            runId: run.id,
+            stepId: invocation.stepId,
+        });
+    }
+    ensureToolResultMessage(writer, invocationId) {
+        const invocation = writer.snapshot().invocations.find(item => item.id === invocationId);
+        if (invocation && _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(invocation.status))
+            this.appendToolResultMessage(writer, invocation);
+    }
+    recordUnknownToolOutcome(writer, invocation, message) {
+        const current = writer.snapshot().invocations.find(item => item.id === invocation.id);
+        if (!current || _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(current.status))
+            return;
+        if (current.status !== 'claimed') {
+            throw new Error(`Cannot record an unknown outcome before tool execution starts: ${current.id}`);
+        }
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'tool.finished',
+            timestamp: this.host.now(),
+            invocationId: current.id,
+            outcome: 'outcome_unknown',
+            error: message,
+        });
+        this.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === current.id));
+        const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(writer.snapshot(), current.runId);
+        if (step) {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'step.finished',
+                timestamp: this.host.now(),
+                runId: current.runId,
+                stepId: step.id,
+                outcome: 'interrupted',
+                error: message,
+            });
+        }
+    }
+    appendToolProtocolError(writer, runId, stepId, callId, message) {
+        const snapshot = writer.snapshot();
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRef)(snapshot, run.ref);
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'conversation.message',
+            timestamp: this.host.now(),
+            ref: run.ref,
+            parentId: ref.leafEntryId,
+            role: 'tool',
+            content: JSON.stringify({ ok: false, error: message }),
+            toolCallId: callId,
+            runId,
+            stepId,
+        });
+    }
+    resolveApproval(writer, approval, decision, resolvedByUserHandle) {
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'approval.resolved',
+            timestamp: this.host.now(),
+            approvalId: approval.id,
+            decision,
+            ...(resolvedByUserHandle ? { resolvedByUserHandle } : {}),
+        });
+        if (decision === 'approved')
+            return;
+        const invocation = writer.snapshot().invocations.find(item => item.id === approval.invocationId);
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'tool.finished',
+            timestamp: this.host.now(),
+            invocationId: invocation.id,
+            outcome: decision === 'expired' ? 'timed_out' : 'cancelled',
+            error: decision === 'denied'
+                ? 'Tool execution was denied by the user'
+                : decision === 'expired' ? 'Tool approval expired before the user responded' : 'Tool approval was cancelled',
+        });
+        this.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === invocation.id));
+    }
+    finalizeCancellation(writer, runId, message) {
+        let snapshot = writer.snapshot();
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_RUNS.has(run.status))
+            return;
+        const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(snapshot, runId);
+        if (step) {
+            const generation = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeGeneration)(snapshot, step.id);
+            if (generation) {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'generation.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: step.id,
+                    generationId: generation.id,
+                    outcome: 'cancelled',
+                    providerRequestState: 'sent_or_unknown',
+                    error: message,
+                });
+            }
+            snapshot = writer.snapshot();
+            const invocation = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeInvocation)(snapshot, step.id);
+            if (invocation) {
+                const approval = snapshot.approvals.find(item => item.invocationId === invocation.id && item.status === 'pending');
+                if (approval)
+                    this.resolveApproval(writer, approval, 'cancelled');
+                const current = writer.snapshot().invocations.find(item => item.id === invocation.id);
+                if (!_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(current.status)) {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'tool.finished',
+                        timestamp: this.host.now(),
+                        invocationId: current.id,
+                        outcome: current.status === 'claimed' ? 'outcome_unknown' : 'cancelled',
+                        error: current.status === 'claimed'
+                            ? `${message}; the tool may still have produced side effects`
+                            : message,
+                    });
+                    this.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === current.id));
+                }
+            }
+            snapshot = writer.snapshot();
+            if ((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(snapshot, runId)) {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'step.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: step.id,
+                    outcome: 'cancelled',
+                    error: message,
+                });
+            }
+        }
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'run.finished',
+            timestamp: this.host.now(),
+            runId,
+            outcome: 'cancelled',
+            error: message,
+        });
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-model.ts"
+/*!*********************************************!*\
+  !*** ./src/services/agent-session-model.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AGENT_SESSION_MAIN_REF: () => (/* binding */ AGENT_SESSION_MAIN_REF),
+/* harmony export */   applyAgentSessionRecord: () => (/* binding */ applyAgentSessionRecord),
+/* harmony export */   createAgentSessionProjection: () => (/* binding */ createAgentSessionProjection),
+/* harmony export */   snapshotAgentSession: () => (/* binding */ snapshotAgentSession)
+/* harmony export */ });
+const AGENT_SESSION_MAIN_REF = 'main';
+function createAgentSessionProjection() {
+    return {
+        session: null,
+        lastSequence: 0,
+        lastHash: '',
+        refs: new Map(),
+        conversation: new Map(),
+        runs: new Map(),
+        steps: new Map(),
+        generations: new Map(),
+        invocations: new Map(),
+        approvals: new Map(),
+        pendingMessages: new Map(),
+        entryBodies: new Map(),
+    };
+}
+function applyAgentSessionRecord(projection, record, canonicalEntry) {
+    if (projection.entryBodies.has(record.entry.id)) {
+        throw new Error(`Duplicate Agent session entry id: ${record.entry.id}`);
+    }
+    if (record.sequence !== projection.lastSequence + 1) {
+        throw new Error(`Agent session sequence is not contiguous at ${record.sequence}`);
+    }
+    if (record.previousHash !== (projection.lastSequence === 0 ? null : projection.lastHash)) {
+        throw new Error(`Agent session hash chain is broken at sequence ${record.sequence}`);
+    }
+    if (projection.session && projection.session.id !== record.sessionId) {
+        throw new Error(`Agent session record belongs to a different session: ${record.sessionId}`);
+    }
+    applyEntry(projection, record);
+    projection.lastSequence = record.sequence;
+    projection.lastHash = record.hash;
+    projection.entryBodies.set(record.entry.id, canonicalEntry);
+    if (projection.session) {
+        projection.session.updatedAt = record.entry.timestamp;
+    }
+}
+function snapshotAgentSession(projection) {
+    if (!projection.session) {
+        throw new Error('Agent session has no creation entry');
+    }
+    const refs = sortByCreated([...projection.refs.values()]);
+    const activePaths = Object.fromEntries(refs.map(ref => [ref.name, activePath(projection, ref.leafEntryId)]));
+    return {
+        session: structuredClone(projection.session),
+        lastSequence: projection.lastSequence,
+        lastHash: projection.lastHash,
+        refs: structuredClone(refs),
+        conversation: structuredClone(sortBySequence([...projection.conversation.values()])),
+        activePaths,
+        runs: structuredClone(sortByCreated([...projection.runs.values()])),
+        steps: structuredClone(sortByCreated([...projection.steps.values()])),
+        generations: structuredClone(sortByCreated([...projection.generations.values()])),
+        invocations: structuredClone(sortByCreated([...projection.invocations.values()])),
+        approvals: structuredClone(sortByCreated([...projection.approvals.values()])),
+        pendingMessages: structuredClone(sortByCreated([...projection.pendingMessages.values()])),
+    };
+}
+function applyEntry(projection, record) {
+    const entry = record.entry;
+    if (entry.type !== 'session.created' && !projection.session) {
+        throw new Error('Agent session journal must begin with session.created');
+    }
+    switch (entry.type) {
+        case 'session.created': {
+            if (projection.session || record.sequence !== 1 || record.sessionId !== entry.id) {
+                throw new Error('Agent session has an invalid creation entry');
+            }
+            projection.session = {
+                id: record.sessionId,
+                callerUserHandle: entry.callerUserHandle,
+                callerExtensionId: entry.callerExtensionId,
+                workspaceId: entry.workspaceId,
+                title: entry.title,
+                profileId: entry.profileId,
+                mode: entry.mode,
+                allowedTools: [...entry.allowedTools],
+                maxSteps: entry.maxSteps,
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+            };
+            projection.refs.set(AGENT_SESSION_MAIN_REF, {
+                name: AGENT_SESSION_MAIN_REF,
+                leafEntryId: null,
+                activeRunId: null,
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+            });
+            return;
+        }
+        case 'session.updated': {
+            const session = requireSession(projection);
+            if (entry.title !== undefined)
+                session.title = entry.title;
+            if (entry.profileId !== undefined)
+                session.profileId = entry.profileId;
+            if (entry.mode !== undefined)
+                session.mode = entry.mode;
+            if (entry.allowedTools !== undefined)
+                session.allowedTools = [...entry.allowedTools];
+            if (entry.maxSteps !== undefined)
+                session.maxSteps = entry.maxSteps;
+            if (entry.archived === true)
+                session.archivedAt = entry.timestamp;
+            if (entry.archived === false)
+                delete session.archivedAt;
+            return;
+        }
+        case 'ref.created': {
+            if (projection.refs.has(entry.ref))
+                throw new Error(`Agent session ref already exists: ${entry.ref}`);
+            requireConversationEntry(projection, entry.fromEntryId, true);
+            projection.refs.set(entry.ref, {
+                name: entry.ref,
+                leafEntryId: entry.fromEntryId,
+                activeRunId: null,
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+            });
+            return;
+        }
+        case 'ref.moved': {
+            const ref = requireRef(projection, entry.ref);
+            if (ref.activeRunId)
+                throw new Error(`Cannot move Agent session ref with an active run: ${entry.ref}`);
+            requireConversationEntry(projection, entry.targetEntryId, true);
+            ref.leafEntryId = entry.targetEntryId;
+            ref.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'conversation.message': {
+            const ref = requireAppendParent(projection, entry.ref, entry.parentId);
+            const run = entry.runId === undefined ? undefined : requireRun(projection, entry.runId);
+            if (run && run.ref !== entry.ref)
+                throw new Error(`Agent conversation run belongs to another ref: ${entry.runId}`);
+            if (entry.stepId !== undefined) {
+                if (!run)
+                    throw new Error(`Agent conversation step requires a run: ${entry.stepId}`);
+                const step = requireStep(projection, entry.stepId);
+                if (step.runId !== run.id)
+                    throw new Error(`Agent conversation step belongs to another run: ${entry.stepId}`);
+                if (entry.role === 'assistant' && activeGeneration(projection, entry.stepId)) {
+                    throw new Error(`Cannot append an Agent assistant message while generation is active: ${entry.stepId}`);
+                }
+            }
+            if (entry.consumedQueueId !== undefined)
+                consumeQueuedMessage(projection, entry);
+            projection.conversation.set(entry.id, {
+                id: entry.id,
+                kind: 'message',
+                sequence: record.sequence,
+                ref: entry.ref,
+                parentId: entry.parentId,
+                timestamp: entry.timestamp,
+                role: entry.role,
+                content: entry.content,
+                ...(entry.toolCallId === undefined ? {} : { toolCallId: entry.toolCallId }),
+                ...(entry.toolCalls === undefined ? {} : { toolCalls: structuredClone(entry.toolCalls) }),
+                ...(entry.runId === undefined ? {} : { runId: entry.runId }),
+                ...(entry.stepId === undefined ? {} : { stepId: entry.stepId }),
+                ...(entry.consumedQueueId === undefined ? {} : { consumedQueueId: entry.consumedQueueId }),
+            });
+            advanceRef(ref, entry.id, entry.timestamp);
+            return;
+        }
+        case 'conversation.compacted': {
+            const ref = requireAppendParent(projection, entry.ref, entry.parentId);
+            if (entry.runId !== undefined && requireRun(projection, entry.runId).ref !== entry.ref) {
+                throw new Error(`Agent compaction run belongs to another ref: ${entry.runId}`);
+            }
+            requireConversationEntry(projection, entry.firstKeptEntryId);
+            for (const retainedId of entry.retainedEntryIds)
+                requireConversationEntry(projection, retainedId);
+            projection.conversation.set(entry.id, {
+                id: entry.id,
+                kind: 'compaction',
+                sequence: record.sequence,
+                ref: entry.ref,
+                parentId: entry.parentId,
+                timestamp: entry.timestamp,
+                summary: entry.summary,
+                firstKeptEntryId: entry.firstKeptEntryId,
+                retainedEntryIds: [...entry.retainedEntryIds],
+                ...(entry.tokensBefore === undefined ? {} : { tokensBefore: entry.tokensBefore }),
+                ...(entry.runId === undefined ? {} : { runId: entry.runId }),
+            });
+            advanceRef(ref, entry.id, entry.timestamp);
+            return;
+        }
+        case 'conversation.branch_summary': {
+            const ref = requireAppendParent(projection, entry.ref, entry.parentId);
+            if (entry.runId !== undefined && requireRun(projection, entry.runId).ref !== entry.ref) {
+                throw new Error(`Agent branch summary run belongs to another ref: ${entry.runId}`);
+            }
+            requireConversationEntry(projection, entry.fromEntryId);
+            projection.conversation.set(entry.id, {
+                id: entry.id,
+                kind: 'branch_summary',
+                sequence: record.sequence,
+                ref: entry.ref,
+                parentId: entry.parentId,
+                timestamp: entry.timestamp,
+                fromEntryId: entry.fromEntryId,
+                summary: entry.summary,
+                ...(entry.runId === undefined ? {} : { runId: entry.runId }),
+            });
+            advanceRef(ref, entry.id, entry.timestamp);
+            return;
+        }
+        case 'queue.added': {
+            if (projection.pendingMessages.has(entry.queueId))
+                throw new Error(`Queued Agent message already exists: ${entry.queueId}`);
+            const ref = requireRef(projection, entry.ref);
+            if (entry.kind !== 'next_run') {
+                if (!entry.runId || ref.activeRunId !== entry.runId) {
+                    throw new Error(`${entry.kind} requires the active Agent run`);
+                }
+            }
+            else if (entry.runId !== undefined) {
+                const run = requireRun(projection, entry.runId);
+                if (run.ref !== entry.ref)
+                    throw new Error(`Queued Agent message run belongs to another ref: ${entry.queueId}`);
+            }
+            projection.pendingMessages.set(entry.queueId, {
+                id: entry.queueId,
+                ref: entry.ref,
+                kind: entry.kind,
+                content: entry.content,
+                ...(entry.runId === undefined ? {} : { runId: entry.runId }),
+                createdAt: entry.timestamp,
+            });
+            return;
+        }
+        case 'queue.removed': {
+            if (!projection.pendingMessages.delete(entry.queueId))
+                throw new Error(`Queued Agent message not found: ${entry.queueId}`);
+            return;
+        }
+        case 'run.accepted': {
+            if (projection.runs.has(entry.runId))
+                throw new Error(`Agent session run already exists: ${entry.runId}`);
+            const ref = requireRef(projection, entry.ref);
+            if (ref.activeRunId)
+                throw new Error(`Agent session ref already has an active run: ${entry.ref}`);
+            const trigger = requireConversationEntry(projection, entry.triggerMessageId);
+            if (trigger.kind !== 'message' || trigger.role !== 'user' || ref.leafEntryId !== trigger.id) {
+                throw new Error('Agent run trigger must be the active user message');
+            }
+            projection.runs.set(entry.runId, {
+                id: entry.runId,
+                ref: entry.ref,
+                triggerMessageId: entry.triggerMessageId,
+                status: 'queued',
+                profileId: entry.profileId,
+                mode: entry.mode,
+                allowedTools: [...entry.allowedTools],
+                maxSteps: entry.maxSteps,
+                stepCount: 0,
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+                resumeCount: 0,
+            });
+            ref.activeRunId = entry.runId;
+            ref.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'run.started': {
+            const run = requireRunStatus(projection, entry.runId, ['queued']);
+            run.status = 'running';
+            run.startedAt = entry.timestamp;
+            run.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'run.resumed': {
+            const run = requireRunStatus(projection, entry.runId, ['suspended']);
+            run.status = 'running';
+            run.resumeCount += 1;
+            run.updatedAt = entry.timestamp;
+            delete run.suspendedAt;
+            delete run.suspensionReason;
+            return;
+        }
+        case 'run.suspended': {
+            const run = requireRunStatus(projection, entry.runId, ['queued', 'running', 'cancelling']);
+            run.status = 'suspended';
+            run.suspendedAt = entry.timestamp;
+            run.suspensionReason = entry.reason;
+            run.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'run.cancel_requested': {
+            const run = requireRunStatus(projection, entry.runId, ['queued', 'running', 'waiting_approval', 'waiting_tool', 'suspended']);
+            run.status = 'cancelling';
+            run.cancelRequestedAt = entry.timestamp;
+            run.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'run.finished': {
+            const run = requireRunStatus(projection, entry.runId, ['queued', 'running', 'waiting_approval', 'waiting_tool', 'cancelling', 'suspended']);
+            if (activeStep(projection, entry.runId))
+                throw new Error(`Cannot finish Agent run with an active step: ${entry.runId}`);
+            run.status = entry.outcome;
+            run.finishedAt = entry.timestamp;
+            run.updatedAt = entry.timestamp;
+            if (entry.finalText !== undefined)
+                run.finalText = entry.finalText;
+            if (entry.error !== undefined)
+                run.error = entry.error;
+            const ref = requireRef(projection, run.ref);
+            if (ref.activeRunId !== run.id)
+                throw new Error(`Agent run is not active on ref ${run.ref}`);
+            ref.activeRunId = null;
+            ref.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'step.started': {
+            const run = requireRunStatus(projection, entry.runId, ['running']);
+            if (projection.steps.has(entry.stepId))
+                throw new Error(`Agent step already exists: ${entry.stepId}`);
+            if (activeStep(projection, entry.runId))
+                throw new Error(`Agent run already has an active step: ${entry.runId}`);
+            if (entry.index !== run.stepCount + 1 || entry.index > run.maxSteps)
+                throw new Error(`Invalid Agent step index: ${entry.index}`);
+            projection.steps.set(entry.stepId, {
+                id: entry.stepId,
+                runId: entry.runId,
+                index: entry.index,
+                status: 'running',
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+            });
+            return;
+        }
+        case 'step.finished': {
+            const step = requireStepStatus(projection, entry.stepId, ['running']);
+            if (step.runId !== entry.runId)
+                throw new Error(`Agent step does not belong to run: ${entry.stepId}`);
+            if (activeGeneration(projection, entry.stepId))
+                throw new Error(`Cannot finish Agent step with an active generation: ${entry.stepId}`);
+            if (activeInvocation(projection, entry.stepId))
+                throw new Error(`Cannot finish Agent step with an active tool: ${entry.stepId}`);
+            step.status = entry.outcome;
+            step.finishedAt = entry.timestamp;
+            step.updatedAt = entry.timestamp;
+            if (entry.finishReason !== undefined)
+                step.finishReason = entry.finishReason;
+            if (entry.usage !== undefined)
+                step.usage = structuredClone(entry.usage);
+            if (entry.error !== undefined)
+                step.error = entry.error;
+            const run = requireRun(projection, entry.runId);
+            run.stepCount = Math.max(run.stepCount, step.index);
+            run.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'generation.started': {
+            const step = requireStepStatus(projection, entry.stepId, ['running']);
+            if (step.runId !== entry.runId)
+                throw new Error(`Agent generation step does not belong to run: ${entry.stepId}`);
+            if (projection.generations.has(entry.generationId))
+                throw new Error(`Agent generation already exists: ${entry.generationId}`);
+            if (activeGeneration(projection, entry.stepId))
+                throw new Error(`Agent step already has an active generation: ${entry.stepId}`);
+            const attempts = [...projection.generations.values()].filter(item => item.stepId === entry.stepId).length;
+            if (entry.attempt !== attempts + 1)
+                throw new Error(`Invalid Agent generation attempt: ${entry.attempt}`);
+            projection.generations.set(entry.generationId, {
+                id: entry.generationId,
+                runId: entry.runId,
+                stepId: entry.stepId,
+                attempt: entry.attempt,
+                status: 'running',
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+                providerRequestState: 'not_sent',
+            });
+            return;
+        }
+        case 'generation.finished': {
+            const generation = requireGenerationStatus(projection, entry.generationId, ['running']);
+            if (generation.runId !== entry.runId || generation.stepId !== entry.stepId) {
+                throw new Error(`Agent generation identity mismatch: ${entry.generationId}`);
+            }
+            generation.status = entry.outcome;
+            generation.providerRequestState = entry.providerRequestState;
+            generation.finishedAt = entry.timestamp;
+            generation.updatedAt = entry.timestamp;
+            if (entry.providerRequestId !== undefined)
+                generation.providerRequestId = entry.providerRequestId;
+            if (entry.finishReason !== undefined)
+                generation.finishReason = entry.finishReason;
+            if (entry.usage !== undefined)
+                generation.usage = structuredClone(entry.usage);
+            if (entry.error !== undefined)
+                generation.error = entry.error;
+            return;
+        }
+        case 'tool.requested': {
+            const step = requireStepStatus(projection, entry.stepId, ['running']);
+            if (step.runId !== entry.runId)
+                throw new Error(`Agent tool step does not belong to run: ${entry.stepId}`);
+            if (activeGeneration(projection, entry.stepId))
+                throw new Error(`Cannot request an Agent tool while generation is active: ${entry.stepId}`);
+            if (projection.invocations.has(entry.invocationId))
+                throw new Error(`Agent tool invocation already exists: ${entry.invocationId}`);
+            if ([...projection.invocations.values()].some(item => item.runId === entry.runId && item.callId === entry.callId)) {
+                throw new Error(`Duplicate Agent tool call id: ${entry.callId}`);
+            }
+            projection.invocations.set(entry.invocationId, {
+                id: entry.invocationId,
+                runId: entry.runId,
+                stepId: entry.stepId,
+                callId: entry.callId,
+                toolId: entry.toolId,
+                execution: entry.execution,
+                arguments: structuredClone(entry.arguments),
+                status: 'pending',
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+                ...(entry.deadlineAt === undefined ? {} : { deadlineAt: entry.deadlineAt }),
+            });
+            return;
+        }
+        case 'approval.requested': {
+            if (projection.approvals.has(entry.approvalId))
+                throw new Error(`Agent approval already exists: ${entry.approvalId}`);
+            const invocation = requireInvocationStatus(projection, entry.invocationId, ['pending']);
+            if (invocation.runId !== entry.runId)
+                throw new Error(`Agent approval run mismatch: ${entry.approvalId}`);
+            projection.approvals.set(entry.approvalId, {
+                id: entry.approvalId,
+                runId: entry.runId,
+                invocationId: entry.invocationId,
+                title: entry.title,
+                summary: entry.summary,
+                arguments: structuredClone(entry.arguments),
+                riskLevel: entry.riskLevel,
+                status: 'pending',
+                createdAt: entry.timestamp,
+                updatedAt: entry.timestamp,
+                ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }),
+            });
+            invocation.status = 'waiting_approval';
+            invocation.updatedAt = entry.timestamp;
+            const run = requireRunStatus(projection, entry.runId, ['running']);
+            run.status = 'waiting_approval';
+            run.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'approval.resolved': {
+            const approval = requireApprovalStatus(projection, entry.approvalId, ['pending']);
+            approval.status = entry.decision;
+            approval.updatedAt = entry.timestamp;
+            approval.resolvedAt = entry.timestamp;
+            if (entry.resolvedByUserHandle !== undefined)
+                approval.resolvedByUserHandle = entry.resolvedByUserHandle;
+            const invocation = requireInvocationStatus(projection, approval.invocationId, ['waiting_approval']);
+            invocation.status = entry.decision === 'approved' ? 'pending' : 'cancelled';
+            invocation.updatedAt = entry.timestamp;
+            const run = requireRunStatus(projection, approval.runId, ['waiting_approval', 'cancelling']);
+            if (run.status === 'waiting_approval'
+                && ![...projection.approvals.values()].some(item => item.runId === run.id && item.status === 'pending')) {
+                run.status = 'running';
+                run.updatedAt = entry.timestamp;
+            }
+            return;
+        }
+        case 'tool.waiting': {
+            const invocation = requireInvocationStatus(projection, entry.invocationId, ['pending']);
+            if (invocation.execution !== 'browser' || entry.reason !== 'browser') {
+                throw new Error(`Only browser tools may wait for an external executor: ${entry.invocationId}`);
+            }
+            invocation.deadlineAt = entry.deadlineAt;
+            invocation.updatedAt = entry.timestamp;
+            const run = requireRunStatus(projection, invocation.runId, ['running']);
+            run.status = 'waiting_tool';
+            run.updatedAt = entry.timestamp;
+            return;
+        }
+        case 'tool.started': {
+            const invocation = requireInvocationStatus(projection, entry.invocationId, ['pending']);
+            const run = requireRun(projection, invocation.runId);
+            if (invocation.execution === 'browser') {
+                if (run.status !== 'waiting_tool')
+                    throw new Error(`Browser tool run is not waiting: ${entry.invocationId}`);
+            }
+            else if (run.status !== 'running') {
+                throw new Error(`Agent tool run is not active: ${entry.invocationId}`);
+            }
+            invocation.status = 'claimed';
+            invocation.startedAt = entry.timestamp;
+            invocation.updatedAt = entry.timestamp;
+            if (entry.claimId !== undefined)
+                invocation.claimId = entry.claimId;
+            if (entry.idempotencyKey !== undefined)
+                invocation.idempotencyKey = entry.idempotencyKey;
+            return;
+        }
+        case 'tool.finished': {
+            const invocation = requireInvocationStatus(projection, entry.invocationId, ['pending', 'claimed', 'cancelled']);
+            invocation.status = entry.outcome;
+            invocation.finishedAt = entry.timestamp;
+            invocation.updatedAt = entry.timestamp;
+            if (entry.result !== undefined)
+                invocation.result = structuredClone(entry.result);
+            if (entry.error !== undefined)
+                invocation.error = entry.error;
+            const run = requireRun(projection, invocation.runId);
+            if (run.status === 'waiting_tool') {
+                run.status = 'running';
+                run.updatedAt = entry.timestamp;
+            }
+            return;
+        }
+        case 'workspace.checkpointed': {
+            const invocation = requireInvocation(projection, entry.invocationId);
+            if (entry.phase === 'before')
+                invocation.beforeCommitId = entry.commitId;
+            if (entry.phase === 'after')
+                invocation.afterCommitId = entry.commitId;
+            if (entry.phase === 'failure')
+                invocation.failureCommitId = entry.commitId;
+            invocation.updatedAt = entry.timestamp;
+            return;
+        }
+    }
+}
+function requireSession(projection) {
+    if (!projection.session)
+        throw new Error('Agent session has not been created');
+    return projection.session;
+}
+function requireRef(projection, name) {
+    const ref = projection.refs.get(name);
+    if (!ref)
+        throw new Error(`Agent session ref not found: ${name}`);
+    return ref;
+}
+function requireAppendParent(projection, refName, parentId) {
+    const ref = requireRef(projection, refName);
+    if (ref.leafEntryId !== parentId)
+        throw new Error(`Agent conversation parent is not the active leaf for ref ${refName}`);
+    requireConversationEntry(projection, parentId, true);
+    return ref;
+}
+function requireConversationEntry(projection, id, allowNull = false) {
+    if (id === null && allowNull)
+        return null;
+    const entry = id === null ? undefined : projection.conversation.get(id);
+    if (!entry)
+        throw new Error(`Agent conversation entry not found: ${id ?? '<root>'}`);
+    return entry;
+}
+function requireRun(projection, id) {
+    const run = projection.runs.get(id);
+    if (!run)
+        throw new Error(`Agent session run not found: ${id}`);
+    return run;
+}
+function requireRunStatus(projection, id, statuses) {
+    const run = requireRun(projection, id);
+    if (!statuses.includes(run.status))
+        throw new Error(`Agent run ${id} is ${run.status}; expected ${statuses.join(' or ')}`);
+    return run;
+}
+function requireStep(projection, id) {
+    const step = projection.steps.get(id);
+    if (!step)
+        throw new Error(`Agent step not found: ${id}`);
+    return step;
+}
+function requireStepStatus(projection, id, statuses) {
+    const step = requireStep(projection, id);
+    if (!statuses.includes(step.status))
+        throw new Error(`Agent step ${id} is ${step.status}; expected ${statuses.join(' or ')}`);
+    return step;
+}
+function requireGenerationStatus(projection, id, statuses) {
+    const generation = projection.generations.get(id);
+    if (!generation)
+        throw new Error(`Agent generation not found: ${id}`);
+    if (!statuses.includes(generation.status))
+        throw new Error(`Agent generation ${id} is ${generation.status}; expected ${statuses.join(' or ')}`);
+    return generation;
+}
+function requireInvocation(projection, id) {
+    const invocation = projection.invocations.get(id);
+    if (!invocation)
+        throw new Error(`Agent tool invocation not found: ${id}`);
+    return invocation;
+}
+function requireInvocationStatus(projection, id, statuses) {
+    const invocation = requireInvocation(projection, id);
+    if (!statuses.includes(invocation.status)) {
+        throw new Error(`Agent tool invocation ${id} is ${invocation.status}; expected ${statuses.join(' or ')}`);
+    }
+    return invocation;
+}
+function requireApprovalStatus(projection, id, statuses) {
+    const approval = projection.approvals.get(id);
+    if (!approval)
+        throw new Error(`Agent approval not found: ${id}`);
+    if (!statuses.includes(approval.status))
+        throw new Error(`Agent approval ${id} is ${approval.status}; expected ${statuses.join(' or ')}`);
+    return approval;
+}
+function activeStep(projection, runId) {
+    return [...projection.steps.values()].find(step => step.runId === runId && step.status === 'running');
+}
+function activeGeneration(projection, stepId) {
+    return [...projection.generations.values()].find(generation => generation.stepId === stepId && generation.status === 'running');
+}
+function activeInvocation(projection, stepId) {
+    const terminal = new Set(['completed', 'failed', 'cancelled', 'outcome_unknown', 'timed_out']);
+    return [...projection.invocations.values()].find(invocation => invocation.stepId === stepId && !terminal.has(invocation.status));
+}
+function consumeQueuedMessage(projection, entry) {
+    const queued = projection.pendingMessages.get(entry.consumedQueueId);
+    if (!queued)
+        throw new Error(`Queued Agent message not found: ${entry.consumedQueueId}`);
+    if (queued.ref !== entry.ref || queued.content !== entry.content || entry.role !== 'user') {
+        throw new Error(`Queued Agent message does not match conversation entry: ${entry.consumedQueueId}`);
+    }
+    projection.pendingMessages.delete(queued.id);
+}
+function advanceRef(ref, entryId, timestamp) {
+    ref.leafEntryId = entryId;
+    ref.updatedAt = timestamp;
+}
+function activePath(projection, leafId) {
+    const result = [];
+    const visited = new Set();
+    let current = leafId;
+    while (current !== null) {
+        if (visited.has(current))
+            throw new Error(`Agent conversation contains a parent cycle at ${current}`);
+        visited.add(current);
+        const entry = requireConversationEntry(projection, current);
+        result.push(entry.id);
+        current = entry.parentId;
+    }
+    return result.reverse();
+}
+function sortBySequence(values) {
+    return values.sort((left, right) => left.sequence - right.sequence);
+}
+function sortByCreated(values) {
+    return values.sort((left, right) => left.createdAt.localeCompare(right.createdAt)
+        || (left.id ?? left.name ?? '').localeCompare(right.id ?? right.name ?? ''));
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-recovery-service.ts"
+/*!********************************************************!*\
+  !*** ./src/services/agent-session-recovery-service.ts ***!
+  \********************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentSessionRecoveryService: () => (/* binding */ AgentSessionRecoveryService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-session-runtime-support.js */ "./src/services/agent-session-runtime-support.ts");
+
+
+/**
+ * Reconciles durable Session state after ownership loss. It records uncertain
+ * effects and suspends work, but never queues or replays a model/tool call.
+ */
+class AgentSessionRecoveryService {
+    history;
+    journal;
+    host;
+    constructor(history, journal, host) {
+        this.history = history;
+        this.journal = journal;
+        this.host = host;
+    }
+    async recoverSession(sessionId) {
+        const recovered = await this.host.perform(sessionId, writer => {
+            let count = 0;
+            for (const ref of writer.snapshot().refs) {
+                if (!ref.activeRunId)
+                    continue;
+                const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), ref.activeRunId);
+                if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_RUNS.has(run.status) || run.status === 'suspended')
+                    continue;
+                count += 1;
+                if (run.status === 'waiting_approval')
+                    continue;
+                this.recoverRun(writer, run.id);
+            }
+            return count;
+        });
+        const snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
+        for (const approval of snapshot.approvals.filter(item => item.status === 'pending')) {
+            this.host.scheduleApprovalExpiry(sessionId, approval);
+        }
+        for (const invocation of snapshot.invocations.filter(item => item.execution === 'browser'
+            && (item.status === 'pending' || item.status === 'claimed')
+            && item.deadlineAt)) {
+            this.host.scheduleBrowserExpiry(sessionId, invocation);
+        }
+        return recovered;
+    }
+    recoverRun(writer, runId, interruptionReason = 'Agent host restarted; review the last durable step and resume explicitly') {
+        let snapshot = writer.snapshot();
+        let run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(snapshot, runId);
+        if (step) {
+            const generation = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeGeneration)(snapshot, step.id);
+            if (generation) {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'generation.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: step.id,
+                    generationId: generation.id,
+                    outcome: 'interrupted',
+                    providerRequestState: 'sent_or_unknown',
+                    error: `${interruptionReason}; the model request outcome is unknown`,
+                });
+            }
+            snapshot = writer.snapshot();
+            const invocation = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeInvocation)(snapshot, step.id);
+            if (invocation) {
+                if (invocation.status === 'waiting_approval')
+                    return;
+                this.reconcileWorkspaceCheckpoints(writer, invocation);
+                if (invocation.status === 'claimed') {
+                    this.journal.recordUnknownToolOutcome(writer, invocation, `${interruptionReason}; tool execution started and its side effects are unknown`);
+                }
+                else {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'tool.finished',
+                        timestamp: this.host.now(),
+                        invocationId: invocation.id,
+                        outcome: 'cancelled',
+                        error: `${interruptionReason}; the tool did not start`,
+                    });
+                    this.journal.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === invocation.id));
+                }
+            }
+            snapshot = writer.snapshot();
+            if ((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(snapshot, runId)) {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'step.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: step.id,
+                    outcome: 'interrupted',
+                    error: `${interruptionReason}; the step did not complete`,
+                });
+            }
+        }
+        snapshot = writer.snapshot();
+        run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        if (run.status === 'cancelling') {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.finished',
+                timestamp: this.host.now(),
+                runId,
+                outcome: 'cancelled',
+                error: `${interruptionReason}; cancellation completed during recovery`,
+            });
+        }
+        else {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.suspended',
+                timestamp: this.host.now(),
+                runId,
+                reason: interruptionReason,
+            });
+        }
+    }
+    reconcileWorkspaceCheckpoints(writer, invocation) {
+        const snapshot = writer.snapshot();
+        const commits = this.history.findCommitsForToolCall(snapshot.session.workspaceId, invocation.runId, invocation.callId);
+        for (const phase of ['before', 'after', 'failure']) {
+            const commit = commits.find(item => item.metadata?.mutationPhase === phase);
+            const known = phase === 'before'
+                ? invocation.beforeCommitId
+                : phase === 'after' ? invocation.afterCommitId : invocation.failureCommitId;
+            if (commit && !known) {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'workspace.checkpointed',
+                    timestamp: this.host.now(),
+                    invocationId: invocation.id,
+                    phase,
+                    commitId: commit.id,
+                });
+            }
+        }
+    }
+    interruptActiveRun(writer, runId, message) {
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+        if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_RUNS.has(run.status) || run.status === 'suspended' || run.status === 'waiting_approval')
+            return;
+        this.recoverRun(writer, runId, message);
+        const updated = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+        if (updated.status === 'suspended')
+            return;
+        if (updated.status === 'running') {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.suspended',
+                timestamp: this.host.now(),
+                runId,
+                reason: message,
+            });
+        }
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-run-executor.ts"
+/*!****************************************************!*\
+  !*** ./src/services/agent-session-run-executor.ts ***!
+  \****************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentSessionRunExecutor: () => (/* binding */ AgentSessionRunExecutor)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-session-runtime-support.js */ "./src/services/agent-session-runtime-support.ts");
+
+
+/**
+ * Executes one durable Run. Scheduling, writer ownership, timers and public
+ * commands stay in the runtime coordinator; this class owns the model/tool
+ * loop and its intent-before-effect protocol.
+ */
+class AgentSessionRunExecutor {
+    profileStore;
+    hostTools;
+    tools;
+    toolExecutor;
+    journal;
+    recovery;
+    host;
+    requestCompletion;
+    approvalTimeoutMs;
+    constructor(profileStore, hostTools, tools, toolExecutor, journal, recovery, host, options) {
+        this.profileStore = profileStore;
+        this.hostTools = hostTools;
+        this.tools = tools;
+        this.toolExecutor = toolExecutor;
+        this.journal = journal;
+        this.recovery = recovery;
+        this.host = host;
+        this.requestCompletion = options.requestCompletion;
+        this.approvalTimeoutMs = options.approvalTimeoutMs;
+    }
+    async execute(sessionId, runId, signal) {
+        await this.host.perform(sessionId, writer => {
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+            if (run.status === 'queued') {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'run.started',
+                    timestamp: this.host.now(),
+                    runId,
+                });
+            }
+        });
+        while (!signal.aborted && !this.host.isStopping()) {
+            const snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+            if (run.status !== 'running')
+                return;
+            const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(snapshot, runId);
+            if (step) {
+                const shouldContinue = await this.continueStep(sessionId, runId, step.id, signal);
+                if (!shouldContinue)
+                    return;
+                continue;
+            }
+            const prepared = await this.host.perform(sessionId, writer => this.prepareGeneration(writer, runId));
+            if (!prepared)
+                return;
+            let completion;
+            try {
+                completion = await this.requestCompletion(this.profileStore.getProfileForRequest(prepared.profileId), {
+                    messages: prepared.messages,
+                    tools: prepared.tools,
+                    signal,
+                });
+            }
+            catch (error) {
+                await this.host.perform(sessionId, writer => {
+                    this.finishGenerationFailure(writer, runId, prepared, error, signal);
+                });
+                return;
+            }
+            const accepted = await this.host.perform(sessionId, writer => this.acceptCompletion(writer, runId, prepared, completion));
+            if (!accepted)
+                return;
+        }
+        await this.host.perform(sessionId, writer => {
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+            if (run.status === 'cancelling') {
+                this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
+            }
+            else if (run.status === 'running') {
+                this.recovery.interruptActiveRun(writer, runId, 'Agent host stopped while the run was active');
+            }
+        });
+    }
+    prepareGeneration(writer, runId) {
+        this.consumeSteeringMessages(writer, runId);
+        let snapshot = writer.snapshot();
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        if (run.status !== 'running')
+            return null;
+        if (run.stepCount >= run.maxSteps) {
+            const nextRunId = this.host.finishRunAndStartFollowUp(writer, runId, 'failed', undefined, `Agent reached the ${run.maxSteps} step limit`);
+            if (nextRunId)
+                queueMicrotask(() => this.host.enqueue(snapshot.session.id, nextRunId));
+            return null;
+        }
+        const catalog = this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId);
+        const availableIds = new Set(catalog.map(tool => tool.id));
+        const missing = run.allowedTools.filter(id => !availableIds.has(id));
+        if (missing.length > 0) {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.suspended',
+                timestamp: this.host.now(),
+                runId,
+                reason: `Agent capabilities are unavailable: ${missing.join(', ')}`,
+            });
+            return null;
+        }
+        const descriptors = catalog.filter(tool => run.allowedTools.includes(tool.id)
+            && (run.mode !== 'plan' || (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isPlanSafeTool)(tool)));
+        const stepId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        const generationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'step.started',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            index: run.stepCount + 1,
+        });
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'generation.started',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            generationId,
+            attempt: 1,
+        });
+        snapshot = writer.snapshot();
+        return {
+            profileId: run.profileId,
+            messages: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.conversationMessages)(snapshot, run),
+            tools: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.mapLlmTools)(descriptors).definitions,
+            stepId,
+            generationId,
+        };
+    }
+    acceptCompletion(writer, runId, prepared, completion) {
+        const snapshot = writer.snapshot();
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const generation = snapshot.generations.find(item => item.id === prepared.generationId);
+        if (!generation || generation.status !== 'running')
+            return false;
+        if (run.status === 'cancelling') {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'generation.finished',
+                timestamp: this.host.now(),
+                runId,
+                stepId: prepared.stepId,
+                generationId: prepared.generationId,
+                outcome: 'cancelled',
+                providerRequestState: 'response_received',
+                ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                error: 'Model response arrived after cancellation was requested',
+            });
+            this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
+            return false;
+        }
+        if (run.status !== 'running')
+            return false;
+        if (this.host.isStopping()) {
+            const message = 'Model response arrived after the Agent host began stopping';
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'generation.finished',
+                timestamp: this.host.now(),
+                runId,
+                stepId: prepared.stepId,
+                generationId: prepared.generationId,
+                outcome: 'interrupted',
+                providerRequestState: 'response_received',
+                ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                error: message,
+            });
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'step.finished',
+                timestamp: this.host.now(),
+                runId,
+                stepId: prepared.stepId,
+                outcome: 'interrupted',
+                error: message,
+            });
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.suspended',
+                timestamp: this.host.now(),
+                runId,
+                reason: `${message}; resume explicitly to request a fresh response`,
+            });
+            return false;
+        }
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'generation.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId: prepared.stepId,
+            generationId: prepared.generationId,
+            outcome: 'completed',
+            providerRequestState: 'response_received',
+            ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+            finishReason: completion.finishReason,
+            ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+        });
+        const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRef)(writer.snapshot(), run.ref);
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'conversation.message',
+            timestamp: this.host.now(),
+            ref: run.ref,
+            parentId: ref.leafEntryId,
+            role: 'assistant',
+            content: completion.message.content,
+            ...(completion.message.toolCalls ? { toolCalls: completion.message.toolCalls } : {}),
+            runId,
+            stepId: prepared.stepId,
+        });
+        return true;
+    }
+    finishGenerationFailure(writer, runId, prepared, error, signal) {
+        const snapshot = writer.snapshot();
+        const generation = snapshot.generations.find(item => item.id === prepared.generationId);
+        if (!generation || generation.status !== 'running')
+            return;
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.errorMessage)(error);
+        const cancelled = run.status === 'cancelling' || signal.aborted;
+        const stopping = this.host.isStopping();
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'generation.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId: prepared.stepId,
+            generationId: prepared.generationId,
+            outcome: cancelled ? (stopping ? 'interrupted' : 'cancelled') : ((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isTimeoutMessage)(message) ? 'timed_out' : 'failed'),
+            providerRequestState: 'sent_or_unknown',
+            error: message,
+        });
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'step.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId: prepared.stepId,
+            outcome: cancelled ? (stopping ? 'interrupted' : 'cancelled') : 'failed',
+            error: message,
+        });
+        if (run.status === 'cancelling') {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.finished',
+                timestamp: this.host.now(),
+                runId,
+                outcome: 'cancelled',
+                error: 'Cancelled by user',
+            });
+        }
+        else {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.suspended',
+                timestamp: this.host.now(),
+                runId,
+                reason: stopping
+                    ? 'Agent host stopped while the model request was active'
+                    : `Model generation failed without a safe automatic retry: ${message}`,
+            });
+        }
+    }
+    async continueStep(sessionId, runId, stepId, signal) {
+        while (!signal.aborted && !this.host.isStopping()) {
+            const snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+            if (run.status === 'cancelling') {
+                await this.host.perform(sessionId, writer => {
+                    this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
+                });
+                return false;
+            }
+            if (run.status !== 'running')
+                return false;
+            const step = snapshot.steps.find(item => item.id === stepId);
+            if (!step || step.status !== 'running')
+                return true;
+            const assistant = [...snapshot.conversation].reverse().find(entry => entry.kind === 'message'
+                && entry.role === 'assistant'
+                && entry.stepId === stepId);
+            const calls = assistant?.toolCalls ?? [];
+            if (calls.length === 0) {
+                const completed = await this.host.perform(sessionId, writer => {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'step.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId,
+                        outcome: 'completed',
+                    });
+                    const hasSteering = writer.snapshot().pendingMessages.some(item => item.runId === runId && item.kind === 'steer');
+                    if (hasSteering)
+                        return { keepRunning: true, nextRunId: null };
+                    return {
+                        keepRunning: false,
+                        nextRunId: this.host.finishRunAndStartFollowUp(writer, runId, 'completed', assistant?.content ?? '', undefined),
+                    };
+                });
+                if (completed.nextRunId)
+                    this.host.enqueue(sessionId, completed.nextRunId);
+                return completed.keepRunning;
+            }
+            const descriptors = this.allowedDescriptors(snapshot, run);
+            const mapped = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.mapLlmTools)(descriptors);
+            let yielded = false;
+            for (const call of calls) {
+                let current = await this.host.perform(sessionId, writer => writer.snapshot());
+                let invocation = current.invocations.find(item => item.runId === runId && item.callId === call.id);
+                if (invocation) {
+                    if (invocation.status === 'waiting_approval')
+                        return false;
+                    if (invocation.status === 'pending') {
+                        const outcome = await this.toolExecutor.execute(sessionId, invocation.id, signal);
+                        if (outcome === 'waiting')
+                            return false;
+                        continue;
+                    }
+                    if (invocation.status === 'claimed') {
+                        await this.host.perform(sessionId, writer => this.toolExecutor.interruptClaimedInvocation(writer, invocation, 'Execution ownership was lost before the tool result was recorded'));
+                        return false;
+                    }
+                    if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(invocation.status)) {
+                        await this.host.perform(sessionId, writer => this.journal.ensureToolResultMessage(writer, invocation.id));
+                        continue;
+                    }
+                }
+                const toolId = mapped.nameToId.get(call.name);
+                if (!toolId) {
+                    await this.host.perform(sessionId, writer => this.journal.appendToolProtocolError(writer, runId, stepId, call.id, `Unknown tool requested by model: ${call.name}`));
+                    continue;
+                }
+                const descriptor = descriptors.find(tool => tool.id === toolId);
+                if (run.mode === 'plan' && !(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isPlanSafeTool)(descriptor)) {
+                    await this.host.perform(sessionId, writer => this.journal.appendToolProtocolError(writer, runId, stepId, call.id, `Tool is unavailable in plan mode: ${descriptor.id}`));
+                    continue;
+                }
+                let input;
+                try {
+                    input = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.parseToolArguments)(call.arguments);
+                }
+                catch (error) {
+                    await this.host.perform(sessionId, writer => this.journal.appendToolProtocolError(writer, runId, stepId, call.id, (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.errorMessage)(error)));
+                    continue;
+                }
+                const invocationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+                const requiresApproval = descriptor.approvalPolicy === 'always'
+                    || (run.mode === 'ask' && descriptor.approvalPolicy === 'on-mutation');
+                await this.host.perform(sessionId, writer => {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'tool.requested',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId,
+                        invocationId,
+                        callId: call.id,
+                        toolId: descriptor.id,
+                        execution: descriptor.execution,
+                        arguments: input,
+                    });
+                    if (requiresApproval) {
+                        const approvalId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+                        const timestamp = this.host.now();
+                        this.host.append(writer, {
+                            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                            type: 'approval.requested',
+                            timestamp,
+                            approvalId,
+                            runId,
+                            invocationId,
+                            title: descriptor.title,
+                            summary: this.approvalSummary(descriptor, input),
+                            arguments: input,
+                            riskLevel: descriptor.riskLevel,
+                            expiresAt: new Date(Date.parse(timestamp) + this.approvalTimeoutMs).toISOString(),
+                        });
+                    }
+                });
+                current = await this.host.perform(sessionId, writer => writer.snapshot());
+                invocation = current.invocations.find(item => item.id === invocationId);
+                if (requiresApproval) {
+                    const approval = current.approvals.find(item => item.invocationId === invocationId);
+                    this.host.scheduleApprovalExpiry(sessionId, approval);
+                    yielded = true;
+                    break;
+                }
+                const outcome = await this.toolExecutor.execute(sessionId, invocationId, signal);
+                if (outcome === 'waiting') {
+                    yielded = true;
+                    break;
+                }
+            }
+            if (yielded)
+                return false;
+            const after = await this.host.perform(sessionId, writer => writer.snapshot());
+            const afterRun = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(after, runId);
+            if (afterRun.status === 'cancelling' || signal.aborted || this.host.isStopping()) {
+                await this.host.perform(sessionId, writer => {
+                    const currentRun = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+                    if (currentRun.status === 'cancelling') {
+                        this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
+                    }
+                    else if (currentRun.status === 'running') {
+                        this.recovery.interruptActiveRun(writer, runId, 'Agent host stopped while a tool step was active');
+                    }
+                });
+                return false;
+            }
+            if (afterRun.status !== 'running')
+                return false;
+            const unfinished = after.invocations.some(item => item.stepId === stepId && !_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(item.status));
+            if (unfinished)
+                return false;
+            await this.host.perform(sessionId, writer => {
+                const active = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(writer.snapshot(), runId);
+                if (active?.id === stepId) {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'step.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId,
+                        outcome: 'completed',
+                    });
+                }
+            });
+            return true;
+        }
+        await this.host.perform(sessionId, writer => {
+            this.recovery.interruptActiveRun(writer, runId, 'Agent host stopped while a tool step was active');
+        });
+        return false;
+    }
+    consumeSteeringMessages(writer, runId) {
+        let snapshot = writer.snapshot();
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const messages = snapshot.pendingMessages
+            .filter(item => item.ref === run.ref && item.runId === runId && item.kind === 'steer')
+            .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+        for (const message of messages) {
+            snapshot = writer.snapshot();
+            const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRef)(snapshot, run.ref);
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'conversation.message',
+                timestamp: this.host.now(),
+                ref: run.ref,
+                parentId: ref.leafEntryId,
+                role: 'user',
+                content: message.content,
+                runId,
+                consumedQueueId: message.id,
+            });
+        }
+    }
+    approvalSummary(descriptor, input) {
+        if (descriptor.execution === 'host')
+            return this.hostTools.approvalSummary(descriptor.id, input);
+        const preview = JSON.stringify(input);
+        return `${descriptor.title}; effects are outside workspace rollback: ${preview.slice(0, 500)}`;
+    }
+    allowedDescriptors(snapshot, run) {
+        const allowed = new Set(run.allowedTools);
+        return this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId)
+            .filter(tool => allowed.has(tool.id) && (run.mode !== 'plan' || (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isPlanSafeTool)(tool)));
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-runtime-service.ts"
+/*!*******************************************************!*\
+  !*** ./src/services/agent-session-runtime-service.ts ***!
+  \*******************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentSessionRuntimeService: () => (/* binding */ AgentSessionRuntimeService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-llm-client.js */ "./src/services/agent-llm-client.ts");
+/* harmony import */ var _agent_session_model_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./agent-session-model.js */ "./src/services/agent-session-model.ts");
+/* harmony import */ var _agent_session_journal_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./agent-session-journal-service.js */ "./src/services/agent-session-journal-service.ts");
+/* harmony import */ var _agent_session_recovery_service_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./agent-session-recovery-service.js */ "./src/services/agent-session-recovery-service.ts");
+/* harmony import */ var _agent_session_run_executor_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./agent-session-run-executor.js */ "./src/services/agent-session-run-executor.ts");
+/* harmony import */ var _agent_session_tool_executor_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./agent-session-tool-executor.js */ "./src/services/agent-session-tool-executor.ts");
+/* harmony import */ var _agent_tool_registry_service_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./agent-tool-registry-service.js */ "./src/services/agent-tool-registry-service.ts");
+/* harmony import */ var _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./agent-session-runtime-support.js */ "./src/services/agent-session-runtime-support.ts");
+
+
+
+
+
+
+
+
+
+const DEFAULT_MAX_STEPS = 24;
+const HARD_MAX_STEPS = 64;
+const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 2 * 60_000;
+const MAX_CONCURRENT_RUNS = 16;
+class SessionActor {
+    writer;
+    tail = Promise.resolve();
+    constructor(writer) {
+        this.writer = writer;
+    }
+    perform(operation) {
+        const result = this.tail.then(() => operation(this.writer));
+        this.tail = result.then(() => undefined, () => undefined);
+        return result;
+    }
+    async close() {
+        await this.tail;
+        this.writer.close();
+    }
+}
+class AgentSessionRuntimeService {
+    sessionStore;
+    profileStore;
+    history;
+    tools;
+    journal;
+    recovery;
+    executor;
+    maxConcurrentRuns;
+    maxConcurrentRunsPerUser;
+    approvalTimeoutMs;
+    browserToolTimeoutMs;
+    shutdownTimeoutMs;
+    now;
+    actors = new Map();
+    contexts = new Map();
+    runLocations = new Map();
+    queue = [];
+    queuedRunIds = new Set();
+    wakeAfterTask = new Set();
+    tasks = new Map();
+    controllers = new Map();
+    approvalTimers = new Map();
+    browserTimers = new Map();
+    listeners = new Map();
+    startPromise = null;
+    started = false;
+    stopping = false;
+    stopped = false;
+    constructor(sessionStore, profileStore, history, hostTools, options = {}) {
+        this.sessionStore = sessionStore;
+        this.profileStore = profileStore;
+        this.history = history;
+        const client = new _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__.AgentLlmClient();
+        const requestCompletion = options.requestCompletion ?? client.complete.bind(client);
+        this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
+        this.approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+        this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? DEFAULT_BROWSER_TOOL_TIMEOUT_MS;
+        this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
+        this.now = options.now ?? (() => new Date().toISOString());
+        this.tools = new _agent_tool_registry_service_js__WEBPACK_IMPORTED_MODULE_7__.AgentToolRegistryService(hostTools, options.moduleHost);
+        if (!Number.isSafeInteger(this.maxConcurrentRuns)
+            || this.maxConcurrentRuns < 1
+            || this.maxConcurrentRuns > MAX_CONCURRENT_RUNS) {
+            throw new Error(`maxConcurrentRuns must be an integer between 1 and ${MAX_CONCURRENT_RUNS}`);
+        }
+        this.maxConcurrentRunsPerUser = Math.max(1, this.maxConcurrentRuns - 1);
+        if (!Number.isSafeInteger(this.approvalTimeoutMs)
+            || this.approvalTimeoutMs < 1
+            || this.approvalTimeoutMs > 24 * 60 * 60_000) {
+            throw new Error('approvalTimeoutMs must be an integer between 1 ms and 24 hours');
+        }
+        if (!Number.isSafeInteger(this.browserToolTimeoutMs)
+            || this.browserToolTimeoutMs < 1_000
+            || this.browserToolTimeoutMs > 10 * 60_000) {
+            throw new Error('browserToolTimeoutMs must be an integer between 1000 and 600000 ms');
+        }
+        if (!Number.isSafeInteger(this.shutdownTimeoutMs)
+            || this.shutdownTimeoutMs < 1
+            || this.shutdownTimeoutMs > 60_000) {
+            throw new Error('shutdownTimeoutMs must be an integer between 1 and 60000 ms');
+        }
+        const journalHost = {
+            now: () => this.now(),
+            append: (writer, entry) => this.append(writer, entry),
+        };
+        this.journal = new _agent_session_journal_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentSessionJournalService(journalHost);
+        this.recovery = new _agent_session_recovery_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentSessionRecoveryService(history, this.journal, {
+            ...journalHost,
+            perform: (sessionId, operation) => (this.actor(sessionId).perform(operation)),
+            scheduleApprovalExpiry: (sessionId, approval) => this.scheduleApprovalExpiry(sessionId, approval),
+            scheduleBrowserExpiry: (sessionId, invocation) => this.scheduleBrowserExpiry(sessionId, invocation),
+        });
+        const executionHost = {
+            ...journalHost,
+            perform: (sessionId, operation) => (this.actor(sessionId).perform(operation)),
+            isStopping: () => this.stopping,
+            context: (sessionId) => this.contexts.get(sessionId),
+            scheduleBrowserExpiry: (sessionId, invocation) => (this.scheduleBrowserExpiry(sessionId, invocation)),
+        };
+        const toolExecutor = new _agent_session_tool_executor_js__WEBPACK_IMPORTED_MODULE_6__.AgentSessionToolExecutor(history, hostTools, this.tools, this.journal, this.recovery, executionHost, {
+            ...(options.moduleHost ? { moduleHost: options.moduleHost } : {}),
+            browserToolTimeoutMs: this.browserToolTimeoutMs,
+        });
+        this.executor = new _agent_session_run_executor_js__WEBPACK_IMPORTED_MODULE_5__.AgentSessionRunExecutor(profileStore, hostTools, this.tools, toolExecutor, this.journal, this.recovery, {
+            ...executionHost,
+            enqueue: (sessionId, runId) => this.enqueue(sessionId, runId),
+            scheduleApprovalExpiry: (sessionId, approval) => this.scheduleApprovalExpiry(sessionId, approval),
+            finishRunAndStartFollowUp: (writer, runId, outcome, finalText, error) => (this.finishRunAndStartFollowUp(writer, runId, outcome, finalText, error)),
+        }, {
+            requestCompletion,
+            approvalTimeoutMs: this.approvalTimeoutMs,
+        });
+    }
+    start() {
+        if (this.stopped)
+            return Promise.reject(new Error('Agent session runtime cannot restart after it has stopped'));
+        if (this.started)
+            return Promise.resolve({ sessions: 0, recoveredRuns: 0, problems: [] });
+        if (this.startPromise)
+            return this.startPromise;
+        this.stopping = false;
+        this.startPromise = (async () => {
+            await new Promise(resolve => setImmediate(resolve));
+            try {
+                if (this.stopping)
+                    return { sessions: 0, recoveredRuns: 0, problems: [] };
+                const listed = this.sessionStore.start();
+                const problems = [...listed.problems];
+                this.started = true;
+                let recoveredRuns = 0;
+                for (const snapshot of listed.sessions) {
+                    for (const run of snapshot.runs)
+                        this.runLocations.set(run.id, snapshot.session.id);
+                    if (snapshot.refs.some(ref => ref.activeRunId !== null)) {
+                        try {
+                            recoveredRuns += await this.recovery.recoverSession(snapshot.session.id);
+                        }
+                        catch (error) {
+                            problems.push({ sessionId: snapshot.session.id, error: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.errorMessage)(error) });
+                        }
+                    }
+                }
+                return { sessions: listed.sessions.length, recoveredRuns, problems };
+            }
+            finally {
+                this.startPromise = null;
+            }
+        })();
+        return this.startPromise;
+    }
+    async stop() {
+        this.stopping = true;
+        this.stopped = true;
+        await this.startPromise?.catch(() => ({ sessions: 0, recoveredRuns: 0, problems: [] }));
+        for (const scheduled of this.queue.splice(0)) {
+            this.queuedRunIds.delete(scheduled.runId);
+            await this.suspendQueuedRun(scheduled.sessionId, scheduled.runId, 'Agent host stopped before the run started');
+        }
+        this.wakeAfterTask.clear();
+        for (const controller of this.controllers.values()) {
+            controller.abort(new Error('Agent host stopped'));
+        }
+        const settled = Promise.allSettled([...this.tasks.values()]);
+        const completed = await Promise.race([settled.then(() => true), (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.delay)(this.shutdownTimeoutMs).then(() => false)]);
+        if (!completed) {
+            console.warn(`[authority] ${this.tasks.size} Agent session run(s) did not stop within ${this.shutdownTimeoutMs} ms`);
+        }
+        for (const timer of this.approvalTimers.values())
+            clearTimeout(timer);
+        for (const timer of this.browserTimers.values())
+            clearTimeout(timer);
+        this.approvalTimers.clear();
+        this.browserTimers.clear();
+        const closeActors = async () => {
+            await Promise.allSettled([...this.actors.values()].map(actor => actor.close()));
+            this.actors.clear();
+            this.contexts.clear();
+            this.runLocations.clear();
+            this.listeners.clear();
+        };
+        if (completed) {
+            await closeActors();
+        }
+        else {
+            void settled.then(closeActors, closeActors);
+        }
+        this.started = false;
+    }
+    async createSession(request, callerExtensionId = 'authority', callerContext) {
+        this.assertRunning();
+        const caller = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(callerExtensionId, 'Agent caller extension id', 128);
+        if (callerContext && callerContext.session.extension.id !== caller) {
+            throw new Error('Agent caller context does not match the caller extension');
+        }
+        const callerUserHandle = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(callerContext?.user.handle ?? 'authority', 'Agent caller user handle', 200);
+        const workspace = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.selectOne)(request.workspaceId, this.history.listWorkspaces(), item => item.id, 'workspace');
+        if (callerContext) {
+            this.history.assertWorkspaceAccess(workspace.id, callerUserHandle, callerContext.user.isAdmin);
+        }
+        const profile = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.selectOne)(request.profileId, this.profileStore.listProfiles(), item => item.id, 'LLM profile');
+        const mode = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeMode)(request.mode);
+        const availableTools = this.tools.list(callerUserHandle, caller);
+        const allowedTools = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeAllowedTools)(request.allowedTools, availableTools);
+        const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
+        if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > HARD_MAX_STEPS) {
+            throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
+        }
+        const firstMessage = request.message === undefined
+            ? undefined
+            : (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.formatInitialMessage)(request.message, request.instructions, request.context);
+        if (firstMessage === undefined && (request.instructions !== undefined || request.context !== undefined)) {
+            throw new Error('Agent instructions and context require an initial message');
+        }
+        const title = request.title === undefined
+            ? (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.titleFromMessage)(firstMessage ?? `Agent session for ${workspace.displayName}`)
+            : (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.title, 'Agent session title', 500);
+        const snapshot = this.sessionStore.createSession({
+            callerUserHandle,
+            callerExtensionId: caller,
+            workspaceId: workspace.id,
+            title,
+            profileId: profile.id,
+            mode,
+            allowedTools,
+            maxSteps,
+        });
+        if (callerContext)
+            this.contexts.set(snapshot.session.id, callerContext);
+        if (firstMessage === undefined)
+            return snapshot;
+        return (await this.sendMessage(snapshot.session.id, { content: firstMessage }, callerContext ? caller : undefined, callerContext)).snapshot;
+    }
+    async updateSession(sessionId, request, callerExtensionId, callerContext) {
+        this.assertRunning();
+        if (callerContext && callerExtensionId && callerContext.session.extension.id !== callerExtensionId) {
+            throw new Error('Agent caller context does not match the caller extension');
+        }
+        const actor = this.actor(sessionId);
+        const snapshot = await actor.perform(writer => {
+            const current = writer.snapshot();
+            this.assertOwner(current, callerExtensionId, callerContext?.user.handle);
+            const update = {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'session.updated',
+                timestamp: this.now(),
+            };
+            if (request.title !== undefined) {
+                update.title = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.title, 'Agent session title', 500);
+            }
+            if (request.profileId !== undefined) {
+                update.profileId = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.selectOne)(request.profileId, this.profileStore.listProfiles(), item => item.id, 'LLM profile').id;
+            }
+            if (request.mode !== undefined)
+                update.mode = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeMode)(request.mode);
+            if (request.allowedTools !== undefined) {
+                update.allowedTools = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeAllowedTools)(request.allowedTools, this.tools.list(current.session.callerUserHandle, current.session.callerExtensionId));
+            }
+            if (request.maxSteps !== undefined) {
+                if (!Number.isSafeInteger(request.maxSteps)
+                    || request.maxSteps < 1
+                    || request.maxSteps > HARD_MAX_STEPS) {
+                    throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
+                }
+                update.maxSteps = request.maxSteps;
+            }
+            if (request.archived !== undefined) {
+                if (typeof request.archived !== 'boolean')
+                    throw new Error('Agent session archived must be boolean');
+                update.archived = request.archived;
+            }
+            if (Object.keys(update).length === 3)
+                throw new Error('Agent session update is empty');
+            this.append(writer, update);
+            return writer.snapshot();
+        });
+        if (callerContext)
+            this.contexts.set(sessionId, callerContext);
+        return snapshot;
+    }
+    listSessions(callerExtensionId, callerUserHandle) {
+        const sessions = this.sessionStore.listSessions().sessions;
+        if (callerExtensionId === undefined && callerUserHandle === undefined)
+            return sessions;
+        if (!callerExtensionId || !callerUserHandle) {
+            throw new Error('Agent session owner requires both user and extension identity');
+        }
+        return sessions.filter(snapshot => snapshot.session.callerExtensionId === callerExtensionId
+            && snapshot.session.callerUserHandle === callerUserHandle);
+    }
+    async getSession(sessionId) {
+        const actor = this.actors.get(sessionId);
+        return actor
+            ? await actor.perform(writer => writer.snapshot())
+            : this.sessionStore.readSession(sessionId).snapshot;
+    }
+    async sendMessage(sessionId, request, callerExtensionId, callerContext) {
+        this.assertRunning();
+        const content = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.content, 'Agent message', _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.MAX_MESSAGE_CHARS);
+        const actor = this.actor(sessionId);
+        const result = await actor.perform(writer => {
+            const before = writer.snapshot();
+            this.assertOwner(before, callerExtensionId, callerContext?.user.handle);
+            const refName = request.ref ?? _agent_session_model_js__WEBPACK_IMPORTED_MODULE_2__.AGENT_SESSION_MAIN_REF;
+            const ref = before.refs.find(item => item.name === refName);
+            if (!ref)
+                throw new Error(`Agent session ref not found: ${refName}`);
+            if (ref.activeRunId) {
+                const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(before, ref.activeRunId);
+                const delivery = request.delivery === undefined || request.delivery === 'auto'
+                    ? (run.status === 'running' ? 'steer' : 'follow_up')
+                    : request.delivery;
+                const queueId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+                this.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'queue.added',
+                    timestamp: this.now(),
+                    queueId,
+                    ref: refName,
+                    kind: delivery,
+                    content,
+                    runId: run.id,
+                });
+                return { snapshot: writer.snapshot(), runId: run.id, queuedMessageId: queueId, acceptedRunId: null };
+            }
+            const acceptedRunId = this.appendUserAndAcceptRun(writer, refName, content);
+            return {
+                snapshot: writer.snapshot(),
+                runId: acceptedRunId,
+                queuedMessageId: null,
+                acceptedRunId,
+            };
+        });
+        if (callerContext)
+            this.contexts.set(sessionId, callerContext);
+        if (result.acceptedRunId)
+            this.enqueue(sessionId, result.acceptedRunId);
+        return { snapshot: result.snapshot, runId: result.runId, queuedMessageId: result.queuedMessageId };
+    }
+    attachContext(sessionId, callerExtensionId, context) {
+        this.assertRunning();
+        const snapshot = this.sessionStore.readSession(sessionId).snapshot;
+        this.assertOwner(snapshot, callerExtensionId, context.user.handle);
+        if (context.session.extension.id !== callerExtensionId) {
+            throw new Error('Agent caller context does not match the caller extension');
+        }
+        this.contexts.set(sessionId, context);
+    }
+    async resumeRun(sessionId, runId, callerExtensionId, callerContext) {
+        this.assertRunning();
+        const actor = this.actor(sessionId);
+        const snapshot = await actor.perform(writer => {
+            const current = writer.snapshot();
+            this.assertOwner(current, callerExtensionId, callerContext?.user.handle);
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(current, runId);
+            if (run.status !== 'suspended')
+                throw new Error(`Agent run is not suspended: ${run.status}`);
+            this.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.resumed',
+                timestamp: this.now(),
+                runId,
+            });
+            return writer.snapshot();
+        });
+        if (callerContext)
+            this.contexts.set(sessionId, callerContext);
+        this.enqueue(sessionId, runId);
+        return snapshot;
+    }
+    async cancelRun(sessionId, runId) {
+        this.assertRunning();
+        const actor = this.actor(sessionId);
+        const shouldFinalize = await actor.perform(writer => {
+            const snapshot = writer.snapshot();
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(snapshot, runId);
+            if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.TERMINAL_RUNS.has(run.status))
+                return false;
+            if (run.status !== 'cancelling') {
+                this.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'run.cancel_requested',
+                    timestamp: this.now(),
+                    runId,
+                });
+            }
+            return !this.tasks.has(runId);
+        });
+        const queueIndex = this.queue.findIndex(item => item.runId === runId);
+        if (queueIndex !== -1) {
+            this.queue.splice(queueIndex, 1);
+            this.queuedRunIds.delete(runId);
+        }
+        this.controllers.get(runId)?.abort(new Error('Agent run cancelled'));
+        if (shouldFinalize || queueIndex !== -1) {
+            await actor.perform(writer => this.journal.finalizeCancellation(writer, runId, 'Cancelled by user'));
+        }
+        return await actor.perform(writer => writer.snapshot());
+    }
+    async resolveApproval(sessionId, approvalId, decision, resolvedByUserHandle) {
+        this.assertRunning();
+        const actor = this.actor(sessionId);
+        const runId = await actor.perform(writer => {
+            const snapshot = writer.snapshot();
+            const approval = snapshot.approvals.find(item => item.id === approvalId);
+            if (!approval || approval.status !== 'pending') {
+                throw new Error(`Agent approval is no longer pending: ${approvalId}`);
+            }
+            this.journal.resolveApproval(writer, approval, decision === 'approve' ? 'approved' : 'denied', resolvedByUserHandle);
+            return approval.runId;
+        });
+        this.clearApprovalTimer(approvalId);
+        this.enqueue(sessionId, runId);
+        return await actor.perform(writer => writer.snapshot());
+    }
+    registerBrowserTools(userHandle, extensionId, request) {
+        this.assertRunning();
+        return this.tools.registerBrowserTools(userHandle, extensionId, request);
+    }
+    async claimBrowserTool(userHandle, extensionId, request) {
+        this.assertRunning();
+        const browserInstanceId = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.browserInstanceId, 'Browser instance id', 128);
+        const claimId = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.claimId, 'Browser tool claim id', 128);
+        const allowedIds = new Set(this.tools.browserDescriptors(userHandle, extensionId, browserInstanceId).map(tool => tool.id));
+        const requestedCallId = request.callId === undefined
+            ? undefined
+            : (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.callId, 'Browser tool call id', 256);
+        for (const snapshot of this.listSessions(extensionId, userHandle)) {
+            const alreadyClaimed = snapshot.invocations.find(invocation => invocation.execution === 'browser'
+                && invocation.status === 'claimed'
+                && invocation.claimId === claimId
+                && allowedIds.has(invocation.toolId)
+                && (requestedCallId === undefined || invocation.callId === requestedCallId));
+            if (alreadyClaimed) {
+                return { sessionId: snapshot.session.id, invocation: alreadyClaimed };
+            }
+            const candidate = snapshot.invocations.find(invocation => invocation.execution === 'browser'
+                && invocation.status === 'pending'
+                && allowedIds.has(invocation.toolId)
+                && (requestedCallId === undefined || invocation.callId === requestedCallId));
+            if (!candidate)
+                continue;
+            const actor = this.actor(snapshot.session.id);
+            const claimed = await actor.perform(writer => {
+                const current = writer.snapshot();
+                const invocation = current.invocations.find(item => item.id === candidate.id);
+                if (!invocation || invocation.status !== 'pending')
+                    return null;
+                this.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'tool.started',
+                    timestamp: this.now(),
+                    invocationId: invocation.id,
+                    claimId,
+                });
+                return writer.snapshot().invocations.find(item => item.id === invocation.id);
+            });
+            if (claimed)
+                return { sessionId: snapshot.session.id, invocation: claimed };
+        }
+        if (requestedCallId)
+            throw new Error(`Browser tool invocation is unavailable: ${requestedCallId}`);
+        return null;
+    }
+    async submitBrowserToolResult(userHandle, extensionId, request) {
+        this.assertRunning();
+        if (request.status !== 'completed' && request.status !== 'failed' && request.status !== 'cancelled') {
+            throw new Error('Browser tool result status must be completed, failed, or cancelled');
+        }
+        const sessionId = this.runLocations.get((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.runId, 'Agent run id', 128));
+        if (!sessionId)
+            throw new Error(`Agent run not found: ${request.runId}`);
+        const actor = this.actor(sessionId);
+        const result = await actor.perform(writer => {
+            const snapshot = writer.snapshot();
+            this.assertOwner(snapshot, extensionId, userHandle);
+            const invocation = snapshot.invocations.find(item => item.runId === request.runId && item.callId === request.callId);
+            if (!invocation || invocation.execution !== 'browser' || invocation.status !== 'claimed') {
+                throw new Error(`Browser tool invocation is unavailable: ${request.callId}`);
+            }
+            if (invocation.claimId !== request.claimId) {
+                throw new Error(`Browser tool invocation is not claimed by this browser: ${request.callId}`);
+            }
+            const descriptor = this.descriptor(snapshot, invocation.toolId);
+            if (descriptor.source.kind !== 'browser'
+                || descriptor.source.browserInstanceId !== request.browserInstanceId
+                || descriptor.source.userHandle !== userHandle
+                || descriptor.source.extensionId !== extensionId) {
+                throw new Error(`Browser tool invocation owner mismatch: ${request.callId}`);
+            }
+            const timestamp = this.now();
+            if (request.status === 'completed') {
+                this.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'tool.finished',
+                    timestamp,
+                    invocationId: invocation.id,
+                    outcome: 'completed',
+                    result: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.boundedToolValue)(request.result),
+                });
+            }
+            else {
+                this.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'tool.finished',
+                    timestamp,
+                    invocationId: invocation.id,
+                    outcome: request.status,
+                    error: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.error ?? `Browser tool ${request.status}`, 'Browser tool error', 10_000),
+                });
+            }
+            const updated = writer.snapshot().invocations.find(item => item.id === invocation.id);
+            this.journal.appendToolResultMessage(writer, updated);
+            return updated;
+        });
+        this.clearBrowserTimer(result.id);
+        this.enqueue(sessionId, result.runId);
+        return result;
+    }
+    subscribe(sessionId, listener) {
+        this.assertRunning();
+        return this.addListener(sessionId, listener);
+    }
+    async openSubscription(sessionId, listener, callerExtensionId, callerContext) {
+        this.assertRunning();
+        if (callerContext && callerExtensionId && callerContext.session.extension.id !== callerExtensionId) {
+            throw new Error('Agent caller context does not match the caller extension');
+        }
+        const actor = this.actor(sessionId);
+        const opened = await actor.perform(writer => {
+            const snapshot = writer.snapshot();
+            this.assertOwner(snapshot, callerExtensionId, callerContext?.user.handle);
+            return {
+                snapshot,
+                close: this.addListener(sessionId, listener),
+            };
+        });
+        if (callerContext)
+            this.contexts.set(sessionId, callerContext);
+        return opened;
+    }
+    enqueue(sessionId, runId) {
+        if (this.stopping || this.queuedRunIds.has(runId))
+            return;
+        if (this.tasks.has(runId)) {
+            this.wakeAfterTask.add(runId);
+            return;
+        }
+        const snapshot = this.actors.get(sessionId)?.writer.snapshot() ?? this.sessionStore.readSession(sessionId).snapshot;
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(snapshot, runId);
+        if (run.status !== 'queued' && run.status !== 'running')
+            return;
+        this.queue.push({ sessionId, runId, userHandle: snapshot.session.callerUserHandle });
+        this.queuedRunIds.add(runId);
+        this.drainQueue();
+    }
+    drainQueue() {
+        if (this.stopping)
+            return;
+        while (this.tasks.size < this.maxConcurrentRuns && this.queue.length > 0) {
+            const index = this.nextRunnableQueueIndex();
+            if (index === -1)
+                return;
+            const scheduled = this.queue.splice(index, 1)[0];
+            this.queuedRunIds.delete(scheduled.runId);
+            const task = this.executeRun(scheduled.sessionId, scheduled.runId)
+                .catch(error => this.handleRunFailure(scheduled.sessionId, scheduled.runId, error))
+                .finally(() => {
+                this.tasks.delete(scheduled.runId);
+                this.controllers.delete(scheduled.runId);
+                const shouldWake = this.wakeAfterTask.delete(scheduled.runId);
+                if (shouldWake && !this.stopping) {
+                    this.enqueue(scheduled.sessionId, scheduled.runId);
+                }
+                this.drainQueue();
+            });
+            this.tasks.set(scheduled.runId, task);
+        }
+    }
+    nextRunnableQueueIndex() {
+        const activeByUser = new Map();
+        for (const runId of this.tasks.keys()) {
+            const sessionId = this.runLocations.get(runId);
+            if (!sessionId)
+                continue;
+            const snapshot = this.actors.get(sessionId)?.writer.snapshot() ?? this.sessionStore.readSession(sessionId).snapshot;
+            const user = snapshot.session.callerUserHandle;
+            activeByUser.set(user, (activeByUser.get(user) ?? 0) + 1);
+        }
+        return this.queue.findIndex(item => (activeByUser.get(item.userHandle) ?? 0) < this.maxConcurrentRunsPerUser);
+    }
+    async executeRun(sessionId, runId) {
+        const controller = new AbortController();
+        this.controllers.set(runId, controller);
+        await this.executor.execute(sessionId, runId, controller.signal);
+    }
+    async handleRunFailure(sessionId, runId, error) {
+        const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.errorMessage)(error);
+        console.warn(`[authority] Agent session run ${runId} failed unexpectedly: ${message}`);
+        try {
+            await this.actor(sessionId).perform(writer => {
+                const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(writer.snapshot(), runId);
+                if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.TERMINAL_RUNS.has(run.status) || run.status === 'suspended' || run.status === 'waiting_approval')
+                    return;
+                if (run.status === 'cancelling') {
+                    this.journal.finalizeCancellation(writer, runId, 'Cancelled while the Agent run was unwinding');
+                    return;
+                }
+                this.recovery.interruptActiveRun(writer, runId, `Agent execution failed unexpectedly and was suspended: ${message}`);
+            });
+        }
+        catch (recoveryError) {
+            console.warn(`[authority] Unable to persist failure state for Agent session run ${runId}: ${(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.errorMessage)(recoveryError)}`);
+        }
+    }
+    scheduleApprovalExpiry(sessionId, approval) {
+        if (approval.status !== 'pending' || !approval.expiresAt)
+            return;
+        this.clearApprovalTimer(approval.id);
+        const delayMs = Math.max(0, Date.parse(approval.expiresAt) - Date.now());
+        const timer = setTimeout(() => {
+            void this.expireApproval(sessionId, approval.id).catch(error => {
+                console.warn(`[authority] Unable to expire Agent session approval ${approval.id}: ${(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.errorMessage)(error)}`);
+            });
+        }, Math.min(delayMs, 0x7fffffff));
+        timer.unref();
+        this.approvalTimers.set(approval.id, timer);
+    }
+    async expireApproval(sessionId, approvalId) {
+        const actor = this.actor(sessionId);
+        const runId = await actor.perform(writer => {
+            const approval = writer.snapshot().approvals.find(item => item.id === approvalId);
+            if (!approval || approval.status !== 'pending')
+                return null;
+            this.journal.resolveApproval(writer, approval, 'expired');
+            return approval.runId;
+        });
+        this.clearApprovalTimer(approvalId);
+        if (runId)
+            this.enqueue(sessionId, runId);
+    }
+    clearApprovalTimer(approvalId) {
+        const timer = this.approvalTimers.get(approvalId);
+        if (timer)
+            clearTimeout(timer);
+        this.approvalTimers.delete(approvalId);
+    }
+    scheduleBrowserExpiry(sessionId, invocation) {
+        if (!invocation.deadlineAt || (invocation.status !== 'pending' && invocation.status !== 'claimed'))
+            return;
+        this.clearBrowserTimer(invocation.id);
+        const delayMs = Math.max(0, Date.parse(invocation.deadlineAt) - Date.now());
+        const timer = setTimeout(() => {
+            void this.expireBrowserTool(sessionId, invocation.id).catch(error => {
+                console.warn(`[authority] Unable to expire Agent browser tool ${invocation.id}: ${(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.errorMessage)(error)}`);
+            });
+        }, Math.min(delayMs, 0x7fffffff));
+        timer.unref();
+        this.browserTimers.set(invocation.id, timer);
+    }
+    async expireBrowserTool(sessionId, invocationId) {
+        const actor = this.actor(sessionId);
+        const result = await actor.perform(writer => {
+            const snapshot = writer.snapshot();
+            const invocation = snapshot.invocations.find(item => item.id === invocationId);
+            if (!invocation || (invocation.status !== 'pending' && invocation.status !== 'claimed'))
+                return null;
+            const claimed = invocation.status === 'claimed';
+            const message = claimed
+                ? 'Browser tool timed out after it was claimed; its side effects are unknown'
+                : 'Browser tool timed out before it was claimed';
+            if (claimed) {
+                this.journal.recordUnknownToolOutcome(writer, invocation, message);
+                this.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'run.suspended',
+                    timestamp: this.now(),
+                    runId: invocation.runId,
+                    reason: message,
+                });
+                return { runId: invocation.runId, resume: false };
+            }
+            this.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'tool.finished',
+                timestamp: this.now(),
+                invocationId,
+                outcome: 'timed_out',
+                error: message,
+            });
+            this.journal.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === invocationId));
+            return { runId: invocation.runId, resume: true };
+        });
+        this.clearBrowserTimer(invocationId);
+        if (result?.resume)
+            this.enqueue(sessionId, result.runId);
+    }
+    clearBrowserTimer(invocationId) {
+        const timer = this.browserTimers.get(invocationId);
+        if (timer)
+            clearTimeout(timer);
+        this.browserTimers.delete(invocationId);
+    }
+    finishRunAndStartFollowUp(writer, runId, outcome, finalText, error) {
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(writer.snapshot(), runId);
+        this.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'run.finished',
+            timestamp: this.now(),
+            runId,
+            outcome,
+            ...(finalText === undefined ? {} : { finalText }),
+            ...(error === undefined ? {} : { error }),
+        });
+        const snapshot = writer.snapshot();
+        const next = snapshot.pendingMessages
+            .filter(item => item.ref === run.ref && (item.kind === 'follow_up' || item.kind === 'next_run'))
+            .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0];
+        if (!next)
+            return null;
+        const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRef)(snapshot, run.ref);
+        const messageId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        this.append(writer, {
+            id: messageId,
+            type: 'conversation.message',
+            timestamp: this.now(),
+            ref: run.ref,
+            parentId: ref.leafEntryId,
+            role: 'user',
+            content: next.content,
+            consumedQueueId: next.id,
+        });
+        const nextRunId = this.acceptRun(writer, run.ref, messageId);
+        this.runLocations.set(nextRunId, snapshot.session.id);
+        return nextRunId;
+    }
+    appendUserAndAcceptRun(writer, refName, content) {
+        const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRef)(writer.snapshot(), refName);
+        const messageId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        this.append(writer, {
+            id: messageId,
+            type: 'conversation.message',
+            timestamp: this.now(),
+            ref: refName,
+            parentId: ref.leafEntryId,
+            role: 'user',
+            content,
+        });
+        const runId = this.acceptRun(writer, refName, messageId);
+        this.runLocations.set(runId, writer.snapshot().session.id);
+        return runId;
+    }
+    acceptRun(writer, refName, triggerMessageId) {
+        const snapshot = writer.snapshot();
+        (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.assertRunCapacity)(snapshot, this.listSessions());
+        const runId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        this.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'run.accepted',
+            timestamp: this.now(),
+            runId,
+            ref: refName,
+            triggerMessageId,
+            profileId: snapshot.session.profileId,
+            mode: snapshot.session.mode,
+            allowedTools: snapshot.session.allowedTools,
+            maxSteps: snapshot.session.maxSteps,
+        });
+        return runId;
+    }
+    async suspendQueuedRun(sessionId, runId, reason) {
+        const actor = this.actor(sessionId);
+        await actor.perform(writer => {
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(writer.snapshot(), runId);
+            if (run.status === 'queued') {
+                this.append(writer, { id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(), type: 'run.suspended', timestamp: this.now(), runId, reason });
+            }
+        });
+    }
+    descriptor(snapshot, toolId) {
+        const descriptor = this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId)
+            .find(tool => tool.id === toolId);
+        if (!descriptor)
+            throw new Error(`Agent tool is unavailable: ${toolId}`);
+        return descriptor;
+    }
+    actor(sessionId) {
+        const existing = this.actors.get(sessionId);
+        if (existing)
+            return existing;
+        const actor = new SessionActor(this.sessionStore.openWriter(sessionId));
+        this.actors.set(sessionId, actor);
+        return actor;
+    }
+    append(writer, entry) {
+        const record = writer.append(entry);
+        for (const listener of this.listeners.get(writer.sessionId) ?? []) {
+            try {
+                listener(record);
+            }
+            catch (error) {
+                console.warn(`[authority] Agent session listener failed: ${(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.errorMessage)(error)}`);
+            }
+        }
+        return record;
+    }
+    addListener(sessionId, listener) {
+        const listeners = this.listeners.get(sessionId) ?? new Set();
+        listeners.add(listener);
+        this.listeners.set(sessionId, listeners);
+        return () => {
+            listeners.delete(listener);
+            if (listeners.size === 0)
+                this.listeners.delete(sessionId);
+        };
+    }
+    assertOwner(snapshot, extensionId, userHandle) {
+        if (extensionId === undefined && userHandle === undefined)
+            return;
+        if (!extensionId || !userHandle
+            || snapshot.session.callerExtensionId !== extensionId
+            || snapshot.session.callerUserHandle !== userHandle) {
+            throw new Error(`Agent session not found: ${snapshot.session.id}`);
+        }
+    }
+    assertRunning() {
+        if (!this.started || this.stopping)
+            throw new Error('Agent session runtime is not running');
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-runtime-support.ts"
+/*!*******************************************************!*\
+  !*** ./src/services/agent-session-runtime-support.ts ***!
+  \*******************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   MAX_ACTIVE_RUNS: () => (/* binding */ MAX_ACTIVE_RUNS),
+/* harmony export */   MAX_ACTIVE_RUNS_PER_CALLER: () => (/* binding */ MAX_ACTIVE_RUNS_PER_CALLER),
+/* harmony export */   MAX_ACTIVE_RUNS_PER_USER: () => (/* binding */ MAX_ACTIVE_RUNS_PER_USER),
+/* harmony export */   MAX_CONTEXT_CHARS: () => (/* binding */ MAX_CONTEXT_CHARS),
+/* harmony export */   MAX_MESSAGE_CHARS: () => (/* binding */ MAX_MESSAGE_CHARS),
+/* harmony export */   MAX_TOOL_ARGUMENT_CHARS: () => (/* binding */ MAX_TOOL_ARGUMENT_CHARS),
+/* harmony export */   MAX_TOOL_RESULT_CHARS: () => (/* binding */ MAX_TOOL_RESULT_CHARS),
+/* harmony export */   TERMINAL_RUNS: () => (/* binding */ TERMINAL_RUNS),
+/* harmony export */   TERMINAL_TOOLS: () => (/* binding */ TERMINAL_TOOLS),
+/* harmony export */   activeGeneration: () => (/* binding */ activeGeneration),
+/* harmony export */   activeInvocation: () => (/* binding */ activeInvocation),
+/* harmony export */   activeStep: () => (/* binding */ activeStep),
+/* harmony export */   assertRunCapacity: () => (/* binding */ assertRunCapacity),
+/* harmony export */   boundedToolValue: () => (/* binding */ boundedToolValue),
+/* harmony export */   conversationMessages: () => (/* binding */ conversationMessages),
+/* harmony export */   delay: () => (/* binding */ delay),
+/* harmony export */   errorMessage: () => (/* binding */ errorMessage),
+/* harmony export */   formatInitialMessage: () => (/* binding */ formatInitialMessage),
+/* harmony export */   isObject: () => (/* binding */ isObject),
+/* harmony export */   isPlanSafeTool: () => (/* binding */ isPlanSafeTool),
+/* harmony export */   isTimeoutMessage: () => (/* binding */ isTimeoutMessage),
+/* harmony export */   mapLlmTools: () => (/* binding */ mapLlmTools),
+/* harmony export */   normalizeAllowedTools: () => (/* binding */ normalizeAllowedTools),
+/* harmony export */   normalizeMode: () => (/* binding */ normalizeMode),
+/* harmony export */   parseToolArguments: () => (/* binding */ parseToolArguments),
+/* harmony export */   requireRef: () => (/* binding */ requireRef),
+/* harmony export */   requireRun: () => (/* binding */ requireRun),
+/* harmony export */   requiredText: () => (/* binding */ requiredText),
+/* harmony export */   selectOne: () => (/* binding */ selectOne),
+/* harmony export */   titleFromMessage: () => (/* binding */ titleFromMessage)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+
+const MAX_CONTEXT_CHARS = 64 * 1024;
+const MAX_MESSAGE_CHARS = 2 * 1024 * 1024;
+const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
+const MAX_TOOL_RESULT_CHARS = 256 * 1024;
+const MAX_ACTIVE_RUNS = 100;
+const MAX_ACTIVE_RUNS_PER_USER = 32;
+const MAX_ACTIVE_RUNS_PER_CALLER = 16;
+const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_TOOLS = new Set([
+    'completed', 'failed', 'cancelled', 'outcome_unknown', 'timed_out',
+]);
+function activeStep(snapshot, runId) {
+    return snapshot.steps.find(step => step.runId === runId && step.status === 'running');
+}
+function activeGeneration(snapshot, stepId) {
+    return snapshot.generations.find(generation => generation.stepId === stepId && generation.status === 'running');
+}
+function activeInvocation(snapshot, stepId) {
+    return snapshot.invocations.find(invocation => invocation.stepId === stepId && !TERMINAL_TOOLS.has(invocation.status));
+}
+function requireRun(snapshot, runId) {
+    const run = snapshot.runs.find(item => item.id === runId);
+    if (!run)
+        throw new Error(`Agent session run not found: ${runId}`);
+    return run;
+}
+function requireRef(snapshot, refName) {
+    const ref = snapshot.refs.find(item => item.name === refName);
+    if (!ref)
+        throw new Error(`Agent session ref not found: ${refName}`);
+    return ref;
+}
+function conversationMessages(snapshot, run) {
+    const path = new Set(snapshot.activePaths[run.ref] ?? []);
+    const active = snapshot.conversation.filter(entry => path.has(entry.id));
+    const lastCompaction = [...active].reverse().find(entry => entry.kind === 'compaction');
+    const messages = [{ role: 'system', content: systemPrompt(snapshot.session.workspaceId, run.mode) }];
+    if (lastCompaction?.kind === 'compaction') {
+        messages.push({ role: 'system', content: `Conversation summary:\n${lastCompaction.summary}` });
+        const keep = new Set(lastCompaction.retainedEntryIds);
+        for (const entry of active) {
+            if (entry.sequence <= lastCompaction.sequence && !keep.has(entry.id))
+                continue;
+            appendProjectedMessage(messages, entry);
+        }
+        return messages;
+    }
+    for (const entry of active)
+        appendProjectedMessage(messages, entry);
+    return messages;
+}
+function appendProjectedMessage(messages, entry) {
+    if (entry.kind === 'branch_summary') {
+        messages.push({ role: 'system', content: `Earlier branch summary:\n${entry.summary}` });
+    }
+    else if (entry.kind === 'message') {
+        messages.push({
+            role: entry.role,
+            content: entry.content,
+            ...(entry.toolCallId ? { toolCallId: entry.toolCallId } : {}),
+            ...(entry.toolCalls ? { toolCalls: entry.toolCalls } : {}),
+        });
+    }
+}
+function mapLlmTools(descriptors) {
+    const nameToId = new Map();
+    const definitions = descriptors.map(descriptor => {
+        const name = llmToolName(descriptor.id);
+        if (nameToId.has(name))
+            throw new Error(`Agent tool name collision: ${descriptor.id}`);
+        nameToId.set(name, descriptor.id);
+        return {
+            type: 'function',
+            function: { name, description: descriptor.description, parameters: descriptor.inputSchema },
+        };
+    });
+    return { definitions, nameToId };
+}
+function llmToolName(toolId) {
+    const normalized = toolId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (normalized === toolId && normalized.length <= 64)
+        return normalized;
+    return `${normalized.slice(0, 51)}_${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(toolId).digest('hex').slice(0, 12)}`;
+}
+function isPlanSafeTool(tool) {
+    return tool.execution === 'host' && !tool.mutatesWorkspace && tool.approvalPolicy === 'never';
+}
+function normalizeMode(value) {
+    if (value === undefined)
+        return 'ask';
+    if (value !== 'plan' && value !== 'ask' && value !== 'auto')
+        throw new Error('Agent mode must be plan, ask, or auto');
+    return value;
+}
+function normalizeAllowedTools(value, available) {
+    const ids = new Set(available.map(tool => tool.id));
+    if (value === undefined)
+        return [...ids];
+    if (!Array.isArray(value) || value.length > 128 || value.some(item => typeof item !== 'string')) {
+        throw new Error('allowedTools must be an array of at most 128 tool ids');
+    }
+    const result = [...new Set(value)];
+    for (const id of result) {
+        if (!ids.has(id))
+            throw new Error(`Unknown Agent tool: ${id}`);
+    }
+    return result;
+}
+function assertRunCapacity(current, sessions) {
+    const active = sessions.flatMap(snapshot => snapshot.runs.map(run => ({ snapshot, run })))
+        .filter(item => !TERMINAL_RUNS.has(item.run.status));
+    const userRuns = active.filter(item => item.snapshot.session.callerUserHandle === current.session.callerUserHandle);
+    const callerRuns = userRuns.filter(item => item.snapshot.session.callerExtensionId === current.session.callerExtensionId);
+    if (active.length >= MAX_ACTIVE_RUNS
+        || userRuns.length >= MAX_ACTIVE_RUNS_PER_USER
+        || callerRuns.length >= MAX_ACTIVE_RUNS_PER_CALLER) {
+        throw new Error('Agent session run queue limit reached');
+    }
+}
+function selectOne(requestedId, items, id, label) {
+    if (requestedId !== undefined) {
+        const selected = items.find(item => id(item) === requestedId);
+        if (!selected)
+            throw new Error(`Agent ${label} not found: ${requestedId}`);
+        return selected;
+    }
+    if (items.length !== 1) {
+        throw new Error(items.length === 0
+            ? `No Agent ${label} is configured`
+            : `Agent ${label} must be selected because multiple are configured`);
+    }
+    return items[0];
+}
+function parseToolArguments(value) {
+    if (value.length > MAX_TOOL_ARGUMENT_CHARS)
+        throw new Error('Tool arguments exceed the 128 KB limit');
+    let parsed;
+    try {
+        parsed = JSON.parse(value);
+    }
+    catch (error) {
+        throw new Error(`Tool arguments are invalid JSON: ${errorMessage(error)}`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Tool arguments must be a JSON object');
+    }
+    return parsed;
+}
+function boundedToolValue(value) {
+    const normalized = value === undefined ? null : value;
+    const serialized = JSON.stringify(normalized);
+    if (serialized.length <= MAX_TOOL_RESULT_CHARS)
+        return normalized;
+    return {
+        truncated: true,
+        originalChars: serialized.length,
+        preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS - 1_000),
+    };
+}
+function formatInitialMessage(message, instructions, context) {
+    const content = requiredText(message, 'Agent message', MAX_MESSAGE_CHARS);
+    const normalizedInstructions = instructions === undefined
+        ? undefined
+        : requiredText(instructions, 'Agent instructions', 20_000);
+    let serializedContext;
+    if (context !== undefined) {
+        try {
+            serializedContext = JSON.stringify(context);
+        }
+        catch (error) {
+            throw new Error(`Agent context must be JSON serializable: ${errorMessage(error)}`);
+        }
+        if (serializedContext.length > MAX_CONTEXT_CHARS)
+            throw new Error('Agent context exceeds the 64 KB limit');
+    }
+    return [
+        content,
+        ...(normalizedInstructions ? [`Additional instructions:\n${normalizedInstructions}`] : []),
+        ...(serializedContext ? [`Caller context (JSON):\n${serializedContext}`] : []),
+    ].join('\n\n');
+}
+function titleFromMessage(message) {
+    const firstLine = message.split(/\r?\n/, 1)[0].trim();
+    return (firstLine || 'New Agent session').slice(0, 120);
+}
+function systemPrompt(workspaceId, mode) {
+    return [
+        'You are Authority Agent, an IDE-grade operator for a registered SillyTavern workspace.',
+        `Registered workspace: ${workspaceId}. All tool paths are relative to its private root.`,
+        `Execution mode: ${mode}.`,
+        'This is a persistent session. Use the conversation as durable context and treat tool results as authoritative.',
+        'Inspect relevant files before changing them. Use registered tools for every action and rely on their returned results.',
+        'Keep writes narrow. Shell commands checkpoint the workspace except .git and node_modules, and always require approval because those paths and effects outside the workspace cannot be rolled back.',
+        mode === 'plan'
+            ? 'Plan mode is read-only: only Authority host inspection tools are available.'
+            : mode === 'ask'
+                ? 'Ask mode pauses before each workspace mutation so the user can approve or deny it.'
+                : 'Auto mode may execute workspace mutations without pausing; every mutation is still checkpointed for rollback.',
+        'When the current request is complete, return a concise result and verification status. The session remains open for follow-up work.',
+    ].join('\n');
+}
+function requiredText(value, label, maxLength) {
+    if (typeof value !== 'string' || !value.trim())
+        throw new Error(`${label} is required`);
+    const result = value.trim();
+    if (result.length > maxLength)
+        throw new Error(`${label} exceeds ${maxLength} characters`);
+    return result;
+}
+function isTimeoutMessage(message) {
+    return /timed? out|timeout/i.test(message);
+}
+function isObject(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-store-service.ts"
+/*!*****************************************************!*\
+  !*** ./src/services/agent-session-store-service.ts ***!
+  \*****************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentSessionStoreService: () => (/* binding */ AgentSessionStoreService),
+/* harmony export */   AgentSessionWriter: () => (/* binding */ AgentSessionWriter)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:os */ "node:os");
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_os__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./agent-session-model.js */ "./src/services/agent-session-model.ts");
+
+
+
+
+
+
+const JOURNAL_FORMAT = 'authority-agent-session-journal/v1';
+const LOCK_FORMAT = 'authority-agent-session-writer-lock/v1';
+const SAFE_FILE_ID = /^[a-zA-Z0-9._-]+$/;
+const HASH_PATTERN = /^[a-f0-9]{64}$/;
+const DEFAULT_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_JOURNAL_BYTES = 512 * 1024 * 1024;
+const DEFAULT_STALE_LOCK_MS = 5 * 60_000;
+class AgentSessionStoreService {
+    stateDir;
+    now;
+    hostname;
+    pid;
+    isProcessAlive;
+    maxEntryBytes;
+    maxJournalBytes;
+    staleLockMs;
+    constructor(stateDir, options = {}) {
+        this.stateDir = stateDir;
+        this.stateDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stateDir);
+        this.now = options.now ?? (() => new Date().toISOString());
+        this.hostname = options.hostname ?? node_os__WEBPACK_IMPORTED_MODULE_2___default().hostname();
+        this.pid = options.pid ?? process.pid;
+        this.isProcessAlive = options.isProcessAlive ?? processIsAlive;
+        this.maxEntryBytes = positiveInteger(options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES, 'Agent session entry byte limit');
+        this.maxJournalBytes = positiveInteger(options.maxJournalBytes ?? DEFAULT_MAX_JOURNAL_BYTES, 'Agent session journal byte limit');
+        this.staleLockMs = nonNegativeInteger(options.staleLockMs ?? DEFAULT_STALE_LOCK_MS, 'Agent session stale lock duration');
+    }
+    start() {
+        protectDirectory(this.stateDir);
+        protectDirectory(this.sessionsDir());
+        return this.listSessions();
+    }
+    createSession(input) {
+        protectDirectory(this.sessionsDir());
+        const sessionId = input.id ?? node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        assertFileId(sessionId, 'Agent session id');
+        const timestamp = this.now();
+        const entry = {
+            id: sessionId,
+            type: 'session.created',
+            timestamp,
+            callerUserHandle: requiredText(input.callerUserHandle, 'Agent session caller user', 200),
+            callerExtensionId: requiredText(input.callerExtensionId, 'Agent session caller extension', 200),
+            workspaceId: requiredText(input.workspaceId, 'Agent session workspace', 200),
+            title: requiredText(input.title, 'Agent session title', 500),
+            profileId: requiredText(input.profileId, 'Agent session profile', 200),
+            mode: executionMode(input.mode),
+            allowedTools: textArray(input.allowedTools, 'Agent session allowed tools', 512),
+            maxSteps: boundedInteger(input.maxSteps, 'Agent session max steps', 1, 1_000),
+        };
+        validateJournalEntry(entry);
+        const record = createRecord(sessionId, 1, null, entry);
+        const serialized = `${JSON.stringify(record)}\n`;
+        this.assertEntrySize(serialized);
+        const sessionDir = this.sessionDir(sessionId);
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(sessionDir);
+        }
+        catch (error) {
+            if (isNodeError(error, 'EEXIST'))
+                throw new Error(`Agent session already exists: ${sessionId}`);
+            throw error;
+        }
+        protectDirectory(sessionDir);
+        try {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(this.journalPath(sessionId), serialized);
+            protectFile(this.journalPath(sessionId));
+            return this.readSession(sessionId).snapshot;
+        }
+        catch (error) {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(sessionDir, { recursive: true, force: true });
+            throw error;
+        }
+    }
+    readSession(sessionId) {
+        const loaded = this.loadJournal(sessionId);
+        return {
+            snapshot: (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.snapshotAgentSession)(loaded.projection),
+            records: structuredClone(loaded.records),
+            tail: { ...loaded.tail },
+        };
+    }
+    listSessions() {
+        protectDirectory(this.sessionsDir());
+        const sessions = [];
+        const problems = [];
+        for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(this.sessionsDir(), { withFileTypes: true })) {
+            if (!entry.isDirectory() || !SAFE_FILE_ID.test(entry.name))
+                continue;
+            try {
+                sessions.push(this.readSession(entry.name).snapshot);
+            }
+            catch (error) {
+                problems.push({ sessionId: entry.name, error: errorMessage(error) });
+            }
+        }
+        sessions.sort((left, right) => right.session.updatedAt.localeCompare(left.session.updatedAt)
+            || right.session.id.localeCompare(left.session.id));
+        problems.sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+        return { sessions, problems };
+    }
+    openWriter(sessionId) {
+        assertFileId(sessionId, 'Agent session id');
+        const lock = this.acquireWriterLock(sessionId);
+        try {
+            const loaded = this.loadJournal(sessionId);
+            if (loaded.tail.tornTailBytes > 0) {
+                truncateAndSync(this.journalPath(sessionId), loaded.validBytes);
+                loaded.totalBytes = loaded.validBytes;
+                loaded.tail.tornTailBytes = 0;
+            }
+            if (loaded.tail.missingFinalNewline) {
+                appendAndSync(this.journalPath(sessionId), '\n');
+                loaded.totalBytes += 1;
+                loaded.tail.missingFinalNewline = false;
+            }
+            return new AgentSessionWriter(sessionId, this.journalPath(sessionId), this.writerLockPath(sessionId), lock, loaded, this.maxEntryBytes, this.maxJournalBytes);
+        }
+        catch (error) {
+            releaseWriterLock(this.writerLockPath(sessionId), lock.token);
+            throw error;
+        }
+    }
+    loadJournal(sessionId) {
+        assertFileId(sessionId, 'Agent session id');
+        const journalPath = this.journalPath(sessionId);
+        const stats = node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(journalPath);
+        if (stats.size > this.maxJournalBytes) {
+            throw new Error(`Agent session journal exceeds the ${this.maxJournalBytes} byte limit: ${sessionId}`);
+        }
+        const buffer = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(journalPath);
+        const projection = (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.createAgentSessionProjection)();
+        const records = [];
+        const recordsByEntryId = new Map();
+        let cursor = 0;
+        let validBytes = 0;
+        let tornTailBytes = 0;
+        let missingFinalNewline = false;
+        while (cursor < buffer.length) {
+            const newline = buffer.indexOf(0x0a, cursor);
+            const isTail = newline === -1;
+            const end = isTail ? buffer.length : newline;
+            const line = buffer.subarray(cursor, end);
+            if (line.length === 0) {
+                if (isTail)
+                    break;
+                throw new Error(`Agent session journal contains an empty record at byte ${cursor}: ${sessionId}`);
+            }
+            if (line.length > this.maxEntryBytes) {
+                throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit: ${sessionId}`);
+            }
+            let parsed;
+            try {
+                parsed = JSON.parse(line.toString('utf8'));
+            }
+            catch (error) {
+                if (!isTail)
+                    throw error;
+                tornTailBytes = buffer.length - cursor;
+                break;
+            }
+            const record = parseJournalRecord(parsed, sessionId);
+            const canonicalEntry = canonicalJson(record.entry);
+            (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.applyAgentSessionRecord)(projection, record, canonicalEntry);
+            records.push(record);
+            recordsByEntryId.set(record.entry.id, record);
+            validBytes = isTail ? end : end + 1;
+            if (isTail)
+                missingFinalNewline = true;
+            cursor = end + 1;
+        }
+        if (records.length === 0)
+            throw new Error(`Agent session journal has no valid records: ${sessionId}`);
+        return {
+            projection,
+            records,
+            recordsByEntryId,
+            tail: { tornTailBytes, missingFinalNewline },
+            validBytes,
+            totalBytes: buffer.length,
+        };
+    }
+    acquireWriterLock(sessionId) {
+        const lockPath = this.writerLockPath(sessionId);
+        const record = {
+            format: LOCK_FORMAT,
+            token: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            pid: this.pid,
+            hostname: this.hostname,
+            createdAt: this.now(),
+        };
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            let descriptor = null;
+            try {
+                descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(lockPath, 'wx');
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(descriptor, `${JSON.stringify(record)}\n`);
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().fsyncSync(descriptor);
+                node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+                descriptor = null;
+                protectFile(lockPath);
+                return record;
+            }
+            catch (error) {
+                if (descriptor !== null)
+                    node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+                if (!isNodeError(error, 'EEXIST'))
+                    throw error;
+                if (attempt > 0 || !this.claimStaleLock(lockPath)) {
+                    throw new Error(`Agent session already has an active writer: ${sessionId}`);
+                }
+            }
+        }
+        throw new Error(`Unable to acquire Agent session writer lock: ${sessionId}`);
+    }
+    claimStaleLock(lockPath) {
+        let stale = false;
+        try {
+            const value = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(lockPath, 'utf8'));
+            if (value.format === LOCK_FORMAT && typeof value.hostname === 'string' && value.hostname) {
+                if (value.hostname !== this.hostname)
+                    return false;
+                if (typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid))
+                    return false;
+                stale = !this.isProcessAlive(value.pid);
+            }
+            else {
+                stale = Date.now() - node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(lockPath).mtimeMs >= this.staleLockMs;
+            }
+        }
+        catch {
+            try {
+                stale = Date.now() - node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(lockPath).mtimeMs >= this.staleLockMs;
+            }
+            catch {
+                return true;
+            }
+        }
+        if (!stale)
+            return false;
+        const claimedPath = `${lockPath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.stale`;
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(lockPath, claimedPath);
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().rmSync(claimedPath, { force: true });
+            return true;
+        }
+        catch (error) {
+            if (isNodeError(error, 'ENOENT'))
+                return true;
+            return false;
+        }
+    }
+    assertEntrySize(serialized) {
+        const bytes = Buffer.byteLength(serialized, 'utf8');
+        if (bytes > this.maxEntryBytes) {
+            throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit`);
+        }
+    }
+    sessionsDir() {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.stateDir, 'sessions');
+    }
+    sessionDir(sessionId) {
+        assertFileId(sessionId, 'Agent session id');
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.sessionsDir(), sessionId);
+    }
+    journalPath(sessionId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.sessionDir(sessionId), 'journal.jsonl');
+    }
+    writerLockPath(sessionId) {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.sessionDir(sessionId), 'writer.lock');
+    }
+}
+class AgentSessionWriter {
+    sessionId;
+    journalPath;
+    lockPath;
+    lock;
+    maxEntryBytes;
+    maxJournalBytes;
+    projection;
+    records;
+    recordsByEntryId;
+    totalBytes;
+    closed = false;
+    faulted = false;
+    constructor(sessionId, journalPath, lockPath, lock, loaded, maxEntryBytes, maxJournalBytes) {
+        this.sessionId = sessionId;
+        this.journalPath = journalPath;
+        this.lockPath = lockPath;
+        this.lock = lock;
+        this.maxEntryBytes = maxEntryBytes;
+        this.maxJournalBytes = maxJournalBytes;
+        this.projection = loaded.projection;
+        this.records = loaded.records;
+        this.recordsByEntryId = loaded.recordsByEntryId;
+        this.totalBytes = loaded.totalBytes;
+    }
+    append(entry) {
+        this.assertWritable();
+        validateJournalEntry(entry);
+        const canonicalEntry = canonicalJson(entry);
+        const existingBody = this.projection.entryBodies.get(entry.id);
+        if (existingBody !== undefined) {
+            if (existingBody !== canonicalEntry)
+                throw new Error(`Agent session entry id was reused with different content: ${entry.id}`);
+            return structuredClone(this.recordsByEntryId.get(entry.id));
+        }
+        const record = createRecord(this.sessionId, this.projection.lastSequence + 1, this.projection.lastHash || null, entry);
+        const serialized = `${JSON.stringify(record)}\n`;
+        const entryBytes = Buffer.byteLength(serialized, 'utf8');
+        if (entryBytes > this.maxEntryBytes)
+            throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit`);
+        if (this.totalBytes + entryBytes > this.maxJournalBytes) {
+            throw new Error(`Agent session journal exceeds the ${this.maxJournalBytes} byte limit: ${this.sessionId}`);
+        }
+        const nextProjection = structuredClone(this.projection);
+        (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.applyAgentSessionRecord)(nextProjection, record, canonicalEntry);
+        try {
+            appendAndSync(this.journalPath, serialized);
+        }
+        catch (error) {
+            this.faulted = true;
+            throw error;
+        }
+        this.projection = nextProjection;
+        this.records.push(record);
+        this.recordsByEntryId.set(entry.id, record);
+        this.totalBytes += entryBytes;
+        return structuredClone(record);
+    }
+    snapshot() {
+        return (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.snapshotAgentSession)(this.projection);
+    }
+    close() {
+        if (this.closed)
+            return;
+        this.closed = true;
+        releaseWriterLock(this.lockPath, this.lock.token);
+    }
+    assertWritable() {
+        if (this.closed)
+            throw new Error(`Agent session writer is closed: ${this.sessionId}`);
+        if (this.faulted)
+            throw new Error(`Agent session writer is faulted: ${this.sessionId}`);
+        const current = readWriterLock(this.lockPath);
+        if (!current || current.token !== this.lock.token) {
+            this.faulted = true;
+            throw new Error(`Agent session writer lock was lost: ${this.sessionId}`);
+        }
+    }
+}
+function createRecord(sessionId, sequence, previousHash, entry) {
+    const unsigned = {
+        format: JOURNAL_FORMAT,
+        sessionId,
+        sequence,
+        previousHash,
+        entry: structuredClone(entry),
+    };
+    return {
+        ...unsigned,
+        hash: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(canonicalJson(unsigned)).digest('hex'),
+    };
+}
+function parseJournalRecord(value, expectedSessionId) {
+    if (!isObject(value)
+        || value.format !== JOURNAL_FORMAT
+        || value.sessionId !== expectedSessionId
+        || !Number.isSafeInteger(value.sequence)
+        || value.sequence < 1
+        || (value.previousHash !== null && (typeof value.previousHash !== 'string' || !HASH_PATTERN.test(value.previousHash)))
+        || typeof value.hash !== 'string'
+        || !HASH_PATTERN.test(value.hash)) {
+        throw new Error(`Invalid Agent session journal record for ${expectedSessionId}`);
+    }
+    validateJournalEntry(value.entry);
+    const unsigned = {
+        format: value.format,
+        sessionId: value.sessionId,
+        sequence: value.sequence,
+        previousHash: value.previousHash,
+        entry: value.entry,
+    };
+    const expectedHash = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(canonicalJson(unsigned)).digest('hex');
+    if (value.hash !== expectedHash) {
+        throw new Error(`Agent session journal hash mismatch at sequence ${String(value.sequence)}`);
+    }
+    return value;
+}
+function validateJournalEntry(value) {
+    assertJsonValue(value, 'Agent session entry');
+    if (!isObject(value))
+        throw new Error('Agent session entry must be an object');
+    const type = requiredText(value.type, 'Agent session entry type', 100);
+    requiredIdentifier(value.id, 'Agent session entry id');
+    isoTimestamp(value.timestamp, 'Agent session entry timestamp');
+    switch (type) {
+        case 'session.created':
+            requiredText(value.callerUserHandle, 'Agent session caller user', 200);
+            requiredText(value.callerExtensionId, 'Agent session caller extension', 200);
+            requiredText(value.workspaceId, 'Agent session workspace', 200);
+            requiredText(value.title, 'Agent session title', 500);
+            requiredText(value.profileId, 'Agent session profile', 200);
+            executionMode(value.mode);
+            textArray(value.allowedTools, 'Agent session allowed tools', 512);
+            boundedInteger(value.maxSteps, 'Agent session max steps', 1, 1_000);
+            return;
+        case 'session.updated':
+            optionalText(value.title, 'Agent session title', 500);
+            optionalText(value.profileId, 'Agent session profile', 200);
+            if (value.mode !== undefined)
+                executionMode(value.mode);
+            if (value.allowedTools !== undefined)
+                textArray(value.allowedTools, 'Agent session allowed tools', 512);
+            if (value.maxSteps !== undefined)
+                boundedInteger(value.maxSteps, 'Agent session max steps', 1, 1_000);
+            if (value.archived !== undefined && typeof value.archived !== 'boolean')
+                throw new Error('Agent session archived must be boolean');
+            return;
+        case 'ref.created':
+            requiredIdentifier(value.ref, 'Agent session ref');
+            nullableIdentifier(value.fromEntryId, 'Agent session ref anchor');
+            return;
+        case 'ref.moved':
+            requiredIdentifier(value.ref, 'Agent session ref');
+            nullableIdentifier(value.targetEntryId, 'Agent session ref target');
+            return;
+        case 'conversation.message':
+            conversationBase(value);
+            enumValue(value.role, ['system', 'user', 'assistant', 'tool'], 'Agent conversation role');
+            nullableText(value.content, 'Agent conversation content', 8 * 1024 * 1024);
+            optionalIdentifier(value.toolCallId, 'Agent tool call id');
+            optionalIdentifier(value.runId, 'Agent run id');
+            optionalIdentifier(value.stepId, 'Agent step id');
+            optionalIdentifier(value.consumedQueueId, 'Agent queue id');
+            if (value.toolCalls !== undefined)
+                validateToolCalls(value.toolCalls);
+            return;
+        case 'conversation.compacted':
+            conversationBase(value);
+            requiredText(value.summary, 'Agent compaction summary', 2 * 1024 * 1024);
+            requiredIdentifier(value.firstKeptEntryId, 'Agent compaction boundary');
+            identifierArray(value.retainedEntryIds, 'Agent compaction retained entries', 100_000);
+            if (value.tokensBefore !== undefined)
+                nonNegativeInteger(value.tokensBefore, 'Agent compaction tokens');
+            optionalIdentifier(value.runId, 'Agent run id');
+            return;
+        case 'conversation.branch_summary':
+            conversationBase(value);
+            requiredIdentifier(value.fromEntryId, 'Agent branch source');
+            requiredText(value.summary, 'Agent branch summary', 2 * 1024 * 1024);
+            optionalIdentifier(value.runId, 'Agent run id');
+            return;
+        case 'queue.added':
+            requiredIdentifier(value.queueId, 'Agent queue id');
+            requiredIdentifier(value.ref, 'Agent session ref');
+            enumValue(value.kind, ['steer', 'follow_up', 'next_run'], 'Agent queue kind');
+            requiredText(value.content, 'Agent queued message', 2 * 1024 * 1024);
+            optionalIdentifier(value.runId, 'Agent run id');
+            return;
+        case 'queue.removed':
+            requiredIdentifier(value.queueId, 'Agent queue id');
+            enumValue(value.reason, ['cancelled', 'superseded', 'run_finished'], 'Agent queue removal reason');
+            return;
+        case 'run.accepted':
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredIdentifier(value.ref, 'Agent session ref');
+            requiredIdentifier(value.triggerMessageId, 'Agent run trigger');
+            requiredText(value.profileId, 'Agent run profile', 200);
+            executionMode(value.mode);
+            textArray(value.allowedTools, 'Agent run allowed tools', 512);
+            boundedInteger(value.maxSteps, 'Agent run max steps', 1, 1_000);
+            return;
+        case 'run.started':
+        case 'run.resumed':
+        case 'run.cancel_requested':
+            requiredIdentifier(value.runId, 'Agent run id');
+            return;
+        case 'run.suspended':
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredText(value.reason, 'Agent run suspension reason', 20_000);
+            return;
+        case 'run.finished':
+            requiredIdentifier(value.runId, 'Agent run id');
+            enumValue(value.outcome, ['completed', 'failed', 'cancelled'], 'Agent run outcome');
+            optionalText(value.finalText, 'Agent final text', 2 * 1024 * 1024);
+            optionalText(value.error, 'Agent run error', 100_000);
+            return;
+        case 'step.started':
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredIdentifier(value.stepId, 'Agent step id');
+            positiveInteger(value.index, 'Agent step index');
+            return;
+        case 'step.finished':
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredIdentifier(value.stepId, 'Agent step id');
+            enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'interrupted'], 'Agent step outcome');
+            optionalNullableText(value.finishReason, 'Agent step finish reason', 1_000);
+            optionalText(value.error, 'Agent step error', 100_000);
+            return;
+        case 'generation.started':
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredIdentifier(value.stepId, 'Agent step id');
+            requiredIdentifier(value.generationId, 'Agent generation id');
+            positiveInteger(value.attempt, 'Agent generation attempt');
+            return;
+        case 'generation.finished':
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredIdentifier(value.stepId, 'Agent step id');
+            requiredIdentifier(value.generationId, 'Agent generation id');
+            enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'interrupted', 'timed_out'], 'Agent generation outcome');
+            enumValue(value.providerRequestState, ['not_sent', 'sent_or_unknown', 'response_received'], 'Agent provider request state');
+            optionalIdentifier(value.providerRequestId, 'Agent provider request id');
+            optionalNullableText(value.finishReason, 'Agent generation finish reason', 1_000);
+            optionalText(value.error, 'Agent generation error', 100_000);
+            return;
+        case 'tool.requested':
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredIdentifier(value.stepId, 'Agent step id');
+            requiredIdentifier(value.invocationId, 'Agent invocation id');
+            requiredIdentifier(value.callId, 'Agent tool call id');
+            requiredIdentifier(value.toolId, 'Agent tool id');
+            enumValue(value.execution, ['host', 'module', 'browser'], 'Agent tool execution');
+            optionalTimestamp(value.deadlineAt, 'Agent tool deadline');
+            return;
+        case 'approval.requested':
+            requiredIdentifier(value.approvalId, 'Agent approval id');
+            requiredIdentifier(value.runId, 'Agent run id');
+            requiredIdentifier(value.invocationId, 'Agent invocation id');
+            requiredText(value.title, 'Agent approval title', 1_000);
+            requiredText(value.summary, 'Agent approval summary', 20_000);
+            enumValue(value.riskLevel, ['low', 'medium', 'high'], 'Agent approval risk');
+            optionalTimestamp(value.expiresAt, 'Agent approval expiry');
+            return;
+        case 'approval.resolved':
+            requiredIdentifier(value.approvalId, 'Agent approval id');
+            enumValue(value.decision, ['approved', 'denied', 'expired', 'cancelled'], 'Agent approval decision');
+            optionalText(value.resolvedByUserHandle, 'Agent approval resolver', 200);
+            return;
+        case 'tool.waiting':
+            requiredIdentifier(value.invocationId, 'Agent invocation id');
+            enumValue(value.reason, ['browser'], 'Agent tool wait reason');
+            isoTimestamp(value.deadlineAt, 'Agent tool wait deadline');
+            return;
+        case 'tool.started':
+            requiredIdentifier(value.invocationId, 'Agent invocation id');
+            optionalIdentifier(value.claimId, 'Agent claim id');
+            optionalIdentifier(value.idempotencyKey, 'Agent idempotency key');
+            return;
+        case 'tool.finished':
+            requiredIdentifier(value.invocationId, 'Agent invocation id');
+            enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'outcome_unknown', 'timed_out'], 'Agent tool outcome');
+            optionalText(value.error, 'Agent tool error', 100_000);
+            return;
+        case 'workspace.checkpointed':
+            requiredIdentifier(value.invocationId, 'Agent invocation id');
+            enumValue(value.phase, ['before', 'after', 'failure'], 'Agent workspace checkpoint phase');
+            requiredIdentifier(value.commitId, 'Agent workspace commit id');
+            return;
+        default:
+            throw new Error(`Unsupported Agent session entry type: ${type}`);
+    }
+}
+function conversationBase(value) {
+    requiredIdentifier(value.ref, 'Agent session ref');
+    nullableIdentifier(value.parentId, 'Agent conversation parent');
+}
+function validateToolCalls(value) {
+    if (!Array.isArray(value) || value.length > 128)
+        throw new Error('Agent tool calls must be a bounded array');
+    for (const call of value) {
+        if (!isObject(call))
+            throw new Error('Agent tool call must be an object');
+        requiredIdentifier(call.id, 'Agent tool call id');
+        requiredIdentifier(call.name, 'Agent tool call name');
+        requiredText(call.arguments, 'Agent tool call arguments', 2 * 1024 * 1024, true);
+    }
+}
+function readWriterLock(lockPath) {
+    try {
+        const value = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(lockPath, 'utf8'));
+        if (!isObject(value)
+            || value.format !== LOCK_FORMAT
+            || typeof value.token !== 'string'
+            || typeof value.pid !== 'number'
+            || typeof value.hostname !== 'string'
+            || typeof value.createdAt !== 'string')
+            return null;
+        return value;
+    }
+    catch {
+        return null;
+    }
+}
+function releaseWriterLock(lockPath, token) {
+    const current = readWriterLock(lockPath);
+    if (!current) {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(lockPath))
+            return;
+        throw new Error(`Unable to verify Agent session writer lock: ${lockPath}`);
+    }
+    if (current.token !== token)
+        throw new Error(`Agent session writer lock token changed: ${lockPath}`);
+    node_fs__WEBPACK_IMPORTED_MODULE_1___default().unlinkSync(lockPath);
+}
+function appendAndSync(filePath, content) {
+    let descriptor = null;
+    try {
+        descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(filePath, 'a');
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(descriptor, content);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().fsyncSync(descriptor);
+    }
+    finally {
+        if (descriptor !== null)
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+    }
+}
+function truncateAndSync(filePath, length) {
+    let descriptor = null;
+    try {
+        descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(filePath, 'r+');
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().ftruncateSync(descriptor, length);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().fsyncSync(descriptor);
+    }
+    finally {
+        if (descriptor !== null)
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+    }
+}
+function canonicalJson(value) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean')
+        return JSON.stringify(value);
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value))
+            throw new Error('Agent session journal contains a non-finite number');
+        return JSON.stringify(value);
+    }
+    if (Array.isArray(value))
+        return `[${value.map(item => canonicalJson(item)).join(',')}]`;
+    if (isObject(value)) {
+        return `{${Object.keys(value)
+            .filter(key => value[key] !== undefined)
+            .sort()
+            .map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+            .join(',')}}`;
+    }
+    throw new Error(`Agent session journal contains unsupported data: ${typeof value}`);
+}
+function assertJsonValue(value, label, ancestors = new Set()) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean')
+        return;
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value))
+            throw new Error(`${label} contains a non-finite number`);
+        return;
+    }
+    if (typeof value !== 'object')
+        throw new Error(`${label} contains a non-JSON value: ${typeof value}`);
+    if (ancestors.has(value))
+        throw new Error(`${label} contains a cycle`);
+    const prototype = Object.getPrototypeOf(value);
+    if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+        throw new Error(`${label} contains a non-plain object`);
+    }
+    ancestors.add(value);
+    if (Array.isArray(value)) {
+        for (const item of value)
+            assertJsonValue(item, label, ancestors);
+    }
+    else {
+        for (const item of Object.values(value))
+            assertJsonValue(item, label, ancestors);
+    }
+    ancestors.delete(value);
+}
+function requiredText(value, label, maxLength, allowEmpty = false) {
+    if (typeof value !== 'string' || (!allowEmpty && !value.trim()))
+        throw new Error(`${label} is required`);
+    if (value.length > maxLength)
+        throw new Error(`${label} exceeds ${maxLength} characters`);
+    return value;
+}
+function optionalText(value, label, maxLength) {
+    if (value === undefined)
+        return undefined;
+    return requiredText(value, label, maxLength);
+}
+function nullableText(value, label, maxLength) {
+    if (value === null)
+        return null;
+    return requiredText(value, label, maxLength, true);
+}
+function optionalNullableText(value, label, maxLength) {
+    if (value === undefined || value === null)
+        return value;
+    return requiredText(value, label, maxLength, true);
+}
+function requiredIdentifier(value, label) {
+    return requiredText(value, label, 500);
+}
+function optionalIdentifier(value, label) {
+    if (value === undefined)
+        return undefined;
+    return requiredIdentifier(value, label);
+}
+function nullableIdentifier(value, label) {
+    if (value === null)
+        return null;
+    return requiredIdentifier(value, label);
+}
+function isoTimestamp(value, label) {
+    const timestamp = requiredText(value, label, 100);
+    if (!Number.isFinite(Date.parse(timestamp)))
+        throw new Error(`${label} must be an ISO timestamp`);
+    return timestamp;
+}
+function optionalTimestamp(value, label) {
+    if (value === undefined)
+        return undefined;
+    return isoTimestamp(value, label);
+}
+function executionMode(value) {
+    return enumValue(value, ['plan', 'ask', 'auto'], 'Agent execution mode');
+}
+function enumValue(value, values, label) {
+    if (typeof value !== 'string' || !values.includes(value))
+        throw new Error(`${label} is invalid`);
+    return value;
+}
+function textArray(value, label, maxItems) {
+    if (!Array.isArray(value) || value.length > maxItems)
+        throw new Error(`${label} must be a bounded array`);
+    return value.map(item => requiredText(item, label, 500));
+}
+function identifierArray(value, label, maxItems) {
+    if (!Array.isArray(value) || value.length > maxItems)
+        throw new Error(`${label} must be a bounded array`);
+    return value.map(item => requiredIdentifier(item, label));
+}
+function positiveInteger(value, label) {
+    return boundedInteger(value, label, 1, Number.MAX_SAFE_INTEGER);
+}
+function nonNegativeInteger(value, label) {
+    return boundedInteger(value, label, 0, Number.MAX_SAFE_INTEGER);
+}
+function boundedInteger(value, label, minimum, maximum) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum || value > maximum) {
+        throw new Error(`${label} must be an integer between ${minimum} and ${maximum}`);
+    }
+    return value;
+}
+function assertFileId(value, label) {
+    if (!value || value.length > 128 || !SAFE_FILE_ID.test(value) || value === '.' || value === '..') {
+        throw new Error(`${label} contains invalid characters`);
+    }
+}
+function protectDirectory(dirPath) {
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
+    if (process.platform !== 'win32')
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
+}
+function protectFile(filePath) {
+    if (process.platform !== 'win32')
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(filePath, 0o600);
+}
+function processIsAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        return isNodeError(error, 'EPERM');
+    }
+}
+function isObject(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function isNodeError(error, code) {
+    return error instanceof Error && error.code === code;
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-tool-executor.ts"
+/*!*****************************************************!*\
+  !*** ./src/services/agent-session-tool-executor.ts ***!
+  \*****************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentSessionToolExecutor: () => (/* binding */ AgentSessionToolExecutor)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-session-runtime-support.js */ "./src/services/agent-session-runtime-support.ts");
+
+
+/**
+ * Owns the external-effect boundary for host, module and browser tools.
+ * A durable tool intent must exist before this service may start an effect.
+ */
+class AgentSessionToolExecutor {
+    history;
+    hostTools;
+    tools;
+    journal;
+    recovery;
+    host;
+    moduleHost;
+    browserToolTimeoutMs;
+    constructor(history, hostTools, tools, journal, recovery, host, options) {
+        this.history = history;
+        this.hostTools = hostTools;
+        this.tools = tools;
+        this.journal = journal;
+        this.recovery = recovery;
+        this.host = host;
+        this.moduleHost = options.moduleHost;
+        this.browserToolTimeoutMs = options.browserToolTimeoutMs;
+    }
+    async execute(sessionId, invocationId, signal) {
+        let snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
+        let invocation = snapshot.invocations.find(item => item.id === invocationId);
+        if (!invocation || invocation.status !== 'pending')
+            return 'completed';
+        const descriptor = this.descriptor(snapshot, invocation.toolId);
+        if (descriptor.execution === 'browser') {
+            const timestamp = this.host.now();
+            const deadlineAt = new Date(Date.parse(timestamp) + this.browserToolTimeoutMs).toISOString();
+            const waiting = await this.host.perform(sessionId, writer => {
+                const currentSnapshot = writer.snapshot();
+                const current = currentSnapshot.invocations.find(item => item.id === invocationId);
+                if (!current || current.status !== 'pending')
+                    return null;
+                const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(currentSnapshot, current.runId);
+                if (run.status === 'cancelling') {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'tool.finished',
+                        timestamp,
+                        invocationId,
+                        outcome: 'cancelled',
+                        error: 'Cancelled before browser tool dispatch',
+                    });
+                    this.journal.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === invocationId));
+                    return null;
+                }
+                if (run.status !== 'running' || signal.aborted || this.host.isStopping()) {
+                    throw new Error('Agent run stopped before browser tool dispatch');
+                }
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'tool.waiting',
+                    timestamp,
+                    invocationId,
+                    reason: 'browser',
+                    deadlineAt,
+                });
+                return writer.snapshot().invocations.find(item => item.id === invocationId);
+            });
+            if (!waiting)
+                return 'completed';
+            this.host.scheduleBrowserExpiry(sessionId, waiting);
+            return 'waiting';
+        }
+        try {
+            const workspace = this.history.getWorkspace(snapshot.session.workspaceId);
+            let result;
+            if (descriptor.mutatesWorkspace) {
+                if (descriptor.execution !== 'host') {
+                    throw new Error(`Only host tools may declare workspace mutations: ${descriptor.id}`);
+                }
+                const paths = this.hostTools.checkpointPaths(descriptor.id, invocation.arguments);
+                const mutation = await this.history.runMutation(workspace.id, {
+                    beforeMessage: `Before ${descriptor.title}`,
+                    afterMessage: `After ${descriptor.title}`,
+                    failureMessage: `Partial changes from failed ${descriptor.title}`,
+                    paths,
+                    runId: invocation.runId,
+                    toolCallId: invocation.callId,
+                    metadata: {
+                        agentToolId: descriptor.id,
+                        agentSessionId: sessionId,
+                        agentInvocationId: invocation.id,
+                    },
+                }, { kind: 'agent', id: invocation.runId }, () => this.hostTools.execute(descriptor.id, invocation.arguments, {
+                    workspace,
+                    runId: invocation.runId,
+                    signal,
+                }), {
+                    beforeCheckpoint: async (checkpoint) => {
+                        await this.host.perform(sessionId, writer => {
+                            const currentSnapshot = writer.snapshot();
+                            const current = currentSnapshot.invocations.find(item => item.id === invocationId);
+                            const run = current && (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(currentSnapshot, current.runId);
+                            if (!current
+                                || current.status !== 'pending'
+                                || run?.status !== 'running'
+                                || signal.aborted
+                                || this.host.isStopping()) {
+                                throw new Error('Agent run stopped before the workspace mutation started');
+                            }
+                            this.host.append(writer, {
+                                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                                type: 'workspace.checkpointed',
+                                timestamp: this.host.now(),
+                                invocationId,
+                                phase: 'before',
+                                commitId: checkpoint.commit.id,
+                            });
+                            this.journal.appendToolStarted(writer, current);
+                        });
+                    },
+                    afterCheckpoint: async (checkpoint) => {
+                        await this.host.perform(sessionId, writer => this.host.append(writer, {
+                            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                            type: 'workspace.checkpointed',
+                            timestamp: this.host.now(),
+                            invocationId,
+                            phase: 'after',
+                            commitId: checkpoint.commit.id,
+                        }));
+                    },
+                    failureCheckpoint: async (checkpoint) => {
+                        await this.host.perform(sessionId, writer => this.host.append(writer, {
+                            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                            type: 'workspace.checkpointed',
+                            timestamp: this.host.now(),
+                            invocationId,
+                            phase: 'failure',
+                            commitId: checkpoint.commit.id,
+                        }));
+                    },
+                });
+                result = mutation.value;
+            }
+            else {
+                const started = await this.host.perform(sessionId, writer => {
+                    const currentSnapshot = writer.snapshot();
+                    const current = currentSnapshot.invocations.find(item => item.id === invocationId);
+                    if (!current || current.status !== 'pending')
+                        throw new Error('Agent tool is no longer pending');
+                    const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(currentSnapshot, current.runId);
+                    if (run.status === 'cancelling') {
+                        this.host.append(writer, {
+                            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                            type: 'tool.finished',
+                            timestamp: this.host.now(),
+                            invocationId,
+                            outcome: 'cancelled',
+                            error: 'Cancelled before tool execution started',
+                        });
+                        this.journal.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === invocationId));
+                        return false;
+                    }
+                    if (run.status !== 'running')
+                        throw new Error('Agent run is no longer active');
+                    if (signal.aborted || this.host.isStopping()) {
+                        throw new Error('Agent host stopped before tool execution started');
+                    }
+                    this.journal.appendToolStarted(writer, current);
+                    return true;
+                });
+                if (!started)
+                    return 'completed';
+                snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
+                invocation = snapshot.invocations.find(item => item.id === invocationId);
+                if (descriptor.execution === 'host') {
+                    result = await this.hostTools.execute(descriptor.id, invocation.arguments, {
+                        workspace,
+                        runId: invocation.runId,
+                        signal,
+                    });
+                }
+                else if (descriptor.execution === 'module' && descriptor.source.kind === 'module') {
+                    const context = this.host.context(sessionId);
+                    if (!context || !this.moduleHost) {
+                        throw new Error(`Agent module execution context is unavailable: ${descriptor.id}`);
+                    }
+                    result = await this.moduleHost.execute(context.user, context.session, descriptor.source.moduleId, descriptor.source.transactionName, invocation.arguments, signal);
+                }
+                else {
+                    throw new Error(`Unsupported Agent tool execution: ${descriptor.id}`);
+                }
+            }
+            await this.host.perform(sessionId, writer => {
+                const current = writer.snapshot().invocations.find(item => item.id === invocationId);
+                if (!current || current.status !== 'claimed')
+                    return;
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'tool.finished',
+                    timestamp: this.host.now(),
+                    invocationId,
+                    outcome: 'completed',
+                    result: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.boundedToolValue)(result),
+                });
+                this.journal.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === invocationId));
+            });
+        }
+        catch (error) {
+            await this.host.perform(sessionId, writer => {
+                let current = writer.snapshot().invocations.find(item => item.id === invocationId);
+                if (!current || _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(current.status))
+                    return;
+                if (descriptor.mutatesWorkspace) {
+                    this.recovery.reconcileWorkspaceCheckpoints(writer, current);
+                    current = writer.snapshot().invocations.find(item => item.id === invocationId);
+                }
+                const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), current.runId);
+                const endedBeforeStart = current.status === 'pending'
+                    && (run.status === 'cancelling' || signal.aborted || this.host.isStopping());
+                const uncertain = current.status === 'claimed'
+                    && (signal.aborted || this.host.isStopping() || descriptor.execution === 'module');
+                if (uncertain) {
+                    this.journal.recordUnknownToolOutcome(writer, current, `${(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.errorMessage)(error)}; tool execution started and its side effects are unknown`);
+                    const updatedRun = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), run.id);
+                    if (updatedRun.status === 'cancelling') {
+                        this.host.append(writer, {
+                            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                            type: 'run.finished',
+                            timestamp: this.host.now(),
+                            runId: run.id,
+                            outcome: 'cancelled',
+                            error: 'Cancelled while a tool outcome was unknown',
+                        });
+                    }
+                    else {
+                        this.host.append(writer, {
+                            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                            type: 'run.suspended',
+                            timestamp: this.host.now(),
+                            runId: run.id,
+                            reason: 'Tool execution ended with an unknown outcome; inspect changes before resuming',
+                        });
+                    }
+                    return;
+                }
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'tool.finished',
+                    timestamp: this.host.now(),
+                    invocationId,
+                    outcome: endedBeforeStart ? 'cancelled' : 'failed',
+                    error: endedBeforeStart
+                        ? run.status === 'cancelling'
+                            ? 'Cancelled before tool execution started'
+                            : 'Agent host stopped before tool execution started'
+                        : (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.errorMessage)(error),
+                });
+                this.journal.appendToolResultMessage(writer, writer.snapshot().invocations.find(item => item.id === invocationId));
+            });
+        }
+        return 'completed';
+    }
+    interruptClaimedInvocation(writer, invocation, message) {
+        this.recovery.reconcileWorkspaceCheckpoints(writer, invocation);
+        this.journal.recordUnknownToolOutcome(writer, invocation, message);
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'run.suspended',
+            timestamp: this.host.now(),
+            runId: invocation.runId,
+            reason: message,
+        });
+    }
+    descriptor(snapshot, toolId) {
+        const descriptor = this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId)
+            .find(tool => tool.id === toolId);
+        if (!descriptor)
+            throw new Error(`Agent tool is unavailable: ${toolId}`);
+        return descriptor;
+    }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-tool-registry-service.ts"
+/*!*****************************************************!*\
+  !*** ./src/services/agent-tool-registry-service.ts ***!
+  \*****************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   AgentToolRegistryService: () => (/* binding */ AgentToolRegistryService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+
+const DEFAULT_BROWSER_LEASE_MS = 60_000;
+const MIN_BROWSER_LEASE_MS = 5_000;
+const MAX_BROWSER_LEASE_MS = 5 * 60_000;
+const MAX_BROWSER_TOOLS = 64;
+const MAX_BROWSER_INSTANCES_PER_CALLER = 16;
+const MAX_BROWSER_TOOLS_PER_CALLER = 128;
+const MAX_BROWSER_REGISTRATION_BYTES = 256 * 1024;
+const BROWSER_TOOL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/;
+class AgentToolRegistryService {
+    hostTools;
+    moduleHost;
+    now;
+    browserRegistrations = new Map();
+    constructor(hostTools, moduleHost, now = () => Date.now()) {
+        this.hostTools = hostTools;
+        this.moduleHost = moduleHost;
+        this.now = now;
+    }
+    list(userHandle, extensionId) {
+        const tools = [
+            ...this.hostTools.list(),
+            ...moduleToolDescriptors(this.moduleHost),
+            ...this.browserTools(userHandle, extensionId),
+        ];
+        const ids = new Set();
+        for (const tool of tools) {
+            if (ids.has(tool.id))
+                throw new Error(`Agent tool id collision: ${tool.id}`);
+            ids.add(tool.id);
+        }
+        return structuredClone(tools);
+    }
+    registerBrowserTools(userHandle, extensionId, request) {
+        const user = requiredText(userHandle, 'Browser tool user handle', 200);
+        const owner = requiredText(extensionId, 'Browser tool extension id', 128);
+        const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
+        const leaseDurationMs = request.leaseDurationMs ?? DEFAULT_BROWSER_LEASE_MS;
+        if (!Number.isSafeInteger(leaseDurationMs)
+            || leaseDurationMs < MIN_BROWSER_LEASE_MS
+            || leaseDurationMs > MAX_BROWSER_LEASE_MS) {
+            throw new Error(`Browser tool leaseDurationMs must be between ${MIN_BROWSER_LEASE_MS} and ${MAX_BROWSER_LEASE_MS}`);
+        }
+        if (!Array.isArray(request.tools) || request.tools.length === 0 || request.tools.length > MAX_BROWSER_TOOLS) {
+            throw new Error(`Browser tool registration must contain between 1 and ${MAX_BROWSER_TOOLS} tools`);
+        }
+        let serializedTools;
+        try {
+            serializedTools = JSON.stringify(request.tools);
+        }
+        catch {
+            throw new Error('Browser tool registration must be JSON serializable');
+        }
+        if (Buffer.byteLength(serializedTools, 'utf8') > MAX_BROWSER_REGISTRATION_BYTES) {
+            throw new Error(`Browser tool registration exceeds ${MAX_BROWSER_REGISTRATION_BYTES} bytes`);
+        }
+        this.pruneBrowserRegistrations();
+        const registrationKey = browserRegistrationKey(user, owner, browserInstanceId);
+        const callerRegistrations = [...this.browserRegistrations.entries()]
+            .filter(([, registration]) => registration.userHandle === user && registration.extensionId === owner);
+        if (!this.browserRegistrations.has(registrationKey)
+            && callerRegistrations.length >= MAX_BROWSER_INSTANCES_PER_CALLER) {
+            throw new Error(`Browser tool registration limit reached for ${owner}`);
+        }
+        const existingTools = callerRegistrations
+            .filter(([key]) => key !== registrationKey)
+            .reduce((total, [, registration]) => total + registration.tools.length, 0);
+        if (existingTools + request.tools.length > MAX_BROWSER_TOOLS_PER_CALLER) {
+            throw new Error(`Browser tool limit reached for ${owner}`);
+        }
+        const localIds = new Set();
+        const normalizedTools = request.tools.map(input => {
+            const normalized = normalizeBrowserTool(input);
+            if (localIds.has(normalized.id))
+                throw new Error(`Duplicate browser tool id: ${normalized.id}`);
+            localIds.add(normalized.id);
+            return normalized;
+        });
+        const registrationId = hashValue(JSON.stringify(normalizedTools));
+        const prefix = `browser_${shortHash(`${user}\0${owner}\0${browserInstanceId}\0${registrationId}`)}_`;
+        const tools = normalizedTools.map(normalized => ({
+            ...normalized,
+            id: `${prefix}${normalized.id}`,
+            execution: 'browser',
+            source: {
+                kind: 'browser',
+                userHandle: user,
+                extensionId: owner,
+                browserInstanceId,
+                registrationId,
+            },
+        }));
+        const leaseExpiresAt = new Date(this.now() + leaseDurationMs).toISOString();
+        this.browserRegistrations.set(registrationKey, {
+            userHandle: user,
+            extensionId: owner,
+            browserInstanceId,
+            registrationId,
+            leaseExpiresAt,
+            tools,
+        });
+        return { browserInstanceId, registrationId, leaseExpiresAt, tools: structuredClone(tools) };
+    }
+    browserDescriptors(userHandle, extensionId, browserInstanceId) {
+        this.pruneBrowserRegistrations();
+        const registration = this.browserRegistrations.get(browserRegistrationKey(userHandle, extensionId, browserInstanceId));
+        if (!registration)
+            throw new Error(`Browser tool registration is unavailable: ${browserInstanceId}`);
+        return structuredClone(registration.tools);
+    }
+    browserTools(userHandle, extensionId) {
+        this.pruneBrowserRegistrations();
+        return [...this.browserRegistrations.values()]
+            .filter(registration => registration.userHandle === userHandle && registration.extensionId === extensionId)
+            .flatMap(registration => registration.tools);
+    }
+    pruneBrowserRegistrations() {
+        const timestamp = this.now();
+        for (const [key, registration] of this.browserRegistrations) {
+            if (Date.parse(registration.leaseExpiresAt) <= timestamp)
+                this.browserRegistrations.delete(key);
+        }
+    }
+}
+function moduleToolDescriptors(moduleHost) {
+    if (!moduleHost)
+        return [];
+    return moduleHost.listManifests().modules.flatMap(module => Object.entries(module.transactions).map(([name, transaction]) => ({
+        id: `module:${module.id}:${name}`,
+        title: `${module.displayName}: ${transaction.title}`,
+        description: `${transaction.description || transaction.title} This Authority module transaction may have effects outside workspace rollback.`,
+        inputSchema: moduleTransactionSchema(transaction),
+        ...(transaction.outputSchema ? { outputSchema: structuredClone(transaction.outputSchema) } : {}),
+        execution: 'module',
+        riskLevel: transaction.riskLevel,
+        approvalPolicy: transaction.riskLevel === 'high'
+            ? 'always'
+            : transaction.riskLevel === 'medium' ? 'on-mutation' : 'never',
+        mutatesWorkspace: false,
+        source: { kind: 'module', moduleId: module.id, transactionName: name },
+    })));
+}
+function moduleTransactionSchema(transaction) {
+    return {
+        type: 'object',
+        properties: {
+            input: transaction.inputSchema ?? { type: 'object' },
+            idempotencyKey: { type: 'string' },
+            options: {
+                type: 'object',
+                properties: { timeoutMs: { type: 'integer', minimum: 1, maximum: 600_000 } },
+                additionalProperties: false,
+            },
+        },
+        ...(transaction.idempotency === 'required' ? { required: ['idempotencyKey'] } : {}),
+        additionalProperties: false,
+    };
+}
+function normalizeBrowserTool(input) {
+    if (!input || typeof input !== 'object')
+        throw new Error('Browser tool descriptor must be an object');
+    const id = requiredText(input.id, 'Browser tool id', 64);
+    if (!BROWSER_TOOL_ID_PATTERN.test(id))
+        throw new Error(`Browser tool id is invalid: ${id}`);
+    const title = requiredText(input.title, 'Browser tool title', 200);
+    const description = requiredText(input.description, 'Browser tool description', 2_000);
+    if (!isSchema(input.inputSchema) || (input.outputSchema !== undefined && !isSchema(input.outputSchema))) {
+        throw new Error(`Browser tool schema is invalid: ${id}`);
+    }
+    if (input.riskLevel !== 'low' && input.riskLevel !== 'medium' && input.riskLevel !== 'high') {
+        throw new Error(`Browser tool risk level is invalid: ${id}`);
+    }
+    if (input.approvalPolicy !== 'never' && input.approvalPolicy !== 'on-mutation' && input.approvalPolicy !== 'always') {
+        throw new Error(`Browser tool approval policy is invalid: ${id}`);
+    }
+    if (input.mutatesWorkspace !== false)
+        throw new Error(`Browser tools cannot declare workspace mutations: ${id}`);
+    const riskLevel = input.riskLevel === 'high' ? 'high' : 'medium';
+    const approvalPolicy = riskLevel === 'high' || input.approvalPolicy === 'always'
+        ? 'always'
+        : 'on-mutation';
+    return {
+        id,
+        title,
+        description,
+        inputSchema: structuredClone(input.inputSchema),
+        ...(input.outputSchema ? { outputSchema: structuredClone(input.outputSchema) } : {}),
+        riskLevel,
+        approvalPolicy,
+        mutatesWorkspace: false,
+    };
+}
+function browserRegistrationKey(userHandle, extensionId, browserInstanceId) {
+    return `${userHandle}\0${extensionId}\0${browserInstanceId}`;
+}
+function shortHash(value) {
+    return hashValue(value).slice(0, 24);
+}
+function hashValue(value) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(value).digest('hex');
+}
+function isSchema(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+function requiredText(value, label, maxLength) {
+    if (typeof value !== 'string' || !value.trim())
+        throw new Error(`${label} is required`);
+    const result = value.trim();
+    if (result.length > maxLength)
+        throw new Error(`${label} exceeds ${maxLength} characters`);
+    return result;
 }
 
 
@@ -14142,6 +16868,76 @@ function pruneEmptyDirs(startDir, stopDir) {
 
 /***/ },
 
+/***/ "./src/services/one-time-ticket-store.ts"
+/*!***********************************************!*\
+  !*** ./src/services/one-time-ticket-store.ts ***!
+  \***********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   DEFAULT_ONE_TIME_TICKET_TTL_MS: () => (/* binding */ DEFAULT_ONE_TIME_TICKET_TTL_MS),
+/* harmony export */   OneTimeTicketStore: () => (/* binding */ OneTimeTicketStore)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+
+const DEFAULT_ONE_TIME_TICKET_TTL_MS = 30_000;
+/** In-memory, short-lived bearer exchange for browser transports without headers. */
+class OneTimeTicketStore {
+    ttlMs;
+    now;
+    records = new Map();
+    constructor(ttlMs = DEFAULT_ONE_TIME_TICKET_TTL_MS, now = Date.now) {
+        this.ttlMs = ttlMs;
+        this.now = now;
+        if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > 5 * 60_000) {
+            throw new Error('One-time ticket TTL must be between 1000 and 300000 ms');
+        }
+    }
+    issue(value) {
+        this.pruneExpired();
+        let ticket;
+        do {
+            ticket = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomBytes(32).toString('base64url');
+        } while (this.records.has(ticket));
+        const expiresAt = this.now() + this.ttlMs;
+        const timer = setTimeout(() => this.expire(ticket), this.ttlMs);
+        timer.unref?.();
+        this.records.set(ticket, { value, expiresAt, timer });
+        return { ticket, expiresAt: new Date(expiresAt).toISOString() };
+    }
+    consume(ticket) {
+        if (typeof ticket !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(ticket)) {
+            return null;
+        }
+        const record = this.records.get(ticket);
+        if (!record) {
+            return null;
+        }
+        clearTimeout(record.timer);
+        this.records.delete(ticket);
+        return record.expiresAt > this.now() ? record.value : null;
+    }
+    expire(ticket) {
+        const record = this.records.get(ticket);
+        if (!record)
+            return;
+        clearTimeout(record.timer);
+        this.records.delete(ticket);
+    }
+    pruneExpired() {
+        const now = this.now();
+        for (const [ticket, record] of this.records) {
+            if (record.expiresAt <= now)
+                this.expire(ticket);
+        }
+    }
+}
+
+
+/***/ },
+
 /***/ "./src/services/permission-service.ts"
 /*!********************************************!*\
   !*** ./src/services/permission-service.ts ***!
@@ -18180,31 +20976,43 @@ class WorkspaceHistoryService {
             return this.checkpointLocked(workspace, request, actor);
         });
     }
-    async runMutation(workspaceId, request, actor, mutate) {
+    async runMutation(workspaceId, request, actor, mutate, hooks = {}) {
         return await this.withLock(`workspace-${workspaceId}`, async () => {
             this.assertNoPendingRollback(workspaceId);
             const workspace = this.getStoredWorkspace(workspaceId);
             this.recoverRefJournal(workspace);
             const { beforeMessage, afterMessage, failureMessage, ...checkpoint } = request;
-            const before = this.checkpointLocked(workspace, { ...checkpoint, message: beforeMessage }, actor);
+            const before = this.checkpointLocked(workspace, {
+                ...checkpoint,
+                message: beforeMessage,
+                metadata: { ...checkpoint.metadata, mutationPhase: 'before' },
+            }, actor);
+            await hooks.beforeCheckpoint?.(before);
+            let value;
             try {
-                const value = await mutate();
-                const after = this.checkpointLocked(workspace, { ...checkpoint, message: afterMessage }, actor);
-                return { value, before, after };
+                value = await mutate();
             }
             catch (error) {
                 try {
-                    this.checkpointLocked(workspace, {
+                    const failure = this.checkpointLocked(workspace, {
                         ...checkpoint,
                         message: failureMessage ?? `${afterMessage} (failed)`,
-                        metadata: { ...checkpoint.metadata, mutationFailed: true },
+                        metadata: { ...checkpoint.metadata, mutationFailed: true, mutationPhase: 'failure' },
                     }, actor);
+                    await hooks.failureCheckpoint?.(failure);
                 }
                 catch (checkpointError) {
                     throw new AggregateError([error, checkpointError], 'Workspace mutation and failure checkpoint both failed');
                 }
                 throw error;
             }
+            const after = this.checkpointLocked(workspace, {
+                ...checkpoint,
+                message: afterMessage,
+                metadata: { ...checkpoint.metadata, mutationPhase: 'after' },
+            }, actor);
+            await hooks.afterCheckpoint?.(after);
+            return { value, before, after };
         });
     }
     listCommits(workspaceId, limit = 100) {
@@ -18221,6 +21029,28 @@ class WorkspaceHistoryService {
             nextId = commit.parents[0] ?? null;
         }
         return commits;
+    }
+    findCommitsForToolCall(workspaceId, runId, toolCallId) {
+        const workspace = this.getStoredWorkspace(workspaceId);
+        const ref = this.readRef(workspace);
+        const matches = [];
+        const phases = new Set();
+        const visited = new Set();
+        let nextId = ref.head;
+        while (nextId && !(phases.has('before') && (phases.has('after') || phases.has('failure')))) {
+            if (visited.has(nextId))
+                throw new Error(`Workspace commit cycle detected: ${nextId}`);
+            visited.add(nextId);
+            const commit = this.readCommit(nextId, workspace.id);
+            if (commit.runId === runId && commit.toolCallId === toolCallId) {
+                matches.push(commit);
+                const phase = commit.metadata?.mutationPhase;
+                if (phase === 'before' || phase === 'after' || phase === 'failure')
+                    phases.add(phase);
+            }
+            nextId = commit.parents[0] ?? null;
+        }
+        return matches;
     }
     diff(workspaceId, fromCommitId, toCommitId) {
         const workspace = this.getStoredWorkspace(workspaceId);
@@ -20205,10 +23035,6 @@ function getSessionToken(request) {
     if (typeof headerValue === 'string' && headerValue.trim()) {
         return headerValue.trim();
     }
-    const queryValue = request.query?.[_constants_js__WEBPACK_IMPORTED_MODULE_4__.SESSION_QUERY];
-    if (typeof queryValue === 'string' && queryValue.trim()) {
-        return queryValue.trim();
-    }
     return null;
 }
 function normalizeHostname(input) {
@@ -20591,8 +23417,12 @@ async function init(router) {
         // service's logger indirectly via console for now.
         console.warn(`[authority] Companion module discovery/load failed: ${message}`);
     }
-    void runtime.agent.start().catch(error => {
-        console.warn(`[authority] Agent service startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    void runtime.agentSessions.start().then(result => {
+        for (const problem of result.problems) {
+            console.warn(`[authority] Agent session recovery skipped ${problem.sessionId}: ${problem.error}`);
+        }
+    }).catch(error => {
+        console.warn(`[authority] Agent session runtime startup failed: ${error instanceof Error ? error.message : String(error)}`);
     });
     void runtime.core.start();
 }
@@ -20602,7 +23432,7 @@ async function exit() {
     }
     const current = runtime;
     try {
-        await current.agent.stop();
+        await current.agentSessions.stop();
     }
     finally {
         try {

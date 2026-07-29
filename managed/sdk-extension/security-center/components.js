@@ -1,23 +1,5 @@
 import { escapeHtml, formatDate, formatJson } from '../dom.js';
 import { formatBytes, getActivityKindLabel, getActivityMessageLabel, getJobAttemptEventLabel, getJobStatusLabel, getJobTypeLabel, getResourceLabel, getRiskLabel, getRiskLevel, getStatusLabel, getSystemMessageLabel, } from './formatters.js';
-export function renderKpiCard(label, value, meta) {
-    return `
-        <div class="authority-kpi-card">
-            <div class="authority-kpi-card__label">${escapeHtml(label)}</div>
-            <div class="authority-kpi-card__value">${escapeHtml(value)}</div>
-            <div class="authority-kpi-card__meta">${escapeHtml(meta)}</div>
-        </div>
-    `;
-}
-export function renderMetricTile(label, value, meta, tone = 'neutral') {
-    return `
-        <div class="authority-metric-tile authority-metric-tile--${tone}">
-            <div class="authority-metric-tile__label">${escapeHtml(label)}</div>
-            <div class="authority-metric-tile__value">${escapeHtml(value)}</div>
-            <div class="authority-metric-tile__meta">${escapeHtml(meta)}</div>
-        </div>
-    `;
-}
 export function renderStorageCard(label, value, meta) {
     return `
         <div class="authority-storage-card">

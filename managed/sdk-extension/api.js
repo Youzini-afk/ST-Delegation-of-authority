@@ -94,10 +94,14 @@ export async function authorityRequest(path, options = {}) {
 export function isInvalidSessionError(error) {
     return error instanceof AuthoritySessionError && error.code === 'invalid_session';
 }
-export function buildEventStreamUrl(sessionToken, channel) {
+export function buildEventStreamUrl(ticket) {
     const url = new URL(`${AUTHORITY_API_BASE}/events/stream`, window.location.origin);
-    url.searchParams.set('authoritySessionToken', sessionToken);
-    url.searchParams.set('channel', channel);
+    url.searchParams.set('ticket', ticket);
+    return url.toString();
+}
+export function buildAgentSessionStreamUrl(ticket, sessionId) {
+    const url = new URL(`${AUTHORITY_API_BASE}/agent/sessions/${encodeURIComponent(sessionId)}/events`, window.location.origin);
+    url.searchParams.set('ticket', ticket);
     return url.toString();
 }
 export function hostnameFromUrl(url) {
