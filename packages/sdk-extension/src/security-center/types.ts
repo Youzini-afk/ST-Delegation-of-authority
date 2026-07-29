@@ -29,6 +29,7 @@ import type { StManagerBackupSummary, StManagerControlConfig } from './st-manage
 export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'agent' | 'policies' | 'updates' | 'settings';
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
 export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
+export type SystemView = 'runtime' | 'recovery' | 'migration' | 'diagnostics' | 'backup';
 
 export interface ActivityRecord {
     timestamp: string;
@@ -129,6 +130,19 @@ export interface AgentWorkbenchState {
     workspaceDiff: WorkspaceDiffResponse | null;
 }
 
+export interface SystemWorkbenchState {
+    selectedView: SystemView;
+    recoveryLoaded: boolean;
+    recoveryLoading: boolean;
+    recoveryBusy: boolean;
+    recoveryError: string | null;
+    workspace: AgentWorkspaceRecord | null;
+    workspaceStatus: WorkspaceStatusResponse | null;
+    workspaceCommits: WorkspaceCommitObject[];
+    selectedCommitId: string | null;
+    workspaceDiff: WorkspaceDiffResponse | null;
+}
+
 export interface SecurityCenterState {
     loading: boolean;
     error: string | null;
@@ -143,6 +157,7 @@ export interface SecurityCenterState {
     extensionFilter: string;
     policies: PoliciesResponse | null;
     agent: AgentWorkbenchState;
+    system: SystemWorkbenchState;
     policyEditorExtensionId: string | null;
     packageOperations: PackageOperation[];
     packageActionInProgress: boolean;

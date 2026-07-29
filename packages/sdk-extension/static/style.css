@@ -1,3 +1,5 @@
+@import url('./styles/system-workbench.css');
+
 .authority-panel,
 .authority-permission-dialog,
 .authority-impact-dialog {
@@ -362,7 +364,8 @@
 
 .authority-workbench__body {
   position: relative;
-  height: 100%;
+  grid-row: 2;
+  align-self: stretch;
   overflow: hidden;
 }
 

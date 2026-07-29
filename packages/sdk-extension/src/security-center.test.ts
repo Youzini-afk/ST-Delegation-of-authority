@@ -7,8 +7,10 @@ describe('Security Center tab interaction', () => {
     const components = fs.readFileSync(path.resolve(__dirname, 'security-center/components.ts'), 'utf8');
     const constants = fs.readFileSync(path.resolve(__dirname, 'security-center/constants.ts'), 'utf8');
     const impactConfirmation = fs.readFileSync(path.resolve(__dirname, 'security-center/impact-confirmation.ts'), 'utf8');
+    const systemWorkbench = fs.readFileSync(path.resolve(__dirname, 'security-center/system-workbench.ts'), 'utf8');
     const html = fs.readFileSync(path.resolve(__dirname, '../static/security-center.html'), 'utf8');
     const css = fs.readFileSync(path.resolve(__dirname, '../static/style.css'), 'utf8');
+    const systemCss = fs.readFileSync(path.resolve(__dirname, '../static/styles/system-workbench.css'), 'utf8');
 
     it('declares a primary tab name whitelist matching all valid CenterTab values', () => {
         expect(source).toContain("const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings']");
@@ -180,6 +182,28 @@ describe('Security Center tab interaction', () => {
         expect(source).toContain('data-policy-default=');
         expect(source).toContain('data-policy-editor-extension');
         expect(source).toContain('data-role="policy-rows"');
+    });
+
+    it('uses a dedicated system workbench with maintenance, recovery, migration, diagnostics, and backup views', () => {
+        expect(source).toContain("const SYSTEM_VIEW_NAMES: readonly SystemView[] = ['runtime', 'recovery', 'migration', 'diagnostics', 'backup']");
+        expect(source).toContain('renderSystemWorkbench(this.state)');
+        expect(systemWorkbench).toContain("{ id: 'runtime', label: '运行状态'");
+        expect(systemWorkbench).toContain("{ id: 'recovery', label: '版本与恢复'");
+        expect(systemWorkbench).toContain("{ id: 'migration', label: '数据迁移'");
+        expect(systemWorkbench).toContain("{ id: 'diagnostics', label: '诊断'");
+        expect(systemWorkbench).toContain("{ id: 'backup', label: '远程备份'");
+        expect(systemCss).toContain(".authority-section[data-section='updates'] > [data-role='updates-view']");
+        expect(systemCss).toContain('grid-template-columns: 250px minmax(0, 1fr) 290px');
+    });
+
+    it('binds recovery to the default whole-ST workspace and protects destructive rollback', () => {
+        expect(source).toContain('client.agent.admin.workspaces.default()');
+        expect(source).toContain('.agent.admin.workspaces.checkpoint(workspace.id');
+        expect(source).toContain('.agent.admin.workspaces.rollback(workspace.id');
+        expect(source).toContain('.agent.admin.workspaces.resumeRollback(workspace.id)');
+        expect(source).toContain("confirmLabel: '建立保护并恢复'");
+        expect(source).toContain("force: hasUnrecordedChanges");
+        expect(systemWorkbench).toContain('node runtime/agent.cjs rescue status --workspace');
     });
 
     it('declares agent.run before the built-in workbench creates runs', () => {

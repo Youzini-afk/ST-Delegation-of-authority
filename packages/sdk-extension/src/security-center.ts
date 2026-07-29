@@ -46,7 +46,6 @@ import {
     getCoreStateLabel,
     getDeclaredPermissionLabels,
     getExtensionRiskLevel,
-    getInstallStatusLabel,
     getInstallTypeLabel,
     getResourceLabel,
     getRiskLabel,
@@ -70,20 +69,19 @@ import type {
     ProbeResponse,
     SecurityCenterOpenOptions,
     SecurityCenterState,
+    SystemView,
     UsageSummaryResponse,
     ExtensionStorageSummary,
 } from './security-center/types.js';
 import {
     buildStManagerBridgePayload,
     normalizeStManagerBridgeConfig,
-    renderStManagerBridgeSection,
     ST_MANAGER_RESOURCE_OPTIONS,
     type StManagerBridgeConfig,
 } from './security-center/st-manager-bridge.js';
 import {
     buildStManagerControlPayload,
     normalizeStManagerControlConfig,
-    renderStManagerControlSection,
     type StManagerBackupSummary,
     type StManagerControlConfig,
 } from './security-center/st-manager-control.js';
@@ -92,10 +90,11 @@ import {
     openSecurityCenter as openSecurityCenterHost,
 } from './security-center/host.js';
 import { buildOverviewModel, getDatabaseGroupSummaries } from './security-center/view-models.js';
+import { renderSystemWorkbench } from './security-center/system-workbench.js';
 
 const TOAST_TITLE = '权限中心';
-const MISSING_TEXT = '未获取';
 const PRIMARY_TAB_NAMES: readonly CenterTab[] = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings'];
+const SYSTEM_VIEW_NAMES: readonly SystemView[] = ['runtime', 'recovery', 'migration', 'diagnostics', 'backup'];
 type CenterArea = 'agent' | 'governance' | 'system' | 'settings';
 
 function isValidCenterTab(value: string | undefined): value is CenterTab {
@@ -107,6 +106,10 @@ function getCenterArea(tab: CenterTab): CenterArea {
     if (tab === 'updates') return 'system';
     if (tab === 'settings') return 'settings';
     return 'governance';
+}
+
+function isSystemView(value: string | undefined): value is SystemView {
+    return typeof value === 'string' && (SYSTEM_VIEW_NAMES as readonly string[]).includes(value);
 }
 
 function getDeclaredPermissionValue(
@@ -245,6 +248,18 @@ class SecurityCenterView {
                 workspaceCommits: [],
                 workspaceDiff: null,
             },
+            system: {
+                selectedView: 'runtime',
+                recoveryLoaded: false,
+                recoveryLoading: false,
+                recoveryBusy: false,
+                recoveryError: null,
+                workspace: null,
+                workspaceStatus: null,
+                workspaceCommits: [],
+                selectedCommitId: null,
+                workspaceDiff: null,
+            },
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
             packageActionInProgress: false,
@@ -294,6 +309,42 @@ class SecurityCenterView {
             const refreshButton = target.closest<HTMLElement>('[data-action="refresh"]');
             if (refreshButton) {
                 void this.refresh();
+                return;
+            }
+
+            const systemViewButton = target.closest<HTMLElement>('[data-action="system-select-view"]');
+            if (systemViewButton && isSystemView(systemViewButton.dataset.systemView)) {
+                this.selectSystemView(systemViewButton.dataset.systemView);
+                return;
+            }
+
+            const systemRecoveryRefresh = target.closest<HTMLElement>('[data-action="system-recovery-refresh"]');
+            if (systemRecoveryRefresh) {
+                void this.refreshSystemRecovery();
+                return;
+            }
+
+            const systemRecoveryCheckpoint = target.closest<HTMLElement>('[data-action="system-recovery-checkpoint"]');
+            if (systemRecoveryCheckpoint) {
+                void this.checkpointSystemWorkspace();
+                return;
+            }
+
+            const systemCheckpoint = target.closest<HTMLElement>('[data-action="system-select-checkpoint"]');
+            if (systemCheckpoint?.dataset.commitId) {
+                void this.selectSystemCheckpoint(systemCheckpoint.dataset.commitId);
+                return;
+            }
+
+            const systemRecoveryRollback = target.closest<HTMLElement>('[data-action="system-recovery-rollback"]');
+            if (systemRecoveryRollback?.dataset.commitId) {
+                void this.rollbackSystemWorkspace(systemRecoveryRollback.dataset.commitId);
+                return;
+            }
+
+            const systemRecoveryResume = target.closest<HTMLElement>('[data-action="system-recovery-resume"]');
+            if (systemRecoveryResume) {
+                void this.resumeSystemWorkspaceRollback();
                 return;
             }
 
@@ -615,6 +666,9 @@ class SecurityCenterView {
             if (this.state.isAdmin && this.state.selectedTab === 'agent') {
                 await this.refreshAgentWorkbench();
             }
+            if (this.state.isAdmin && this.state.selectedTab === 'updates' && this.state.system.selectedView === 'recovery') {
+                await this.refreshSystemRecovery();
+            }
         } catch (error) {
             this.state.error = error instanceof Error ? error.message : String(error);
         } finally {
@@ -795,6 +849,160 @@ class SecurityCenterView {
             })
             : null;
         return { status, commits: history.commits, diff };
+    }
+
+    private selectSystemView(view: SystemView): void {
+        this.state.system.selectedView = view;
+        void this.renderUpdatesSection();
+        if (view === 'recovery' && !this.state.system.recoveryLoaded && !this.state.system.recoveryLoading) {
+            void this.refreshSystemRecovery();
+        }
+    }
+
+    private async refreshSystemRecovery(): Promise<void> {
+        if (!this.state.isAdmin || this.state.system.recoveryLoading || this.state.system.recoveryBusy) return;
+        this.state.system.recoveryLoading = true;
+        this.state.system.recoveryError = null;
+        void this.renderUpdatesSection();
+        try {
+            const client = await this.getAgentClient();
+            const workspace = await client.agent.admin.workspaces.default();
+            const [status, history] = await Promise.all([
+                client.agent.admin.workspaces.status(workspace.id),
+                client.agent.admin.workspaces.commits(workspace.id, 200),
+            ]);
+            const selectedCommit = history.commits.find(commit => commit.id === this.state.system.selectedCommitId)
+                ?? history.commits.find(commit => commit.id === status.workspace.headCommitId)
+                ?? history.commits[0]
+                ?? null;
+            const diff = selectedCommit
+                ? await client.agent.admin.workspaces.diff(workspace.id, {
+                    from: selectedCommit.parents[0] ?? null,
+                    to: selectedCommit.id,
+                })
+                : null;
+            this.state.system.workspace = status.workspace;
+            this.state.system.workspaceStatus = status;
+            this.state.system.workspaceCommits = history.commits;
+            this.state.system.selectedCommitId = selectedCommit?.id ?? null;
+            this.state.system.workspaceDiff = diff;
+            this.state.system.recoveryLoaded = true;
+        } catch (error) {
+            this.state.system.recoveryError = error instanceof Error ? error.message : String(error);
+        } finally {
+            this.state.system.recoveryLoading = false;
+            void this.renderUpdatesSection();
+        }
+    }
+
+    private async selectSystemCheckpoint(commitId: string): Promise<void> {
+        const workspace = this.state.system.workspace;
+        const commit = this.state.system.workspaceCommits.find(item => item.id === commitId);
+        if (!workspace || !commit || this.state.system.recoveryLoading || this.state.system.recoveryBusy) return;
+        this.state.system.selectedCommitId = commitId;
+        this.state.system.recoveryLoading = true;
+        void this.renderUpdatesSection();
+        try {
+            this.state.system.workspaceDiff = await (await this.getAgentClient()).agent.admin.workspaces.diff(workspace.id, {
+                from: commit.parents[0] ?? null,
+                to: commit.id,
+            });
+            this.state.system.recoveryError = null;
+        } catch (error) {
+            this.state.system.recoveryError = error instanceof Error ? error.message : String(error);
+            toastr.error(getSystemMessageLabel(this.state.system.recoveryError), TOAST_TITLE);
+        } finally {
+            this.state.system.recoveryLoading = false;
+            void this.renderUpdatesSection();
+        }
+    }
+
+    private async checkpointSystemWorkspace(): Promise<void> {
+        const workspace = this.state.system.workspace;
+        if (!workspace || this.state.system.recoveryBusy) return;
+        const message = this.root.querySelector<HTMLInputElement>('[data-role="system-checkpoint-message"]')?.value.trim()
+            || 'Manual checkpoint from Authority recovery';
+        this.state.system.recoveryBusy = true;
+        void this.renderUpdatesSection();
+        try {
+            const result = await (await this.getAgentClient()).agent.admin.workspaces.checkpoint(workspace.id, { message });
+            toastr.success(`检查点已建立，记录 ${result.changedPaths} 个路径`, TOAST_TITLE);
+            this.state.system.selectedCommitId = result.commit.id;
+        } catch (error) {
+            this.reportSystemRecoveryError(error);
+        } finally {
+            this.state.system.recoveryBusy = false;
+        }
+        await this.refreshSystemRecovery();
+    }
+
+    private async rollbackSystemWorkspace(commitId: string): Promise<void> {
+        const workspace = this.state.system.workspace;
+        const commit = this.state.system.workspaceCommits.find(item => item.id === commitId);
+        if (!workspace || !commit || this.state.system.recoveryBusy) return;
+        const hasUnrecordedChanges = Boolean(this.state.system.workspaceStatus?.dirty);
+        if (!await showImpactConfirmation({
+            title: '恢复 SillyTavern 检查点',
+            description: '将 Authority 跟踪的文件恢复到选定检查点。',
+            confirmLabel: '建立保护并恢复',
+            target: `${workspace.displayName} @ ${commit.id.slice(0, 12)}`,
+            effects: [
+                '恢复前会自动建立安全检查点，当前状态可以再次找回。',
+                hasUnrecordedChanges ? '当前未记录变更会先进入安全检查点，再执行强制恢复。' : '当前工作树干净，不需要覆盖未记录变更。',
+                '未跟踪文件以及 .git、node_modules 和 Authority 历史库保持不变。',
+                '中断时会留下事务记录，可从本页或离线救援入口继续。',
+            ],
+            tone: 'danger',
+        })) return;
+        this.state.system.recoveryBusy = true;
+        void this.renderUpdatesSection();
+        try {
+            const result = await (await this.getAgentClient()).agent.admin.workspaces.rollback(workspace.id, {
+                targetCommitId: commitId,
+                operationId: globalThis.crypto.randomUUID(),
+                force: hasUnrecordedChanges,
+                message: `Restore ${commit.id.slice(0, 12)} from Authority recovery`,
+            });
+            toastr.success(`恢复完成，处理 ${result.changedPaths} 个路径`, TOAST_TITLE);
+            if (result.warnings.length) toastr.warning(result.warnings.join('；'), TOAST_TITLE);
+            this.state.system.selectedCommitId = null;
+        } catch (error) {
+            this.reportSystemRecoveryError(error);
+        } finally {
+            this.state.system.recoveryBusy = false;
+        }
+        await this.refreshSystemRecovery();
+    }
+
+    private async resumeSystemWorkspaceRollback(): Promise<void> {
+        const workspace = this.state.system.workspace;
+        if (!workspace || this.state.system.recoveryBusy || !await showImpactConfirmation({
+            title: '继续未完成的恢复',
+            description: '继续执行 Authority 已持久化的恢复事务。',
+            confirmLabel: '继续恢复',
+            target: workspace.displayName,
+            effects: ['只继续已经记录的恢复操作。', '若文件再次发生冲突，事务会保留并可再次继续。'],
+            tone: 'warning',
+        })) return;
+        this.state.system.recoveryBusy = true;
+        void this.renderUpdatesSection();
+        try {
+            const result = await (await this.getAgentClient()).agent.admin.workspaces.resumeRollback(workspace.id);
+            toastr.success(`恢复事务已完成，处理 ${result.changedPaths} 个路径`, TOAST_TITLE);
+            if (result.warnings.length) toastr.warning(result.warnings.join('；'), TOAST_TITLE);
+            this.state.system.selectedCommitId = null;
+        } catch (error) {
+            this.reportSystemRecoveryError(error);
+        } finally {
+            this.state.system.recoveryBusy = false;
+        }
+        await this.refreshSystemRecovery();
+    }
+
+    private reportSystemRecoveryError(error: unknown): void {
+        const message = error instanceof Error ? error.message : String(error);
+        this.state.system.recoveryError = message;
+        toastr.error(getSystemMessageLabel(message), TOAST_TITLE);
     }
 
     private async refreshSelectedAgentWorkspace(): Promise<void> {
@@ -1925,6 +2133,9 @@ class SecurityCenterView {
                 this.agentPollTimer = null;
             }
         }
+        if (tab === 'updates' && this.state.system.selectedView === 'recovery' && !this.state.system.recoveryLoaded) {
+            void this.refreshSystemRecovery();
+        }
     }
 
     private async render(): Promise<void> {
@@ -2576,389 +2787,9 @@ class SecurityCenterView {
         if (!container) {
             return;
         }
-
-        if (!this.state.isAdmin) {
-            container.innerHTML = '<div class="authority-empty">只有管理员可以使用这里的维护、备份和迁移功能。</div>';
-            return;
-        }
-
-        const probe = this.state.probe;
-        const core = probe?.core;
-        const result = this.state.updateResult;
-        const usageSummary = this.state.usageSummary;
-        const packageOperations = [...this.state.packageOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        const nativeMigrationOperations = [...this.state.nativeMigrationOperations].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-        const installPath = result?.git?.pluginRoot ?? '未获取';
-        const pullButtonLabel = this.state.updateInProgress ? '处理中…' : '拉取最新代码';
-        const redeployButtonLabel = this.state.updateInProgress ? '处理中…' : '重新部署前端界面';
-        const packageButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导出数据包';
-        const diagnosticArchiveLabel = this.state.packageActionInProgress ? '处理中…' : '导出诊断压缩包';
-        const importButtonLabel = this.state.packageActionInProgress ? '处理中…' : '导入数据包';
-        const nativeMigrationButtonLabel = this.state.nativeMigrationActionInProgress ? '处理中…' : '上传并预览';
-        const systemAttentionCount = Number(Boolean(core?.health?.lastError))
-            + Number(Boolean(probe && ['conflict', 'error', 'missing'].includes(probe.installStatus)));
-
-        const updateResultMarkup = result ? `
-            <section class="authority-system-result" aria-label="最近一次更新结果">
-                <div class="authority-section-heading">
-                    <div>
-                        <h3>最近一次更新</h3>
-                        <div class="authority-muted">${escapeHtml(result.message)}</div>
-                    </div>
-                    <div class="authority-page-actions authority-page-actions--inline">
-                        <span class="authority-pill authority-pill--${result.requiresRestart ? 'warning' : 'granted'}">${escapeHtml(result.requiresRestart ? '需要重启 ST' : '无需重启 ST')}</span>
-                        <span class="authority-pill authority-pill--runtime">${escapeHtml(result.action === 'git-pull' ? '代码更新' : '前端部署')}</span>
-                    </div>
-                </div>
-                <div class="authority-system-result__facts">
-                    <span><strong>${escapeHtml(result.before.pluginVersion)}</strong> → <strong>${escapeHtml(result.after.pluginVersion)}</strong><small>插件版本</small></span>
-                    <span><strong>${escapeHtml(result.before.sdkDeployedVersion ?? '未部署')}</strong> → <strong>${escapeHtml(result.after.sdkDeployedVersion ?? '未部署')}</strong><small>前端版本</small></span>
-                    <span><strong>${escapeHtml(getCoreStateLabel(result.core.state))}</strong><small>${escapeHtml(result.coreRestartMessage ?? '后台服务正常')}</small></span>
-                </div>
-                ${result.git ? `
-                    <details class="authority-system-subsection">
-                        <summary><span>Git 输出</span><span>${escapeHtml(result.git.branch ?? '未获取')} · ${escapeHtml(result.git.previousRevision ?? '未知')} → ${escapeHtml(result.git.currentRevision ?? '未知')}</span></summary>
-                        <div class="authority-system-subsection__body">
-                            ${result.git.stdout ? `<pre class="authority-code-block">${escapeHtml(result.git.stdout)}</pre>` : ''}
-                            ${result.git.stderr ? `<pre class="authority-code-block">${escapeHtml(result.git.stderr)}</pre>` : ''}
-                        </div>
-                    </details>
-                ` : ''}
-            </section>
-        ` : '';
-
-        const packageOperationsMarkup = packageOperations.length > 0 ? `
-            <div class="authority-table-wrap">
-                <table class="authority-data-table authority-policy-matrix">
-                    <thead><tr><th>任务</th><th>状态</th><th>进度</th><th>结果</th><th>更新时间</th><th>动作</th></tr></thead>
-                    <tbody>
-                        ${packageOperations.map(operation => `
-                            <tr>
-                                <td>
-                                    <strong>${escapeHtml(operation.kind === 'export' ? '导出' : '导入')}</strong>
-                                    <div class="authority-muted">${escapeHtml(operation.id)}</div>
-                                    ${operation.sourceFileName ? `<div class="authority-muted">来源文件：${escapeHtml(operation.sourceFileName)}</div>` : ''}
-                                </td>
-                                <td><span class="authority-pill authority-pill--${escapeHtml(this.getPackageOperationPill(operation.status))}">${escapeHtml(this.getPackageOperationStatusLabel(operation.status))}</span></td>
-                                <td>${escapeHtml(String(operation.progress))}%</td>
-                                <td>
-                                    <div>${escapeHtml(operation.summary ?? '未开始')}</div>
-                                    ${operation.error ? `<div class="authority-muted">${escapeHtml(operation.error)}</div>` : ''}
-                                    ${operation.artifact ? `<div class="authority-muted">${escapeHtml(operation.artifact.fileName)} · ${escapeHtml(formatBytes(operation.artifact.sizeBytes))}</div>` : ''}
-                                    ${operation.importSummary ? `<div class="authority-muted">扩展 ${escapeHtml(String(operation.importSummary.extensionCount))} 个 · 存储文件 ${escapeHtml(String(operation.importSummary.blobCount))} 个 · 私有文件 ${escapeHtml(String(operation.importSummary.fileCount))} 个</div>` : ''}
-                                </td>
-                                <td>${escapeHtml(formatDate(operation.updatedAt))}</td>
-                                <td>
-                                    <div class="authority-page-actions authority-page-actions--inline">
-                                        ${operation.artifact ? `<button type="button" class="authority-action-button" data-action="download-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>下载</button>` : ''}
-                                        ${operation.status === 'failed' ? `<button type="button" class="authority-action-button" data-action="resume-package-operation" data-operation-id="${escapeHtml(operation.id)}" ${this.state.packageActionInProgress ? 'disabled' : ''}>恢复</button>` : ''}
-                                    </div>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>
-        ` : '<div class="authority-empty">暂时还没有导入或导出任务。</div>';
-
-        const usageMarkup = usageSummary ? `
-            <div class="authority-system-usage-summary">
-                <span><strong>${escapeHtml(String(usageSummary.totals.extensionCount))}</strong><small>扩展</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.blobCount))} · ${escapeHtml(formatBytes(usageSummary.totals.blobBytes))}</strong><small>存储文件</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.databaseCount))} · ${escapeHtml(formatBytes(usageSummary.totals.databaseBytes))}</strong><small>SQL / Trivium</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.files.fileCount))} · ${escapeHtml(formatBytes(usageSummary.totals.files.totalSizeBytes))}</strong><small>私有文件</small></span>
-                <span><strong>${escapeHtml(String(usageSummary.totals.kvEntries))}</strong><small>键值条目</small></span>
-            </div>
-            <details class="authority-system-subsection">
-                <summary><span>按扩展查看占用</span><span>${escapeHtml(formatDate(usageSummary.generatedAt))}</span></summary>
-                <div class="authority-system-subsection__body">
-                    <div class="authority-table-wrap">
-                        <table class="authority-data-table authority-policy-matrix">
-                            <thead><tr><th>扩展</th><th>键值</th><th>存储文件</th><th>SQL / Trivium</th><th>私有文件</th><th>授权</th></tr></thead>
-                            <tbody>
-                                ${usageSummary.extensions.map(entry => `
-                                    <tr>
-                                        <td><strong>${escapeHtml(entry.extension.displayName || entry.extension.id)}</strong><div class="authority-muted">${escapeHtml(entry.extension.id)}</div></td>
-                                        <td>${escapeHtml(String(entry.storage.kvEntries))}</td>
-                                        <td>${escapeHtml(String(entry.storage.blobCount))} · ${escapeHtml(formatBytes(entry.storage.blobBytes))}</td>
-                                        <td>${escapeHtml(String(entry.storage.databaseCount))} · ${escapeHtml(formatBytes(entry.storage.databaseBytes))}</td>
-                                        <td>${escapeHtml(String(entry.storage.files.fileCount))} · ${escapeHtml(formatBytes(entry.storage.files.totalSizeBytes))}</td>
-                                        <td>${escapeHtml(String(entry.grantedCount))} / ${escapeHtml(String(entry.deniedCount))}</td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </details>
-        ` : '<div class="authority-empty">暂时还没拿到数据占用概览。</div>';
-
-        const nativeMigrationMarkup = `
-            <div class="authority-system-section__intro">
-                <div>
-                    <h3>从旧 SillyTavern 导入原生目录</h3>
-                    <p>上传 data 或 third-party 插件 ZIP，生成影响预览后再决定跳过或覆盖。最大 12 GB。</p>
-                </div>
-                <span class="authority-pill authority-pill--warning">管理员高风险操作</span>
-            </div>
-            <div class="authority-migration-grid">
-                <div class="authority-upload-tile">
-                    <strong>导入旧酒馆 data 目录</strong>
-                    <div class="authority-muted">支持压缩包内为 <code>data/default-user/...</code> 或直接 <code>default-user/...</code>。</div>
-                    <div class="authority-page-actions">
-                        <input type="file" data-role="native-migration-file" data-target="data" accept=".zip,application/zip" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''} />
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="data" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
-                    </div>
-                </div>
-                <div class="authority-upload-tile">
-                    <strong>导入旧酒馆第三方插件目录</strong>
-                    <div class="authority-muted">支持 public/scripts/extensions/third-party、extensions/third-party、third-party 或直接插件文件夹。</div>
-                    <div class="authority-page-actions">
-                        <input type="file" data-role="native-migration-file" data-target="third-party" accept=".zip,application/zip" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''} />
-                        <button type="button" class="authority-action-button authority-action-button--primary" data-action="preview-native-migration" data-target="third-party" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>${nativeMigrationButtonLabel}</button>
-                    </div>
-                </div>
-            </div>
-            <div class="authority-guardrail-band">
-                <span>不删除缺失文件</span><span>不运行 npm install</span><span>不重启</span><span>不自动启用脚本</span>
-            </div>
-            ${nativeMigrationOperations.length > 0 ? `
-                <div class="authority-table-wrap">
-                    <table class="authority-data-table authority-policy-matrix">
-                        <thead><tr><th>迁移任务</th><th>状态</th><th>预览统计</th><th>执行结果</th><th>更新时间</th><th>动作</th></tr></thead>
-                        <tbody>${nativeMigrationOperations.map(operation => this.renderNativeMigrationOperationRow(operation)).join('')}</tbody>
-                    </table>
-                </div>
-            ` : '<div class="authority-empty">暂时还没有原生迁移任务。上传 ZIP 后会先生成预览。</div>'}
-        `;
-
-        container.innerHTML = `
-            <div class="authority-page-stack authority-system-workspace">
-                <header class="authority-page-header authority-page-header--updates">
-                    <div>
-                        <div class="authority-eyebrow">System & recovery</div>
-                        <h2>系统与恢复</h2>
-                        <p>日常运行状态、更新、备份恢复与高风险迁移分层管理。</p>
-                    </div>
-                    <div class="authority-page-actions">
-                        <button type="button" class="authority-action-button" data-action="export-diagnostic-archive" ${this.state.packageActionInProgress ? 'disabled' : ''}>${diagnosticArchiveLabel}</button>
-                        <button type="button" class="authority-action-button" data-action="export-diagnostic-bundle">导出诊断 JSON</button>
-                    </div>
-                </header>
-
-                <div class="authority-system-health-grid" aria-label="系统状态摘要">
-                    <div><small>Authority 服务</small><strong>${escapeHtml(getCoreStateLabel(core?.state))}</strong><span>Core ${escapeHtml(core?.version ?? probe?.coreBundledVersion ?? MISSING_TEXT)}</span></div>
-                    <div><small>部署状态</small><strong>${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : MISSING_TEXT)}</strong><span>SDK ${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</span></div>
-                    <div><small>需要处理</small><strong>${systemAttentionCount}</strong><span>${systemAttentionCount > 0 ? '展开下方项目查看' : '当前没有阻塞项'}</span></div>
-                </div>
-
-                <details class="authority-system-section" open>
-                    <summary>
-                        <span><strong>版本与部署</strong><small>更新插件、部署前端与检查 Core</small></span>
-                        <span class="authority-pill authority-pill--${escapeHtml(probe?.installStatus ?? 'prompt')}">${escapeHtml(probe ? getInstallStatusLabel(probe.installStatus) : '未获取')}</span>
-                    </summary>
-                    <div class="authority-system-section__body authority-stack">
-                        <div class="authority-system-operation-list">
-                            <div class="authority-system-operation-row">
-                                <div><strong>插件更新</strong><span>当前 ${escapeHtml(probe?.pluginVersion ?? MISSING_TEXT)} · 仅允许快进更新</span></div>
-                                <button type="button" class="authority-action-button authority-action-button--primary" data-action="admin-update" data-update-action="git-pull" ${this.state.updateInProgress ? 'disabled' : ''}>${pullButtonLabel}</button>
-                            </div>
-                            <div class="authority-system-operation-row">
-                                <div><strong>SDK 部署</strong><span>内置 ${escapeHtml(probe?.sdkBundledVersion ?? MISSING_TEXT)} · 当前 ${escapeHtml(probe?.sdkDeployedVersion ?? MISSING_TEXT)}</span></div>
-                                <button type="button" class="authority-action-button" data-action="admin-update" data-update-action="redeploy-sdk" ${this.state.updateInProgress ? 'disabled' : ''}>${redeployButtonLabel}</button>
-                            </div>
-                            <div class="authority-system-operation-row">
-                                <div><strong>后台服务</strong><span>${escapeHtml(getCoreStateLabel(core?.state))} · ${escapeHtml(probe?.coreArtifactPlatform ?? MISSING_TEXT)} · 校验 ${escapeHtml(probe?.coreVerified ? '通过' : '未通过')}</span></div>
-                                <span class="authority-pill authority-pill--${escapeHtml(core?.state ?? 'starting')}">${escapeHtml(core?.version ?? MISSING_TEXT)}</span>
-                            </div>
-                        </div>
-                        <details class="authority-system-subsection">
-                            <summary><span>后台服务详细诊断</span><span>${escapeHtml(core?.port ? `127.0.0.1:${core.port}` : '端口未分配')}</span></summary>
-                            <div class="authority-system-subsection__body">
-                                <div class="authority-system-facts authority-system-facts--runtime">
-                                    <div><span>构建编号</span><strong>${escapeHtml(core?.health?.buildHash ?? probe?.coreBinarySha256 ?? MISSING_TEXT)}</strong></div>
-                                    <div><span>数据目录</span><strong>${escapeHtml(probe?.storageRoot ?? MISSING_TEXT)}</strong></div>
-                                    <div><span>插件目录</span><strong>${escapeHtml(installPath)}</strong></div>
-                                    <div><span>处理请求</span><strong>${escapeHtml(core?.health ? String(core.health.requestCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>累计错误</span><strong>${escapeHtml(core?.health ? String(core.health.errorCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>当前并发</span><strong>${escapeHtml(core?.health ? `${core.health.currentConcurrency} / ${core.health.maxConcurrency}` : MISSING_TEXT)}</strong></div>
-                                    <div><span>请求排队</span><strong>${escapeHtml(core?.health ? String(core.health.queuedRequestCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>任务排队</span><strong>${escapeHtml(core?.health ? String(core.health.queuedJobCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>工作线程</span><strong>${escapeHtml(core?.health ? String(core.health.workerCount) : MISSING_TEXT)}</strong></div>
-                                    <div><span>任务类型</span><strong>${escapeHtml(core?.health ? `${core.health.jobRegistrySummary.registered} · ${core.health.jobRegistrySummary.jobTypes.join(', ')}` : MISSING_TEXT)}</strong></div>
-                                    <div><span>最近操作</span><strong>${escapeHtml(result ? formatDate(result.updatedAt) : '未执行')}</strong></div>
-                                </div>
-                            </div>
-                        </details>
-                        ${updateResultMarkup}
-                        <details class="authority-system-subsection">
-                            <summary><span>更新说明</span><span>什么时候需要重启</span></summary>
-                            <div class="authority-system-subsection__body authority-stack">
-                                <div class="authority-inline-note"><strong>拉取最新代码</strong><div>仅适用于 Git 安装；执行 git pull --ff-only，再部署前端并尝试重启后台服务。</div></div>
-                                <div class="authority-inline-note"><strong>重新部署前端</strong><div>只替换 third-party/st-authority-sdk，不联网、不修改服务端代码。</div></div>
-                                <div class="authority-inline-note"><strong>重启提示</strong><div>若更新包含新的 Node 服务端代码，需要重启 SillyTavern 才会完全生效。</div></div>
-                            </div>
-                        </details>
-                    </div>
-                </details>
-
-                <details class="authority-system-section" open>
-                    <summary>
-                        <span><strong>ST-Manager 备份与恢复</strong><small>酒馆主动备份、恢复预览与恢复</small></span>
-                        <span class="authority-pill authority-pill--${this.state.stManagerControlConfig?.enabled ? 'granted' : 'warning'}">${this.state.stManagerControlConfig?.enabled ? '已配置' : '未配置'}</span>
-                    </summary>
-                    <div class="authority-system-section__body">
-                        ${renderStManagerControlSection(
-            this.state.stManagerControlConfig,
-            this.state.stManagerControlBackups,
-            this.state.stManagerControlActionInProgress,
-        )}
-                    </div>
-                </details>
-
-                <details class="authority-system-section">
-                    <summary>
-                        <span><strong>Authority 数据包</strong><small>授权、规则、私有文件与数据库</small></span>
-                        <span class="authority-pill authority-pill--runtime">${packageOperations.length} 个任务</span>
-                    </summary>
-                    <div class="authority-system-section__body authority-stack">
-                        <div class="authority-system-section__intro">
-                            <div>
-                                <h3>备份与迁移 Authority 数据</h3>
-                                <p>导出完整数据包，或以覆盖/合并方式导入；后台任务进度会保留在下方。</p>
-                            </div>
-                            <button type="button" class="authority-action-button authority-action-button--primary" data-action="export-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${packageButtonLabel}</button>
-                        </div>
-                        ${usageMarkup}
-                        <div class="authority-system-import">
-                            <label>
-                                <span>导入方式</span>
-                                <select data-role="import-package-mode" ${this.state.packageActionInProgress ? 'disabled' : ''}>
-                                    <option value="replace">覆盖导入 · 清空现有数据后导入</option>
-                                    <option value="merge">合并导入 · 保留现有数据并补充</option>
-                                </select>
-                            </label>
-                            <input type="file" data-role="import-package-file" accept=".zip,.authoritypkg.zip,.json,.gz,.authoritypkg,.authoritypkg.json.gz,application/zip,application/json,application/gzip" ${this.state.packageActionInProgress ? 'disabled' : ''} />
-                            <button type="button" class="authority-action-button" data-action="import-portable-package" ${this.state.packageActionInProgress ? 'disabled' : ''}>${importButtonLabel}</button>
-                        </div>
-                        ${packageOperationsMarkup}
-                    </div>
-                </details>
-
-                <details class="authority-system-section authority-system-section--danger">
-                    <summary>
-                        <span><strong>原生 SillyTavern 迁移</strong><small>从旧 data 或 third-party ZIP 导入</small></span>
-                        <span class="authority-pill authority-pill--warning">${nativeMigrationOperations.length} 个任务</span>
-                    </summary>
-                    <div class="authority-system-section__body authority-stack">${nativeMigrationMarkup}</div>
-                </details>
-
-                <details class="authority-system-section">
-                    <summary>
-                        <span><strong>高级远程桥接</strong><small>让 ST-Manager 回连酒馆的公网通道</small></span>
-                        <span class="authority-pill authority-pill--${this.state.stManagerBridgeConfig?.enabled ? 'granted' : 'warning'}">${this.state.stManagerBridgeConfig?.enabled ? '已启用' : '未启用'}</span>
-                    </summary>
-                    <div class="authority-system-section__body">
-                        <div class="authority-inline-note">通常只需要上面的 ST-Manager 控制配置。仅当 ST-Manager 必须主动回连酒馆时才启用桥接。</div>
-                        ${renderStManagerBridgeSection(
-            this.state.stManagerBridgeConfig,
-            this.state.stManagerBridgeGeneratedKey,
-            this.state.stManagerBridgeActionInProgress,
-        )}
-                    </div>
-                </details>
-            </div>
-        `;
-    }
-    private getPackageOperationPill(status: PackageOperation['status']): 'granted' | 'warning' | 'runtime' | 'prompt' {
-        switch (status) {
-            case 'completed':
-                return 'granted';
-            case 'failed':
-                return 'warning';
-            case 'running':
-                return 'runtime';
-            default:
-                return 'prompt';
-        }
-    }
-
-    private renderNativeMigrationOperationRow(operation: SecurityCenterNativeMigrationOperation): string {
-        const rejectedCount = operation.entries?.filter(entry => entry.action === 'reject').length ?? 0;
-        const createCount = operation.entries?.filter(entry => entry.action === 'create').length ?? 0;
-        const overwriteCount = operation.entries?.filter(entry => entry.action === 'overwrite').length ?? 0;
-        const canApply = operation.status === 'previewed' && rejectedCount === 0;
-        const canRollback = operation.status === 'applied' || operation.status === 'needs_rollback';
-        return `
-            <tr>
-                <td>
-                    <strong>${escapeHtml(operation.target === 'data' ? 'Data 目录' : '第三方插件')}</strong>
-                    <div class="authority-muted">${escapeHtml(operation.id)}</div>
-                    <div class="authority-muted">${escapeHtml(operation.sourceFileName)} · ${escapeHtml(formatBytes(operation.sourceSizeBytes))}</div>
-                </td>
-                <td><span class="authority-pill authority-pill--${escapeHtml(this.getNativeMigrationOperationPill(operation.status))}">${escapeHtml(this.getNativeMigrationOperationStatusLabel(operation.status))}</span></td>
-                <td>
-                    <div>${escapeHtml(String(operation.entryCount))} 个文件 · ${escapeHtml(formatBytes(operation.totalSizeBytes))}</div>
-                    <div class="authority-muted">新增 ${escapeHtml(String(createCount))} · 覆盖候选 ${escapeHtml(String(overwriteCount))} · 拒绝 ${escapeHtml(String(rejectedCount))}</div>
-                    ${operation.warnings.length > 0 ? `<div class="authority-muted">${escapeHtml(operation.warnings.join('；'))}</div>` : ''}
-                </td>
-                <td>
-                    <div>已创建 ${escapeHtml(String(operation.createdCount))} · 已覆盖 ${escapeHtml(String(operation.overwrittenCount))} · 已跳过 ${escapeHtml(String(operation.skippedCount))}</div>
-                    ${operation.error ? `<div class="authority-muted">${escapeHtml(operation.error)}</div>` : ''}
-                </td>
-                <td>${escapeHtml(formatDate(operation.updatedAt))}</td>
-                <td>
-                    <div class="authority-page-actions authority-page-actions--inline">
-                        ${canApply ? `
-                            <select data-role="native-migration-mode" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>
-                                <option value="skip">跳过已有文件</option>
-                                <option value="overwrite">覆盖已有文件并保留回滚备份</option>
-                            </select>
-                            <button type="button" class="authority-action-button authority-action-button--primary" data-action="apply-native-migration" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>应用</button>
-                        ` : ''}
-                        ${canRollback ? `<button type="button" class="authority-action-button" data-action="rollback-native-migration" data-operation-id="${escapeHtml(operation.id)}" ${this.state.nativeMigrationActionInProgress ? 'disabled' : ''}>回滚</button>` : ''}
-                        ${rejectedCount > 0 ? '<span class="authority-muted">存在被拒绝文件，不能应用。</span>' : ''}
-                    </div>
-                </td>
-            </tr>
-        `;
-    }
-
-    private getNativeMigrationOperationPill(status: SecurityCenterNativeMigrationOperation['status']): 'granted' | 'warning' | 'runtime' | 'prompt' {
-        switch (status) {
-            case 'applied':
-            case 'rolled_back':
-                return 'granted';
-            case 'failed':
-            case 'needs_rollback':
-                return 'warning';
-            case 'applying':
-            case 'rolling_back':
-                return 'runtime';
-            default:
-                return 'prompt';
-        }
-    }
-
-    private getNativeMigrationOperationStatusLabel(status: SecurityCenterNativeMigrationOperation['status']): string {
-        switch (status) {
-            case 'previewed':
-                return '已预览';
-            case 'applying':
-                return '导入中';
-            case 'applied':
-                return '已导入';
-            case 'rolling_back':
-                return '回滚中';
-            case 'rolled_back':
-                return '已回滚';
-            case 'needs_rollback':
-                return '需要回滚';
-            case 'failed':
-                return '失败';
-            default:
-                return '未知';
-        }
+        container.innerHTML = this.state.isAdmin
+            ? renderSystemWorkbench(this.state)
+            : '<div class="authority-empty">只有管理员可以使用这里的维护、备份和迁移功能。</div>';
     }
 
     private getRequiredSessionToken(): string {
@@ -3031,19 +2862,6 @@ class SecurityCenterView {
                 <button type="button" class="menu_button" data-action="remove-policy-row">移除</button>
             </div>
         `;
-    }
-
-    private getPackageOperationStatusLabel(status: PackageOperation['status']): string {
-        switch (status) {
-            case 'completed':
-                return '已完成';
-            case 'failed':
-                return '失败';
-            case 'running':
-                return '处理中';
-            default:
-                return '排队中';
-        }
     }
 
     private toggleSections(): void {
