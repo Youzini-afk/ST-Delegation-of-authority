@@ -10,6 +10,7 @@ import type {
 } from '@stdo/shared-types';
 import { escapeHtml, formatDate } from '../dom.js';
 import type { AgentWorkbenchState } from './types.js';
+import { renderWorkspaceDiffEntries } from './workspace-diff-view.js';
 
 const ACTIVE_RUN_STATUSES = new Set<AgentSessionRunStatus>([
     'queued', 'running', 'waiting_approval', 'waiting_tool', 'cancelling',
@@ -93,7 +94,8 @@ export function renderAgentSessionMain(state: AgentWorkbenchState, disabled = ''
     }
 
     const snapshot = state.selectedSession;
-    const run = getActiveAgentSessionRun(snapshot);
+    const activeRun = getActiveAgentSessionRun(snapshot);
+    const run = activeRun ?? snapshot.runs.at(-1) ?? null;
     const queued = snapshot.pendingMessages.length;
     return `
         <section class="authority-agent-session">
@@ -107,17 +109,14 @@ export function renderAgentSessionMain(state: AgentWorkbenchState, disabled = ''
                     <div class="authority-agent-session__actions">
                         ${renderSessionStatus(run?.status ?? 'idle')}
                         <button type="button" class="authority-agent-mobile-pane-button authority-mobile-only" data-action="mobile-open-surface" data-mobile-surface="agent-inspector" aria-label="打开任务与变更">⌁</button>
-                        ${run && ACTIVE_RUN_STATUSES.has(run.status)
-        ? `<button type="button" class="authority-agent-icon-button" data-action="agent-cancel-run" data-session-id="${escapeHtml(snapshot.session.id)}" data-run-id="${escapeHtml(run.id)}" aria-label="取消当前运行" title="取消当前运行" ${disabled}>■</button>`
-        : ''}
-                        ${run?.status === 'suspended'
-        ? `<button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-resume-run" data-session-id="${escapeHtml(snapshot.session.id)}" data-run-id="${escapeHtml(run.id)}" ${disabled}>检查后恢复</button>`
+                        ${activeRun && ACTIVE_RUN_STATUSES.has(activeRun.status)
+        ? `<button type="button" class="authority-agent-icon-button" data-action="agent-cancel-run" data-session-id="${escapeHtml(snapshot.session.id)}" data-run-id="${escapeHtml(activeRun.id)}" aria-label="取消当前运行" title="取消当前运行" ${disabled}>■</button>`
         : ''}
                         ${renderSessionMenu(state, snapshot, disabled)}
                     </div>
                 </header>
                 ${run && ACTIVE_RUN_STATUSES.has(run.status) ? `<div class="authority-agent-run-progress authority-mobile-only"><span>${escapeHtml(sessionStatusLabel(run.status))}</span><strong>${escapeHtml(`${run.stepCount} / ${run.maxSteps}`)}</strong></div>` : ''}
-                ${run?.suspensionReason ? `<div class="authority-agent-recovery-banner"><strong>运行已暂停</strong><span>${escapeHtml(redactSensitiveText(run.suspensionReason))}</span></div>` : ''}
+                ${renderRunRecovery(snapshot.session.id, run, disabled)}
             </div>
             <div class="authority-agent-timeline" data-role="agent-timeline">
                 ${renderTimeline(snapshot, disabled)}
@@ -139,6 +138,16 @@ export function renderAgentSessionMain(state: AgentWorkbenchState, disabled = ''
             </footer>
         </section>
     `;
+}
+
+function renderRunRecovery(sessionId: string, run: AgentSessionRun | null, disabled: string): string {
+    if (run?.status === 'suspended') {
+        return `<div class="authority-agent-recovery-banner"><div><strong>运行已暂停，可以从安全边界继续</strong><span>${escapeHtml(redactSensitiveText(run.suspensionReason ?? '运行需要人工确认后继续。'))}</span></div><button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-resume-run" data-session-id="${escapeHtml(sessionId)}" data-run-id="${escapeHtml(run.id)}" ${disabled}>确认后继续</button></div>`;
+    }
+    if (run?.status === 'failed') {
+        return `<div class="authority-agent-recovery-banner authority-agent-recovery-banner--failed"><div><strong>本轮运行未完成</strong><span>${escapeHtml(redactSensitiveText(run.error ?? '可以保留当前上下文并开始下一轮。'))}</span></div><button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-continue-failed-run" data-session-id="${escapeHtml(sessionId)}" data-run-id="${escapeHtml(run.id)}" ${disabled}>从当前状态继续</button></div>`;
+    }
+    return '';
 }
 
 function renderNewSession(state: AgentWorkbenchState, disabled: string): string {
@@ -363,8 +372,14 @@ function renderChangesInspector(
                 <input data-role="agent-checkpoint-message" type="text" placeholder="检查点说明" aria-label="检查点说明" ${disabled} />
                 <button type="button" class="authority-action-button" data-action="agent-workspace-checkpoint" ${disabled}>建立检查点</button>
             </div>
-            ${status?.changes.length ? `<details class="authority-agent-subsection" open><summary><span>当前变更</span><span>${escapeHtml(String(status.changes.length))}</span></summary>${renderDiffEntries(status.changes)}</details>` : '<div class="authority-muted">当前没有未记录变更。</div>'}
-            ${state.workspaceDiff?.entries.length ? `<details class="authority-agent-subsection"><summary><span>最近检查点差异</span><span>${escapeHtml(String(state.workspaceDiff.entries.length))}</span></summary>${renderDiffEntries(state.workspaceDiff.entries)}</details>` : ''}
+            ${status?.changes.length ? `<details class="authority-agent-subsection" open><summary><span>当前变更</span><span>${escapeHtml(String(status.changes.length))}</span></summary>${renderWorkspaceDiffEntries(status.changes, {
+        action: 'agent-file-diff', scope: 'working', workspaceId: selected.id,
+        from: status.workspace.headCommitId, to: 'working', states: state.fileDiffs, disabled,
+    })}</details>` : '<div class="authority-muted">当前没有未记录变更。</div>'}
+            ${state.workspaceDiff?.entries.length ? `<details class="authority-agent-subsection"><summary><span>最近检查点差异</span><span>${escapeHtml(String(state.workspaceDiff.entries.length))}</span></summary>${renderWorkspaceDiffEntries(state.workspaceDiff.entries, {
+        action: 'agent-file-diff', scope: 'history', workspaceId: selected.id,
+        from: state.workspaceDiff.fromCommitId, to: state.workspaceDiff.toCommitId, states: state.fileDiffs, disabled,
+    })}</details>` : ''}
             <div class="authority-agent-subheading"><strong>检查点</strong><span>${escapeHtml(String(state.workspaceCommits.length))}</span></div>
             <div class="authority-agent-commit-list">${state.workspaceCommits.map(commit => renderCommitItem(commit, selected.headCommitId, disabled)).join('') || '<div class="authority-muted">暂无检查点。</div>'}</div>
         </section>
@@ -412,10 +427,6 @@ function modeOptions(selected: 'plan' | 'ask' | 'auto'): string {
 
 function renderCommitItem(commit: WorkspaceCommitObject, head: string | null, disabled: string): string {
     return `<article class="authority-agent-commit"><div><code>${escapeHtml(commit.id.slice(0, 10))}</code>${commit.id === head ? ' <span class="authority-pill authority-pill--granted">当前</span>' : ''}</div><strong>${escapeHtml(commit.message)}</strong><span class="authority-muted">${escapeHtml(formatDate(commit.createdAt))}</span>${commit.id === head ? '' : `<button type="button" class="authority-action-button" data-action="agent-workspace-rollback" data-commit-id="${escapeHtml(commit.id)}" ${disabled}>回退到这里</button>`}</article>`;
-}
-
-function renderDiffEntries(entries: Array<{ path: string; status: string }>): string {
-    return `<div class="authority-agent-diff-list">${entries.map(entry => `<div><code>${escapeHtml(entry.path)}</code><span>${escapeHtml(entry.status)}</span></div>`).join('')}</div>`;
 }
 
 function profileOptions(profiles: AgentLlmProfile[], selectedId: string | null): string {

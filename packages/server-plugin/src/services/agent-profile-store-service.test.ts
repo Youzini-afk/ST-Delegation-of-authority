@@ -78,6 +78,52 @@ describe('AgentProfileStoreService', () => {
         expect(store.getProfileForRequest('main').apiKey).toBeNull();
     });
 
+    it('prepares an unsaved connection test with the same validation without mutating profiles.json', () => {
+        const { stateDir, store } = createStore();
+        store.upsertProfile({
+            id: 'main',
+            displayName: 'Main',
+            provider: 'openai-compatible',
+            baseUrl: 'https://api.example.com/v1',
+            model: 'saved-model',
+            apiKey: 'secret-api-key',
+        });
+        const profilesPath = path.join(stateDir, 'profiles.json');
+        const saved = fs.readFileSync(profilesPath, 'utf8');
+
+        const prepared = store.prepareProfileForTest({
+            id: 'main',
+            displayName: 'Unsaved edit',
+            provider: 'openai-compatible',
+            baseUrl: 'https://api.example.com/v1',
+            model: 'unsaved-model',
+        });
+
+        expect(prepared).toMatchObject({
+            id: 'main',
+            displayName: 'Unsaved edit',
+            model: 'unsaved-model',
+            apiKey: 'secret-api-key',
+        });
+        expect(fs.readFileSync(profilesPath, 'utf8')).toBe(saved);
+
+        const empty = createStore();
+        expect(empty.store.prepareProfileForTest({
+            displayName: 'Temporary',
+            provider: 'openai-compatible',
+            baseUrl: 'http://localhost:1234/v1',
+            model: 'temporary-model',
+        })).toMatchObject({ displayName: 'Temporary', apiKey: null });
+        expect(fs.existsSync(path.join(empty.stateDir, 'profiles.json'))).toBe(false);
+        expect(() => empty.store.prepareProfileForTest({
+            displayName: 'Invalid key',
+            provider: 'openai-compatible',
+            baseUrl: 'http://localhost:1234/v1',
+            model: 'temporary-model',
+            apiKey: 42 as never,
+        })).toThrow('apiKey must be a string');
+    });
+
     it('persists deletion without touching historical run-first files', () => {
         const { stateDir, store } = createStore();
         const runsDir = path.join(stateDir, 'runs');

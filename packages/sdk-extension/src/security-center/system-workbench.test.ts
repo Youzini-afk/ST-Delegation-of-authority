@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderSystemWorkbench } from './system-workbench.js';
 import type { SecurityCenterState, SystemView } from './types.js';
+import { workspaceFileDiffKey } from './workspace-diff-view.js';
 
 describe('System and recovery workbench rendering', () => {
     it('provides a stable five-view maintenance workspace', () => {
@@ -53,7 +54,36 @@ describe('System and recovery workbench rendering', () => {
             },
         ];
         state.system.selectedCommitId = 'previous';
-        state.system.workspaceDiff = { entries: [{ path: 'config.yaml', status: 'modified' }] };
+        state.system.workspaceDiff = {
+            workspaceId: 'sillytavern',
+            fromCommitId: null,
+            toCommitId: 'previous',
+            entries: [{ path: 'config.yaml', status: 'modified' }],
+        };
+        state.system.fileDiffs.set(
+            workspaceFileDiffKey('sillytavern', null, 'previous', 'config.yaml'),
+            {
+                loading: false,
+                expanded: true,
+                error: null,
+                response: {
+                    workspaceId: 'sillytavern',
+                    path: 'config.yaml',
+                    status: 'modified',
+                    fromCommitId: null,
+                    toCommitId: 'previous',
+                    toWorkingTree: false,
+                    beforeKind: 'blob',
+                    afterKind: 'blob',
+                    kind: 'text',
+                    hunks: [{ lines: [
+                        { kind: 'deleted', beforeLine: 1, afterLine: null, text: 'port: 8000' },
+                        { kind: 'added', beforeLine: null, afterLine: 1, text: 'port: 8001' },
+                    ] }],
+                    truncated: false,
+                },
+            },
+        );
 
         const html = renderSystemWorkbench(state);
 
@@ -62,6 +92,9 @@ describe('System and recovery workbench rendering', () => {
         expect(html).toContain('data-action="system-select-checkpoint"');
         expect(html).toContain('data-action="system-recovery-rollback"');
         expect(html).toContain('data-action="system-recovery-resume"');
+        expect(html).toContain('data-action="system-file-diff"');
+        expect(html).toContain('authority-file-diff__line--deleted');
+        expect(html).toContain('port: 8001');
         expect(html).toContain('class="authority-mobile-recovery-header authority-mobile-only"');
         expect(html).toContain('data-action="mobile-close-surface"');
         expect(html).toContain('恢复前自动创建安全检查点');
@@ -121,6 +154,7 @@ function systemState(selectedView: SystemView): SecurityCenterState {
             workspaceCommits: [],
             selectedCommitId: null,
             workspaceDiff: null,
+            fileDiffs: new Map(),
         },
         mobile: { surface: 'none' },
         policyEditorExtensionId: null,

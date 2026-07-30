@@ -91,6 +91,7 @@ export interface AgentSessionRunState {
     id: string;
     ref: string;
     triggerMessageId: string;
+    continuedFromRunId?: string;
     status: AgentSessionRunStatus;
     profileId: string;
     mode: AgentExecutionMode;
@@ -294,6 +295,7 @@ export interface AgentSessionRunAcceptedEntry extends AgentSessionEntryBase {
     runId: string;
     ref: string;
     triggerMessageId: string;
+    continuedFromRunId?: string;
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
@@ -712,6 +714,15 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             if (projection.runs.has(entry.runId)) throw new Error(`Agent session run already exists: ${entry.runId}`);
             const ref = requireRef(projection, entry.ref);
             if (ref.activeRunId) throw new Error(`Agent session ref already has an active run: ${entry.ref}`);
+            if (entry.continuedFromRunId !== undefined) {
+                const source = requireRun(projection, entry.continuedFromRunId);
+                if (source.status !== 'failed' || source.ref !== entry.ref) {
+                    throw new Error('Agent failed-run continuation source must be a failed run on the same ref');
+                }
+                if ([...projection.runs.values()].some(run => run.continuedFromRunId === entry.continuedFromRunId)) {
+                    throw new Error(`Agent failed run already has a continuation: ${entry.continuedFromRunId}`);
+                }
+            }
             const trigger = requireConversationEntry(projection, entry.triggerMessageId);
             if (trigger.kind !== 'message' || trigger.role !== 'user' || ref.leafEntryId !== trigger.id) {
                 throw new Error('Agent run trigger must be the active user message');
@@ -720,6 +731,7 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
                 id: entry.runId,
                 ref: entry.ref,
                 triggerMessageId: entry.triggerMessageId,
+                ...(entry.continuedFromRunId === undefined ? {} : { continuedFromRunId: entry.continuedFromRunId }),
                 status: 'queued',
                 profileId: entry.profileId,
                 mode: entry.mode,

@@ -1333,6 +1333,15 @@ function registerAgentHistoryRoutes(router, runtime, fail) {
         const workspace = runtime.workspaceHistory.getWorkspace(id);
         res.json(runtime.workspaceHistory.diff(id, resolveCommit(req.query?.from, workspace.headCommitId), resolveCommit(req.query?.to, workspace.headCommitId)));
     }));
+    router.get('/admin/agent/workspaces/:workspaceId/diff/file', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
+        const id = workspaceId(req);
+        const workspace = runtime.workspaceHistory.getWorkspace(id);
+        const requestedPath = req.query?.path;
+        if (typeof requestedPath !== 'string' || requestedPath.length === 0) {
+            throw new Error('Workspace file diff path is required');
+        }
+        res.json(await runtime.workspaceHistory.diffFile(id, resolveCommit(req.query?.from, workspace.headCommitId), resolveFileDiffTarget(req.query?.to, workspace.headCommitId), requestedPath));
+    }));
     router.post('/admin/agent/workspaces/:workspaceId/checkpoints', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_1__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
         const response = await runtime.workspaceHistory.checkpoint(workspaceId(req), (req.body ?? {}), { kind: 'user', id: context.user.handle });
         void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent workspace checkpoint created', {
@@ -1376,6 +1385,9 @@ function resolveCommit(value, head) {
         return head;
     }
     return normalized === 'empty' ? null : normalized;
+}
+function resolveFileDiffTarget(value, head) {
+    return value?.trim() === 'working' ? 'working' : resolveCommit(value, head);
 }
 
 
@@ -1549,6 +1561,32 @@ function registerAgentRoutes(router, runtime, fail) {
             fail(runtime, req, res, extensionId, error);
         }
     });
+    router.post('/agent/sessions/:sessionId/runs/:runId/continue', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const failedRunId = runId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const existing = await ownedSession(runtime, id, context, false);
+            await authorizeWorkspace(runtime, context, existing.session.workspaceId);
+            const result = await runtime.agentSessions.continueFailedRun(id, failedRunId, extensionId, context);
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent failed run continued', {
+                sessionId: id,
+                failedRunId,
+                continuationRunId: result.runId,
+            }).catch(() => undefined);
+            res.json({
+                snapshot: (0,_agent_session_presenter_js__WEBPACK_IMPORTED_MODULE_4__.presentAgentSession)(result.snapshot),
+                runId: result.runId,
+                queuedMessageId: result.queuedMessageId,
+            });
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
     router.post('/agent/sessions/:sessionId/events-ticket', async (req, res) => {
         let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
         try {
@@ -1687,6 +1725,16 @@ function registerAgentAdminRoutes(router, runtime, fail) {
             model: profile.model,
         }).catch(() => undefined);
         res.json(profile);
+    }));
+    router.post('/admin/agent/profiles/test', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res, context) => {
+        const request = (req.body ?? {});
+        const result = await runtime.agentSessions.testLlmProfile(request);
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent LLM profile connection tested', {
+            model: request.profile?.model,
+            ok: result.ok,
+            ...(!result.ok ? { failure: result.failure, statusCode: result.statusCode } : {}),
+        }).catch(() => undefined);
+        res.json(result);
     }));
     router.get('/admin/agent/profiles/:profileId', (0,_authority_route_context_js__WEBPACK_IMPORTED_MODULE_3__.withAuthorityAdmin)(runtime, fail, async (req, res) => {
         res.json(runtime.agentProfiles.getProfile(decodeParam(req.params?.profileId, 'profile id')));
@@ -6425,6 +6473,51 @@ class AgentProfileStoreService {
     }
     upsertProfile(input) {
         const profiles = this.readProfiles();
+        const stored = this.buildStoredProfile(input, profiles);
+        const index = profiles.profiles.findIndex(profile => profile.id === stored.id);
+        if (index === -1) {
+            profiles.profiles.push(stored);
+        }
+        else {
+            profiles.profiles[index] = stored;
+        }
+        profiles.profiles.sort((left, right) => left.id.localeCompare(right.id));
+        protectDirectory(this.stateDir);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.profilesPath(), profiles);
+        protectFile(this.profilesPath());
+        return publicProfile(stored);
+    }
+    prepareProfileForTest(input) {
+        return structuredClone(this.buildStoredProfile(input, this.readProfiles()));
+    }
+    listProfiles() {
+        return this.readProfiles().profiles.map(publicProfile);
+    }
+    getProfile(profileId) {
+        return publicProfile(this.getStoredProfile(profileId));
+    }
+    getProfileForRequest(profileId) {
+        return structuredClone(this.getStoredProfile(profileId));
+    }
+    deleteProfile(profileId) {
+        assertSafeId(profileId, 'LLM profile id');
+        const profiles = this.readProfiles();
+        const next = profiles.profiles.filter(profile => profile.id !== profileId);
+        if (next.length === profiles.profiles.length) {
+            return false;
+        }
+        profiles.profiles = next;
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.profilesPath(), profiles);
+        protectFile(this.profilesPath());
+        return true;
+    }
+    buildStoredProfile(input, profiles) {
+        if (input.id !== undefined && typeof input.id !== 'string') {
+            throw new Error('LLM profile id must be a string');
+        }
+        if (input.apiKey !== undefined && typeof input.apiKey !== 'string') {
+            throw new Error('LLM profile apiKey must be a string');
+        }
         const requestedId = input.id?.trim();
         if (requestedId !== undefined) {
             assertSafeId(requestedId, 'LLM profile id');
@@ -6462,39 +6555,7 @@ class AgentProfileStoreService {
             createdAt: existing?.createdAt ?? timestamp,
             updatedAt: timestamp,
         };
-        const index = profiles.profiles.findIndex(profile => profile.id === stored.id);
-        if (index === -1) {
-            profiles.profiles.push(stored);
-        }
-        else {
-            profiles.profiles[index] = stored;
-        }
-        profiles.profiles.sort((left, right) => left.id.localeCompare(right.id));
-        protectDirectory(this.stateDir);
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.profilesPath(), profiles);
-        protectFile(this.profilesPath());
-        return publicProfile(stored);
-    }
-    listProfiles() {
-        return this.readProfiles().profiles.map(publicProfile);
-    }
-    getProfile(profileId) {
-        return publicProfile(this.getStoredProfile(profileId));
-    }
-    getProfileForRequest(profileId) {
-        return structuredClone(this.getStoredProfile(profileId));
-    }
-    deleteProfile(profileId) {
-        assertSafeId(profileId, 'LLM profile id');
-        const profiles = this.readProfiles();
-        const next = profiles.profiles.filter(profile => profile.id !== profileId);
-        if (next.length === profiles.profiles.length) {
-            return false;
-        }
-        profiles.profiles = next;
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteJson)(this.profilesPath(), profiles);
-        protectFile(this.profilesPath());
-        return true;
+        return stored;
     }
     readProfiles() {
         if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(this.profilesPath())) {
@@ -7067,6 +7128,15 @@ function applyEntry(projection, record) {
             const ref = requireRef(projection, entry.ref);
             if (ref.activeRunId)
                 throw new Error(`Agent session ref already has an active run: ${entry.ref}`);
+            if (entry.continuedFromRunId !== undefined) {
+                const source = requireRun(projection, entry.continuedFromRunId);
+                if (source.status !== 'failed' || source.ref !== entry.ref) {
+                    throw new Error('Agent failed-run continuation source must be a failed run on the same ref');
+                }
+                if ([...projection.runs.values()].some(run => run.continuedFromRunId === entry.continuedFromRunId)) {
+                    throw new Error(`Agent failed run already has a continuation: ${entry.continuedFromRunId}`);
+                }
+            }
             const trigger = requireConversationEntry(projection, entry.triggerMessageId);
             if (trigger.kind !== 'message' || trigger.role !== 'user' || ref.leafEntryId !== trigger.id) {
                 throw new Error('Agent run trigger must be the active user message');
@@ -7075,6 +7145,7 @@ function applyEntry(projection, record) {
                 id: entry.runId,
                 ref: entry.ref,
                 triggerMessageId: entry.triggerMessageId,
+                ...(entry.continuedFromRunId === undefined ? {} : { continuedFromRunId: entry.continuedFromRunId }),
                 status: 'queued',
                 profileId: entry.profileId,
                 mode: entry.mode,
@@ -8180,6 +8251,7 @@ const HARD_MAX_STEPS = 64;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 2 * 60_000;
 const MAX_CONCURRENT_RUNS = 16;
+const FAILED_RUN_CONTINUATION_MESSAGE = '继续完成上一轮未完成的任务。先检查当前工作区和已经完成的操作，再从安全边界继续，不要重复已有副作用。';
 class SessionActor {
     writer;
     tail = Promise.resolve();
@@ -8209,6 +8281,7 @@ class AgentSessionRuntimeService {
     approvalTimeoutMs;
     browserToolTimeoutMs;
     shutdownTimeoutMs;
+    requestCompletion;
     now;
     actors = new Map();
     contexts = new Map();
@@ -8230,7 +8303,7 @@ class AgentSessionRuntimeService {
         this.profileStore = profileStore;
         this.history = history;
         const client = new _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__.AgentLlmClient();
-        const requestCompletion = options.requestCompletion ?? client.complete.bind(client);
+        this.requestCompletion = options.requestCompletion ?? client.complete.bind(client);
         this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
         this.approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
         this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? DEFAULT_BROWSER_TOOL_TIMEOUT_MS;
@@ -8286,9 +8359,38 @@ class AgentSessionRuntimeService {
             scheduleApprovalExpiry: (sessionId, approval) => this.scheduleApprovalExpiry(sessionId, approval),
             finishRunAndStartFollowUp: (writer, runId, outcome, finalText, error) => (this.finishRunAndStartFollowUp(writer, runId, outcome, finalText, error)),
         }, {
-            requestCompletion,
+            requestCompletion: this.requestCompletion,
             approvalTimeoutMs: this.approvalTimeoutMs,
         });
+    }
+    async testLlmProfile(request) {
+        if (!request || typeof request !== 'object' || !request.profile || typeof request.profile !== 'object') {
+            throw new Error('Agent LLM profile test profile is required');
+        }
+        const profile = this.profileStore.prepareProfileForTest(request.profile);
+        const startedAt = Date.now();
+        try {
+            await this.requestCompletion({
+                ...profile,
+                maxOutputTokens: Math.min(profile.maxOutputTokens ?? 32, 32),
+                timeoutMs: Math.min(profile.timeoutMs, 30_000),
+            }, {
+                messages: [{ role: 'user', content: 'Reply with OK to confirm this connection.' }],
+                tools: [],
+                signal: new AbortController().signal,
+            });
+            return {
+                ok: true,
+                latencyMs: Math.max(0, Date.now() - startedAt),
+            };
+        }
+        catch (error) {
+            return {
+                ok: false,
+                latencyMs: Math.max(0, Date.now() - startedAt),
+                ...classifyLlmConnectionFailure(error),
+            };
+        }
     }
     start() {
         if (this.stopped)
@@ -8502,6 +8604,42 @@ class AgentSessionRuntimeService {
                 return { snapshot: writer.snapshot(), runId: run.id, queuedMessageId: queueId, acceptedRunId: null };
             }
             const acceptedRunId = this.appendUserAndAcceptRun(writer, refName, content);
+            return {
+                snapshot: writer.snapshot(),
+                runId: acceptedRunId,
+                queuedMessageId: null,
+                acceptedRunId,
+            };
+        });
+        if (callerContext)
+            this.contexts.set(sessionId, callerContext);
+        if (result.acceptedRunId)
+            this.enqueue(sessionId, result.acceptedRunId);
+        return { snapshot: result.snapshot, runId: result.runId, queuedMessageId: result.queuedMessageId };
+    }
+    async continueFailedRun(sessionId, failedRunId, callerExtensionId, callerContext) {
+        this.assertRunning();
+        const actor = this.actor(sessionId);
+        const result = await actor.perform(writer => {
+            const before = writer.snapshot();
+            this.assertOwner(before, callerExtensionId, callerContext?.user.handle);
+            const existing = before.runs.find(run => run.continuedFromRunId === failedRunId);
+            if (existing) {
+                return { snapshot: before, runId: existing.id, queuedMessageId: null, acceptedRunId: null };
+            }
+            const failed = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRun)(before, failedRunId);
+            if (failed.status !== 'failed') {
+                throw new Error(`Agent run is not failed: ${failed.status}`);
+            }
+            const latest = before.runs.filter(run => run.ref === failed.ref).at(-1);
+            if (latest?.id !== failed.id) {
+                throw new Error('Agent failed run is no longer the latest run on its ref');
+            }
+            const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRef)(before, failed.ref);
+            if (ref.activeRunId) {
+                throw new Error(`Agent session ref already has an active run: ${failed.ref}`);
+            }
+            const acceptedRunId = this.appendUserAndAcceptRun(writer, failed.ref, FAILED_RUN_CONTINUATION_MESSAGE, failed.id);
             return {
                 snapshot: writer.snapshot(),
                 runId: acceptedRunId,
@@ -8912,7 +9050,7 @@ class AgentSessionRuntimeService {
         this.runLocations.set(nextRunId, snapshot.session.id);
         return nextRunId;
     }
-    appendUserAndAcceptRun(writer, refName, content) {
+    appendUserAndAcceptRun(writer, refName, content, continuedFromRunId) {
         const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requireRef)(writer.snapshot(), refName);
         const messageId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         this.append(writer, {
@@ -8924,11 +9062,11 @@ class AgentSessionRuntimeService {
             role: 'user',
             content,
         });
-        const runId = this.acceptRun(writer, refName, messageId);
+        const runId = this.acceptRun(writer, refName, messageId, continuedFromRunId);
         this.runLocations.set(runId, writer.snapshot().session.id);
         return runId;
     }
-    acceptRun(writer, refName, triggerMessageId) {
+    acceptRun(writer, refName, triggerMessageId, continuedFromRunId) {
         const snapshot = writer.snapshot();
         (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.assertRunCapacity)(snapshot, this.listSessions());
         const runId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
@@ -8939,6 +9077,7 @@ class AgentSessionRuntimeService {
             runId,
             ref: refName,
             triggerMessageId,
+            ...(continuedFromRunId === undefined ? {} : { continuedFromRunId }),
             profileId: snapshot.session.profileId,
             mode: snapshot.session.mode,
             allowedTools: snapshot.session.allowedTools,
@@ -9005,6 +9144,20 @@ class AgentSessionRuntimeService {
         if (!this.started || this.stopping)
             throw new Error('Agent session runtime is not running');
     }
+}
+function classifyLlmConnectionFailure(error) {
+    const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.errorMessage)(error);
+    if (/timed out|timeout/i.test(message)) {
+        return { failure: 'timeout' };
+    }
+    const upstreamStatus = /^LLM request failed \((\d{3})\):/.exec(message);
+    if (upstreamStatus) {
+        return { failure: 'rejected', statusCode: Number(upstreamStatus[1]) };
+    }
+    if (/invalid JSON|did not include an assistant message|assistant message was empty|response exceeded|assistant content exceeded|invalid tool call/i.test(message)) {
+        return { failure: 'invalid_response' };
+    }
+    return { failure: 'unreachable' };
 }
 
 
@@ -20902,6 +21055,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _workspace_text_diff_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./workspace-text-diff.js */ "./src/services/workspace-text-diff.ts");
+
 
 
 
@@ -20918,6 +21073,7 @@ const DEFAULT_REF = 'main';
 const DEFAULT_LOCK_TIMEOUT_MS = 15_000;
 const DEFAULT_STALE_LOCK_MS = 30 * 60_000;
 const EXCLUDED_SEGMENTS = new Set(['.git', 'node_modules']);
+const MAX_FILE_DIFF_BYTES = 512 * 1024;
 function resolveWorkspaceHistoryStore(dataRoot) {
     return node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(dataRoot, '_authority-global', 'authority', 'state', 'agent-workspaces');
 }
@@ -21106,6 +21262,112 @@ class WorkspaceHistoryService {
             toCommitId,
             entries: diffNodes(before, after),
         };
+    }
+    async diffFile(workspaceId, fromCommitId, toCommitId, requestedPath) {
+        const relativePath = normalizeRelativePath(requestedPath);
+        if (relativePath === '.') {
+            throw validationError('Workspace file diff path must identify a file');
+        }
+        if ((fromCommitId !== null && !OID_PATTERN.test(fromCommitId))
+            || (toCommitId !== null && toCommitId !== 'working' && !OID_PATTERN.test(toCommitId))) {
+            throw validationError('Workspace file diff commit ids must be SHA-256 commit ids');
+        }
+        const createResponse = () => {
+            const workspace = this.getStoredWorkspace(workspaceId);
+            const beforeTree = fromCommitId
+                ? this.loadCommitTree(this.readCommit(fromCommitId, workspace.id))
+                : emptyTree();
+            const before = exactTreeNode(beforeTree, relativePath);
+            let after;
+            let workingContent;
+            let resolvedToCommitId;
+            if (toCommitId === 'working') {
+                this.recoverRefJournal(workspace);
+                const captured = this.captureWorkingNodeForDiff(workspace, relativePath);
+                after = captured?.node;
+                workingContent = captured?.content;
+                resolvedToCommitId = null;
+            }
+            else {
+                const afterTree = toCommitId
+                    ? this.loadCommitTree(this.readCommit(toCommitId, workspace.id))
+                    : emptyTree();
+                after = exactTreeNode(afterTree, relativePath);
+                resolvedToCommitId = toCommitId;
+            }
+            if (toCommitId === 'working'
+                && after?.kind === 'blob'
+                && (after.sizeBytes ?? 0) > MAX_FILE_DIFF_BYTES) {
+                const afterSize = after.sizeBytes;
+                const beforeSize = before?.kind === 'blob' ? this.objectSize(before.oid) : undefined;
+                const status = !before ? 'added'
+                    : before.kind !== 'blob' ? 'type_changed'
+                        : before.mode !== after.mode || beforeSize !== afterSize ? 'modified'
+                            : 'unknown';
+                return {
+                    workspaceId,
+                    path: relativePath,
+                    status,
+                    fromCommitId,
+                    toCommitId: null,
+                    toWorkingTree: true,
+                    ...(before ? { beforeKind: before.kind } : {}),
+                    afterKind: 'blob',
+                    ...(beforeSize === undefined ? {} : { beforeSizeBytes: beforeSize }),
+                    afterSizeBytes: afterSize,
+                    kind: 'unavailable',
+                    reason: 'file_too_large',
+                    hunks: [],
+                    truncated: false,
+                };
+            }
+            const entries = [];
+            diffNode(before, after, relativePath, entries);
+            const entry = entries.find(item => item.path === relativePath);
+            if (!entry) {
+                throw validationError(`Workspace file is unchanged in the selected diff: ${relativePath}`);
+            }
+            const base = {
+                workspaceId,
+                path: relativePath,
+                status: entry.status,
+                fromCommitId,
+                toCommitId: resolvedToCommitId,
+                toWorkingTree: toCommitId === 'working',
+                ...(entry.beforeKind ? { beforeKind: entry.beforeKind } : {}),
+                ...(entry.afterKind ? { afterKind: entry.afterKind } : {}),
+                ...(entry.beforeSizeBytes === undefined ? {} : { beforeSizeBytes: entry.beforeSizeBytes }),
+                ...(entry.afterSizeBytes === undefined ? {} : { afterSizeBytes: entry.afterSizeBytes }),
+            };
+            if ((before && before.kind !== 'blob') || (after && after.kind !== 'blob')) {
+                return { ...base, kind: 'unavailable', reason: 'unsupported_kind', hunks: [], truncated: false };
+            }
+            const beforeSize = before ? this.objectSize(before.oid) : 0;
+            const afterSize = after
+                ? toCommitId === 'working'
+                    ? after.sizeBytes ?? 0
+                    : this.objectSize(after.oid)
+                : 0;
+            const sizedBase = {
+                ...base,
+                ...(before ? { beforeSizeBytes: beforeSize } : {}),
+                ...(after ? { afterSizeBytes: afterSize } : {}),
+            };
+            if (beforeSize > MAX_FILE_DIFF_BYTES || afterSize > MAX_FILE_DIFF_BYTES) {
+                return { ...sizedBase, kind: 'unavailable', reason: 'file_too_large', hunks: [], truncated: false };
+            }
+            return {
+                ...sizedBase,
+                ...(0,_workspace_text_diff_js__WEBPACK_IMPORTED_MODULE_5__.createWorkspaceTextDiff)(before ? this.readObject(before.oid) : Buffer.alloc(0), after
+                    ? toCommitId === 'working'
+                        ? workingContent ?? Buffer.alloc(0)
+                        : this.readObject(after.oid)
+                    : Buffer.alloc(0)),
+            };
+        };
+        return toCommitId === 'working'
+            ? await this.withLock(`workspace-${workspaceId}`, async () => createResponse())
+            : createResponse();
     }
     async status(workspaceId) {
         return await this.withLock(`workspace-${workspaceId}`, async () => {
@@ -21461,6 +21723,60 @@ class WorkspaceHistoryService {
         }
         catch (error) {
             if (isFsError(error, 'ENOENT')) {
+                return undefined;
+            }
+            throw error;
+        }
+    }
+    captureWorkingNodeForDiff(workspace, relativePath) {
+        const absolutePath = this.resolveSafeWorkspacePath(workspace, relativePath);
+        if (this.isExcluded(workspace, relativePath, absolutePath)) {
+            throw new Error(`Workspace history excludes path: ${relativePath}`);
+        }
+        try {
+            const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+            const mode = stat.mode & 0o777;
+            if (stat.isSymbolicLink()) {
+                const payload = { format: SYMLINK_FORMAT, target: node_fs__WEBPACK_IMPORTED_MODULE_1___default().readlinkSync(absolutePath) };
+                assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+                const content = Buffer.from(canonicalJson(payload), 'utf8');
+                return { node: { kind: 'symlink', mode, oid: sha256(content), sizeBytes: content.byteLength } };
+            }
+            if (stat.isFile()) {
+                if (stat.size > MAX_FILE_DIFF_BYTES) {
+                    assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+                    const identity = Buffer.from(canonicalJson({
+                        format: 'authority-working-large-file/v1',
+                        device: String(stat.dev),
+                        inode: String(stat.ino),
+                        size: stat.size,
+                        modifiedAtMs: stat.mtimeMs,
+                    }), 'utf8');
+                    return { node: { kind: 'blob', mode, oid: sha256(identity), sizeBytes: stat.size } };
+                }
+                const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(absolutePath, (node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_RDONLY | ((node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_NOFOLLOW ?? 0));
+                let content;
+                try {
+                    assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), relativePath);
+                    content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(descriptor);
+                    assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), relativePath);
+                }
+                finally {
+                    node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+                }
+                assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+                return {
+                    node: { kind: 'blob', mode, oid: sha256(content), sizeBytes: stat.size },
+                    content,
+                };
+            }
+            if (stat.isDirectory()) {
+                return { node: { kind: 'tree', mode, children: new Map() } };
+            }
+            throw new Error(`Unsupported workspace entry: ${relativePath}`);
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOENT') || isFsError(error, 'ENOTDIR')) {
                 return undefined;
             }
             throw error;
@@ -21831,6 +22147,14 @@ class WorkspaceHistoryService {
         }
         return content;
     }
+    objectSize(oid) {
+        assertOid(oid);
+        const filePath = this.objectPath(oid);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            throw new Error(`Workspace object not found: ${oid}`);
+        }
+        return node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(filePath).size;
+    }
     publishRef(workspace, expected, head) {
         const current = this.readRef(workspace);
         if (current.generation !== expected.generation || current.head !== expected.head) {
@@ -22186,6 +22510,10 @@ function findScopedNode(tree, relativePath) {
         current = child;
     }
     return { path: relativePath, node: current };
+}
+function exactTreeNode(tree, relativePath) {
+    const found = findScopedNode(tree, relativePath);
+    return found.path === relativePath ? found.node : undefined;
 }
 function ensureTreeAncestors(root, relativePath) {
     if (relativePath === '.') {
@@ -22587,6 +22915,195 @@ function applyMode(filePath, mode) {
 }
 function delay(milliseconds) {
     return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+
+/***/ },
+
+/***/ "./src/services/workspace-text-diff.ts"
+/*!*********************************************!*\
+  !*** ./src/services/workspace-text-diff.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   createWorkspaceTextDiff: () => (/* binding */ createWorkspaceTextDiff)
+/* harmony export */ });
+const MAX_COMBINED_LINES = 20_000;
+const MAX_EDIT_DISTANCE = 512;
+const MAX_OUTPUT_LINES = 4_000;
+const CONTEXT_LINES = 3;
+function createWorkspaceTextDiff(before, after) {
+    const beforeText = decodeWorkspaceText(before);
+    const afterText = decodeWorkspaceText(after);
+    if (beforeText === null || afterText === null) {
+        return { kind: 'binary', hunks: [], truncated: false };
+    }
+    const textMetadata = {
+        before: analyzeText(beforeText),
+        after: analyzeText(afterText),
+    };
+    const beforeLines = splitLines(beforeText);
+    const afterLines = splitLines(afterText);
+    if (beforeLines.length + afterLines.length > MAX_COMBINED_LINES) {
+        return { kind: 'unavailable', reason: 'diff_too_complex', hunks: [], truncated: false };
+    }
+    const edits = createLineEdits(beforeLines, afterLines);
+    if (!edits) {
+        return { kind: 'unavailable', reason: 'diff_too_complex', hunks: [], truncated: false };
+    }
+    return { ...buildHunks(edits), textMetadata };
+}
+function analyzeText(value) {
+    const endings = new Set(value.match(/\r\n|\r|\n/g) ?? []);
+    const lineEnding = endings.size === 0 ? 'none'
+        : endings.size > 1 ? 'mixed'
+            : endings.has('\r\n') ? 'crlf'
+                : endings.has('\r') ? 'cr'
+                    : 'lf';
+    return {
+        lineEnding,
+        endsWithNewline: /(?:\r\n|\r|\n)$/.test(value),
+    };
+}
+function decodeWorkspaceText(content) {
+    if (content.includes(0))
+        return null;
+    let value;
+    try {
+        value = new TextDecoder('utf-8', { fatal: true }).decode(content);
+    }
+    catch {
+        return null;
+    }
+    let controls = 0;
+    for (const character of value) {
+        const code = character.charCodeAt(0);
+        if (code < 32 && code !== 9 && code !== 10 && code !== 12 && code !== 13)
+            controls += 1;
+    }
+    return controls > Math.max(8, Math.floor(value.length / 20)) ? null : value;
+}
+function splitLines(value) {
+    const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!normalized)
+        return [];
+    const lines = normalized.split('\n');
+    if (normalized.endsWith('\n'))
+        lines.pop();
+    return lines;
+}
+function createLineEdits(before, after) {
+    const maximum = before.length + after.length;
+    let frontier = new Map([[1, 0]]);
+    const trace = [];
+    for (let distance = 0; distance <= Math.min(maximum, MAX_EDIT_DISTANCE); distance += 1) {
+        trace.push(new Map(frontier));
+        for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+            const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+            const right = (frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY) + 1;
+            let beforeIndex = diagonal === -distance || (diagonal !== distance && right < down)
+                ? down
+                : right;
+            if (!Number.isFinite(beforeIndex))
+                beforeIndex = 0;
+            let afterIndex = beforeIndex - diagonal;
+            while (beforeIndex < before.length && afterIndex < after.length && before[beforeIndex] === after[afterIndex]) {
+                beforeIndex += 1;
+                afterIndex += 1;
+            }
+            frontier.set(diagonal, beforeIndex);
+            if (beforeIndex >= before.length && afterIndex >= after.length) {
+                return backtrackLineEdits(trace, before, after, distance);
+            }
+        }
+    }
+    return null;
+}
+function backtrackLineEdits(trace, before, after, maximumDistance) {
+    const edits = [];
+    let beforeIndex = before.length;
+    let afterIndex = after.length;
+    for (let distance = maximumDistance; distance >= 0; distance -= 1) {
+        const frontier = trace[distance];
+        const diagonal = beforeIndex - afterIndex;
+        const left = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+        const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+        const previousDiagonal = diagonal === -distance || (diagonal !== distance && left < down)
+            ? diagonal + 1
+            : diagonal - 1;
+        const previousBefore = frontier.get(previousDiagonal) ?? 0;
+        const previousAfter = previousBefore - previousDiagonal;
+        while (beforeIndex > previousBefore && afterIndex > previousAfter) {
+            edits.push({ kind: 'equal', text: before[beforeIndex - 1] });
+            beforeIndex -= 1;
+            afterIndex -= 1;
+        }
+        if (distance === 0)
+            break;
+        if (beforeIndex === previousBefore) {
+            edits.push({ kind: 'added', text: after[afterIndex - 1] });
+            afterIndex -= 1;
+        }
+        else {
+            edits.push({ kind: 'deleted', text: before[beforeIndex - 1] });
+            beforeIndex -= 1;
+        }
+    }
+    return edits.reverse();
+}
+function buildHunks(edits) {
+    const lines = [];
+    let beforeLine = 1;
+    let afterLine = 1;
+    for (const edit of edits) {
+        if (edit.kind === 'equal') {
+            lines.push({ kind: 'context', beforeLine, afterLine, text: edit.text });
+            beforeLine += 1;
+            afterLine += 1;
+        }
+        else if (edit.kind === 'deleted') {
+            lines.push({ kind: 'deleted', beforeLine, afterLine: null, text: edit.text });
+            beforeLine += 1;
+        }
+        else {
+            lines.push({ kind: 'added', beforeLine: null, afterLine, text: edit.text });
+            afterLine += 1;
+        }
+    }
+    const ranges = [];
+    for (let index = 0; index < lines.length; index += 1) {
+        if (lines[index].kind === 'context')
+            continue;
+        const start = Math.max(0, index - CONTEXT_LINES);
+        const end = Math.min(lines.length, index + CONTEXT_LINES + 1);
+        const current = ranges.at(-1);
+        if (current && start <= current.end) {
+            current.end = Math.max(current.end, end);
+        }
+        else {
+            ranges.push({ start, end });
+        }
+    }
+    const hunks = [];
+    let remaining = MAX_OUTPUT_LINES;
+    let truncated = false;
+    for (const range of ranges) {
+        if (remaining === 0) {
+            truncated = true;
+            break;
+        }
+        const available = range.end - range.start;
+        const taken = Math.min(available, remaining);
+        hunks.push({ lines: lines.slice(range.start, range.start + taken) });
+        remaining -= taken;
+        if (taken < available) {
+            truncated = true;
+            break;
+        }
+    }
+    return { kind: 'text', hunks, truncated };
 }
 
 

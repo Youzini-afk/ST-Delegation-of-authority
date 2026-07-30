@@ -1410,6 +1410,12 @@ export class AuthorityClient {
                     this.rememberAgentSession(snapshot);
                     return snapshot;
                 },
+                continueFailedRun: async (sessionId, runId) => {
+                    await this.ensureAgentSessionRunPermission(sessionId, '继续失败的 Agent 运行');
+                    const response = await this.requestWithSession(`/agent/sessions/${agentPathId(sessionId, 'sessionId')}/runs/${agentPathId(runId, 'runId')}/continue`, { method: 'POST' });
+                    this.rememberAgentSession(response.snapshot);
+                    return response;
+                },
                 waitForRun: async (sessionId, runId, options = {}) => {
                     const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'agent run');
                     const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'agent run');
@@ -1598,6 +1604,12 @@ export class AuthorityClient {
                             body: profile,
                         });
                     },
+                    test: async (request) => {
+                        return await this.requestWithSession('/admin/agent/profiles/test', {
+                            method: 'POST',
+                            body: request,
+                        });
+                    },
                     delete: async (profileId) => {
                         const response = await this.requestWithSession(`/admin/agent/profiles/${agentPathId(profileId, 'profileId')}/delete`, { method: 'POST' });
                         return response.deleted;
@@ -1664,6 +1676,16 @@ export class AuthorityClient {
                             query.set('to', options.to === null ? 'empty' : options.to);
                         const suffix = query.size > 0 ? `?${query.toString()}` : '';
                         return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/diff${suffix}`);
+                    },
+                    fileDiff: async (workspaceId, options) => {
+                        const query = new URLSearchParams({
+                            path: agentWorkspacePath(options.path),
+                        });
+                        if (options.from !== undefined)
+                            query.set('from', options.from === null ? 'empty' : options.from);
+                        if (options.to !== undefined)
+                            query.set('to', options.to === null ? 'empty' : options.to);
+                        return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/diff/file?${query.toString()}`);
                     },
                     checkpoint: async (workspaceId, request) => {
                         return await this.requestWithSession(`/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/checkpoints`, { method: 'POST', body: request });
@@ -2502,6 +2524,12 @@ function agentValueId(value, label) {
         throw new Error(`Authority agent ${label} must be a non-empty string`);
     }
     return value.trim();
+}
+function agentWorkspacePath(value) {
+    if (typeof value !== 'string' || value.length === 0) {
+        throw new Error('Authority agent workspace file diff path must be a non-empty string');
+    }
+    return value;
 }
 function getSqlDatabaseName(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : 'default';

@@ -57,9 +57,13 @@ export function renderAgentSettings(state) {
                                 <label class="authority-agent-field">超时（ms）<input data-role="agent-profile-timeout" type="number" min="1000" max="600000" value="${escapeHtml(String(selected?.timeoutMs ?? 120000))}" ${disabled} /></label>
                             </div>
                         </div>
+                        ${state.profileTest ? `<div class="authority-connection-test authority-connection-test--${state.profileTest.status}" data-role="agent-profile-test-result" role="status"><i aria-hidden="true"></i><span>${escapeHtml(state.profileTest.message)}</span></div>` : ''}
                         <footer>
                             ${selected ? `<button type="button" class="authority-action-button authority-action-button--danger" data-action="agent-delete-profile" data-profile-id="${escapeHtml(selected.id)}" ${disabled}>删除连接</button>` : '<span></span>'}
-                            <button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-save-profile" ${disabled}>保存设置</button>
+                            <div class="authority-model-editor__footer-actions">
+                                <button type="button" class="authority-action-button" data-action="agent-test-profile" ${disabled}>测试连接</button>
+                                <button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-save-profile" ${disabled}>保存设置</button>
+                            </div>
                         </footer>
                     </section>
                 </div>

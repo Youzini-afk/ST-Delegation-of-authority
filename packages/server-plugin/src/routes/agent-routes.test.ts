@@ -35,6 +35,7 @@ function setup(extensionId = 'third-party/ext-a', isAdmin = false) {
         },
         agentSessions: {
             start: vi.fn().mockResolvedValue({ sessions: 1, recoveredRuns: 0, problems: [] }),
+            testLlmProfile: vi.fn().mockResolvedValue({ ok: true, latencyMs: 12 }),
             tools: { list: vi.fn(() => []) },
             listSessions: vi.fn(() => [snapshot]),
             getSession: vi.fn().mockResolvedValue(snapshot),
@@ -44,6 +45,7 @@ function setup(extensionId = 'third-party/ext-a', isAdmin = false) {
             sendMessage: vi.fn().mockResolvedValue({ snapshot, runId: 'run-1', queuedMessageId: null }),
             cancelRun: vi.fn().mockResolvedValue(snapshot),
             resumeRun: vi.fn().mockResolvedValue(snapshot),
+            continueFailedRun: vi.fn().mockResolvedValue({ snapshot, runId: 'run-2', queuedMessageId: null }),
             openSubscription: vi.fn().mockResolvedValue({ snapshot, close: vi.fn() }),
             registerBrowserTools: vi.fn(() => ({ browserInstanceId: 'tab-a', tools: [] })),
             claimBrowserTool: vi.fn().mockResolvedValue(null),
@@ -91,6 +93,41 @@ function response(): AuthorityResponse {
 }
 
 describe('Agent session routes', () => {
+    it('tests an unsaved model connection for administrators without auditing its secret', async () => {
+        const { runtime, post } = setup('third-party/ext-a', true);
+        const res = response();
+        const body = {
+            profile: {
+                displayName: 'Unsaved',
+                provider: 'openai-compatible',
+                baseUrl: 'https://api.example.test/v1',
+                model: 'test-model',
+                apiKey: 'connection-secret',
+            },
+        };
+
+        await post.get('/admin/agent/profiles/test')!(request(body, true), res);
+
+        expect(runtime.agentSessions.testLlmProfile).toHaveBeenCalledWith(body);
+        expect(res.json).toHaveBeenCalledWith({ ok: true, latencyMs: 12 });
+        expect(runtime.audit.logUsage).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            'third-party/ext-a',
+            'Agent LLM profile connection tested',
+            { model: 'test-model', ok: true },
+        );
+        expect(JSON.stringify(vi.mocked(runtime.audit.logUsage).mock.calls)).not.toContain('connection-secret');
+        expect(JSON.stringify(vi.mocked(runtime.audit.logUsage).mock.calls)).not.toContain('api.example.test');
+    });
+
+    it('rejects model connection tests from non-administrators', async () => {
+        const { runtime, post } = setup('third-party/ext-a', false);
+
+        await expect(post.get('/admin/agent/profiles/test')!(request({ profile: {} }, false), response()))
+            .rejects.toThrow('Forbidden');
+        expect(runtime.agentSessions.testLlmProfile).not.toHaveBeenCalled();
+    });
+
     it('lists tools in the authenticated user and extension scope', async () => {
         const { runtime, get } = setup();
 
@@ -175,6 +212,34 @@ describe('Agent session routes', () => {
             { content: 'Continue with the tests' },
             'third-party/ext-a',
             expect.objectContaining({ session }),
+        );
+    });
+
+    it('continues a failed run through the atomic runtime operation', async () => {
+        const { runtime, session, post } = setup();
+        const req = request();
+        req.params = { sessionId: 'session-1', runId: 'failed-run-1' };
+        const res = response();
+
+        await post.get('/agent/sessions/:sessionId/runs/:runId/continue')!(req, res);
+
+        expect(runtime.permissions.authorize).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            session,
+            { resource: 'agent.run', target: 'workspace-a' },
+        );
+        expect(runtime.agentSessions.continueFailedRun).toHaveBeenCalledWith(
+            'session-1',
+            'failed-run-1',
+            'third-party/ext-a',
+            expect.objectContaining({ session }),
+        );
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-2', queuedMessageId: null }));
+        expect(runtime.audit.logUsage).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            'third-party/ext-a',
+            'Agent failed run continued',
+            { sessionId: 'session-1', failedRunId: 'failed-run-1', continuationRunId: 'run-2' },
         );
     });
 

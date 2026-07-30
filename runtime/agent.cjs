@@ -244,6 +244,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _workspace_text_diff_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./workspace-text-diff.js */ "./src/services/workspace-text-diff.ts");
+
 
 
 
@@ -260,6 +262,7 @@ const DEFAULT_REF = 'main';
 const DEFAULT_LOCK_TIMEOUT_MS = 15_000;
 const DEFAULT_STALE_LOCK_MS = 30 * 60_000;
 const EXCLUDED_SEGMENTS = new Set(['.git', 'node_modules']);
+const MAX_FILE_DIFF_BYTES = 512 * 1024;
 function resolveWorkspaceHistoryStore(dataRoot) {
     return node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(dataRoot, '_authority-global', 'authority', 'state', 'agent-workspaces');
 }
@@ -448,6 +451,112 @@ class WorkspaceHistoryService {
             toCommitId,
             entries: diffNodes(before, after),
         };
+    }
+    async diffFile(workspaceId, fromCommitId, toCommitId, requestedPath) {
+        const relativePath = normalizeRelativePath(requestedPath);
+        if (relativePath === '.') {
+            throw validationError('Workspace file diff path must identify a file');
+        }
+        if ((fromCommitId !== null && !OID_PATTERN.test(fromCommitId))
+            || (toCommitId !== null && toCommitId !== 'working' && !OID_PATTERN.test(toCommitId))) {
+            throw validationError('Workspace file diff commit ids must be SHA-256 commit ids');
+        }
+        const createResponse = () => {
+            const workspace = this.getStoredWorkspace(workspaceId);
+            const beforeTree = fromCommitId
+                ? this.loadCommitTree(this.readCommit(fromCommitId, workspace.id))
+                : emptyTree();
+            const before = exactTreeNode(beforeTree, relativePath);
+            let after;
+            let workingContent;
+            let resolvedToCommitId;
+            if (toCommitId === 'working') {
+                this.recoverRefJournal(workspace);
+                const captured = this.captureWorkingNodeForDiff(workspace, relativePath);
+                after = captured?.node;
+                workingContent = captured?.content;
+                resolvedToCommitId = null;
+            }
+            else {
+                const afterTree = toCommitId
+                    ? this.loadCommitTree(this.readCommit(toCommitId, workspace.id))
+                    : emptyTree();
+                after = exactTreeNode(afterTree, relativePath);
+                resolvedToCommitId = toCommitId;
+            }
+            if (toCommitId === 'working'
+                && after?.kind === 'blob'
+                && (after.sizeBytes ?? 0) > MAX_FILE_DIFF_BYTES) {
+                const afterSize = after.sizeBytes;
+                const beforeSize = before?.kind === 'blob' ? this.objectSize(before.oid) : undefined;
+                const status = !before ? 'added'
+                    : before.kind !== 'blob' ? 'type_changed'
+                        : before.mode !== after.mode || beforeSize !== afterSize ? 'modified'
+                            : 'unknown';
+                return {
+                    workspaceId,
+                    path: relativePath,
+                    status,
+                    fromCommitId,
+                    toCommitId: null,
+                    toWorkingTree: true,
+                    ...(before ? { beforeKind: before.kind } : {}),
+                    afterKind: 'blob',
+                    ...(beforeSize === undefined ? {} : { beforeSizeBytes: beforeSize }),
+                    afterSizeBytes: afterSize,
+                    kind: 'unavailable',
+                    reason: 'file_too_large',
+                    hunks: [],
+                    truncated: false,
+                };
+            }
+            const entries = [];
+            diffNode(before, after, relativePath, entries);
+            const entry = entries.find(item => item.path === relativePath);
+            if (!entry) {
+                throw validationError(`Workspace file is unchanged in the selected diff: ${relativePath}`);
+            }
+            const base = {
+                workspaceId,
+                path: relativePath,
+                status: entry.status,
+                fromCommitId,
+                toCommitId: resolvedToCommitId,
+                toWorkingTree: toCommitId === 'working',
+                ...(entry.beforeKind ? { beforeKind: entry.beforeKind } : {}),
+                ...(entry.afterKind ? { afterKind: entry.afterKind } : {}),
+                ...(entry.beforeSizeBytes === undefined ? {} : { beforeSizeBytes: entry.beforeSizeBytes }),
+                ...(entry.afterSizeBytes === undefined ? {} : { afterSizeBytes: entry.afterSizeBytes }),
+            };
+            if ((before && before.kind !== 'blob') || (after && after.kind !== 'blob')) {
+                return { ...base, kind: 'unavailable', reason: 'unsupported_kind', hunks: [], truncated: false };
+            }
+            const beforeSize = before ? this.objectSize(before.oid) : 0;
+            const afterSize = after
+                ? toCommitId === 'working'
+                    ? after.sizeBytes ?? 0
+                    : this.objectSize(after.oid)
+                : 0;
+            const sizedBase = {
+                ...base,
+                ...(before ? { beforeSizeBytes: beforeSize } : {}),
+                ...(after ? { afterSizeBytes: afterSize } : {}),
+            };
+            if (beforeSize > MAX_FILE_DIFF_BYTES || afterSize > MAX_FILE_DIFF_BYTES) {
+                return { ...sizedBase, kind: 'unavailable', reason: 'file_too_large', hunks: [], truncated: false };
+            }
+            return {
+                ...sizedBase,
+                ...(0,_workspace_text_diff_js__WEBPACK_IMPORTED_MODULE_5__.createWorkspaceTextDiff)(before ? this.readObject(before.oid) : Buffer.alloc(0), after
+                    ? toCommitId === 'working'
+                        ? workingContent ?? Buffer.alloc(0)
+                        : this.readObject(after.oid)
+                    : Buffer.alloc(0)),
+            };
+        };
+        return toCommitId === 'working'
+            ? await this.withLock(`workspace-${workspaceId}`, async () => createResponse())
+            : createResponse();
     }
     async status(workspaceId) {
         return await this.withLock(`workspace-${workspaceId}`, async () => {
@@ -803,6 +912,60 @@ class WorkspaceHistoryService {
         }
         catch (error) {
             if (isFsError(error, 'ENOENT')) {
+                return undefined;
+            }
+            throw error;
+        }
+    }
+    captureWorkingNodeForDiff(workspace, relativePath) {
+        const absolutePath = this.resolveSafeWorkspacePath(workspace, relativePath);
+        if (this.isExcluded(workspace, relativePath, absolutePath)) {
+            throw new Error(`Workspace history excludes path: ${relativePath}`);
+        }
+        try {
+            const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+            const mode = stat.mode & 0o777;
+            if (stat.isSymbolicLink()) {
+                const payload = { format: SYMLINK_FORMAT, target: node_fs__WEBPACK_IMPORTED_MODULE_1___default().readlinkSync(absolutePath) };
+                assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+                const content = Buffer.from(canonicalJson(payload), 'utf8');
+                return { node: { kind: 'symlink', mode, oid: sha256(content), sizeBytes: content.byteLength } };
+            }
+            if (stat.isFile()) {
+                if (stat.size > MAX_FILE_DIFF_BYTES) {
+                    assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+                    const identity = Buffer.from(canonicalJson({
+                        format: 'authority-working-large-file/v1',
+                        device: String(stat.dev),
+                        inode: String(stat.ino),
+                        size: stat.size,
+                        modifiedAtMs: stat.mtimeMs,
+                    }), 'utf8');
+                    return { node: { kind: 'blob', mode, oid: sha256(identity), sizeBytes: stat.size } };
+                }
+                const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(absolutePath, (node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_RDONLY | ((node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_NOFOLLOW ?? 0));
+                let content;
+                try {
+                    assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), relativePath);
+                    content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(descriptor);
+                    assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), relativePath);
+                }
+                finally {
+                    node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+                }
+                assertSameFile(stat, node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath), relativePath);
+                return {
+                    node: { kind: 'blob', mode, oid: sha256(content), sizeBytes: stat.size },
+                    content,
+                };
+            }
+            if (stat.isDirectory()) {
+                return { node: { kind: 'tree', mode, children: new Map() } };
+            }
+            throw new Error(`Unsupported workspace entry: ${relativePath}`);
+        }
+        catch (error) {
+            if (isFsError(error, 'ENOENT') || isFsError(error, 'ENOTDIR')) {
                 return undefined;
             }
             throw error;
@@ -1173,6 +1336,14 @@ class WorkspaceHistoryService {
         }
         return content;
     }
+    objectSize(oid) {
+        assertOid(oid);
+        const filePath = this.objectPath(oid);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(filePath)) {
+            throw new Error(`Workspace object not found: ${oid}`);
+        }
+        return node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(filePath).size;
+    }
     publishRef(workspace, expected, head) {
         const current = this.readRef(workspace);
         if (current.generation !== expected.generation || current.head !== expected.head) {
@@ -1528,6 +1699,10 @@ function findScopedNode(tree, relativePath) {
         current = child;
     }
     return { path: relativePath, node: current };
+}
+function exactTreeNode(tree, relativePath) {
+    const found = findScopedNode(tree, relativePath);
+    return found.path === relativePath ? found.node : undefined;
 }
 function ensureTreeAncestors(root, relativePath) {
     if (relativePath === '.') {
@@ -1929,6 +2104,195 @@ function applyMode(filePath, mode) {
 }
 function delay(milliseconds) {
     return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+
+/***/ },
+
+/***/ "./src/services/workspace-text-diff.ts"
+/*!*********************************************!*\
+  !*** ./src/services/workspace-text-diff.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   createWorkspaceTextDiff: () => (/* binding */ createWorkspaceTextDiff)
+/* harmony export */ });
+const MAX_COMBINED_LINES = 20_000;
+const MAX_EDIT_DISTANCE = 512;
+const MAX_OUTPUT_LINES = 4_000;
+const CONTEXT_LINES = 3;
+function createWorkspaceTextDiff(before, after) {
+    const beforeText = decodeWorkspaceText(before);
+    const afterText = decodeWorkspaceText(after);
+    if (beforeText === null || afterText === null) {
+        return { kind: 'binary', hunks: [], truncated: false };
+    }
+    const textMetadata = {
+        before: analyzeText(beforeText),
+        after: analyzeText(afterText),
+    };
+    const beforeLines = splitLines(beforeText);
+    const afterLines = splitLines(afterText);
+    if (beforeLines.length + afterLines.length > MAX_COMBINED_LINES) {
+        return { kind: 'unavailable', reason: 'diff_too_complex', hunks: [], truncated: false };
+    }
+    const edits = createLineEdits(beforeLines, afterLines);
+    if (!edits) {
+        return { kind: 'unavailable', reason: 'diff_too_complex', hunks: [], truncated: false };
+    }
+    return { ...buildHunks(edits), textMetadata };
+}
+function analyzeText(value) {
+    const endings = new Set(value.match(/\r\n|\r|\n/g) ?? []);
+    const lineEnding = endings.size === 0 ? 'none'
+        : endings.size > 1 ? 'mixed'
+            : endings.has('\r\n') ? 'crlf'
+                : endings.has('\r') ? 'cr'
+                    : 'lf';
+    return {
+        lineEnding,
+        endsWithNewline: /(?:\r\n|\r|\n)$/.test(value),
+    };
+}
+function decodeWorkspaceText(content) {
+    if (content.includes(0))
+        return null;
+    let value;
+    try {
+        value = new TextDecoder('utf-8', { fatal: true }).decode(content);
+    }
+    catch {
+        return null;
+    }
+    let controls = 0;
+    for (const character of value) {
+        const code = character.charCodeAt(0);
+        if (code < 32 && code !== 9 && code !== 10 && code !== 12 && code !== 13)
+            controls += 1;
+    }
+    return controls > Math.max(8, Math.floor(value.length / 20)) ? null : value;
+}
+function splitLines(value) {
+    const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!normalized)
+        return [];
+    const lines = normalized.split('\n');
+    if (normalized.endsWith('\n'))
+        lines.pop();
+    return lines;
+}
+function createLineEdits(before, after) {
+    const maximum = before.length + after.length;
+    let frontier = new Map([[1, 0]]);
+    const trace = [];
+    for (let distance = 0; distance <= Math.min(maximum, MAX_EDIT_DISTANCE); distance += 1) {
+        trace.push(new Map(frontier));
+        for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+            const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+            const right = (frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY) + 1;
+            let beforeIndex = diagonal === -distance || (diagonal !== distance && right < down)
+                ? down
+                : right;
+            if (!Number.isFinite(beforeIndex))
+                beforeIndex = 0;
+            let afterIndex = beforeIndex - diagonal;
+            while (beforeIndex < before.length && afterIndex < after.length && before[beforeIndex] === after[afterIndex]) {
+                beforeIndex += 1;
+                afterIndex += 1;
+            }
+            frontier.set(diagonal, beforeIndex);
+            if (beforeIndex >= before.length && afterIndex >= after.length) {
+                return backtrackLineEdits(trace, before, after, distance);
+            }
+        }
+    }
+    return null;
+}
+function backtrackLineEdits(trace, before, after, maximumDistance) {
+    const edits = [];
+    let beforeIndex = before.length;
+    let afterIndex = after.length;
+    for (let distance = maximumDistance; distance >= 0; distance -= 1) {
+        const frontier = trace[distance];
+        const diagonal = beforeIndex - afterIndex;
+        const left = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+        const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+        const previousDiagonal = diagonal === -distance || (diagonal !== distance && left < down)
+            ? diagonal + 1
+            : diagonal - 1;
+        const previousBefore = frontier.get(previousDiagonal) ?? 0;
+        const previousAfter = previousBefore - previousDiagonal;
+        while (beforeIndex > previousBefore && afterIndex > previousAfter) {
+            edits.push({ kind: 'equal', text: before[beforeIndex - 1] });
+            beforeIndex -= 1;
+            afterIndex -= 1;
+        }
+        if (distance === 0)
+            break;
+        if (beforeIndex === previousBefore) {
+            edits.push({ kind: 'added', text: after[afterIndex - 1] });
+            afterIndex -= 1;
+        }
+        else {
+            edits.push({ kind: 'deleted', text: before[beforeIndex - 1] });
+            beforeIndex -= 1;
+        }
+    }
+    return edits.reverse();
+}
+function buildHunks(edits) {
+    const lines = [];
+    let beforeLine = 1;
+    let afterLine = 1;
+    for (const edit of edits) {
+        if (edit.kind === 'equal') {
+            lines.push({ kind: 'context', beforeLine, afterLine, text: edit.text });
+            beforeLine += 1;
+            afterLine += 1;
+        }
+        else if (edit.kind === 'deleted') {
+            lines.push({ kind: 'deleted', beforeLine, afterLine: null, text: edit.text });
+            beforeLine += 1;
+        }
+        else {
+            lines.push({ kind: 'added', beforeLine: null, afterLine, text: edit.text });
+            afterLine += 1;
+        }
+    }
+    const ranges = [];
+    for (let index = 0; index < lines.length; index += 1) {
+        if (lines[index].kind === 'context')
+            continue;
+        const start = Math.max(0, index - CONTEXT_LINES);
+        const end = Math.min(lines.length, index + CONTEXT_LINES + 1);
+        const current = ranges.at(-1);
+        if (current && start <= current.end) {
+            current.end = Math.max(current.end, end);
+        }
+        else {
+            ranges.push({ start, end });
+        }
+    }
+    const hunks = [];
+    let remaining = MAX_OUTPUT_LINES;
+    let truncated = false;
+    for (const range of ranges) {
+        if (remaining === 0) {
+            truncated = true;
+            break;
+        }
+        const available = range.end - range.start;
+        const taken = Math.min(available, remaining);
+        hunks.push({ lines: lines.slice(range.start, range.start + taken) });
+        remaining -= taken;
+        if (taken < available) {
+            truncated = true;
+            break;
+        }
+    }
+    return { kind: 'text', hunks, truncated };
 }
 
 

@@ -20,6 +20,7 @@ import type {
     TriviumDatabaseRecord,
     WorkspaceCommitObject,
     WorkspaceDiffResponse,
+    WorkspaceFileDiffResponse,
     WorkspaceStatusResponse,
 } from '@stdo/shared-types';
 import type { AuthorityPolicyEntry, PermissionResource, PermissionStatus } from '@stdo/shared-types';
@@ -128,6 +129,7 @@ export interface AgentWorkbenchState {
     loading: boolean;
     busy: boolean;
     error: string | null;
+    profileTest: { status: 'success' | 'error'; message: string } | null;
     profiles: AgentLlmProfile[];
     workspaces: AgentWorkspaceRecord[];
     sessions: AgentSessionListResponse;
@@ -140,6 +142,14 @@ export interface AgentWorkbenchState {
     workspaceStatus: WorkspaceStatusResponse | null;
     workspaceCommits: WorkspaceCommitObject[];
     workspaceDiff: WorkspaceDiffResponse | null;
+    fileDiffs: Map<string, WorkspaceFileDiffLoadState>;
+}
+
+export interface WorkspaceFileDiffLoadState {
+    loading: boolean;
+    expanded: boolean;
+    error: string | null;
+    response: WorkspaceFileDiffResponse | null;
 }
 
 export interface SystemWorkbenchState {
@@ -153,6 +163,7 @@ export interface SystemWorkbenchState {
     workspaceCommits: WorkspaceCommitObject[];
     selectedCommitId: string | null;
     workspaceDiff: WorkspaceDiffResponse | null;
+    fileDiffs: Map<string, WorkspaceFileDiffLoadState>;
 }
 
 export interface SecurityCenterState {

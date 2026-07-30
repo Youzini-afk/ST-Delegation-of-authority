@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { WorkspaceFileDiffResponse } from '@stdo/shared-types';
 import type { AuthorityRuntime } from '../runtime.js';
 import type { AuthorityRequest, AuthorityResponse, SessionRecord } from '../types.js';
 import { registerAgentHistoryRoutes } from './agent-history-routes.js';
@@ -68,6 +69,36 @@ describe('Agent workspace admin routes', () => {
         });
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ id: 'workspace-a' }));
     });
+
+    it('loads one exact file diff and preserves the working-tree target', async () => {
+        const fixture = setup();
+        const result: WorkspaceFileDiffResponse = {
+            workspaceId: 'workspace-a',
+            path: ' src/file name.ts ',
+            status: 'modified',
+            fromCommitId: null,
+            toCommitId: null,
+            toWorkingTree: true,
+            kind: 'text',
+            hunks: [],
+            truncated: false,
+        };
+        vi.mocked(fixture.runtime.workspaceHistory.diffFile).mockResolvedValue(result);
+        const req = request(true);
+        req.params = { workspaceId: 'workspace-a' };
+        req.query = { path: ' src/file name.ts ', from: 'empty', to: 'working' };
+        const res = response();
+
+        await fixture.get.get('/admin/agent/workspaces/:workspaceId/diff/file')!(req, res);
+
+        expect(fixture.runtime.workspaceHistory.diffFile).toHaveBeenCalledWith(
+            'workspace-a',
+            null,
+            'working',
+            ' src/file name.ts ',
+        );
+        expect(res.json).toHaveBeenCalledWith(result);
+    });
 });
 
 function setup(isAdmin = true, extensionId = 'third-party/ext-a') {
@@ -99,6 +130,7 @@ function setup(isAdmin = true, extensionId = 'third-party/ext-a') {
             status: vi.fn(),
             listCommits: vi.fn(() => []),
             diff: vi.fn(),
+            diffFile: vi.fn(),
             checkpoint: vi.fn(),
             rollback: vi.fn(),
             resumeRollback: vi.fn(),

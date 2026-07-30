@@ -7,6 +7,7 @@ import {
 } from './agent-workbench.js';
 import { renderAgentSettings } from './agent-settings.js';
 import type { AgentWorkbenchState } from './types.js';
+import { workspaceFileDiffKey } from './workspace-diff-view.js';
 
 describe('Agent session workbench rendering', () => {
     it('keeps approvals in the task context and escapes their content', () => {
@@ -31,6 +32,26 @@ describe('Agent session workbench rendering', () => {
         expect(isActiveAgentSession(completed)).toBe(false);
         expect(isActiveAgentSession(suspended)).toBe(false);
         expect(isActiveAgentSession(null)).toBe(false);
+    });
+
+    it('offers the correct direct recovery action for suspended and terminally failed runs', () => {
+        const suspended = workbenchState();
+        suspended.selectedSession = sessionSnapshot('suspended');
+        suspended.selectedSession.runs[0]!.suspensionReason = 'Network outcome unknown';
+        const suspendedHtml = renderAgentWorkbench(suspended);
+        expect(suspendedHtml).toContain('data-action="agent-resume-run"');
+        expect(suspendedHtml).toContain('确认后继续');
+        expect(suspendedHtml).not.toContain('data-action="agent-continue-failed-run"');
+
+        const failed = workbenchState();
+        failed.selectedSession = sessionSnapshot('failed');
+        failed.selectedSession.runs[0]!.error = 'step limit reached; Authorization: Bearer hidden-token';
+        const failedHtml = renderAgentWorkbench(failed);
+        expect(failedHtml).toContain('data-action="agent-continue-failed-run"');
+        expect(failedHtml).toContain('从当前状态继续');
+        expect(failedHtml).toContain('[REDACTED]');
+        expect(failedHtml).not.toContain('hidden-token');
+        expect(failedHtml).not.toContain('data-action="agent-resume-run"');
     });
 
     it('redacts common secrets from conversation, approval, and tool diagnostics', () => {
@@ -94,6 +115,9 @@ describe('Agent session workbench rendering', () => {
         expect(activity).toContain('data-action="agent-resolve-approval"');
         expect(changes).toContain('data-action="agent-workspace-checkpoint"');
         expect(changes).toContain('data-action="agent-workspace-rollback"');
+        expect(changes).toContain('data-action="agent-file-diff"');
+        expect(changes).toContain('data-diff-scope="working"');
+        expect(changes).toContain('data-diff-scope="history"');
         expect(changes).not.toContain('data-role="agent-workspace-select"');
         expect(changes).not.toContain('data-action="agent-register-workspace"');
         expect(activity).not.toContain('工具目录');
@@ -167,12 +191,67 @@ describe('Agent session workbench rendering', () => {
         expect(agent).not.toContain('data-action="agent-save-profile"');
         expect(settings).toContain('data-role="agent-profile-api-key"');
         expect(settings).toContain('data-action="agent-save-profile"');
+        expect(settings).toContain('data-action="agent-test-profile"');
         expect(settings).toContain('data-action="agent-new-profile"');
         expect(settings).toContain('data-action="agent-delete-profile"');
         expect(settings).toContain('class="authority-settings-mobile-back authority-mobile-only"');
         expect(settings).toContain('data-action="mobile-close-surface"');
         expect(settings).not.toContain('工具目录');
         expect(settings).not.toContain('注册工作区');
+    });
+
+    it('renders inline model-test feedback and an expanded line-level code diff', () => {
+        const state = workbenchState();
+        state.profileTest = { status: 'success', message: '连接成功 · 18 ms' };
+        state.inspectorTab = 'workspace';
+        state.fileDiffs.set(
+            workspaceFileDiffKey('workspace', 'head-commit-id', 'working', 'src/index.ts'),
+            {
+                loading: false,
+                expanded: true,
+                error: null,
+                response: {
+                    workspaceId: 'workspace',
+                    path: 'src/index.ts',
+                    status: 'modified',
+                    fromCommitId: 'head-commit-id',
+                    toCommitId: null,
+                    toWorkingTree: true,
+                    beforeKind: 'blob',
+                    afterKind: 'blob',
+                    kind: 'text',
+                    hunks: [{ lines: [
+                        { kind: 'deleted', beforeLine: 4, afterLine: null, text: 'const unsafe = "<old>";' },
+                        { kind: 'added', beforeLine: null, afterLine: 4, text: 'const safe = true;' },
+                    ] }],
+                    truncated: false,
+                },
+            },
+        );
+
+        const settings = renderAgentSettings(state);
+        const workbench = renderAgentWorkbench(state);
+        expect(settings).toContain('data-role="agent-profile-test-result"');
+        expect(settings).toContain('连接成功 · 18 ms');
+        expect(workbench).toContain('authority-file-diff__line--deleted');
+        expect(workbench).toContain('authority-file-diff__line--added');
+        expect(workbench).toContain('&lt;old&gt;');
+        expect(workbench).not.toContain('"<old>"');
+
+        const loaded = state.fileDiffs.get(
+            workspaceFileDiffKey('workspace', 'head-commit-id', 'working', 'src/index.ts'),
+        )!;
+        loaded.response = {
+            ...loaded.response!,
+            hunks: [],
+            textMetadata: {
+                before: { lineEnding: 'crlf', endsWithNewline: true },
+                after: { lineEnding: 'lf', endsWithNewline: false },
+            },
+        };
+        const metadataOnly = renderAgentWorkbench(state);
+        expect(metadataOnly).toContain('换行格式 CRLF → LF');
+        expect(metadataOnly).toContain('文件末尾换行 有 → 无');
     });
 
     it('disables mutating Agent controls while leaving mobile navigation available', () => {
@@ -213,7 +292,10 @@ function workbenchState(): AgentWorkbenchState {
             displayName: 'Workspace',
             rootPath: 'D:\\workspace',
             allowedUserHandles: ['admin'],
+            defaultRef: 'main',
             headCommitId: 'head-commit-id',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-02T00:00:00.000Z',
         }],
         sessions: {
             sessions: [{
@@ -230,21 +312,43 @@ function workbenchState(): AgentWorkbenchState {
             page: { nextCursor: 'older', limit: 50, hasMore: true, totalCount: 2 },
         },
         selectedProfileId: 'profile',
+        profileTest: null,
         defaultWorkspaceId: 'workspace',
         selectedWorkspaceId: 'workspace',
         selectedSession: snapshot,
         creatingSession: false,
         inspectorTab: 'activity',
         workspaceStatus: {
+            workspace: {
+                id: 'workspace',
+                displayName: 'Workspace',
+                rootPath: 'D:\\workspace',
+                allowedUserHandles: ['admin'],
+                defaultRef: 'main',
+                headCommitId: 'head-commit-id',
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-02T00:00:00.000Z',
+            },
             dirty: true,
-            pendingRollback: { commitId: 'old-commit-id' },
+            pendingRollback: {
+                operationId: 'rollback-1',
+                targetCommitId: 'old-commit-id',
+                rollbackCommitId: 'head-commit-id',
+                startedAt: '2026-01-02T00:00:00.000Z',
+            },
             changes: [{ path: 'src/index.ts', status: 'modified' }],
         },
         workspaceCommits: [
             { id: 'head-commit-id', message: 'Current', createdAt: '2026-01-02T00:00:00.000Z' },
             { id: 'old-commit-id', message: 'Previous', createdAt: '2026-01-01T00:00:00.000Z' },
         ],
-        workspaceDiff: { entries: [{ path: 'src/index.ts', status: 'modified' }] },
+        workspaceDiff: {
+            workspaceId: 'workspace',
+            fromCommitId: 'old-commit-id',
+            toCommitId: 'head-commit-id',
+            entries: [{ path: 'src/index.ts', status: 'modified' }],
+        },
+        fileDiffs: new Map(),
     };
 }
 
@@ -268,7 +372,7 @@ function sessionSnapshot(status: AgentSessionSnapshot['runs'][number]['status'])
         refs: [{
             name: 'main',
             leafEntryId: 'assistant-1',
-            activeRunId: status === 'completed' ? null : 'run-1',
+            activeRunId: status === 'completed' || status === 'failed' ? null : 'run-1',
             createdAt: timestamp,
             updatedAt: timestamp,
         }],

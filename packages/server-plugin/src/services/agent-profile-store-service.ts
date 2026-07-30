@@ -39,6 +39,56 @@ export class AgentProfileStoreService {
 
     upsertProfile(input: AgentLlmProfileInput): AgentLlmProfile {
         const profiles = this.readProfiles();
+        const stored = this.buildStoredProfile(input, profiles);
+        const index = profiles.profiles.findIndex(profile => profile.id === stored.id);
+        if (index === -1) {
+            profiles.profiles.push(stored);
+        } else {
+            profiles.profiles[index] = stored;
+        }
+        profiles.profiles.sort((left, right) => left.id.localeCompare(right.id));
+        protectDirectory(this.stateDir);
+        atomicWriteJson(this.profilesPath(), profiles);
+        protectFile(this.profilesPath());
+        return publicProfile(stored);
+    }
+
+    prepareProfileForTest(input: AgentLlmProfileInput): Readonly<StoredAgentLlmProfile> {
+        return structuredClone(this.buildStoredProfile(input, this.readProfiles()));
+    }
+
+    listProfiles(): AgentLlmProfile[] {
+        return this.readProfiles().profiles.map(publicProfile);
+    }
+
+    getProfile(profileId: string): AgentLlmProfile {
+        return publicProfile(this.getStoredProfile(profileId));
+    }
+
+    getProfileForRequest(profileId: string): Readonly<StoredAgentLlmProfile> {
+        return structuredClone(this.getStoredProfile(profileId));
+    }
+
+    deleteProfile(profileId: string): boolean {
+        assertSafeId(profileId, 'LLM profile id');
+        const profiles = this.readProfiles();
+        const next = profiles.profiles.filter(profile => profile.id !== profileId);
+        if (next.length === profiles.profiles.length) {
+            return false;
+        }
+        profiles.profiles = next;
+        atomicWriteJson(this.profilesPath(), profiles);
+        protectFile(this.profilesPath());
+        return true;
+    }
+
+    private buildStoredProfile(input: AgentLlmProfileInput, profiles: StoredProfiles): StoredAgentLlmProfile {
+        if (input.id !== undefined && typeof input.id !== 'string') {
+            throw new Error('LLM profile id must be a string');
+        }
+        if (input.apiKey !== undefined && typeof input.apiKey !== 'string') {
+            throw new Error('LLM profile apiKey must be a string');
+        }
         const requestedId = input.id?.trim();
         if (requestedId !== undefined) {
             assertSafeId(requestedId, 'LLM profile id');
@@ -76,42 +126,7 @@ export class AgentProfileStoreService {
             createdAt: existing?.createdAt ?? timestamp,
             updatedAt: timestamp,
         };
-        const index = profiles.profiles.findIndex(profile => profile.id === stored.id);
-        if (index === -1) {
-            profiles.profiles.push(stored);
-        } else {
-            profiles.profiles[index] = stored;
-        }
-        profiles.profiles.sort((left, right) => left.id.localeCompare(right.id));
-        protectDirectory(this.stateDir);
-        atomicWriteJson(this.profilesPath(), profiles);
-        protectFile(this.profilesPath());
-        return publicProfile(stored);
-    }
-
-    listProfiles(): AgentLlmProfile[] {
-        return this.readProfiles().profiles.map(publicProfile);
-    }
-
-    getProfile(profileId: string): AgentLlmProfile {
-        return publicProfile(this.getStoredProfile(profileId));
-    }
-
-    getProfileForRequest(profileId: string): Readonly<StoredAgentLlmProfile> {
-        return structuredClone(this.getStoredProfile(profileId));
-    }
-
-    deleteProfile(profileId: string): boolean {
-        assertSafeId(profileId, 'LLM profile id');
-        const profiles = this.readProfiles();
-        const next = profiles.profiles.filter(profile => profile.id !== profileId);
-        if (next.length === profiles.profiles.length) {
-            return false;
-        }
-        profiles.profiles = next;
-        atomicWriteJson(this.profilesPath(), profiles);
-        protectFile(this.profilesPath());
-        return true;
+        return stored;
     }
 
     private readProfiles(): StoredProfiles {

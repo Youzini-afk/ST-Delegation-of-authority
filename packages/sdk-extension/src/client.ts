@@ -5,6 +5,8 @@ import type {
     AgentBrowserToolRegistrationResponse,
     AgentLlmProfile,
     AgentLlmProfileInput,
+    AgentLlmProfileTestRequest,
+    AgentLlmProfileTestResponse,
     AgentSessionBrowserToolClaimResponse,
     AgentSessionCreateRequest,
     AgentSessionEvent,
@@ -138,6 +140,7 @@ import type {
     WorkspaceCheckpointResponse,
     WorkspaceCommitListResponse,
     WorkspaceDiffResponse,
+    WorkspaceFileDiffResponse,
     WorkspaceRollbackRequest,
     WorkspaceRollbackResponse,
     WorkspaceStatusResponse,
@@ -377,6 +380,11 @@ export interface AgentSessionSubscribeOptions {
 export interface AgentWorkspaceDiffOptions {
     from?: string | null;
     to?: string | null;
+}
+
+export interface AgentWorkspaceFileDiffOptions extends AgentWorkspaceDiffOptions {
+    path: string;
+    to?: string | null | 'working';
 }
 
 export interface BlobPutJsonRequest {
@@ -638,6 +646,7 @@ export class AuthorityClient {
             send: (sessionId: string, request: AgentSessionSendRequest) => Promise<AgentSessionSendResponse>;
             cancelRun: (sessionId: string, runId: string) => Promise<AgentSessionSnapshot>;
             resumeRun: (sessionId: string, runId: string) => Promise<AgentSessionSnapshot>;
+            continueFailedRun: (sessionId: string, runId: string) => Promise<AgentSessionSendResponse>;
             waitForRun: (sessionId: string, runId: string, options?: AgentSessionRunWaitOptions) => Promise<AgentSessionSnapshot>;
             subscribe: (sessionId: string, options: AgentSessionSubscribeOptions) => Promise<AuthorityEventsSubscription>;
         };
@@ -651,6 +660,7 @@ export class AuthorityClient {
                 list: () => Promise<AgentLlmProfile[]>;
                 get: (profileId: string) => Promise<AgentLlmProfile>;
                 upsert: (profile: AgentLlmProfileInput) => Promise<AgentLlmProfile>;
+                test: (request: AgentLlmProfileTestRequest) => Promise<AgentLlmProfileTestResponse>;
                 delete: (profileId: string) => Promise<boolean>;
             };
             sessions: {
@@ -667,6 +677,7 @@ export class AuthorityClient {
                 status: (workspaceId: string) => Promise<WorkspaceStatusResponse>;
                 commits: (workspaceId: string, limit?: number) => Promise<WorkspaceCommitListResponse>;
                 diff: (workspaceId: string, options?: AgentWorkspaceDiffOptions) => Promise<WorkspaceDiffResponse>;
+                fileDiff: (workspaceId: string, options: AgentWorkspaceFileDiffOptions) => Promise<WorkspaceFileDiffResponse>;
                 checkpoint: (workspaceId: string, request: WorkspaceCheckpointRequest) => Promise<WorkspaceCheckpointResponse>;
                 rollback: (workspaceId: string, request: WorkspaceRollbackRequest) => Promise<WorkspaceRollbackResponse>;
                 resumeRollback: (workspaceId: string) => Promise<WorkspaceRollbackResponse>;
@@ -1988,6 +1999,15 @@ export class AuthorityClient {
                     this.rememberAgentSession(snapshot);
                     return snapshot;
                 },
+                continueFailedRun: async (sessionId, runId) => {
+                    await this.ensureAgentSessionRunPermission(sessionId, '继续失败的 Agent 运行');
+                    const response = await this.requestWithSession<AgentSessionSendResponse>(
+                        `/agent/sessions/${agentPathId(sessionId, 'sessionId')}/runs/${agentPathId(runId, 'runId')}/continue`,
+                        { method: 'POST' },
+                    );
+                    this.rememberAgentSession(response.snapshot);
+                    return response;
+                },
                 waitForRun: async (sessionId, runId, options = {}) => {
                     const pollIntervalMs = getWaitPollInterval(options.pollIntervalMs, 'agent run');
                     const timeoutMs = getOptionalWaitTimeout(options.timeoutMs, 'agent run');
@@ -2169,6 +2189,12 @@ export class AuthorityClient {
                             body: profile,
                         });
                     },
+                    test: async request => {
+                        return await this.requestWithSession<AgentLlmProfileTestResponse>('/admin/agent/profiles/test', {
+                            method: 'POST',
+                            body: request,
+                        });
+                    },
                     delete: async profileId => {
                         const response = await this.requestWithSession<{ deleted: boolean }>(
                             `/admin/agent/profiles/${agentPathId(profileId, 'profileId')}/delete`,
@@ -2247,6 +2273,16 @@ export class AuthorityClient {
                         const suffix = query.size > 0 ? `?${query.toString()}` : '';
                         return await this.requestWithSession<WorkspaceDiffResponse>(
                             `/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/diff${suffix}`,
+                        );
+                    },
+                    fileDiff: async (workspaceId, options) => {
+                        const query = new URLSearchParams({
+                            path: agentWorkspacePath(options.path),
+                        });
+                        if (options.from !== undefined) query.set('from', options.from === null ? 'empty' : options.from);
+                        if (options.to !== undefined) query.set('to', options.to === null ? 'empty' : options.to);
+                        return await this.requestWithSession<WorkspaceFileDiffResponse>(
+                            `/admin/agent/workspaces/${agentPathId(workspaceId, 'workspaceId')}/diff/file?${query.toString()}`,
                         );
                     },
                     checkpoint: async (workspaceId, request) => {
@@ -3237,6 +3273,13 @@ function agentValueId(value: unknown, label: string): string {
         throw new Error(`Authority agent ${label} must be a non-empty string`);
     }
     return value.trim();
+}
+
+function agentWorkspacePath(value: unknown): string {
+    if (typeof value !== 'string' || value.length === 0) {
+        throw new Error('Authority agent workspace file diff path must be a non-empty string');
+    }
+    return value;
 }
 
 function getSqlDatabaseName(value: unknown): string {

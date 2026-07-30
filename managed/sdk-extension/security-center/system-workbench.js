@@ -2,6 +2,7 @@ import { escapeHtml, formatDate } from '../dom.js';
 import { formatBytes, getCoreStateLabel, getInstallStatusLabel } from './formatters.js';
 import { renderStManagerBridgeSection } from './st-manager-bridge.js';
 import { renderStManagerControlSection } from './st-manager-control.js';
+import { renderWorkspaceDiffEntries } from './workspace-diff-view.js';
 const MISSING_TEXT = '未获取';
 const SYSTEM_VIEWS = [
     { id: 'runtime', label: '运行状态', description: 'Core、安装与部署' },
@@ -167,8 +168,14 @@ function renderRecovery(state) {
                     ${viewHeader(selected ? `CP-${String(selectedNumber).padStart(2, '0')} · ${selected.message}` : '版本与恢复', selected ? `${selected.id.slice(0, 12)} · ${formatDate(selected.createdAt)}` : '选择一个检查点查看路径差异。', '', selected?.id === headId ? runtimeState('ready', '当前检查点') : '')}
                     <div class="authority-recovery-diff__scroll">
                         ${status?.pendingRollback ? `<div class="authority-recovery-pending"><strong>检测到未完成的回退事务</strong><span>操作 ${escapeHtml(status.pendingRollback.operationId)} 可以安全继续。</span><button type="button" class="authority-action-button authority-action-button--primary" data-action="system-recovery-resume" ${disabled}>继续回退</button></div>` : ''}
-                        ${status?.changes.length ? `<details class="authority-system-inline-details" open><summary>相对当前检查点的未记录变更 <span>${status.changes.length}</span></summary>${renderDiff(status.changes)}</details>` : ''}
-                        <section class="authority-runtime-section"><div class="authority-section-heading"><div><h3>检查点内容变化</h3><div class="authority-muted">${selected?.parents.length ? '相对上一个检查点' : '初始检查点'}</div></div><span class="authority-section-count">${recovery.workspaceDiff?.entries.length ?? 0}</span></div>${recovery.workspaceDiff?.entries.length ? renderDiff(recovery.workspaceDiff.entries) : '<div class="authority-empty">该检查点没有可显示的路径差异。</div>'}</section>
+                        ${status?.changes.length ? `<details class="authority-system-inline-details" open><summary>相对当前检查点的未记录变更 <span>${status.changes.length}</span></summary>${renderWorkspaceDiffEntries(status.changes, {
+        action: 'system-file-diff', scope: 'working', workspaceId: status.workspace.id,
+        from: status.workspace.headCommitId, to: 'working', states: recovery.fileDiffs, disabled,
+    })}</details>` : ''}
+                        <section class="authority-runtime-section"><div class="authority-section-heading"><div><h3>检查点内容变化</h3><div class="authority-muted">${selected?.parents.length ? '相对上一个检查点' : '初始检查点'}</div></div><span class="authority-section-count">${recovery.workspaceDiff?.entries.length ?? 0}</span></div>${recovery.workspaceDiff?.entries.length ? renderWorkspaceDiffEntries(recovery.workspaceDiff.entries, {
+        action: 'system-file-diff', scope: 'history', workspaceId: workspace.id,
+        from: recovery.workspaceDiff.fromCommitId, to: recovery.workspaceDiff.toCommitId, states: recovery.fileDiffs, disabled,
+    }) : '<div class="authority-empty">该检查点没有可显示的路径差异。</div>'}</section>
                     </div>
                     <footer class="authority-recovery-note">.git、node_modules 与 Authority 历史库不会被纳入检查点。</footer>
                 </main>
@@ -280,9 +287,6 @@ function nativeRow(item, busy) {
     const canApply = item.status === 'previewed' && rejected === 0;
     const canRollback = item.status === 'applied' || item.status === 'needs_rollback';
     return `<tr><td><strong>${item.target === 'data' ? 'Data 目录' : '第三方插件'}</strong><div class="authority-muted">${escapeHtml(item.id)}</div><div class="authority-muted">${escapeHtml(item.sourceFileName)} · ${escapeHtml(formatBytes(item.sourceSizeBytes))}</div></td><td>${runtimeState(item.status === 'applied' || item.status === 'rolled_back' ? 'ready' : item.status === 'failed' || item.status === 'needs_rollback' ? 'attention' : 'working', nativeStatus(item.status))}</td><td><div>${item.entryCount} 个文件 · ${escapeHtml(formatBytes(item.totalSizeBytes))}</div><div class="authority-muted">新增 ${created} · 覆盖候选 ${overwritten} · 拒绝 ${rejected}</div>${item.warnings.length ? `<div class="authority-muted">${escapeHtml(item.warnings.join('；'))}</div>` : ''}</td><td><div>已创建 ${item.createdCount} · 已覆盖 ${item.overwrittenCount} · 已跳过 ${item.skippedCount}</div>${item.error ? `<div class="authority-muted">${escapeHtml(item.error)}</div>` : ''}</td><td>${escapeHtml(formatDate(item.updatedAt))}</td><td><div class="authority-page-actions authority-page-actions--inline">${canApply ? `<select data-role="native-migration-mode" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}><option value="skip">跳过已有文件</option><option value="overwrite">覆盖并保留回滚备份</option></select><button type="button" class="authority-text-button" data-action="apply-native-migration" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>应用</button>` : ''}${canRollback ? `<button type="button" class="authority-text-button authority-text-button--danger" data-action="rollback-native-migration" data-operation-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>回滚</button>` : ''}${rejected ? '<span class="authority-muted">存在被拒绝文件</span>' : ''}</div></td></tr>`;
-}
-function renderDiff(items) {
-    return `<div class="authority-recovery-file-list">${items.map(item => `<div><span class="authority-recovery-file-status authority-recovery-file-status--${escapeHtml(item.status)}">${escapeHtml({ added: 'A', modified: 'M', deleted: 'D', type_changed: 'T' }[item.status] ?? '?')}</span><code>${escapeHtml(item.path)}</code></div>`).join('')}</div>`;
 }
 function packageStatus(status) {
     return status === 'completed' ? '已完成' : status === 'failed' ? '失败' : status === 'running' ? '处理中' : '排队中';

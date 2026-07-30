@@ -11,6 +11,7 @@ import type {
     WorkspaceCommitObject,
     WorkspaceDiffEntry,
     WorkspaceDiffResponse,
+    WorkspaceFileDiffResponse,
     WorkspaceObjectId,
     WorkspaceRefRecord,
     WorkspaceRollbackRequest,
@@ -21,6 +22,7 @@ import type {
     WorkspaceTreeObject,
 } from '@stdo/shared-types';
 import { atomicWriteFile, atomicWriteJson, AuthorityServiceError, ensureDir, isPathInside } from '../utils.js';
+import { createWorkspaceTextDiff } from './workspace-text-diff.js';
 
 const STORE_FORMAT = 'authority-workspaces/v1';
 const REF_JOURNAL_FORMAT = 'authority-workspace-ref-journal/v1';
@@ -33,6 +35,7 @@ const DEFAULT_REF = 'main';
 const DEFAULT_LOCK_TIMEOUT_MS = 15_000;
 const DEFAULT_STALE_LOCK_MS = 30 * 60_000;
 const EXCLUDED_SEGMENTS = new Set(['.git', 'node_modules']);
+const MAX_FILE_DIFF_BYTES = 512 * 1024;
 
 interface WorkspaceRegistry {
     format: typeof STORE_FORMAT;
@@ -339,6 +342,120 @@ export class WorkspaceHistoryService {
             toCommitId,
             entries: diffNodes(before, after),
         };
+    }
+
+    async diffFile(
+        workspaceId: string,
+        fromCommitId: string | null,
+        toCommitId: string | null | 'working',
+        requestedPath: string,
+    ): Promise<WorkspaceFileDiffResponse> {
+        const relativePath = normalizeRelativePath(requestedPath);
+        if (relativePath === '.') {
+            throw validationError('Workspace file diff path must identify a file');
+        }
+        if ((fromCommitId !== null && !OID_PATTERN.test(fromCommitId))
+            || (toCommitId !== null && toCommitId !== 'working' && !OID_PATTERN.test(toCommitId))) {
+            throw validationError('Workspace file diff commit ids must be SHA-256 commit ids');
+        }
+        const createResponse = (): WorkspaceFileDiffResponse => {
+            const workspace = this.getStoredWorkspace(workspaceId);
+            const beforeTree = fromCommitId
+                ? this.loadCommitTree(this.readCommit(fromCommitId, workspace.id))
+                : emptyTree();
+            const before = exactTreeNode(beforeTree, relativePath);
+            let after: SnapshotNode | undefined;
+            let workingContent: Buffer | undefined;
+            let resolvedToCommitId: string | null;
+            if (toCommitId === 'working') {
+                this.recoverRefJournal(workspace);
+                const captured = this.captureWorkingNodeForDiff(workspace, relativePath);
+                after = captured?.node;
+                workingContent = captured?.content;
+                resolvedToCommitId = null;
+            } else {
+                const afterTree = toCommitId
+                    ? this.loadCommitTree(this.readCommit(toCommitId, workspace.id))
+                    : emptyTree();
+                after = exactTreeNode(afterTree, relativePath);
+                resolvedToCommitId = toCommitId;
+            }
+            if (toCommitId === 'working'
+                && after?.kind === 'blob'
+                && (after.sizeBytes ?? 0) > MAX_FILE_DIFF_BYTES) {
+                const afterSize = after.sizeBytes!;
+                const beforeSize = before?.kind === 'blob' ? this.objectSize(before.oid) : undefined;
+                const status = !before ? 'added'
+                    : before.kind !== 'blob' ? 'type_changed'
+                        : before.mode !== after.mode || beforeSize !== afterSize ? 'modified'
+                            : 'unknown';
+                return {
+                    workspaceId,
+                    path: relativePath,
+                    status,
+                    fromCommitId,
+                    toCommitId: null,
+                    toWorkingTree: true,
+                    ...(before ? { beforeKind: before.kind } : {}),
+                    afterKind: 'blob',
+                    ...(beforeSize === undefined ? {} : { beforeSizeBytes: beforeSize }),
+                    afterSizeBytes: afterSize,
+                    kind: 'unavailable',
+                    reason: 'file_too_large',
+                    hunks: [],
+                    truncated: false,
+                };
+            }
+            const entries: WorkspaceDiffEntry[] = [];
+            diffNode(before, after, relativePath, entries);
+            const entry = entries.find(item => item.path === relativePath);
+            if (!entry) {
+                throw validationError(`Workspace file is unchanged in the selected diff: ${relativePath}`);
+            }
+            const base = {
+                workspaceId,
+                path: relativePath,
+                status: entry.status,
+                fromCommitId,
+                toCommitId: resolvedToCommitId,
+                toWorkingTree: toCommitId === 'working',
+                ...(entry.beforeKind ? { beforeKind: entry.beforeKind } : {}),
+                ...(entry.afterKind ? { afterKind: entry.afterKind } : {}),
+                ...(entry.beforeSizeBytes === undefined ? {} : { beforeSizeBytes: entry.beforeSizeBytes }),
+                ...(entry.afterSizeBytes === undefined ? {} : { afterSizeBytes: entry.afterSizeBytes }),
+            };
+            if ((before && before.kind !== 'blob') || (after && after.kind !== 'blob')) {
+                return { ...base, kind: 'unavailable', reason: 'unsupported_kind', hunks: [], truncated: false };
+            }
+            const beforeSize = before ? this.objectSize(before.oid) : 0;
+            const afterSize = after
+                ? toCommitId === 'working'
+                    ? after.sizeBytes ?? 0
+                    : this.objectSize(after.oid)
+                : 0;
+            const sizedBase = {
+                ...base,
+                ...(before ? { beforeSizeBytes: beforeSize } : {}),
+                ...(after ? { afterSizeBytes: afterSize } : {}),
+            };
+            if (beforeSize > MAX_FILE_DIFF_BYTES || afterSize > MAX_FILE_DIFF_BYTES) {
+                return { ...sizedBase, kind: 'unavailable', reason: 'file_too_large', hunks: [], truncated: false };
+            }
+            return {
+                ...sizedBase,
+                ...createWorkspaceTextDiff(
+                    before ? this.readObject(before.oid) : Buffer.alloc(0),
+                    after
+                        ? toCommitId === 'working'
+                            ? workingContent ?? Buffer.alloc(0)
+                            : this.readObject(after.oid)
+                        : Buffer.alloc(0),
+                ),
+            };
+        };
+        return toCommitId === 'working'
+            ? await this.withLock(`workspace-${workspaceId}`, async () => createResponse())
+            : createResponse();
     }
 
     async status(workspaceId: string): Promise<WorkspaceStatusResponse> {
@@ -741,6 +858,62 @@ export class WorkspaceHistoryService {
             return this.scanNode(workspace, absolutePath, relativePath, stats);
         } catch (error) {
             if (isFsError(error, 'ENOENT')) {
+                return undefined;
+            }
+            throw error;
+        }
+    }
+
+    private captureWorkingNodeForDiff(
+        workspace: AgentWorkspaceRecord,
+        relativePath: string,
+    ): { node: SnapshotNode; content?: Buffer } | undefined {
+        const absolutePath = this.resolveSafeWorkspacePath(workspace, relativePath);
+        if (this.isExcluded(workspace, relativePath, absolutePath)) {
+            throw new Error(`Workspace history excludes path: ${relativePath}`);
+        }
+        try {
+            const stat = fs.lstatSync(absolutePath);
+            const mode = stat.mode & 0o777;
+            if (stat.isSymbolicLink()) {
+                const payload: SymlinkObject = { format: SYMLINK_FORMAT, target: fs.readlinkSync(absolutePath) };
+                assertSameFile(stat, fs.lstatSync(absolutePath), relativePath);
+                const content = Buffer.from(canonicalJson(payload), 'utf8');
+                return { node: { kind: 'symlink', mode, oid: sha256(content), sizeBytes: content.byteLength } };
+            }
+            if (stat.isFile()) {
+                if (stat.size > MAX_FILE_DIFF_BYTES) {
+                    assertSameFile(stat, fs.lstatSync(absolutePath), relativePath);
+                    const identity = Buffer.from(canonicalJson({
+                        format: 'authority-working-large-file/v1',
+                        device: String(stat.dev),
+                        inode: String(stat.ino),
+                        size: stat.size,
+                        modifiedAtMs: stat.mtimeMs,
+                    }), 'utf8');
+                    return { node: { kind: 'blob', mode, oid: sha256(identity), sizeBytes: stat.size } };
+                }
+                const descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+                let content: Buffer;
+                try {
+                    assertSameFile(stat, fs.fstatSync(descriptor), relativePath);
+                    content = fs.readFileSync(descriptor);
+                    assertSameFile(stat, fs.fstatSync(descriptor), relativePath);
+                } finally {
+                    fs.closeSync(descriptor);
+                }
+                assertSameFile(stat, fs.lstatSync(absolutePath), relativePath);
+                return {
+                    node: { kind: 'blob', mode, oid: sha256(content), sizeBytes: stat.size },
+                    content,
+                };
+            }
+            if (stat.isDirectory()) {
+                return { node: { kind: 'tree', mode, children: new Map() } };
+            }
+            throw new Error(`Unsupported workspace entry: ${relativePath}`);
+        } catch (error) {
+            if (isFsError(error, 'ENOENT') || isFsError(error, 'ENOTDIR')) {
                 return undefined;
             }
             throw error;
@@ -1166,6 +1339,15 @@ export class WorkspaceHistoryService {
         return content;
     }
 
+    private objectSize(oid: WorkspaceObjectId): number {
+        assertOid(oid);
+        const filePath = this.objectPath(oid);
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`Workspace object not found: ${oid}`);
+        }
+        return fs.statSync(filePath).size;
+    }
+
     private publishRef(
         workspace: AgentWorkspaceRecord,
         expected: WorkspaceRefRecord,
@@ -1555,6 +1737,11 @@ function findScopedNode(tree: TreeNode, relativePath: string): { path: string; n
         current = child;
     }
     return { path: relativePath, node: current };
+}
+
+function exactTreeNode(tree: TreeNode, relativePath: string): SnapshotNode | undefined {
+    const found = findScopedNode(tree, relativePath);
+    return found.path === relativePath ? found.node : undefined;
 }
 
 function ensureTreeAncestors(root: TreeNode, relativePath: string): TreeNode {

@@ -1868,12 +1868,14 @@ describe('AuthorityClient', () => {
         const snapshot = buildAgentSessionSnapshot('queued', 'workspace-a');
         const requestWithSession = vi.fn()
             .mockResolvedValueOnce(snapshot)
-            .mockResolvedValueOnce({ snapshot, runId: 'run-1', queuedMessageId: null });
+            .mockResolvedValueOnce({ snapshot, runId: 'run-1', queuedMessageId: null })
+            .mockResolvedValueOnce({ snapshot, runId: 'run-2', queuedMessageId: null });
         Object.assign(client as object, { ensurePermission, requestWithSession });
 
         const request = { message: '修复插件', workspaceId: 'workspace-a', mode: 'ask' as const };
         await client.agent.sessions.create(request);
         await client.agent.sessions.send('session-1', { content: '继续检查' });
+        await client.agent.sessions.continueFailedRun('session-1', 'failed-run-1');
 
         expect(ensurePermission).toHaveBeenNthCalledWith(1, {
             resource: 'agent.run',
@@ -1885,6 +1887,11 @@ describe('AuthorityClient', () => {
             target: 'workspace-a',
             reason: '继续 Agent 会话（workspace-a）',
         });
+        expect(ensurePermission).toHaveBeenNthCalledWith(3, {
+            resource: 'agent.run',
+            target: 'workspace-a',
+            reason: '继续失败的 Agent 运行（workspace-a）',
+        });
         expect(requestWithSession).toHaveBeenNthCalledWith(1, '/agent/sessions', {
             method: 'POST',
             body: request,
@@ -1893,6 +1900,11 @@ describe('AuthorityClient', () => {
             method: 'POST',
             body: { content: '继续检查' },
         });
+        expect(requestWithSession).toHaveBeenNthCalledWith(
+            3,
+            '/agent/sessions/session-1/runs/failed-run-1/continue',
+            { method: 'POST' },
+        );
     });
 
     it('uses cursor pages for owner and admin Agent session history', async () => {
@@ -2311,6 +2323,35 @@ describe('AuthorityClient', () => {
         }
     });
 
+    it('routes Agent model connection tests without rewriting the unsaved profile', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const requestWithSession = vi.fn(async () => ({ ok: true, latencyMs: 18 }));
+        Object.assign(client as object, { requestWithSession });
+        const request = {
+            profile: {
+                displayName: 'Unsaved',
+                provider: 'openai-compatible' as const,
+                baseUrl: 'https://api.example.test/v1',
+                model: 'model-a',
+                apiKey: 'connection-secret',
+            },
+        };
+
+        await client.agent.admin.profiles.test(request);
+
+        expect(requestWithSession).toHaveBeenCalledWith('/admin/agent/profiles/test', {
+            method: 'POST',
+            body: request,
+        });
+    });
+
     it('routes Agent admin workspace history endpoints', async () => {
         const { AuthorityClient } = await import('./client.js');
         const client = new AuthorityClient({
@@ -2328,6 +2369,11 @@ describe('AuthorityClient', () => {
         await client.agent.admin.workspaces.default();
         await client.agent.admin.workspaces.commits('workspace a', 25);
         await client.agent.admin.workspaces.diff('workspace a', { from: null, to: 'head-1' });
+        await client.agent.admin.workspaces.fileDiff('workspace a', {
+            path: ' src/file name.ts ',
+            from: null,
+            to: 'working',
+        });
 
         expect(requestWithSession).toHaveBeenNthCalledWith(
             1,
@@ -2340,6 +2386,10 @@ describe('AuthorityClient', () => {
         expect(requestWithSession).toHaveBeenNthCalledWith(
             3,
             '/admin/agent/workspaces/workspace%20a/diff?from=empty&to=head-1',
+        );
+        expect(requestWithSession).toHaveBeenNthCalledWith(
+            4,
+            '/admin/agent/workspaces/workspace%20a/diff/file?path=+src%2Ffile+name.ts+&from=empty&to=working',
         );
     });
 });

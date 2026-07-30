@@ -277,6 +277,18 @@ describe('Security Center tab interaction', () => {
         expect(source).toContain('agent.sessions.subscribe(sessionId');
     });
 
+    it('connects model testing, failed-run continuation, and lazy file diffs to real Agent APIs', () => {
+        expect(source).toContain("case 'agent-test-profile':");
+        expect(source).toContain('.agent.admin.profiles.test({ profile: input })');
+        expect(source).toContain("case 'agent-continue-failed-run':");
+        expect(source).toContain("run?.status !== 'failed'");
+        expect(source).toContain('client.agent.sessions.continueFailedRun(sessionId, runId)');
+        expect(source).toContain("case 'agent-file-diff':");
+        expect(source).toContain("'[data-action=\"system-file-diff\"]'");
+        expect(source).toContain('.agent.admin.workspaces.fileDiff(workspaceId');
+        expect(source).toContain('workspaceFileDiffKey(workspaceId, from, to, path)');
+    });
+
     it('static CSS disables pointer-events on tab icon descendants', () => {
         expect(css).toContain('.authority-tab__icon,');
         expect(css).toContain('.authority-tab__icon * {');

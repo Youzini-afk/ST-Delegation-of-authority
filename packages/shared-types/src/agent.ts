@@ -53,6 +53,24 @@ export interface AgentLlmProfile {
     updatedAt: string;
 }
 
+export interface AgentLlmProfileTestRequest {
+    profile: AgentLlmProfileInput;
+}
+
+export type AgentLlmProfileTestFailure = 'timeout' | 'unreachable' | 'rejected' | 'invalid_response';
+
+export type AgentLlmProfileTestResponse =
+    | {
+        ok: true;
+        latencyMs: number;
+    }
+    | {
+        ok: false;
+        latencyMs: number;
+        failure: AgentLlmProfileTestFailure;
+        statusCode?: number;
+    };
+
 /**
  * Durable Agent v2 transport model. A Session is the long-lived product
  * object; Runs and their lower-level records remain execution diagnostics.
@@ -190,6 +208,7 @@ export interface AgentSessionRun {
     id: string;
     ref: string;
     triggerMessageId: string;
+    continuedFromRunId?: string;
     status: AgentSessionRunStatus;
     profileId: string;
     mode: AgentExecutionMode;

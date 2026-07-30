@@ -102,6 +102,53 @@ export interface WorkspaceDiffResponse {
     entries: WorkspaceDiffEntry[];
 }
 
+export type WorkspaceFileDiffLineKind = 'context' | 'added' | 'deleted';
+
+export interface WorkspaceFileDiffLine {
+    kind: WorkspaceFileDiffLineKind;
+    beforeLine: number | null;
+    afterLine: number | null;
+    text: string;
+}
+
+export interface WorkspaceFileDiffHunk {
+    lines: WorkspaceFileDiffLine[];
+}
+
+export type WorkspaceTextLineEnding = 'none' | 'lf' | 'crlf' | 'cr' | 'mixed';
+
+export interface WorkspaceTextMetadata {
+    lineEnding: WorkspaceTextLineEnding;
+    endsWithNewline: boolean;
+}
+
+export interface WorkspaceFileDiffTextMetadata {
+    before: WorkspaceTextMetadata;
+    after: WorkspaceTextMetadata;
+}
+
+export type WorkspaceFileDiffKind = 'text' | 'binary' | 'unavailable';
+export type WorkspaceFileDiffUnavailableReason = 'file_too_large' | 'unsupported_kind' | 'diff_too_complex';
+export type WorkspaceFileDiffStatus = WorkspaceDiffStatus | 'unknown';
+
+export interface WorkspaceFileDiffResponse {
+    workspaceId: string;
+    path: string;
+    status: WorkspaceFileDiffStatus;
+    fromCommitId: WorkspaceObjectId | null;
+    toCommitId: WorkspaceObjectId | null;
+    toWorkingTree: boolean;
+    beforeKind?: WorkspaceTreeEntryKind;
+    afterKind?: WorkspaceTreeEntryKind;
+    beforeSizeBytes?: number;
+    afterSizeBytes?: number;
+    kind: WorkspaceFileDiffKind;
+    reason?: WorkspaceFileDiffUnavailableReason;
+    textMetadata?: WorkspaceFileDiffTextMetadata;
+    hunks: WorkspaceFileDiffHunk[];
+    truncated: boolean;
+}
+
 export interface WorkspaceRollbackRequest {
     targetCommitId: WorkspaceObjectId;
     operationId?: string;

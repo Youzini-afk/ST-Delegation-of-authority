@@ -146,6 +146,103 @@ describe('WorkspaceHistoryService', () => {
         ]);
     });
 
+    it('returns bounded, line-numbered content for commit and working-tree file diffs', async () => {
+        const fixture = await createFixture();
+        write(fixture.root, 'src/demo.ts', 'const one = 1;\nconst two = 2;\n');
+        const first = await fixture.service.checkpoint('test', {
+            message: 'first source',
+            paths: ['src/demo.ts'],
+        }, { kind: 'user' });
+        write(fixture.root, 'src/demo.ts', 'const one = 1;\nconst two = 22;\nconst three = 3;\n');
+        const second = await fixture.service.checkpoint('test', {
+            message: 'second source',
+            paths: ['src/demo.ts'],
+        }, { kind: 'agent' });
+
+        const committed = await fixture.service.diffFile('test', first.commit.id, second.commit.id, 'src/demo.ts');
+        expect(committed).toMatchObject({
+            workspaceId: 'test',
+            path: 'src/demo.ts',
+            status: 'modified',
+            fromCommitId: first.commit.id,
+            toCommitId: second.commit.id,
+            toWorkingTree: false,
+            kind: 'text',
+            truncated: false,
+        });
+        expect(committed.hunks.flatMap(hunk => hunk.lines).filter(line => line.kind !== 'context'))
+            .toEqual([
+                { kind: 'deleted', beforeLine: 2, afterLine: null, text: 'const two = 2;' },
+                { kind: 'added', beforeLine: null, afterLine: 2, text: 'const two = 22;' },
+                { kind: 'added', beforeLine: null, afterLine: 3, text: 'const three = 3;' },
+            ]);
+
+        write(fixture.root, 'src/demo.ts', 'const one = 10;\nconst two = 22;\nconst three = 3;\n');
+        const objectCountBeforeWorkingDiff = fs.readdirSync(path.join(fixture.store, 'objects')).length;
+        const working = await fixture.service.diffFile('test', second.commit.id, 'working', 'src/demo.ts');
+        expect(working).toMatchObject({
+            status: 'modified',
+            fromCommitId: second.commit.id,
+            toCommitId: null,
+            toWorkingTree: true,
+            kind: 'text',
+        });
+        expect(working.hunks.flatMap(hunk => hunk.lines).filter(line => line.kind !== 'context'))
+            .toEqual([
+                { kind: 'deleted', beforeLine: 1, afterLine: null, text: 'const one = 1;' },
+                { kind: 'added', beforeLine: null, afterLine: 1, text: 'const one = 10;' },
+            ]);
+        expect(fs.readdirSync(path.join(fixture.store, 'objects'))).toHaveLength(objectCountBeforeWorkingDiff);
+        await expect(fixture.service.diffFile('test', second.commit.id, second.commit.id, '../outside.txt'))
+            .rejects.toThrow(/escapes workspace/);
+    });
+
+    it('does not load binary or oversized file contents into a text diff', async () => {
+        const fixture = await createFixture();
+        fs.writeFileSync(path.join(fixture.root, 'binary.bin'), Buffer.from([0, 1, 2]));
+        const binaryBefore = await fixture.service.checkpoint('test', {
+            message: 'binary before',
+            paths: ['binary.bin'],
+        }, { kind: 'user' });
+        fs.writeFileSync(path.join(fixture.root, 'binary.bin'), Buffer.from([0, 1, 3]));
+        const binaryAfter = await fixture.service.checkpoint('test', {
+            message: 'binary after',
+            paths: ['binary.bin'],
+        }, { kind: 'agent' });
+        expect(await fixture.service.diffFile('test', binaryBefore.commit.id, binaryAfter.commit.id, 'binary.bin'))
+            .toMatchObject({ kind: 'binary', hunks: [], truncated: false });
+
+        fs.writeFileSync(path.join(fixture.root, 'large.txt'), Buffer.alloc(512 * 1024 + 1, 97));
+        const large = await fixture.service.checkpoint('test', {
+            message: 'large file',
+            paths: ['large.txt'],
+        }, { kind: 'user' });
+        expect(await fixture.service.diffFile('test', null, large.commit.id, 'large.txt')).toMatchObject({
+            kind: 'unavailable',
+            reason: 'file_too_large',
+            hunks: [],
+            truncated: false,
+        });
+        const objectCount = fs.readdirSync(path.join(fixture.store, 'objects')).length;
+        const largePath = path.join(fixture.root, 'large.txt');
+        const openSync = vi.spyOn(fs, 'openSync');
+        expect(await fixture.service.diffFile('test', large.commit.id, 'working', 'large.txt')).toMatchObject({
+            status: 'unknown',
+            kind: 'unavailable',
+            reason: 'file_too_large',
+        });
+        expect(openSync.mock.calls.some(([openedPath]) => path.resolve(String(openedPath)) === path.resolve(largePath))).toBe(false);
+        fs.writeFileSync(largePath, Buffer.alloc(512 * 1024 + 2, 98));
+        openSync.mockClear();
+        expect(await fixture.service.diffFile('test', large.commit.id, 'working', 'large.txt')).toMatchObject({
+            status: 'modified',
+            kind: 'unavailable',
+            reason: 'file_too_large',
+        });
+        expect(openSync.mock.calls.some(([openedPath]) => path.resolve(String(openedPath)) === path.resolve(largePath))).toBe(false);
+        expect(fs.readdirSync(path.join(fixture.store, 'objects'))).toHaveLength(objectCount);
+    });
+
     it('refuses dirty rollback unless forced and preserves the displaced state', async () => {
         const fixture = await createFixture();
         write(fixture.root, 'config/settings.json', '{"version":1}');

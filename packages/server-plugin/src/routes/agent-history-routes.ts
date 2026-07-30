@@ -77,6 +77,21 @@ export function registerAgentHistoryRoutes(
         ));
     }));
 
+    router.get('/admin/agent/workspaces/:workspaceId/diff/file', withAuthorityAdmin(runtime, fail, async (req, res) => {
+        const id = workspaceId(req);
+        const workspace = runtime.workspaceHistory.getWorkspace(id);
+        const requestedPath = req.query?.path;
+        if (typeof requestedPath !== 'string' || requestedPath.length === 0) {
+            throw new Error('Workspace file diff path is required');
+        }
+        res.json(await runtime.workspaceHistory.diffFile(
+            id,
+            resolveCommit(req.query?.from, workspace.headCommitId),
+            resolveFileDiffTarget(req.query?.to, workspace.headCommitId),
+            requestedPath,
+        ));
+    }));
+
     router.post('/admin/agent/workspaces/:workspaceId/checkpoints', withAuthorityAdmin(runtime, fail, async (req, res, context) => {
         const response = await runtime.workspaceHistory.checkpoint(
             workspaceId(req),
@@ -132,4 +147,8 @@ function resolveCommit(value: string | undefined, head: string | null): string |
         return head;
     }
     return normalized === 'empty' ? null : normalized;
+}
+
+function resolveFileDiffTarget(value: string | undefined, head: string | null): string | null | 'working' {
+    return value?.trim() === 'working' ? 'working' : resolveCommit(value, head);
 }

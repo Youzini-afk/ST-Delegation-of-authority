@@ -3,6 +3,7 @@ import type {
     AgentBrowserToolClaimRequest,
     AgentBrowserToolRegistrationRequest,
     AgentLlmProfileInput,
+    AgentLlmProfileTestRequest,
     AgentSessionCreateRequest,
     AgentSessionListRequest,
     AgentSessionSendRequest,
@@ -207,6 +208,32 @@ export function registerAgentRoutes(router: RouterLike, runtime: AuthorityRuntim
         }
     });
 
+    router.post('/agent/sessions/:sessionId/runs/:runId/continue', async (req, res) => {
+        let extensionId = AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            await runtime.agentSessions.start();
+            const id = sessionId(req);
+            const failedRunId = runId(req);
+            const context = await caller(runtime, req);
+            extensionId = context.session.extension.id;
+            const existing = await ownedSession(runtime, id, context, false);
+            await authorizeWorkspace(runtime, context, existing.session.workspaceId);
+            const result = await runtime.agentSessions.continueFailedRun(id, failedRunId, extensionId, context);
+            void runtime.audit.logUsage(context.user, extensionId, 'Agent failed run continued', {
+                sessionId: id,
+                failedRunId,
+                continuationRunId: result.runId,
+            }).catch(() => undefined);
+            res.json({
+                snapshot: presentAgentSession(result.snapshot),
+                runId: result.runId,
+                queuedMessageId: result.queuedMessageId,
+            });
+        } catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+
     router.post('/agent/sessions/:sessionId/events-ticket', async (req, res) => {
         let extensionId = AUTHORITY_SDK_EXTENSION_ID;
         try {
@@ -371,6 +398,17 @@ function registerAgentAdminRoutes(
                 model: profile.model,
             }).catch(() => undefined);
             res.json(profile);
+    }));
+
+    router.post('/admin/agent/profiles/test', withAuthorityAdmin(runtime, fail, async (req, res, context) => {
+        const request = (req.body ?? {}) as AgentLlmProfileTestRequest;
+        const result = await runtime.agentSessions.testLlmProfile(request);
+        void runtime.audit.logUsage(context.user, context.session.extension.id, 'Agent LLM profile connection tested', {
+            model: request.profile?.model,
+            ok: result.ok,
+            ...(!result.ok ? { failure: result.failure, statusCode: result.statusCode } : {}),
+        }).catch(() => undefined);
+        res.json(result);
     }));
 
     router.get('/admin/agent/profiles/:profileId', withAuthorityAdmin(runtime, fail, async (req, res) => {

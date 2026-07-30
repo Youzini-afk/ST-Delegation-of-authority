@@ -4,6 +4,8 @@ import type {
     AgentBrowserToolClaimRequest,
     AgentBrowserToolRegistrationRequest,
     AgentBrowserToolRegistrationResponse,
+    AgentLlmProfileTestRequest,
+    AgentLlmProfileTestResponse,
     AgentSessionCreateRequest,
     AgentSessionSendRequest,
     AgentSessionUpdateRequest,
@@ -54,6 +56,7 @@ const HARD_MAX_STEPS = 64;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 2 * 60_000;
 const MAX_CONCURRENT_RUNS = 16;
+const FAILED_RUN_CONTINUATION_MESSAGE = '继续完成上一轮未完成的任务。先检查当前工作区和已经完成的操作，再从安全边界继续，不要重复已有副作用。';
 
 export interface AgentSessionCallerContext {
     user: UserContext;
@@ -123,6 +126,7 @@ export class AgentSessionRuntimeService {
     private readonly approvalTimeoutMs: number;
     private readonly browserToolTimeoutMs: number;
     private readonly shutdownTimeoutMs: number;
+    private readonly requestCompletion: AgentCompletionRequester;
     private readonly now: () => string;
     private readonly actors = new Map<string, SessionActor>();
     private readonly contexts = new Map<string, AgentSessionCallerContext>();
@@ -148,7 +152,7 @@ export class AgentSessionRuntimeService {
         options: AgentSessionRuntimeOptions = {},
     ) {
         const client = new AgentLlmClient();
-        const requestCompletion = options.requestCompletion ?? client.complete.bind(client);
+        this.requestCompletion = options.requestCompletion ?? client.complete.bind(client);
         this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
         this.approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
         this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? DEFAULT_BROWSER_TOOL_TIMEOUT_MS;
@@ -228,10 +232,39 @@ export class AgentSessionRuntimeService {
                 ),
             },
             {
-                requestCompletion,
+                requestCompletion: this.requestCompletion,
                 approvalTimeoutMs: this.approvalTimeoutMs,
             },
         );
+    }
+
+    async testLlmProfile(request: AgentLlmProfileTestRequest): Promise<AgentLlmProfileTestResponse> {
+        if (!request || typeof request !== 'object' || !request.profile || typeof request.profile !== 'object') {
+            throw new Error('Agent LLM profile test profile is required');
+        }
+        const profile = this.profileStore.prepareProfileForTest(request.profile);
+        const startedAt = Date.now();
+        try {
+            await this.requestCompletion({
+                ...profile,
+                maxOutputTokens: Math.min(profile.maxOutputTokens ?? 32, 32),
+                timeoutMs: Math.min(profile.timeoutMs, 30_000),
+            }, {
+                messages: [{ role: 'user', content: 'Reply with OK to confirm this connection.' }],
+                tools: [],
+                signal: new AbortController().signal,
+            });
+            return {
+                ok: true,
+                latencyMs: Math.max(0, Date.now() - startedAt),
+            };
+        } catch (error) {
+            return {
+                ok: false,
+                latencyMs: Math.max(0, Date.now() - startedAt),
+                ...classifyLlmConnectionFailure(error),
+            };
+        }
     }
 
     start(): Promise<AgentSessionStartResult> {
@@ -461,6 +494,51 @@ export class AgentSessionRuntimeService {
                 return { snapshot: writer.snapshot(), runId: run.id, queuedMessageId: queueId, acceptedRunId: null };
             }
             const acceptedRunId = this.appendUserAndAcceptRun(writer, refName, content);
+            return {
+                snapshot: writer.snapshot(),
+                runId: acceptedRunId,
+                queuedMessageId: null,
+                acceptedRunId,
+            };
+        });
+        if (callerContext) this.contexts.set(sessionId, callerContext);
+        if (result.acceptedRunId) this.enqueue(sessionId, result.acceptedRunId);
+        return { snapshot: result.snapshot, runId: result.runId, queuedMessageId: result.queuedMessageId };
+    }
+
+    async continueFailedRun(
+        sessionId: string,
+        failedRunId: string,
+        callerExtensionId?: string,
+        callerContext?: AgentSessionCallerContext,
+    ): Promise<AgentSessionSendResult> {
+        this.assertRunning();
+        const actor = this.actor(sessionId);
+        const result = await actor.perform(writer => {
+            const before = writer.snapshot();
+            this.assertOwner(before, callerExtensionId, callerContext?.user.handle);
+            const existing = before.runs.find(run => run.continuedFromRunId === failedRunId);
+            if (existing) {
+                return { snapshot: before, runId: existing.id, queuedMessageId: null, acceptedRunId: null };
+            }
+            const failed = requireRun(before, failedRunId);
+            if (failed.status !== 'failed') {
+                throw new Error(`Agent run is not failed: ${failed.status}`);
+            }
+            const latest = before.runs.filter(run => run.ref === failed.ref).at(-1);
+            if (latest?.id !== failed.id) {
+                throw new Error('Agent failed run is no longer the latest run on its ref');
+            }
+            const ref = requireRef(before, failed.ref);
+            if (ref.activeRunId) {
+                throw new Error(`Agent session ref already has an active run: ${failed.ref}`);
+            }
+            const acceptedRunId = this.appendUserAndAcceptRun(
+                writer,
+                failed.ref,
+                FAILED_RUN_CONTINUATION_MESSAGE,
+                failed.id,
+            );
             return {
                 snapshot: writer.snapshot(),
                 runId: acceptedRunId,
@@ -912,7 +990,12 @@ export class AgentSessionRuntimeService {
         return nextRunId;
     }
 
-    private appendUserAndAcceptRun(writer: AgentSessionWriter, refName: string, content: string): string {
+    private appendUserAndAcceptRun(
+        writer: AgentSessionWriter,
+        refName: string,
+        content: string,
+        continuedFromRunId?: string,
+    ): string {
         const ref = requireRef(writer.snapshot(), refName);
         const messageId = crypto.randomUUID();
         this.append(writer, {
@@ -924,12 +1007,17 @@ export class AgentSessionRuntimeService {
             role: 'user',
             content,
         });
-        const runId = this.acceptRun(writer, refName, messageId);
+        const runId = this.acceptRun(writer, refName, messageId, continuedFromRunId);
         this.runLocations.set(runId, writer.snapshot().session.id);
         return runId;
     }
 
-    private acceptRun(writer: AgentSessionWriter, refName: string, triggerMessageId: string): string {
+    private acceptRun(
+        writer: AgentSessionWriter,
+        refName: string,
+        triggerMessageId: string,
+        continuedFromRunId?: string,
+    ): string {
         const snapshot = writer.snapshot();
         assertRunCapacity(snapshot, this.listSessions());
         const runId = crypto.randomUUID();
@@ -940,6 +1028,7 @@ export class AgentSessionRuntimeService {
             runId,
             ref: refName,
             triggerMessageId,
+            ...(continuedFromRunId === undefined ? {} : { continuedFromRunId }),
             profileId: snapshot.session.profileId,
             mode: snapshot.session.mode,
             allowedTools: snapshot.session.allowedTools,
@@ -1007,4 +1096,21 @@ export class AgentSessionRuntimeService {
     private assertRunning(): void {
         if (!this.started || this.stopping) throw new Error('Agent session runtime is not running');
     }
+}
+
+function classifyLlmConnectionFailure(
+    error: unknown,
+): Omit<Extract<AgentLlmProfileTestResponse, { ok: false }>, 'ok' | 'latencyMs'> {
+    const message = errorMessage(error);
+    if (/timed out|timeout/i.test(message)) {
+        return { failure: 'timeout' };
+    }
+    const upstreamStatus = /^LLM request failed \((\d{3})\):/.exec(message);
+    if (upstreamStatus) {
+        return { failure: 'rejected', statusCode: Number(upstreamStatus[1]) };
+    }
+    if (/invalid JSON|did not include an assistant message|assistant message was empty|response exceeded|assistant content exceeded|invalid tool call/i.test(message)) {
+        return { failure: 'invalid_response' };
+    }
+    return { failure: 'unreachable' };
 }

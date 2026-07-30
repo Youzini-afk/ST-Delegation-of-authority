@@ -12,10 +12,11 @@ import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, ST_MANAGER
 import { buildStManagerControlPayload, normalizeStManagerControlConfig, } from './security-center/st-manager-control.js';
 import { bootstrapSecurityCenter as bootstrapSecurityCenterHost, openSecurityCenter as openSecurityCenterHost, } from './security-center/host.js';
 import { renderSystemWorkbench } from './security-center/system-workbench.js';
+import { workspaceFileDiffKey, } from './security-center/workspace-diff-view.js';
 const TOAST_TITLE = '权限中心';
 const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings'];
 const SYSTEM_VIEW_NAMES = ['runtime', 'recovery', 'migration', 'diagnostics', 'backup'];
-const AGENT_FOCUS_DATA_KEYS = ['inspectorTab', 'sessionId', 'runId', 'approvalId', 'decision', 'commitId', 'profileId'];
+const AGENT_FOCUS_DATA_KEYS = ['inspectorTab', 'sessionId', 'runId', 'approvalId', 'decision', 'commitId', 'profileId', 'diffScope', 'path'];
 const MOBILE_FOCUS_DATA_KEYS = ['mobileSurface', 'extensionId', 'sessionId', 'profileId', 'commitId', 'tab', 'area'];
 const MOBILE_BREAKPOINT_QUERY = '(max-width: 700px)';
 function isValidCenterTab(value) {
@@ -32,6 +33,18 @@ function getCenterArea(tab) {
 }
 function isSystemView(value) {
     return typeof value === 'string' && SYSTEM_VIEW_NAMES.includes(value);
+}
+function isWorkspaceDiffScope(value) {
+    return value === 'working' || value === 'history';
+}
+function agentProfileTestFailureLabel(failure, statusCode) {
+    if (failure === 'timeout')
+        return '连接超时，请检查地址、网络或超时设置。';
+    if (failure === 'rejected')
+        return `服务端拒绝了测试请求${statusCode ? `（HTTP ${statusCode}）` : ''}。`;
+    if (failure === 'invalid_response')
+        return '服务端已响应，但返回内容不符合 OpenAI-compatible 格式。';
+    return '无法连接到模型服务，请检查地址和网络。';
 }
 export function bootstrapSecurityCenter() {
     return bootstrapSecurityCenterHost(createSecurityCenterView);
@@ -79,6 +92,7 @@ class SecurityCenterView {
                 loading: false,
                 busy: false,
                 error: null,
+                profileTest: null,
                 profiles: [],
                 workspaces: [],
                 sessions: {
@@ -94,6 +108,7 @@ class SecurityCenterView {
                 workspaceStatus: null,
                 workspaceCommits: [],
                 workspaceDiff: null,
+                fileDiffs: new Map(),
             },
             system: {
                 selectedView: 'runtime',
@@ -106,6 +121,7 @@ class SecurityCenterView {
                 workspaceCommits: [],
                 selectedCommitId: null,
                 workspaceDiff: null,
+                fileDiffs: new Map(),
             },
             mobile: {
                 surface: 'none',
@@ -192,6 +208,11 @@ class SecurityCenterView {
             const systemRecoveryResume = target.closest('[data-action="system-recovery-resume"]');
             if (systemRecoveryResume) {
                 void this.resumeSystemWorkspaceRollback();
+                return;
+            }
+            const systemFileDiff = target.closest('[data-action="system-file-diff"]');
+            if (systemFileDiff?.dataset.path && isWorkspaceDiffScope(systemFileDiff.dataset.diffScope)) {
+                void this.toggleSystemFileDiff(systemFileDiff.dataset.path, systemFileDiff.dataset.diffScope);
                 return;
             }
             const agentAction = target.closest('[data-action^="agent-"]');
@@ -433,6 +454,18 @@ class SecurityCenterView {
                 return;
             }
         });
+        this.root.addEventListener('input', event => {
+            const target = event.target;
+            if (!(target instanceof HTMLInputElement)
+                || !target.dataset.role?.startsWith('agent-profile-')
+                || target.type === 'hidden') {
+                return;
+            }
+            if (this.state.agent.profileTest) {
+                this.state.agent.profileTest = null;
+                this.root.querySelector('[data-role="agent-profile-test-result"]')?.remove();
+            }
+        });
     }
     async refresh() {
         this.state.loading = true;
@@ -540,6 +573,11 @@ class SecurityCenterView {
                     void this.resumeAgentRun(element.dataset.sessionId, element.dataset.runId);
                 }
                 return;
+            case 'agent-continue-failed-run':
+                if (element.dataset.sessionId && element.dataset.runId) {
+                    void this.continueFailedAgentRun(element.dataset.sessionId, element.dataset.runId);
+                }
+                return;
             case 'agent-resolve-approval':
                 if (element.dataset.sessionId && element.dataset.approvalId) {
                     void this.resolveAgentApproval(element.dataset.sessionId, element.dataset.approvalId, element.dataset.decision === 'approve' ? 'approve' : 'deny');
@@ -557,6 +595,7 @@ class SecurityCenterView {
             case 'agent-edit-profile': {
                 const mobileFocusOrigin = this.mobileMediaQuery.matches ? this.captureMobileFocus(element) : undefined;
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
+                this.state.agent.profileTest = null;
                 this.renderSettingsSection();
                 if (!this.mobileMediaQuery.matches)
                     this.playSurfaceEntrance('.authority-model-editor');
@@ -566,6 +605,7 @@ class SecurityCenterView {
             case 'agent-new-profile': {
                 const mobileFocusOrigin = this.mobileMediaQuery.matches ? this.captureMobileFocus(element) : undefined;
                 this.state.agent.selectedProfileId = null;
+                this.state.agent.profileTest = null;
                 this.renderSettingsSection();
                 if (!this.mobileMediaQuery.matches)
                     this.playSurfaceEntrance('.authority-model-editor');
@@ -574,6 +614,9 @@ class SecurityCenterView {
             }
             case 'agent-save-profile':
                 void this.saveAgentProfile();
+                return;
+            case 'agent-test-profile':
+                void this.testAgentProfile();
                 return;
             case 'agent-delete-profile':
                 if (element.dataset.profileId)
@@ -591,6 +634,12 @@ class SecurityCenterView {
                 return;
             case 'agent-workspace-resume':
                 void this.resumeAgentWorkspaceRollback();
+                return;
+            case 'agent-file-diff':
+                if (element.dataset.path && isWorkspaceDiffScope(element.dataset.diffScope)) {
+                    void this.toggleAgentFileDiff(element.dataset.path, element.dataset.diffScope);
+                }
+                return;
         }
     }
     selectAgentInspectorTab(tab) {
@@ -614,6 +663,9 @@ class SecurityCenterView {
             return;
         }
         const generation = ++this.agentRefreshGeneration;
+        const profileIdBeforeRefresh = this.state.agent.selectedProfileId;
+        if (!options.append)
+            this.state.agent.fileDiffs.clear();
         this.state.agent.loading = true;
         this.state.agent.error = null;
         this.renderAgentSurfaces();
@@ -656,6 +708,8 @@ class SecurityCenterView {
                 ? { sessions: mergeAgentSessions(this.state.agent.sessions.sessions, sessions.sessions), page: sessions.page }
                 : sessions;
             this.state.agent.selectedProfileId = selectedProfileId;
+            if (selectedProfileId !== profileIdBeforeRefresh)
+                this.state.agent.profileTest = null;
             this.state.agent.defaultWorkspaceId = defaultWorkspace.id;
             this.state.agent.selectedWorkspaceId = selectedWorkspaceId;
             this.state.agent.workspaceStatus = workspaceResult.value?.status ?? null;
@@ -711,6 +765,7 @@ class SecurityCenterView {
     async refreshSystemRecovery() {
         if (!this.state.isAdmin || this.state.system.recoveryLoading || this.state.system.recoveryBusy)
             return;
+        this.state.system.fileDiffs.clear();
         this.state.system.recoveryLoading = true;
         this.state.system.recoveryError = null;
         void this.renderUpdatesSection();
@@ -754,6 +809,7 @@ class SecurityCenterView {
         const mobileFocusOrigin = this.mobileMediaQuery.matches ? this.captureMobileFocus() : undefined;
         this.state.system.selectedCommitId = commitId;
         this.state.system.workspaceDiff = null;
+        this.state.system.fileDiffs.clear();
         this.state.system.recoveryLoading = true;
         void this.renderUpdatesSection();
         this.setMobileSurface('system-detail', true, undefined, mobileFocusOrigin);
@@ -874,6 +930,7 @@ class SecurityCenterView {
             return;
         }
         this.state.agent.busy = true;
+        this.state.agent.fileDiffs.clear();
         this.renderAgentSurfaces();
         try {
             const workspaceId = this.state.agent.selectedWorkspaceId;
@@ -892,6 +949,70 @@ class SecurityCenterView {
             this.state.agent.busy = false;
             this.renderAgentSurfaces();
         }
+    }
+    async toggleAgentFileDiff(path, scope) {
+        const workspaceId = this.state.agent.selectedWorkspaceId;
+        const status = this.state.agent.workspaceStatus;
+        const history = this.state.agent.workspaceDiff;
+        if (!workspaceId)
+            return;
+        const from = scope === 'working' ? status?.workspace.headCommitId : history?.fromCommitId;
+        const to = scope === 'working' ? 'working' : history?.toCommitId;
+        if (from === undefined || to === undefined)
+            return;
+        await this.toggleWorkspaceFileDiff(this.state.agent.fileDiffs, workspaceId, from, to, path, () => this.renderAgentSurfaces());
+    }
+    async toggleSystemFileDiff(path, scope) {
+        const workspaceId = this.state.system.workspace?.id;
+        const status = this.state.system.workspaceStatus;
+        const history = this.state.system.workspaceDiff;
+        if (!workspaceId)
+            return;
+        const from = scope === 'working' ? status?.workspace.headCommitId : history?.fromCommitId;
+        const to = scope === 'working' ? 'working' : history?.toCommitId;
+        if (from === undefined || to === undefined)
+            return;
+        await this.toggleWorkspaceFileDiff(this.state.system.fileDiffs, workspaceId, from, to, path, () => this.renderUpdatesSection());
+    }
+    async toggleWorkspaceFileDiff(states, workspaceId, from, to, path, render) {
+        const key = workspaceFileDiffKey(workspaceId, from, to, path);
+        const current = states.get(key);
+        if (current?.loading)
+            return;
+        if (current?.response) {
+            states.set(key, { ...current, expanded: !current.expanded });
+            render();
+            return;
+        }
+        const pending = {
+            loading: true,
+            expanded: true,
+            error: null,
+            response: null,
+        };
+        states.set(key, pending);
+        render();
+        try {
+            const response = await (await this.getAgentClient()).agent.admin.workspaces.fileDiff(workspaceId, {
+                path,
+                from,
+                to,
+            });
+            if (states.get(key) !== pending)
+                return;
+            states.set(key, { loading: false, expanded: true, error: null, response });
+        }
+        catch (error) {
+            if (states.get(key) !== pending)
+                return;
+            states.set(key, {
+                loading: false,
+                expanded: true,
+                error: getSystemMessageLabel(error instanceof Error ? error.message : String(error)),
+                response: null,
+            });
+        }
+        render();
     }
     scheduleAgentPoll() {
         if (this.agentPollTimer !== null) {
@@ -1087,6 +1208,7 @@ class SecurityCenterView {
             return;
         this.closeAgentSessionSubscription();
         this.setMobileSurface('none');
+        this.state.agent.fileDiffs.clear();
         this.state.agent.busy = true;
         this.renderAgentSurfaces();
         try {
@@ -1156,6 +1278,22 @@ class SecurityCenterView {
             return 'Agent 运行已恢复';
         }, false);
     }
+    async continueFailedAgentRun(sessionId, runId) {
+        const snapshot = this.state.agent.selectedSession;
+        const run = snapshot?.session.id === sessionId
+            ? snapshot.runs.find(item => item.id === runId)
+            : null;
+        if (run?.status !== 'failed') {
+            this.reportAgentError(new Error('这次运行已经不处于失败状态，请刷新后重试。'));
+            this.renderAgentSurfaces();
+            return;
+        }
+        await this.performAgentMutation(async (client) => {
+            const result = await client.agent.sessions.continueFailedRun(sessionId, runId);
+            this.applySelectedAgentSession(result.snapshot);
+            return '已安排从当前状态开始新的运行';
+        }, false);
+    }
     async resolveAgentApproval(sessionId, approvalId, decision) {
         await this.performAgentMutation(async (client) => {
             this.applySelectedAgentSession(await client.agent.admin.sessions.resolveApproval(sessionId, approvalId, { decision }));
@@ -1168,10 +1306,10 @@ class SecurityCenterView {
             return;
         await this.refreshAgentWorkbench({ cursor, append: true });
     }
-    async saveAgentProfile() {
+    buildAgentProfileInput() {
         const id = this.agentFieldValue('agent-profile-id');
         const apiKey = this.agentFieldValue('agent-profile-api-key');
-        const input = {
+        return {
             ...(id ? { id } : {}),
             displayName: this.agentFieldValue('agent-profile-name'),
             provider: 'openai-compatible',
@@ -1182,6 +1320,9 @@ class SecurityCenterView {
             maxOutputTokens: Number(this.agentFieldValue('agent-profile-max-tokens')),
             timeoutMs: Number(this.agentFieldValue('agent-profile-timeout')),
         };
+    }
+    async saveAgentProfile() {
+        const input = this.buildAgentProfileInput();
         await this.performAgentMutation(async (client) => {
             const profile = await client.agent.admin.profiles.upsert(input);
             this.state.agent.selectedProfileId = profile.id;
@@ -1203,6 +1344,7 @@ class SecurityCenterView {
         }
         await this.performAgentMutation(async (client) => {
             await client.agent.admin.profiles.delete(profileId);
+            this.state.agent.profileTest = null;
             if (this.state.agent.selectedProfileId === profileId) {
                 this.state.agent.selectedProfileId = null;
             }
@@ -2370,6 +2512,35 @@ class SecurityCenterView {
             };
             element.addEventListener('animationend', cleanup);
         });
+    }
+    async testAgentProfile() {
+        if (!this.state.isAdmin || this.state.agent.busy)
+            return;
+        this.state.agent.busy = true;
+        this.state.agent.profileTest = null;
+        this.renderAgentSurfaces();
+        try {
+            const input = this.buildAgentProfileInput();
+            const result = await (await this.getAgentClient()).agent.admin.profiles.test({ profile: input });
+            const message = result.ok
+                ? `连接成功 · ${result.latencyMs} ms`
+                : agentProfileTestFailureLabel(result.failure, result.statusCode);
+            this.state.agent.profileTest = { status: result.ok ? 'success' : 'error', message };
+            if (result.ok)
+                toastr.success(message, TOAST_TITLE);
+            else
+                toastr.error(message, TOAST_TITLE);
+        }
+        catch (error) {
+            const message = getSystemMessageLabel(error instanceof Error ? error.message : String(error));
+            this.state.agent.profileTest = { status: 'error', message };
+            toastr.error(message, TOAST_TITLE);
+        }
+        finally {
+            this.state.agent.busy = false;
+            this.renderAgentSurfaces();
+            this.scheduleAgentPoll();
+        }
     }
     renderMobilePresentation() {
         const activeArea = getCenterArea(this.state.selectedTab);

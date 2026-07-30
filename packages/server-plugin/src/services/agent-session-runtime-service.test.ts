@@ -20,6 +20,87 @@ afterEach(() => {
 });
 
 describe('AgentSessionRuntimeService', () => {
+    it('tests the current unsaved model profile without creating a session or persisting it', async () => {
+        const requester = vi.fn<AgentCompletionRequester>(async () => ({
+            message: { role: 'assistant', content: 'OK' },
+            finishReason: 'stop',
+            providerRequestId: 'provider-request-1',
+        }));
+        const fixture = await createFixture(requester);
+
+        const result = await fixture.runtime.testLlmProfile({
+            profile: {
+                displayName: 'Unsaved profile',
+                provider: 'openai-compatible',
+                baseUrl: 'http://localhost:4321/v1',
+                model: 'unsaved-model',
+                apiKey: 'connection-secret',
+                timeoutMs: 90_000,
+            },
+        });
+
+        expect(result).toMatchObject({ ok: true });
+        expect(result).not.toHaveProperty('providerRequestId');
+        expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+        expect(requester).toHaveBeenCalledWith(
+            expect.objectContaining({
+                baseUrl: 'http://localhost:4321/v1',
+                model: 'unsaved-model',
+                apiKey: 'connection-secret',
+                maxOutputTokens: 32,
+                timeoutMs: 30_000,
+            }),
+            expect.objectContaining({
+                messages: [{ role: 'user', content: 'Reply with OK to confirm this connection.' }],
+                tools: [],
+                signal: expect.any(AbortSignal),
+            }),
+        );
+        expect(fixture.profileStore.listProfiles()).toHaveLength(1);
+        expect(fixture.sessionStore.listSessions().sessions).toEqual([]);
+        await fixture.runtime.stop();
+    });
+
+    it('returns only a sanitized failure class when a provider rejects the connection', async () => {
+        const requester = vi.fn<AgentCompletionRequester>(async () => {
+            throw new Error('LLM request failed (401): provider detail contains connection-secret');
+        });
+        const fixture = await createFixture(requester);
+
+        const result = await fixture.runtime.testLlmProfile({
+            profile: {
+                displayName: 'Rejected profile',
+                provider: 'openai-compatible',
+                baseUrl: 'https://api.example.com/v1',
+                model: 'rejected-model',
+                apiKey: 'connection-secret',
+            },
+        });
+
+        expect(result).toMatchObject({ ok: false, failure: 'rejected', statusCode: 401 });
+        expect(JSON.stringify(result)).not.toContain('connection-secret');
+        expect(JSON.stringify(result)).not.toContain('provider detail');
+        await fixture.runtime.stop();
+    });
+
+    it('rejects a missing connection-test profile before invoking the provider', async () => {
+        const requester = vi.fn<AgentCompletionRequester>();
+        const fixture = await createFixture(requester);
+
+        await expect(fixture.runtime.testLlmProfile({} as never)).rejects.toThrow('profile is required');
+        await expect(fixture.runtime.testLlmProfile({
+            profile: {
+                displayName: 'Invalid key',
+                provider: 'openai-compatible',
+                baseUrl: 'http://localhost:4321/v1',
+                model: 'invalid-key-model',
+                apiKey: 42 as never,
+            },
+        })).rejects.toThrow('apiKey must be a string');
+        expect(requester).not.toHaveBeenCalled();
+        await fixture.runtime.stop();
+    });
+
     it('keeps follow-up work in one persistent session while giving each accepted input its own run', async () => {
         const fixture = await createFixture(sequenceRequester([
             finalMessage('First answer.'),
@@ -55,6 +136,48 @@ describe('AgentSessionRuntimeService', () => {
         expect(fixture.sessionStore.readSession(created.session.id).snapshot).toEqual(completed);
         await fixture.runtime.stop();
         expect(first.session.id).toBe(created.session.id);
+    });
+
+    it('atomically creates only one new run when the same failed run is continued twice', async () => {
+        const fixture = await createFixture(sequenceRequester([
+            toolCall('call-read', 'host_read_file', { path: 'state.txt' }),
+            finalMessage('Continued safely.'),
+        ]));
+        fs.writeFileSync(path.join(fixture.root, 'state.txt'), 'current state', 'utf8');
+        const created = await fixture.runtime.createSession({
+            workspaceId: 'workspace',
+            message: 'Inspect the state',
+            mode: 'auto',
+            allowedTools: ['host_read_file'],
+            maxSteps: 1,
+        });
+        const failedRunId = created.runs[0]!.id;
+        await waitFor(
+            () => fixture.runtime.getSession(created.session.id),
+            snapshot => snapshot.runs[0]?.status === 'failed',
+        );
+
+        const [first, repeated] = await Promise.all([
+            fixture.runtime.continueFailedRun(created.session.id, failedRunId),
+            fixture.runtime.continueFailedRun(created.session.id, failedRunId),
+        ]);
+
+        expect(first.runId).toBeTruthy();
+        expect(repeated.runId).toBe(first.runId);
+        const completed = await waitFor(
+            () => fixture.runtime.getSession(created.session.id),
+            snapshot => snapshot.runs.find(run => run.id === first.runId)?.status === 'completed',
+        );
+        expect(completed.runs).toHaveLength(2);
+        expect(completed.runs[0]).toMatchObject({ id: failedRunId, status: 'failed' });
+        expect(completed.runs[1]).toMatchObject({
+            id: first.runId,
+            continuedFromRunId: failedRunId,
+            status: 'completed',
+        });
+        expect(completed.conversation.filter(entry => entry.kind === 'message' && entry.role === 'user').at(-1))
+            .toMatchObject({ content: expect.stringContaining('不要重复已有副作用') });
+        await fixture.runtime.stop();
     });
 
     it('persists session settings as one journal transition and restores them after restart', async () => {

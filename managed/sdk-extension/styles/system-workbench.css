@@ -708,49 +708,6 @@
   grid-column: 2;
 }
 
-.authority-recovery-file-list {
-  display: grid;
-  overflow: hidden;
-  border: 1px solid var(--authority-border);
-  border-radius: 3px;
-}
-
-.authority-recovery-file-list > div {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  min-height: 31px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--authority-border);
-}
-
-.authority-recovery-file-list > div:last-child {
-  border-bottom: 0;
-}
-
-.authority-recovery-file-list code {
-  overflow: hidden;
-  font-size: .74em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.authority-recovery-file-status {
-  color: var(--authority-warning);
-  font-family: var(--monoFontFamily, ui-monospace, monospace);
-  font-size: .72em;
-  font-weight: 700;
-}
-
-.authority-recovery-file-status--added {
-  color: var(--authority-success);
-}
-
-.authority-recovery-file-status--deleted {
-  color: var(--authority-danger);
-}
-
 .authority-recovery-note {
   padding: 8px 13px;
   border-top: 1px solid var(--authority-border);
