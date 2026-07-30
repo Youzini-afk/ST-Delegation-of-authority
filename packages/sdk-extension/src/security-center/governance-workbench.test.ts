@@ -55,6 +55,8 @@ describe('Extension governance workbench rendering', () => {
         const html = renderExtensionDossier(state);
 
         expect(html).toContain('authority-extension-dossier');
+        expect(html).toContain('id="authority-extension-permission-inspector" role="tabpanel"');
+        expect(html).toContain('aria-labelledby="authority-mobile-governance-tab-permissions"');
         expect(html).toContain('storage.kv');
         expect(html).toContain('data-tab="databases"');
         expect(html).toContain('data-tab="policies"');

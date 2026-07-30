@@ -76,10 +76,10 @@
                     <span class="authority-mobile-stage-bar__spacer" aria-hidden="true"></span>
                   </header>
                   <nav class="authority-mobile-governance-tabs" data-role="mobile-governance-tabs" role="tablist" aria-label="扩展详情视图">
-                    <button type="button" data-tab="detail" role="tab">概览</button>
-                    <button type="button" data-action="mobile-open-surface" data-mobile-surface="governance-inspector" role="tab">权限</button>
-                    <button type="button" data-tab="databases" role="tab">数据</button>
-                    <button type="button" data-tab="activity" role="tab">活动</button>
+                    <button type="button" data-tab="detail" role="tab" id="authority-mobile-governance-tab-detail" aria-controls="security-center-tabpanel-detail" aria-selected="false" tabindex="-1">概览</button>
+                    <button type="button" data-action="mobile-open-surface" data-mobile-surface="governance-inspector" role="tab" id="authority-mobile-governance-tab-permissions" aria-controls="authority-extension-permission-inspector" aria-selected="false" tabindex="-1">权限</button>
+                    <button type="button" data-tab="databases" role="tab" id="authority-mobile-governance-tab-databases" aria-controls="security-center-tabpanel-databases" aria-selected="false" tabindex="-1">数据</button>
+                    <button type="button" data-tab="activity" role="tab" id="authority-mobile-governance-tab-activity" aria-controls="security-center-tabpanel-activity" aria-selected="false" tabindex="-1">活动</button>
                   </nav>
                   <div class="authority-view-canvas">
                     <section class="authority-section" data-section="detail" role="tabpanel" id="security-center-tabpanel-detail" aria-labelledby="security-center-tab-detail">

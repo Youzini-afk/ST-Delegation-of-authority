@@ -152,11 +152,15 @@ describe('Security Center tab interaction', () => {
         expect(html).toContain('data-action="mobile-close-surface"');
         expect(html).toContain('data-role="mobile-governance-tabs"');
         expect(html).toContain('data-mobile-surface="governance-inspector"');
+        expect(html).toContain('id="authority-mobile-governance-tab-permissions" aria-controls="authority-extension-permission-inspector"');
         expect(source).toContain("target.closest<HTMLElement>('[data-action^=\"mobile-\"]')");
         expect(source).toContain('this.root.dataset.mobileSurface = this.state.mobile.surface');
+        expect(source).toContain("event.key === 'Escape' && this.mobileMediaQuery.matches");
+        expect(source).toContain("nextTab.closest('[data-role=\"mobile-governance-tabs\"]')");
+        expect(source).toContain("agentMain?.toggleAttribute('inert', shouldInert)");
         expect(source).toContain('getCenterArea(this.state.selectedTab) !== getCenterArea(tab)');
         expect(source).toContain("this.state.system.selectedView = 'recovery'");
-        expect(source).toContain("this.setMobileSurface('settings-editor')");
+        expect(source).toContain("this.setMobileSurface('settings-editor', true, element)");
         expect(source).toContain("this.setMobileSurface('system-detail')");
         expect(css).toContain("[data-mobile-area='governance'][data-mobile-surface='none'] .authority-governance-stage");
         expect(css).toContain("[data-mobile-area='settings'][data-mobile-surface='settings-editor'] .authority-model-editor");
