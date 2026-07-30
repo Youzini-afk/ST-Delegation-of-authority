@@ -146,6 +146,18 @@ describe('Security Center tab interaction', () => {
         expect(html).toContain('data-role="agent-live-status" role="status" aria-live="polite" aria-atomic="true"');
     });
 
+    it('uses a dedicated mobile presentation layer with four stable destinations', () => {
+        const mobileDestinations = Array.from(html.matchAll(/class="authority-mobile-nav__item"[^>]*data-area="([^"]+)"/g));
+        expect(mobileDestinations.map(match => match[1])).toEqual(['agent', 'governance', 'system', 'settings']);
+        expect(html).toContain('data-action="mobile-close-surface"');
+        expect(html).toContain('data-role="mobile-governance-tabs"');
+        expect(source).toContain("target.closest<HTMLElement>('[data-action^=\"mobile-\"]')");
+        expect(source).toContain('this.root.dataset.mobileSurface = this.state.mobile.surface');
+        expect(source).toContain('getCenterArea(this.state.selectedTab) !== getCenterArea(tab)');
+        expect(css).toContain("[data-mobile-area='governance'][data-mobile-surface='none'] .authority-governance-stage");
+        expect(css).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))');
+    });
+
     it('keeps the approved direction: compact product bar, persistent top navigation, and extension-first governance', () => {
         expect(html).toContain('Delegation of Authority');
         expect(html).toContain('class="authority-app-shell"');

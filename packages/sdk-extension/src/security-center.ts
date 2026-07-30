@@ -36,6 +36,7 @@ import {
     renderPolicyWorkbench,
 } from './security-center/governance-workbench.js';
 import { showImpactConfirmation } from './security-center/impact-confirmation.js';
+import { getMobileBackSurface, isMobileSurface } from './security-center/mobile-presentation.js';
 import {
     formatBytes,
     getCoreStateLabel,
@@ -55,6 +56,7 @@ import type {
     PackageOperation,
     SecurityCenterNativeMigrationOperation,
     ExtensionSummary,
+    MobileSurface,
     PoliciesResponse,
     ProbeResponse,
     SecurityCenterOpenOptions,
@@ -184,6 +186,9 @@ class SecurityCenterView {
                 selectedCommitId: null,
                 workspaceDiff: null,
             },
+            mobile: {
+                surface: 'none',
+            },
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
             packageActionInProgress: false,
@@ -209,6 +214,11 @@ class SecurityCenterView {
         this.root.addEventListener('click', event => {
             const target = event.target instanceof Element ? event.target : null;
             if (!target) {
+                return;
+            }
+
+            const mobileAction = target.closest<HTMLElement>('[data-action^="mobile-"]');
+            if (mobileAction && this.handleMobileAction(mobileAction)) {
                 return;
             }
 
@@ -2044,6 +2054,42 @@ class SecurityCenterView {
         container.appendChild(wrapper);
     }
 
+    private handleMobileAction(element: HTMLElement): boolean {
+        switch (element.dataset.action) {
+            case 'mobile-open-surface': {
+                const surface = element.dataset.mobileSurface;
+                if (!isMobileSurface(surface) || surface === 'none') {
+                    return false;
+                }
+                this.setMobileSurface(surface);
+                return true;
+            }
+            case 'mobile-close-surface':
+                this.setMobileSurface(getMobileBackSurface(this.state.mobile.surface));
+                return true;
+            case 'mobile-navigate': {
+                const tab = element.dataset.tab;
+                if (!isValidCenterTab(tab)) {
+                    return false;
+                }
+                this.state.mobile.surface = 'none';
+                this.switchTab(tab);
+                this.renderMobilePresentation();
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
+    private setMobileSurface(surface: MobileSurface): void {
+        if (this.state.mobile.surface === surface) {
+            return;
+        }
+        this.state.mobile.surface = surface;
+        this.renderMobilePresentation();
+    }
+
     private switchTab(tab: CenterTab): void {
         if (!PRIMARY_TAB_NAMES.includes(tab)) {
             return;
@@ -2052,11 +2098,16 @@ class SecurityCenterView {
             return;
         }
         if (this.state.selectedTab === tab) {
+            this.renderMobilePresentation();
             return;
+        }
+        if (getCenterArea(this.state.selectedTab) !== getCenterArea(tab)) {
+            this.state.mobile.surface = 'none';
         }
         this.state.selectedTab = tab;
         this.renderTabs();
         this.toggleSections();
+        this.renderMobilePresentation();
         if ((tab === 'agent' || tab === 'settings') && !this.state.agent.loaded) {
             void this.refreshAgentWorkbench();
         }
@@ -2088,6 +2139,7 @@ class SecurityCenterView {
         this.renderUpdatesSection();
         this.renderSettingsSection();
         this.toggleSections();
+        this.renderMobilePresentation();
     }
 
     private renderHeader(): void {
@@ -2394,6 +2446,29 @@ class SecurityCenterView {
             section.hidden = !isActive;
             section.setAttribute('aria-hidden', isActive ? 'false' : 'true');
             section.setAttribute('tabindex', isActive ? '0' : '-1');
+        }
+    }
+
+    private renderMobilePresentation(): void {
+        const activeArea = getCenterArea(this.state.selectedTab);
+        this.root.dataset.mobileArea = activeArea;
+        this.root.dataset.mobileSurface = this.state.mobile.surface;
+
+        for (const trigger of this.root.querySelectorAll<HTMLElement>('[data-action="mobile-open-surface"]')) {
+            trigger.setAttribute('aria-expanded', trigger.dataset.mobileSurface === this.state.mobile.surface ? 'true' : 'false');
+        }
+
+        for (const tab of this.root.querySelectorAll<HTMLElement>('[data-role="mobile-governance-tabs"] [data-tab]')) {
+            const isActive = tab.dataset.tab === this.state.selectedTab;
+            tab.classList.toggle('authority-mobile-governance-tab--active', isActive);
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
+        }
+
+        const title = this.root.querySelector<HTMLElement>('[data-role="mobile-governance-title"]');
+        if (title) {
+            const extension = this.state.extensions.find(item => item.id === this.state.selectedExtensionId);
+            title.textContent = this.state.selectedTab === 'detail' && extension ? extension.displayName : '扩展治理';
         }
     }
 

@@ -30,6 +30,18 @@ export type CenterTab = 'overview' | 'detail' | 'databases' | 'activity' | 'agen
 export type AuthorityRiskLevel = 'low' | 'medium' | 'high';
 export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
 export type SystemView = 'runtime' | 'recovery' | 'migration' | 'diagnostics' | 'backup';
+export type MobileSurface =
+    | 'none'
+    | 'agent-sessions'
+    | 'agent-inspector'
+    | 'governance-detail'
+    | 'governance-inspector'
+    | 'system-detail'
+    | 'settings-editor';
+
+export interface MobilePresentationState {
+    surface: MobileSurface;
+}
 
 export interface ActivityRecord {
     timestamp: string;
@@ -158,6 +170,7 @@ export interface SecurityCenterState {
     policies: PoliciesResponse | null;
     agent: AgentWorkbenchState;
     system: SystemWorkbenchState;
+    mobile: MobilePresentationState;
     policyEditorExtensionId: string | null;
     packageOperations: PackageOperation[];
     packageActionInProgress: boolean;

@@ -105,6 +105,7 @@ function governanceState(): SecurityCenterState {
         policies: null,
         agent: {} as SecurityCenterState['agent'],
         system: {} as SecurityCenterState['system'],
+        mobile: { surface: 'none' },
         policyEditorExtensionId: null,
         packageOperations: [],
         packageActionInProgress: false,

@@ -68,6 +68,19 @@
                 </aside>
 
                 <div class="authority-governance-stage">
+                  <header class="authority-mobile-stage-bar">
+                    <button type="button" class="authority-mobile-stage-bar__back" data-action="mobile-close-surface" aria-label="返回扩展目录">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                    </button>
+                    <strong data-role="mobile-governance-title">扩展治理</strong>
+                    <span class="authority-mobile-stage-bar__spacer" aria-hidden="true"></span>
+                  </header>
+                  <nav class="authority-mobile-governance-tabs" data-role="mobile-governance-tabs" role="tablist" aria-label="扩展详情视图">
+                    <button type="button" data-tab="detail" role="tab">概览</button>
+                    <button type="button" data-tab="policies" role="tab">权限</button>
+                    <button type="button" data-tab="databases" role="tab">数据</button>
+                    <button type="button" data-tab="activity" role="tab">活动</button>
+                  </nav>
                   <div class="authority-view-canvas">
                     <section class="authority-section" data-section="detail" role="tabpanel" id="security-center-tabpanel-detail" aria-labelledby="security-center-tab-detail">
                       <div class="authority-governance-detail" data-role="detail-view"></div>
@@ -104,5 +117,23 @@
         </div>
       </div>
     </div>
+    <nav class="authority-mobile-nav" aria-label="Authority 移动端主导航">
+      <button type="button" class="authority-mobile-nav__item" data-action="mobile-navigate" data-area="agent" data-tab="agent">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
+        <span>Agent</span>
+      </button>
+      <button type="button" class="authority-mobile-nav__item" data-action="mobile-navigate" data-area="governance" data-tab="detail">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3M16 3v3M3 8h18M5 8v12h14V8"/><path d="M8 12h3v3H8zM14 12h2M14 15h2"/></svg>
+        <span>扩展</span>
+      </button>
+      <button type="button" class="authority-mobile-nav__item" data-action="mobile-navigate" data-area="system" data-tab="updates">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
+        <span>恢复</span>
+      </button>
+      <button type="button" class="authority-mobile-nav__item" data-action="mobile-navigate" data-area="settings" data-tab="settings" data-admin-only>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1V21h-4v-.08a1.7 1.7 0 0 0-1.1-1.52 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4H3v-4h.08A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1V3h4v.08A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.4.25.75.6 1 1 .18.3.3.65.32 1H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+        <span>设置</span>
+      </button>
+    </nav>
   </div>
 </div>

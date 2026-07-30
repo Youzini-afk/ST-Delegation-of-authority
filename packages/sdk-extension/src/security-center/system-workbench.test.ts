@@ -120,6 +120,7 @@ function systemState(selectedView: SystemView): SecurityCenterState {
             selectedCommitId: null,
             workspaceDiff: null,
         },
+        mobile: { surface: 'none' },
         policyEditorExtensionId: null,
         packageOperations: [],
         packageActionInProgress: false,
