@@ -30,10 +30,14 @@ export function renderAgentWorkbench(state) {
         <div class="authority-agent-workbench">
             ${state.error ? `<div class="authority-agent-error" role="alert">${escapeHtml(state.error)}</div>` : ''}
             <div class="authority-agent-ide ${hasSelectedSession ? '' : 'authority-agent-ide--new'}">
+                <button type="button" class="authority-mobile-scrim" data-action="mobile-close-surface" aria-label="关闭当前面板"></button>
                 <aside class="authority-agent-rail" aria-label="Agent Sessions">
                     <header class="authority-agent-rail__header">
-                        <strong>Sessions</strong>
-                        <button type="button" class="authority-agent-icon-button" data-action="agent-refresh" aria-label="刷新 Sessions" title="刷新" ${disabled}>↻</button>
+                        <div><strong>Sessions</strong><span class="authority-mobile-only">会话历史</span></div>
+                        <div class="authority-agent-rail__actions">
+                            <button type="button" class="authority-agent-icon-button" data-action="agent-refresh" aria-label="刷新 Sessions" title="刷新" ${disabled}>↻</button>
+                            <button type="button" class="authority-agent-icon-button authority-mobile-only" data-action="mobile-close-surface" aria-label="关闭 Sessions">×</button>
+                        </div>
                     </header>
                     <button type="button" class="authority-agent-new-session" data-action="agent-new-session" ${disabled}>＋ 新建 Session</button>
                     <label class="authority-agent-session-search">
@@ -79,12 +83,14 @@ export function renderAgentSessionMain(state, disabled = '') {
         <section class="authority-agent-session">
             <div class="authority-agent-session__top">
                 <header class="authority-agent-session__header">
+                    <button type="button" class="authority-agent-mobile-pane-button authority-mobile-only" data-action="mobile-open-surface" data-mobile-surface="agent-sessions" aria-label="打开 Sessions">☰</button>
                     <div class="authority-agent-session__identity">
                         <h2>${escapeHtml(snapshot.session.title)}</h2>
                         <span>持久 Session · ${escapeHtml(modeLabel(snapshot.session.mode))}</span>
                     </div>
                     <div class="authority-agent-session__actions">
                         ${renderSessionStatus(run?.status ?? 'idle')}
+                        <button type="button" class="authority-agent-mobile-pane-button authority-mobile-only" data-action="mobile-open-surface" data-mobile-surface="agent-inspector" aria-label="打开任务与变更">⌁</button>
                         ${run && ACTIVE_RUN_STATUSES.has(run.status)
         ? `<button type="button" class="authority-agent-icon-button" data-action="agent-cancel-run" data-session-id="${escapeHtml(snapshot.session.id)}" data-run-id="${escapeHtml(run.id)}" aria-label="取消当前运行" title="取消当前运行" ${disabled}>■</button>`
         : ''}
@@ -94,10 +100,11 @@ export function renderAgentSessionMain(state, disabled = '') {
                         ${renderSessionMenu(state, snapshot, disabled)}
                     </div>
                 </header>
+                ${run && ACTIVE_RUN_STATUSES.has(run.status) ? `<div class="authority-agent-run-progress authority-mobile-only"><span>${escapeHtml(sessionStatusLabel(run.status))}</span><strong>${escapeHtml(`${run.stepCount} / ${run.maxSteps}`)}</strong></div>` : ''}
                 ${run?.suspensionReason ? `<div class="authority-agent-recovery-banner"><strong>运行已暂停</strong><span>${escapeHtml(redactSensitiveText(run.suspensionReason))}</span></div>` : ''}
             </div>
             <div class="authority-agent-timeline" data-role="agent-timeline">
-                ${renderTimeline(snapshot)}
+                ${renderTimeline(snapshot, disabled)}
             </div>
             <footer class="authority-agent-composer">
                 ${queued ? `<div class="authority-agent-composer__queue">已有 ${escapeHtml(String(queued))} 条消息等待下一个安全边界</div>` : ''}
@@ -127,6 +134,11 @@ function renderNewSession(state, disabled) {
     ];
     return `
         <section class="authority-agent-session authority-agent-session--new">
+            <header class="authority-agent-mobile-new-header authority-mobile-only">
+                <button type="button" class="authority-agent-mobile-pane-button" data-action="mobile-open-surface" data-mobile-surface="agent-sessions" aria-label="打开 Sessions">☰</button>
+                <strong>新 Session</strong>
+                <span aria-hidden="true"></span>
+            </header>
             <div class="authority-agent-welcome">
                 <div class="authority-agent-welcome__mark" aria-hidden="true">A</div>
                 <h2>你想让 Agent 做什么？</h2>
@@ -195,16 +207,16 @@ function renderSessionHistory(state, disabled) {
         </nav>
     `;
 }
-function renderTimeline(snapshot) {
+function renderTimeline(snapshot, disabled) {
     const ref = snapshot.refs.find(item => item.name === 'main') ?? snapshot.refs[0];
     const path = new Set(snapshot.activePaths[ref?.name ?? 'main'] ?? []);
     const entries = snapshot.conversation
         .filter(entry => path.has(entry.id))
         .sort((left, right) => left.sequence - right.sequence);
-    if (entries.length === 0) {
-        return '<div class="authority-agent-timeline__empty"><strong>这段 Session 还没有消息</strong><span>在下方输入框告诉 Agent 你想完成什么。</span></div>';
-    }
-    return entries.map(entry => renderTimelineEntry(entry, snapshot)).join('');
+    const conversation = entries.length === 0
+        ? '<div class="authority-agent-timeline__empty"><strong>这段 Session 还没有消息</strong><span>在下方输入框告诉 Agent 你想完成什么。</span></div>'
+        : entries.map(entry => renderTimelineEntry(entry, snapshot)).join('');
+    return `${conversation}${renderPendingApprovals(snapshot, disabled, 'authority-agent-mobile-approvals authority-mobile-only')}`;
 }
 function renderTimelineEntry(entry, snapshot) {
     if (entry.kind === 'compaction') {
@@ -240,6 +252,11 @@ function renderInspector(state, selectedWorkspace, disabled) {
         ['activity', '任务'], ['workspace', '变更'],
     ];
     return `
+        <header class="authority-agent-mobile-inspector-header authority-mobile-only">
+            <button type="button" class="authority-agent-mobile-pane-button" data-action="mobile-close-surface" aria-label="返回 Agent 对话">‹</button>
+            <strong>任务与变更</strong>
+            <span aria-hidden="true"></span>
+        </header>
         <div class="authority-agent-inspector__tabs" role="tablist" aria-label="Session 上下文">
             ${tabs.map(([value, label]) => `<button type="button" role="tab" id="authority-agent-inspector-tab-${value}" class="${state.inspectorTab === value ? 'is-active' : ''}" data-action="agent-inspector-tab" data-inspector-tab="${value}" aria-selected="${state.inspectorTab === value}" aria-controls="authority-agent-inspector-panel-${value}" tabindex="${state.inspectorTab === value ? '0' : '-1'}" ${disabled}>${label}</button>`).join('')}
         </div>
@@ -259,20 +276,10 @@ function renderActivityInspector(state, disabled) {
         return '<div class="authority-agent-inspector-empty"><strong>暂无任务上下文</strong><span>运行、审批和执行记录会在这里出现。</span></div>';
     }
     const run = getActiveAgentSessionRun(snapshot) ?? snapshot.runs.at(-1) ?? null;
-    const approvals = snapshot.approvals.filter(approval => approval.status === 'pending');
     const invocations = run ? snapshot.invocations.filter(item => item.runId === run.id) : snapshot.invocations;
     const steps = run ? snapshot.steps.filter(item => item.runId === run.id) : [];
     return `
-        ${approvals.length ? `<section class="authority-agent-approval-queue"><header><strong>等待批准</strong><span>${approvals.length}</span></header>${approvals.map(approval => `
-            <article class="authority-agent-approval">
-                <div><strong>${escapeHtml(redactSensitiveText(approval.title))}</strong><span>${escapeHtml(redactSensitiveText(approval.summary))}</span></div>
-                <pre>${escapeHtml(previewValue(approval.arguments))}</pre>
-                <div class="authority-page-actions authority-page-actions--inline">
-                    <button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-resolve-approval" data-session-id="${escapeHtml(snapshot.session.id)}" data-approval-id="${escapeHtml(approval.id)}" data-decision="approve" ${disabled}>批准</button>
-                    <button type="button" class="authority-action-button" data-action="agent-resolve-approval" data-session-id="${escapeHtml(snapshot.session.id)}" data-approval-id="${escapeHtml(approval.id)}" data-decision="deny" ${disabled}>拒绝</button>
-                </div>
-            </article>
-        `).join('')}</section>` : ''}
+        ${renderPendingApprovals(snapshot, disabled)}
         <section class="authority-agent-inspector-section">
             <header><strong>当前运行</strong>${run ? renderSessionStatus(run.status) : renderSessionStatus('idle')}</header>
             ${run ? `<dl class="authority-agent-description-list">
@@ -291,6 +298,21 @@ function renderActivityInspector(state, disabled) {
             <div class="authority-agent-inspector-panel__body authority-stack">${steps.slice().reverse().map(step => `<div class="authority-list-card"><strong>Step ${step.index + 1}</strong><span>${escapeHtml(step.status)} · ${escapeHtml(formatDate(step.updatedAt))}</span></div>`).join('') || '<div class="authority-muted">没有执行记录。</div>'}</div>
         </details>
     `;
+}
+function renderPendingApprovals(snapshot, disabled, extraClass = '') {
+    const approvals = snapshot.approvals.filter(approval => approval.status === 'pending');
+    if (approvals.length === 0)
+        return '';
+    return `<section class="authority-agent-approval-queue ${extraClass}"><header><strong>需要你的确认</strong><span>${approvals.length}</span></header>${approvals.map(approval => `
+        <article class="authority-agent-approval">
+            <div><strong>${escapeHtml(redactSensitiveText(approval.title))}</strong><span>${escapeHtml(redactSensitiveText(approval.summary))}</span></div>
+            <pre>${escapeHtml(previewValue(approval.arguments))}</pre>
+            <div class="authority-page-actions authority-page-actions--inline">
+                <button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-resolve-approval" data-session-id="${escapeHtml(snapshot.session.id)}" data-approval-id="${escapeHtml(approval.id)}" data-decision="approve" ${disabled}>允许这次操作</button>
+                <button type="button" class="authority-action-button" data-action="agent-resolve-approval" data-session-id="${escapeHtml(snapshot.session.id)}" data-approval-id="${escapeHtml(approval.id)}" data-decision="deny" ${disabled}>拒绝并说明</button>
+            </div>
+        </article>
+    `).join('')}</section>`;
 }
 function renderChangesInspector(state, selected, disabled) {
     const status = state.workspaceStatus;

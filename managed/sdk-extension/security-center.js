@@ -6,6 +6,7 @@ import { getAgentStatusAnnouncement, getActiveAgentSessionRun, isActiveAgentSess
 import { renderAgentSettings } from './security-center/agent-settings.js';
 import { renderAuditWorkspace, renderDataAssets, renderExtensionDirectory, renderExtensionDossier, renderGovernanceOverview, renderPolicyOverrideRow, renderPolicyWorkbench, } from './security-center/governance-workbench.js';
 import { showImpactConfirmation } from './security-center/impact-confirmation.js';
+import { getMobileBackSurface, isMobileSurface } from './security-center/mobile-presentation.js';
 import { formatBytes, getCoreStateLabel, getRiskLevel, getSystemMessageLabel, } from './security-center/formatters.js';
 import { buildStManagerBridgePayload, normalizeStManagerBridgeConfig, ST_MANAGER_RESOURCE_OPTIONS, } from './security-center/st-manager-bridge.js';
 import { buildStManagerControlPayload, normalizeStManagerControlConfig, } from './security-center/st-manager-control.js';
@@ -15,6 +16,8 @@ const TOAST_TITLE = '权限中心';
 const PRIMARY_TAB_NAMES = ['overview', 'detail', 'databases', 'activity', 'agent', 'policies', 'updates', 'settings'];
 const SYSTEM_VIEW_NAMES = ['runtime', 'recovery', 'migration', 'diagnostics', 'backup'];
 const AGENT_FOCUS_DATA_KEYS = ['inspectorTab', 'sessionId', 'runId', 'approvalId', 'decision', 'commitId', 'profileId'];
+const MOBILE_FOCUS_DATA_KEYS = ['mobileSurface', 'extensionId', 'sessionId', 'profileId', 'commitId', 'tab', 'area'];
+const MOBILE_BREAKPOINT_QUERY = '(max-width: 700px)';
 function isValidCenterTab(value) {
     return typeof value === 'string' && PRIMARY_TAB_NAMES.includes(value);
 }
@@ -49,11 +52,15 @@ class SecurityCenterView {
     agentSessionSubscriptionGeneration = 0;
     agentSessionRefreshTimer = null;
     agentRefreshGeneration = 0;
+    mobileMediaQuery;
+    renderedMobileSurface = 'none';
+    mobileFocusOrigin = null;
     initialTabPending;
     constructor(root, focusExtensionId) {
         this.root = root;
         this.focusExtensionId = focusExtensionId;
         this.initialTabPending = !focusExtensionId;
+        this.mobileMediaQuery = window.matchMedia(MOBILE_BREAKPOINT_QUERY);
         this.state = {
             loading: true,
             error: null,
@@ -100,6 +107,9 @@ class SecurityCenterView {
                 selectedCommitId: null,
                 workspaceDiff: null,
             },
+            mobile: {
+                surface: 'none',
+            },
             policyEditorExtensionId: focusExtensionId ?? null,
             packageOperations: [],
             packageActionInProgress: false,
@@ -120,9 +130,14 @@ class SecurityCenterView {
         await this.refresh();
     }
     bindEvents() {
+        this.mobileMediaQuery.addEventListener('change', () => this.renderMobilePresentation());
         this.root.addEventListener('click', event => {
             const target = event.target instanceof Element ? event.target : null;
             if (!target) {
+                return;
+            }
+            const mobileAction = target.closest('[data-action^="mobile-"]');
+            if (mobileAction && this.handleMobileAction(mobileAction)) {
                 return;
             }
             const primaryTab = target.closest('.authority-tab[data-tab]');
@@ -137,6 +152,9 @@ class SecurityCenterView {
             if (actionTab) {
                 const tab = actionTab.dataset.tab;
                 if (isValidCenterTab(tab)) {
+                    if (actionTab.closest('[data-role="mobile-governance-tabs"]')) {
+                        this.setMobileSurface('governance-detail');
+                    }
                     this.switchTab(tab);
                 }
                 return;
@@ -185,7 +203,7 @@ class SecurityCenterView {
             if (extensionButton) {
                 const extensionId = extensionButton.dataset.extensionId;
                 if (extensionId) {
-                    void this.selectExtension(extensionId, 'detail');
+                    void this.selectExtension(extensionId, 'detail', extensionButton);
                 }
                 return;
             }
@@ -330,6 +348,11 @@ class SecurityCenterView {
         });
         this.root.addEventListener('keydown', event => {
             const target = event.target;
+            if (event.key === 'Escape' && this.mobileMediaQuery.matches && this.state.mobile.surface !== 'none') {
+                event.preventDefault();
+                this.setMobileSurface(getMobileBackSurface(this.state.mobile.surface));
+                return;
+            }
             if (!(target instanceof HTMLElement) || target.getAttribute('role') !== 'tab') {
                 return;
             }
@@ -368,8 +391,16 @@ class SecurityCenterView {
                     this.selectAgentInspectorTab(inspectorTab);
                     return;
                 }
+                const mobileSurface = nextTab.dataset.mobileSurface;
+                if (isMobileSurface(mobileSurface) && mobileSurface !== 'none') {
+                    this.handleMobileAction(nextTab);
+                    return;
+                }
                 const tab = nextTab.dataset.tab;
                 if (tab) {
+                    if (nextTab.closest('[data-role="mobile-governance-tabs"]')) {
+                        this.setMobileSurface('governance-detail');
+                    }
                     this.switchTab(tab);
                 }
             }
@@ -525,10 +556,12 @@ class SecurityCenterView {
                 return;
             case 'agent-edit-profile':
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
+                this.setMobileSurface('settings-editor', true, element);
                 this.renderSettingsSection();
                 return;
             case 'agent-new-profile':
                 this.state.agent.selectedProfileId = null;
+                this.setMobileSurface('settings-editor', true, element);
                 this.renderSettingsSection();
                 return;
             case 'agent-save-profile':
@@ -655,6 +688,7 @@ class SecurityCenterView {
         return { status, commits: history.commits, diff };
     }
     selectSystemView(view) {
+        this.setMobileSurface('none');
         this.state.system.selectedView = view;
         this.renderUpdatesSection();
         const activeButton = this.root.querySelector(`[data-action="system-select-view"][data-system-view="${view}"]`);
@@ -708,6 +742,8 @@ class SecurityCenterView {
         if (!workspace || !commit || this.state.system.recoveryLoading || this.state.system.recoveryBusy)
             return;
         this.state.system.selectedCommitId = commitId;
+        this.state.system.workspaceDiff = null;
+        this.setMobileSurface('system-detail');
         this.state.system.recoveryLoading = true;
         void this.renderUpdatesSection();
         try {
@@ -987,6 +1023,7 @@ class SecurityCenterView {
     }
     beginAgentSession() {
         this.closeAgentSessionSubscription();
+        this.setMobileSurface('none');
         this.state.agent.creatingSession = true;
         this.state.agent.selectedSession = null;
         this.state.agent.inspectorTab = 'activity';
@@ -1037,6 +1074,7 @@ class SecurityCenterView {
         if (this.state.agent.busy)
             return;
         this.closeAgentSessionSubscription();
+        this.setMobileSurface('none');
         this.state.agent.busy = true;
         this.renderAgentSurfaces();
         try {
@@ -1155,6 +1193,7 @@ class SecurityCenterView {
             if (this.state.agent.selectedProfileId === profileId) {
                 this.state.agent.selectedProfileId = null;
             }
+            this.setMobileSurface('none');
             return 'LLM 配置已删除';
         });
     }
@@ -1781,13 +1820,14 @@ class SecurityCenterView {
             void this.renderUpdatesSection();
         }
     }
-    async selectExtension(extensionId, tab) {
+    async selectExtension(extensionId, tab, mobileOrigin) {
         this.state.selectedExtensionId = extensionId;
         this.state.selectedTab = tab;
         if (!this.state.details.has(extensionId)) {
             const detail = await authorityRequest(`/extensions/${encodeURIComponent(extensionId)}`);
             this.state.details.set(extensionId, detail);
         }
+        this.setMobileSurface('governance-detail', true, mobileOrigin);
         void this.render();
     }
     async resetGrants(extensionId, keys) {
@@ -1885,6 +1925,61 @@ class SecurityCenterView {
         wrapper.innerHTML = this.buildPolicyRowMarkup(entry);
         container.appendChild(wrapper);
     }
+    handleMobileAction(element) {
+        switch (element.dataset.action) {
+            case 'mobile-open-surface': {
+                const surface = element.dataset.mobileSurface;
+                if (!isMobileSurface(surface) || surface === 'none') {
+                    return false;
+                }
+                if (surface === 'governance-inspector') {
+                    this.state.selectedTab = 'detail';
+                    this.renderTabs();
+                    this.toggleSections();
+                }
+                this.setMobileSurface(surface, true, element);
+                return true;
+            }
+            case 'mobile-close-surface':
+                this.setMobileSurface(getMobileBackSurface(this.state.mobile.surface));
+                return true;
+            case 'mobile-navigate': {
+                const tab = element.dataset.tab;
+                if (!isValidCenterTab(tab)) {
+                    return false;
+                }
+                this.setMobileSurface('none', false);
+                if (tab === 'updates') {
+                    this.state.system.selectedView = 'recovery';
+                }
+                this.switchTab(tab);
+                if (tab === 'updates') {
+                    this.renderUpdatesSection();
+                    if (!this.state.system.recoveryLoaded && !this.state.system.recoveryLoading) {
+                        void this.refreshSystemRecovery();
+                    }
+                }
+                this.renderMobilePresentation();
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+    setMobileSurface(surface, restoreOrigin = true, origin) {
+        if (this.state.mobile.surface === surface) {
+            if (surface === 'none' && !restoreOrigin)
+                this.mobileFocusOrigin = null;
+            return;
+        }
+        if (this.state.mobile.surface === 'none' && surface !== 'none' && this.mobileMediaQuery.matches) {
+            this.mobileFocusOrigin = this.captureMobileFocus(origin);
+        }
+        if (surface === 'none' && !restoreOrigin)
+            this.mobileFocusOrigin = null;
+        this.state.mobile.surface = surface;
+        this.renderMobilePresentation();
+    }
     switchTab(tab) {
         if (!PRIMARY_TAB_NAMES.includes(tab)) {
             return;
@@ -1893,11 +1988,16 @@ class SecurityCenterView {
             return;
         }
         if (this.state.selectedTab === tab) {
+            this.renderMobilePresentation();
             return;
+        }
+        if (getCenterArea(this.state.selectedTab) !== getCenterArea(tab)) {
+            this.setMobileSurface('none', false);
         }
         this.state.selectedTab = tab;
         this.renderTabs();
         this.toggleSections();
+        this.renderMobilePresentation();
         if ((tab === 'agent' || tab === 'settings') && !this.state.agent.loaded) {
             void this.refreshAgentWorkbench();
         }
@@ -1929,6 +2029,7 @@ class SecurityCenterView {
         this.renderUpdatesSection();
         this.renderSettingsSection();
         this.toggleSections();
+        this.renderMobilePresentation();
     }
     renderHeader() {
         const status = this.root.querySelector('[data-role="status"]');
@@ -1973,6 +2074,7 @@ class SecurityCenterView {
     renderTabs() {
         const tablist = this.root.querySelector('[role="tablist"]');
         const activeArea = getCenterArea(this.state.selectedTab);
+        this.root.dataset.admin = this.state.isAdmin ? 'true' : 'false';
         for (const areaTab of this.root.querySelectorAll('[data-area]')) {
             const area = areaTab.dataset.area;
             if (!area)
@@ -2025,6 +2127,7 @@ class SecurityCenterView {
         const draft = this.captureAgentFormDraft(container);
         container.innerHTML = renderAgentSettings(this.state.agent);
         this.restoreAgentFormDraft(container, draft);
+        this.renderMobilePresentation();
     }
     renderExtensionList() {
         const container = this.root.querySelector('[data-role="extension-list"]');
@@ -2075,6 +2178,7 @@ class SecurityCenterView {
             : '<div class="authority-empty">只有管理员可以使用 Agent 工作台。</div>';
         this.restoreAgentFormDraft(container, draft);
         this.restoreAgentFocus(container, focus);
+        this.renderMobilePresentation();
     }
     renderAgentSurfaces() {
         this.renderAgentSection();
@@ -2153,6 +2257,7 @@ class SecurityCenterView {
         container.innerHTML = this.state.isAdmin
             ? renderSystemWorkbench(this.state)
             : '<div class="authority-empty">只有管理员可以使用这里的维护、备份和迁移功能。</div>';
+        this.renderMobilePresentation();
     }
     getRequiredSessionToken() {
         const sessionToken = this.state.session?.sessionToken;
@@ -2229,6 +2334,122 @@ class SecurityCenterView {
             section.setAttribute('aria-hidden', isActive ? 'false' : 'true');
             section.setAttribute('tabindex', isActive ? '0' : '-1');
         }
+    }
+    renderMobilePresentation() {
+        const activeArea = getCenterArea(this.state.selectedTab);
+        this.root.dataset.mobileArea = activeArea;
+        this.root.dataset.mobileSurface = this.state.mobile.surface;
+        for (const trigger of this.root.querySelectorAll('[data-action="mobile-open-surface"]')) {
+            trigger.setAttribute('aria-expanded', trigger.dataset.mobileSurface === this.state.mobile.surface ? 'true' : 'false');
+        }
+        for (const tab of this.root.querySelectorAll('[data-role="mobile-governance-tabs"] [data-tab]')) {
+            const isActive = tab.dataset.tab === this.state.selectedTab
+                && this.state.mobile.surface !== 'governance-inspector';
+            tab.classList.toggle('authority-mobile-governance-tab--active', isActive);
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
+        }
+        for (const tab of this.root.querySelectorAll('[data-role="mobile-governance-tabs"] [data-mobile-surface]')) {
+            const isActive = tab.dataset.mobileSurface === this.state.mobile.surface;
+            tab.classList.toggle('authority-mobile-governance-tab--active', isActive);
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
+        }
+        const title = this.root.querySelector('[data-role="mobile-governance-title"]');
+        if (title) {
+            const extension = this.state.extensions.find(item => item.id === this.state.selectedExtensionId);
+            title.textContent = extension ? extension.displayName : '扩展治理';
+        }
+        const visibleSurface = this.mobileMediaQuery.matches ? this.state.mobile.surface : 'none';
+        const previousSurface = this.renderedMobileSurface;
+        this.renderedMobileSurface = visibleSurface;
+        const agentMain = this.root.querySelector('.authority-agent-main');
+        const shouldInert = visibleSurface === 'agent-sessions' || visibleSurface === 'agent-inspector';
+        agentMain?.toggleAttribute('inert', shouldInert);
+        if (this.mobileMediaQuery.matches) {
+            this.syncMobileFocus(previousSurface, visibleSurface);
+        }
+    }
+    captureMobileFocus(origin) {
+        const active = origin ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+        if (!active || !this.root.contains(active))
+            return null;
+        const data = {};
+        for (const key of MOBILE_FOCUS_DATA_KEYS) {
+            const value = active.dataset[key];
+            if (value)
+                data[key] = value;
+        }
+        return {
+            element: active,
+            action: active.dataset.action ?? null,
+            role: active.dataset.role ?? null,
+            data,
+        };
+    }
+    syncMobileFocus(previousSurface, surface) {
+        if (previousSurface !== surface && surface === 'none') {
+            this.restoreMobileFocus();
+            return;
+        }
+        if (surface === 'none')
+            return;
+        const panelSelectors = {
+            'agent-sessions': '.authority-agent-rail',
+            'agent-inspector': '.authority-agent-inspector',
+            'governance-detail': '.authority-governance-stage',
+            'governance-inspector': '.authority-governance-stage',
+            'system-detail': '.authority-system-recovery',
+            'settings-editor': '.authority-model-editor',
+        };
+        const focusSelectors = {
+            'agent-sessions': '.authority-agent-rail [data-action="mobile-close-surface"]',
+            'agent-inspector': '.authority-agent-inspector [data-action="mobile-close-surface"]',
+            'governance-detail': '.authority-mobile-stage-bar [data-action="mobile-close-surface"]',
+            'governance-inspector': '[data-role="mobile-governance-tabs"] [data-mobile-surface="governance-inspector"]',
+            'system-detail': '.authority-mobile-recovery-header [data-action="mobile-close-surface"]',
+            'settings-editor': '.authority-settings-mobile-back[data-action="mobile-close-surface"]',
+        };
+        const panelSelector = panelSelectors[surface];
+        const focusSelector = focusSelectors[surface];
+        const panel = panelSelector ? this.root.querySelector(panelSelector) : null;
+        const target = focusSelector ? this.root.querySelector(focusSelector) : null;
+        if (!target)
+            return;
+        const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const mobileNav = this.root.querySelector('.authority-mobile-nav');
+        const transition = previousSurface !== surface;
+        if (!transition && active) {
+            if (panel?.contains(active) || mobileNav?.contains(active))
+                return;
+            if (active !== document.body && !this.root.contains(active))
+                return;
+        }
+        target.focus({ preventScroll: true });
+    }
+    restoreMobileFocus() {
+        const snapshot = this.mobileFocusOrigin;
+        this.mobileFocusOrigin = null;
+        if (!snapshot)
+            return;
+        const candidates = snapshot.element.isConnected
+            ? [snapshot.element]
+            : Array.from(this.root.querySelectorAll('[data-action], [data-role], [data-mobile-surface], [data-extension-id], [data-session-id], [data-profile-id], [data-commit-id], [data-tab], [data-area]'));
+        const target = candidates.find(element => {
+            if (snapshot.action && element.dataset.action !== snapshot.action)
+                return false;
+            if (snapshot.role && element.dataset.role !== snapshot.role)
+                return false;
+            if (!snapshot.action && !snapshot.role && Object.keys(snapshot.data).length === 0)
+                return false;
+            return Object.entries(snapshot.data).every(([key, value]) => element.dataset[key] === value);
+        });
+        if (!target || target.closest('[hidden], [inert]'))
+            return;
+        const style = window.getComputedStyle(target);
+        if (style.display === 'none' || style.visibility === 'hidden')
+            return;
+        target.focus({ preventScroll: true });
     }
     resolveSelectedExtensionId() {
         if (this.state.selectedExtensionId && this.state.extensions.some(item => item.id === this.state.selectedExtensionId)) {

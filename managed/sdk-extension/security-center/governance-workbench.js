@@ -205,7 +205,7 @@ export function renderExtensionDossier(state) {
                 </div>
             </main>
 
-            <aside class="authority-context-rail authority-extension-inspector">
+            <aside class="authority-context-rail authority-extension-inspector" id="authority-extension-permission-inspector" role="tabpanel" aria-labelledby="authority-mobile-governance-tab-permissions" tabindex="0">
                 <div class="authority-context-rail__header">
                     <strong>权限控制</strong>
                     <span>${detail.grants.length + detail.policies.length} 条决定</span>

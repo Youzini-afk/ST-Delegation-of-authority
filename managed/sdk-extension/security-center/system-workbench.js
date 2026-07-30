@@ -158,6 +158,11 @@ function renderRecovery(state) {
             </aside>
 
             <main class="authority-recovery-diff">
+                <header class="authority-mobile-recovery-header authority-mobile-only">
+                    <button type="button" data-action="mobile-close-surface" aria-label="返回恢复历史">‹</button>
+                    <strong>检查点详情</strong>
+                    <span aria-hidden="true"></span>
+                </header>
                 ${viewHeader(selected ? `CP-${String(selectedNumber).padStart(2, '0')} · ${selected.message}` : '版本与恢复', selected ? `${selected.id.slice(0, 12)} · ${formatDate(selected.createdAt)}` : '选择一个检查点查看路径差异。', '', selected?.id === headId ? runtimeState('ready', '当前检查点') : '')}
                 <div class="authority-recovery-diff__scroll">
                     ${status?.pendingRollback ? `<div class="authority-recovery-pending"><strong>检测到未完成的回退事务</strong><span>操作 ${escapeHtml(status.pendingRollback.operationId)} 可以安全继续。</span><button type="button" class="authority-action-button authority-action-button--primary" data-action="system-recovery-resume" ${disabled}>继续回退</button></div>` : ''}

@@ -55,12 +55,15 @@ describe('Extension governance workbench rendering', () => {
         const html = renderExtensionDossier(state);
 
         expect(html).toContain('authority-extension-dossier');
+        expect(html).toContain('id="authority-extension-permission-inspector" role="tabpanel"');
+        expect(html).toContain('aria-labelledby="authority-mobile-governance-tab-permissions"');
         expect(html).toContain('storage.kv');
         expect(html).toContain('data-tab="databases"');
         expect(html).toContain('data-tab="policies"');
         expect(html).toContain('data-action="reset-all-grants"');
         expect(html).toContain('data-tab="activity"');
         expect(html).toContain('authority-storage-strip');
+        expect(html).toContain('authority-extension-inspector');
     });
 
     it('keeps every policy field and adds accessible field names', () => {
@@ -105,6 +108,7 @@ function governanceState(): SecurityCenterState {
         policies: null,
         agent: {} as SecurityCenterState['agent'],
         system: {} as SecurityCenterState['system'],
+        mobile: { surface: 'none' },
         policyEditorExtensionId: null,
         packageOperations: [],
         packageActionInProgress: false,
