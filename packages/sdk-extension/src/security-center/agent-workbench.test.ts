@@ -71,6 +71,19 @@ describe('Agent session workbench rendering', () => {
         expect(html).not.toContain('新建任务');
     });
 
+    it('provides focused mobile surfaces and keeps pending approval in the conversation', () => {
+        const html = renderAgentWorkbench(workbenchState());
+
+        expect(html).toContain('data-mobile-surface="agent-sessions"');
+        expect(html).toContain('data-mobile-surface="agent-inspector"');
+        expect(html).toContain('class="authority-mobile-scrim"');
+        expect(html).toContain('authority-agent-mobile-inspector-header');
+        expect(html).toContain('authority-agent-mobile-approvals authority-mobile-only');
+        expect(html.indexOf('authority-agent-mobile-approvals')).toBeGreaterThan(html.indexOf('data-role="agent-timeline"'));
+        expect(html).toContain('允许这次操作');
+        expect(html).toContain('拒绝并说明');
+    });
+
     it('separates task activity from recoverable changes without exposing workspace setup', () => {
         const state = workbenchState();
         const activity = renderAgentWorkbench(state);
@@ -160,12 +173,12 @@ describe('Agent session workbench rendering', () => {
         expect(settings).not.toContain('注册工作区');
     });
 
-    it('disables every interactive Agent control while a mutation is in progress', () => {
+    it('disables mutating Agent controls while leaving mobile navigation available', () => {
         const state = workbenchState();
         state.busy = true;
         const html = `${renderAgentWorkbench(state)}${renderAgentSettings(state)}`;
         const controls = Array.from(html.matchAll(/<(?:button|textarea|select|input)\b[^>]*>/g), match => match[0])
-            .filter(control => !control.includes('type="hidden"'));
+            .filter(control => !control.includes('type="hidden"') && !control.includes('data-action="mobile-'));
 
         expect(controls.length).toBeGreaterThan(0);
         for (const control of controls) {

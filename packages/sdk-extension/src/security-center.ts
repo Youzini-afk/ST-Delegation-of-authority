@@ -1117,6 +1117,7 @@ class SecurityCenterView {
 
     private beginAgentSession(): void {
         this.closeAgentSessionSubscription();
+        this.setMobileSurface('none');
         this.state.agent.creatingSession = true;
         this.state.agent.selectedSession = null;
         this.state.agent.inspectorTab = 'activity';
@@ -1168,6 +1169,7 @@ class SecurityCenterView {
     private async selectAgentSession(sessionId: string): Promise<void> {
         if (this.state.agent.busy) return;
         this.closeAgentSessionSubscription();
+        this.setMobileSurface('none');
         this.state.agent.busy = true;
         this.renderAgentSurfaces();
         try {
