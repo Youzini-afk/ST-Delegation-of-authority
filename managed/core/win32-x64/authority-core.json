@@ -1,9 +1,9 @@
 {
   "managedBy": "authority",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "platform": "win32",
   "arch": "x64",
   "binaryName": "authority-core.exe",
-  "binarySha256": "07f5d015704f9c43108d6d506bb9a1df971b573bbef324ef698110734db9bc1c",
-  "builtAt": "2026-07-30T04:17:45.865Z"
+  "binarySha256": "31dac445739479276b3f8b3b74ca81c2631516850ff4365ce331bb4b010e092c",
+  "builtAt": "2026-07-30T05:17:29.188Z"
 }
