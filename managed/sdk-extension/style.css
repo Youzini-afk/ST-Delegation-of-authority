@@ -19,6 +19,9 @@
   --authority-warning: #e2ad4f;
   --authority-danger: #df6c6c;
   --authority-info: #6fa9e8;
+  --authority-scrollbar-thumb: rgba(146, 153, 163, 0.38);
+  --authority-scrollbar-thumb-hover: rgba(172, 179, 188, 0.56);
+  --authority-scrollbar-thumb-active: rgba(213, 162, 74, 0.72);
   --authority-radius: 3px;
   --authority-font: var(--mainFontFamily, system-ui, sans-serif);
   box-sizing: border-box;
@@ -32,6 +35,57 @@
 .authority-panel *::before,
 .authority-panel *::after {
   box-sizing: border-box;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog),
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) * {
+  scrollbar-color: var(--authority-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog)::-webkit-scrollbar,
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog)::-webkit-scrollbar-track,
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog)::-webkit-scrollbar-thumb,
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) *::-webkit-scrollbar-thumb {
+  min-width: 30px;
+  min-height: 30px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--authority-scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog)::-webkit-scrollbar-thumb:hover,
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) *::-webkit-scrollbar-thumb:hover {
+  background: var(--authority-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog)::-webkit-scrollbar-thumb:active,
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) *::-webkit-scrollbar-thumb:active {
+  background: var(--authority-scrollbar-thumb-active);
+  background-clip: padding-box;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog)::-webkit-scrollbar-button,
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) *::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog)::-webkit-scrollbar-corner,
+:is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog) *::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .authority-panel [hidden] {
@@ -202,6 +256,10 @@
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+.authority-area-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .authority-area-tab {

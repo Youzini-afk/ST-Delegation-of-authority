@@ -234,6 +234,16 @@ describe('Security Center tab interaction', () => {
         expect(css).toContain('pointer-events: none;');
     });
 
+    it('skins scrollbars across Authority surfaces without exposing navigation overflow', () => {
+        expect(css).toContain('--authority-scrollbar-thumb:');
+        expect(css).toContain('scrollbar-color: var(--authority-scrollbar-thumb) transparent;');
+        expect(css).toContain('*::-webkit-scrollbar-thumb {');
+        expect(css).toContain('*::-webkit-scrollbar-thumb:hover {');
+        expect(css).toContain('*::-webkit-scrollbar-thumb:active {');
+        expect(css).toContain('*::-webkit-scrollbar-button {');
+        expect(css).toContain('.authority-area-tabs::-webkit-scrollbar {');
+    });
+
     it('removes superseded one-shot Agent and legacy system workspace styles', () => {
         expect(css).not.toContain('.authority-agent-launch-options');
         expect(css).not.toContain('.authority-agent-session-setup');
