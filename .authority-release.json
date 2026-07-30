@@ -3,7 +3,7 @@
   "pluginVersion": "1.6.1",
   "sdkExtensionId": "third-party/st-authority-sdk",
   "sdkVersion": "1.6.1",
-  "assetHash": "b1fdfca252242e3c96b21660a26bbbf939eec2f48c6b1319a35a423cb2b09a81",
+  "assetHash": "22519299a2beb2a76aaf63eb6886069a009edb000c72ab7fab284bb59c4a1d02",
   "coreVersion": "1.6.1",
   "coreArtifactHash": "e71edd3da1de834216eecf70bb97b29829bf0ac8a737042235db04086eee291d",
   "coreArtifactPlatform": "linux-x64",
@@ -53,5 +53,5 @@
     }
   },
   "coreBinarySha256": "52cadd515b16444fa3f307cacc8d148606f49ac87035b7c31050ff52b789b6e3",
-  "buildTime": "2026-07-30T04:18:30.004Z"
+  "buildTime": "2026-07-30T05:00:46.801Z"
 }

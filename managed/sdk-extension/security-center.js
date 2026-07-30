@@ -554,16 +554,24 @@ class SecurityCenterView {
                     this.selectAgentInspectorTab(element.dataset.inspectorTab);
                 }
                 return;
-            case 'agent-edit-profile':
+            case 'agent-edit-profile': {
+                const mobileFocusOrigin = this.mobileMediaQuery.matches ? this.captureMobileFocus(element) : undefined;
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
-                this.setMobileSurface('settings-editor', true, element);
                 this.renderSettingsSection();
+                if (!this.mobileMediaQuery.matches)
+                    this.playSurfaceEntrance('.authority-model-editor');
+                this.setMobileSurface('settings-editor', true, undefined, mobileFocusOrigin);
                 return;
-            case 'agent-new-profile':
+            }
+            case 'agent-new-profile': {
+                const mobileFocusOrigin = this.mobileMediaQuery.matches ? this.captureMobileFocus(element) : undefined;
                 this.state.agent.selectedProfileId = null;
-                this.setMobileSurface('settings-editor', true, element);
                 this.renderSettingsSection();
+                if (!this.mobileMediaQuery.matches)
+                    this.playSurfaceEntrance('.authority-model-editor');
+                this.setMobileSurface('settings-editor', true, undefined, mobileFocusOrigin);
                 return;
+            }
             case 'agent-save-profile':
                 void this.saveAgentProfile();
                 return;
@@ -590,6 +598,7 @@ class SecurityCenterView {
             return;
         this.state.agent.inspectorTab = tab;
         this.renderAgentSurfaces();
+        this.playSurfaceEntrance('.authority-agent-inspector__body > [role="tabpanel"]:not([hidden])');
     }
     async getAgentClient() {
         this.agentClientPromise ??= import('./sdk.js')
@@ -691,6 +700,7 @@ class SecurityCenterView {
         this.setMobileSurface('none');
         this.state.system.selectedView = view;
         this.renderUpdatesSection();
+        this.playSurfaceEntrance('.authority-system-stage > :first-child');
         const activeButton = this.root.querySelector(`[data-action="system-select-view"][data-system-view="${view}"]`);
         activeButton?.focus({ preventScroll: true });
         activeButton?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -741,11 +751,12 @@ class SecurityCenterView {
         const commit = this.state.system.workspaceCommits.find(item => item.id === commitId);
         if (!workspace || !commit || this.state.system.recoveryLoading || this.state.system.recoveryBusy)
             return;
+        const mobileFocusOrigin = this.mobileMediaQuery.matches ? this.captureMobileFocus() : undefined;
         this.state.system.selectedCommitId = commitId;
         this.state.system.workspaceDiff = null;
-        this.setMobileSurface('system-detail');
         this.state.system.recoveryLoading = true;
         void this.renderUpdatesSection();
+        this.setMobileSurface('system-detail', true, undefined, mobileFocusOrigin);
         try {
             this.state.system.workspaceDiff = await (await this.getAgentClient()).agent.admin.workspaces.diff(workspace.id, {
                 from: commit.parents[0] ?? null,
@@ -1028,6 +1039,7 @@ class SecurityCenterView {
         this.state.agent.selectedSession = null;
         this.state.agent.inspectorTab = 'activity';
         this.renderAgentSurfaces();
+        this.playSurfaceEntrance('.authority-agent-main > :first-child');
     }
     applyAgentPrompt(prompt) {
         const field = this.root.querySelector('[data-role="agent-new-message"]');
@@ -1094,6 +1106,7 @@ class SecurityCenterView {
         finally {
             this.state.agent.busy = false;
             this.renderAgentSurfaces();
+            this.playSurfaceEntrance('.authority-agent-main > :first-child');
             void this.subscribeSelectedAgentSession();
             this.scheduleAgentPoll();
         }
@@ -1821,14 +1834,17 @@ class SecurityCenterView {
         }
     }
     async selectExtension(extensionId, tab, mobileOrigin) {
+        const mobileFocusOrigin = this.mobileMediaQuery.matches ? this.captureMobileFocus(mobileOrigin) : undefined;
         this.state.selectedExtensionId = extensionId;
         this.state.selectedTab = tab;
         if (!this.state.details.has(extensionId)) {
             const detail = await authorityRequest(`/extensions/${encodeURIComponent(extensionId)}`);
             this.state.details.set(extensionId, detail);
         }
-        this.setMobileSurface('governance-detail', true, mobileOrigin);
         void this.render();
+        if (!this.mobileMediaQuery.matches)
+            this.playSurfaceEntrance('.authority-governance-detail > :first-child');
+        this.setMobileSurface('governance-detail', true, undefined, mobileFocusOrigin);
     }
     async resetGrants(extensionId, keys) {
         if (!keys && !await showImpactConfirmation({
@@ -1966,14 +1982,14 @@ class SecurityCenterView {
                 return false;
         }
     }
-    setMobileSurface(surface, restoreOrigin = true, origin) {
+    setMobileSurface(surface, restoreOrigin = true, origin, preparedOrigin) {
         if (this.state.mobile.surface === surface) {
             if (surface === 'none' && !restoreOrigin)
                 this.mobileFocusOrigin = null;
             return;
         }
         if (this.state.mobile.surface === 'none' && surface !== 'none' && this.mobileMediaQuery.matches) {
-            this.mobileFocusOrigin = this.captureMobileFocus(origin);
+            this.mobileFocusOrigin = preparedOrigin === undefined ? this.captureMobileFocus(origin) : preparedOrigin;
         }
         if (surface === 'none' && !restoreOrigin)
             this.mobileFocusOrigin = null;
@@ -2335,6 +2351,26 @@ class SecurityCenterView {
             section.setAttribute('tabindex', isActive ? '0' : '-1');
         }
     }
+    playSurfaceEntrance(selector) {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+            return;
+        const element = this.root.querySelector(selector);
+        if (!element)
+            return;
+        element.classList.remove('authority-motion-enter');
+        window.requestAnimationFrame(() => {
+            if (!element.isConnected)
+                return;
+            element.classList.add('authority-motion-enter');
+            const cleanup = (event) => {
+                if (event.target !== element || event.animationName !== 'authority-view-enter')
+                    return;
+                element.classList.remove('authority-motion-enter');
+                element.removeEventListener('animationend', cleanup);
+            };
+            element.addEventListener('animationend', cleanup);
+        });
+    }
     renderMobilePresentation() {
         const activeArea = getCenterArea(this.state.selectedTab);
         this.root.dataset.mobileArea = activeArea;
@@ -2363,10 +2399,28 @@ class SecurityCenterView {
         const visibleSurface = this.mobileMediaQuery.matches ? this.state.mobile.surface : 'none';
         const previousSurface = this.renderedMobileSurface;
         this.renderedMobileSurface = visibleSurface;
+        const isMobile = this.mobileMediaQuery.matches;
         const agentMain = this.root.querySelector('.authority-agent-main');
         const shouldInert = visibleSurface === 'agent-sessions' || visibleSurface === 'agent-inspector';
         agentMain?.toggleAttribute('inert', shouldInert);
-        if (this.mobileMediaQuery.matches) {
+        const setInert = (selector, inert) => {
+            for (const element of this.root.querySelectorAll(selector)) {
+                element.toggleAttribute('inert', inert);
+            }
+        };
+        setInert('.authority-agent-rail', isMobile && visibleSurface !== 'agent-sessions');
+        setInert('.authority-agent-inspector', isMobile && visibleSurface !== 'agent-inspector');
+        setInert('.authority-extension-nav', isMobile && visibleSurface !== 'none');
+        setInert('.authority-governance-stage', isMobile
+            && visibleSurface !== 'governance-detail'
+            && visibleSurface !== 'governance-inspector');
+        setInert('.authority-extension-dossier__main', isMobile && visibleSurface === 'governance-inspector');
+        setInert('.authority-extension-inspector', isMobile && visibleSurface !== 'governance-inspector');
+        setInert('.authority-recovery-history', isMobile && visibleSurface === 'system-detail');
+        setInert('.authority-recovery-detail', isMobile && visibleSurface !== 'system-detail');
+        setInert('.authority-settings-content__header, .authority-model-profile-list', isMobile && visibleSurface === 'settings-editor');
+        setInert('.authority-model-editor', isMobile && visibleSurface !== 'settings-editor');
+        if (isMobile) {
             this.syncMobileFocus(previousSurface, visibleSurface);
         }
     }

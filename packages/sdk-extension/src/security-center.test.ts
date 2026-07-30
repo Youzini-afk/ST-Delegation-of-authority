@@ -160,11 +160,39 @@ describe('Security Center tab interaction', () => {
         expect(source).toContain("agentMain?.toggleAttribute('inert', shouldInert)");
         expect(source).toContain('getCenterArea(this.state.selectedTab) !== getCenterArea(tab)');
         expect(source).toContain("this.state.system.selectedView = 'recovery'");
-        expect(source).toContain("this.setMobileSurface('settings-editor', true, element)");
-        expect(source).toContain("this.setMobileSurface('system-detail')");
-        expect(css).toContain("[data-mobile-area='governance'][data-mobile-surface='none'] .authority-governance-stage");
+        expect(source).toContain("this.setMobileSurface('settings-editor', true, undefined, mobileFocusOrigin)");
+        expect(source).toContain("this.setMobileSurface('system-detail', true, undefined, mobileFocusOrigin)");
+        expect(css).toContain('.authority-governance-layout > .authority-governance-stage');
+        expect(css).toContain("[data-mobile-area='governance'][data-mobile-surface='governance-detail'] .authority-governance-stage");
         expect(css).toContain("[data-mobile-area='settings'][data-mobile-surface='settings-editor'] .authority-model-editor");
         expect(css).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))');
+    });
+
+    it('uses restrained motion for real view changes without replaying it during background redraws', () => {
+        expect(css).toContain('--authority-motion-panel: 220ms');
+        expect(css).toContain('@keyframes authority-view-enter');
+        expect(css).toContain('@keyframes authority-dialog-enter');
+        expect(css).toContain('.authority-area-panel:not([hidden]) > .authority-section:not([hidden])');
+        expect(css).toContain('.authority-motion-enter');
+        expect(css).toContain('visibility 0s linear var(--authority-motion-panel)');
+        expect(css).toContain('animation: none !important');
+        expect(css).toContain('transition-delay: 0s !important');
+        expect(css).toContain(':is(.authority-panel, .authority-permission-dialog, .authority-impact-dialog),');
+        expect(source).toContain('private playSurfaceEntrance(selector: string): void');
+        expect(source).toContain("window.matchMedia('(prefers-reduced-motion: reduce)').matches");
+        expect(source).toContain("setInert('.authority-recovery-detail'");
+        expect(source).toContain("setInert('.authority-model-editor'");
+        expect(source).toContain('preparedOrigin === undefined ? this.captureMobileFocus(origin) : preparedOrigin');
+        expect(systemWorkbench).toContain('class="authority-recovery-detail"');
+        expect(systemCss).toContain('.authority-recovery-detail {');
+        expect(systemCss).toContain('.authority-system-recovery > .authority-recovery-detail > .authority-recovery-inspector');
+
+        const renderStart = source.indexOf('private render(): void {');
+        const renderEnd = source.indexOf('private renderHeader(): void {', renderStart);
+        expect(source.slice(renderStart, renderEnd)).not.toContain('playSurfaceEntrance');
+        const agentSurfaceStart = source.indexOf('private renderAgentSurfaces(): void {');
+        const agentSurfaceEnd = source.indexOf('private captureAgentFormDraft', agentSurfaceStart);
+        expect(source.slice(agentSurfaceStart, agentSurfaceEnd)).not.toContain('playSurfaceEntrance');
     });
 
     it('keeps the approved direction: compact product bar, persistent top navigation, and extension-first governance', () => {

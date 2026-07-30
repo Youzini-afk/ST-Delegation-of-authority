@@ -157,32 +157,34 @@ function renderRecovery(state) {
                 </div>
             </aside>
 
-            <main class="authority-recovery-diff">
-                <header class="authority-mobile-recovery-header authority-mobile-only">
-                    <button type="button" data-action="mobile-close-surface" aria-label="返回恢复历史">‹</button>
-                    <strong>检查点详情</strong>
-                    <span aria-hidden="true"></span>
-                </header>
-                ${viewHeader(selected ? `CP-${String(selectedNumber).padStart(2, '0')} · ${selected.message}` : '版本与恢复', selected ? `${selected.id.slice(0, 12)} · ${formatDate(selected.createdAt)}` : '选择一个检查点查看路径差异。', '', selected?.id === headId ? runtimeState('ready', '当前检查点') : '')}
-                <div class="authority-recovery-diff__scroll">
-                    ${status?.pendingRollback ? `<div class="authority-recovery-pending"><strong>检测到未完成的回退事务</strong><span>操作 ${escapeHtml(status.pendingRollback.operationId)} 可以安全继续。</span><button type="button" class="authority-action-button authority-action-button--primary" data-action="system-recovery-resume" ${disabled}>继续回退</button></div>` : ''}
-                    ${status?.changes.length ? `<details class="authority-system-inline-details" open><summary>相对当前检查点的未记录变更 <span>${status.changes.length}</span></summary>${renderDiff(status.changes)}</details>` : ''}
-                    <section class="authority-runtime-section"><div class="authority-section-heading"><div><h3>检查点内容变化</h3><div class="authority-muted">${selected?.parents.length ? '相对上一个检查点' : '初始检查点'}</div></div><span class="authority-section-count">${recovery.workspaceDiff?.entries.length ?? 0}</span></div>${recovery.workspaceDiff?.entries.length ? renderDiff(recovery.workspaceDiff.entries) : '<div class="authority-empty">该检查点没有可显示的路径差异。</div>'}</section>
-                </div>
-                <footer class="authority-recovery-note">.git、node_modules 与 Authority 历史库不会被纳入检查点。</footer>
-            </main>
+            <div class="authority-recovery-detail">
+                <main class="authority-recovery-diff">
+                    <header class="authority-mobile-recovery-header authority-mobile-only">
+                        <button type="button" data-action="mobile-close-surface" aria-label="返回恢复历史">‹</button>
+                        <strong>检查点详情</strong>
+                        <span aria-hidden="true"></span>
+                    </header>
+                    ${viewHeader(selected ? `CP-${String(selectedNumber).padStart(2, '0')} · ${selected.message}` : '版本与恢复', selected ? `${selected.id.slice(0, 12)} · ${formatDate(selected.createdAt)}` : '选择一个检查点查看路径差异。', '', selected?.id === headId ? runtimeState('ready', '当前检查点') : '')}
+                    <div class="authority-recovery-diff__scroll">
+                        ${status?.pendingRollback ? `<div class="authority-recovery-pending"><strong>检测到未完成的回退事务</strong><span>操作 ${escapeHtml(status.pendingRollback.operationId)} 可以安全继续。</span><button type="button" class="authority-action-button authority-action-button--primary" data-action="system-recovery-resume" ${disabled}>继续回退</button></div>` : ''}
+                        ${status?.changes.length ? `<details class="authority-system-inline-details" open><summary>相对当前检查点的未记录变更 <span>${status.changes.length}</span></summary>${renderDiff(status.changes)}</details>` : ''}
+                        <section class="authority-runtime-section"><div class="authority-section-heading"><div><h3>检查点内容变化</h3><div class="authority-muted">${selected?.parents.length ? '相对上一个检查点' : '初始检查点'}</div></div><span class="authority-section-count">${recovery.workspaceDiff?.entries.length ?? 0}</span></div>${recovery.workspaceDiff?.entries.length ? renderDiff(recovery.workspaceDiff.entries) : '<div class="authority-empty">该检查点没有可显示的路径差异。</div>'}</section>
+                    </div>
+                    <footer class="authority-recovery-note">.git、node_modules 与 Authority 历史库不会被纳入检查点。</footer>
+                </main>
 
-            <aside class="authority-context-rail authority-recovery-inspector">
-                <div class="authority-context-rail__header"><strong>恢复</strong></div>
-                <div class="authority-context-rail__scroll">
-                    <section class="authority-context-rail__section">
-                        <div class="authority-section-heading"><div><h3>恢复到此检查点</h3></div></div>
-                        ${selected ? `<p>将受跟踪文件恢复到 <code>${escapeHtml(selected.id.slice(0, 12))}</code> 的状态。</p><ul class="authority-impact-list"><li>${recovery.workspaceDiff?.entries.length ?? 0} 个路径属于该检查点差异</li><li>未跟踪文件与排除目录保持不变</li><li>恢复前自动创建安全检查点</li></ul>${selected.id === headId ? okState('当前已经位于此检查点') : `<button type="button" class="authority-action-button authority-action-button--primary authority-block-action" data-action="system-recovery-rollback" data-commit-id="${escapeHtml(selected.id)}" ${disabled}>恢复到此处</button>`}` : '<div class="authority-empty">先建立或选择检查点。</div>'}
-                    </section>
-                    <section class="authority-context-rail__section"><div class="authority-section-heading"><div><h3>当前保护</h3></div></div>${okState(status?.pendingRollback ? '存在待继续的回退' : '没有待继续的回退')}<div class="authority-muted">当前 HEAD：<code>${escapeHtml(headId?.slice(0, 12) ?? '尚无')}</code></div></section>
-                    <details class="authority-context-rail__section authority-offline-rescue"><summary>离线救援</summary><p>即使 SillyTavern 无法启动，也可以在插件目录中运行：</p><code>node runtime/agent.cjs rescue status --workspace ${escapeHtml(workspace?.id ?? 'sillytavern')}</code></details>
-                </div>
-            </aside>
+                <aside class="authority-context-rail authority-recovery-inspector">
+                    <div class="authority-context-rail__header"><strong>恢复</strong></div>
+                    <div class="authority-context-rail__scroll">
+                        <section class="authority-context-rail__section">
+                            <div class="authority-section-heading"><div><h3>恢复到此检查点</h3></div></div>
+                            ${selected ? `<p>将受跟踪文件恢复到 <code>${escapeHtml(selected.id.slice(0, 12))}</code> 的状态。</p><ul class="authority-impact-list"><li>${recovery.workspaceDiff?.entries.length ?? 0} 个路径属于该检查点差异</li><li>未跟踪文件与排除目录保持不变</li><li>恢复前自动创建安全检查点</li></ul>${selected.id === headId ? okState('当前已经位于此检查点') : `<button type="button" class="authority-action-button authority-action-button--primary authority-block-action" data-action="system-recovery-rollback" data-commit-id="${escapeHtml(selected.id)}" ${disabled}>恢复到此处</button>`}` : '<div class="authority-empty">先建立或选择检查点。</div>'}
+                        </section>
+                        <section class="authority-context-rail__section"><div class="authority-section-heading"><div><h3>当前保护</h3></div></div>${okState(status?.pendingRollback ? '存在待继续的回退' : '没有待继续的回退')}<div class="authority-muted">当前 HEAD：<code>${escapeHtml(headId?.slice(0, 12) ?? '尚无')}</code></div></section>
+                        <details class="authority-context-rail__section authority-offline-rescue"><summary>离线救援</summary><p>即使 SillyTavern 无法启动，也可以在插件目录中运行：</p><code>node runtime/agent.cjs rescue status --workspace ${escapeHtml(workspace?.id ?? 'sillytavern')}</code></details>
+                    </div>
+                </aside>
+            </div>
         </div>
     `;
 }

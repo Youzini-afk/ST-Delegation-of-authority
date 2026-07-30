@@ -57,6 +57,9 @@
   color: var(--authority-muted);
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color var(--authority-motion-fast) var(--authority-ease-standard),
+    color var(--authority-motion-fast) var(--authority-ease-standard);
 }
 
 .authority-system-nav__item::before {
@@ -68,6 +71,12 @@
   border-radius: 2px;
   background: transparent;
   content: '';
+  opacity: 0;
+  transform: scaleY(.45);
+  transition:
+    background-color var(--authority-motion-fast) var(--authority-ease-standard),
+    opacity var(--authority-motion-base) var(--authority-ease-enter),
+    transform var(--authority-motion-base) var(--authority-ease-enter);
 }
 
 .authority-system-nav__item:hover {
@@ -82,6 +91,8 @@
 
 .authority-system-nav__item--active::before {
   background: var(--authority-accent);
+  opacity: 1;
+  transform: scaleY(1);
 }
 
 .authority-system-nav__item > span {
@@ -365,6 +376,7 @@
 
 .authority-system-inline-details > summary::after {
   content: '›';
+  transition: transform var(--authority-motion-fast) var(--authority-ease-standard);
 }
 
 .authority-system-inline-details[open] > summary::after {
@@ -524,6 +536,10 @@
   overflow: hidden;
 }
 
+.authority-recovery-detail {
+  display: contents;
+}
+
 .authority-recovery-history {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
@@ -604,6 +620,9 @@
   color: var(--authority-text);
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color var(--authority-motion-fast) var(--authority-ease-standard),
+    color var(--authority-motion-fast) var(--authority-ease-standard);
 }
 
 .authority-recovery-commit::before {
@@ -614,6 +633,12 @@
   width: 2px;
   background: transparent;
   content: '';
+  opacity: 0;
+  transform: scaleY(.45);
+  transition:
+    background-color var(--authority-motion-fast) var(--authority-ease-standard),
+    opacity var(--authority-motion-base) var(--authority-ease-enter),
+    transform var(--authority-motion-base) var(--authority-ease-enter);
 }
 
 .authority-recovery-commit:hover {
@@ -626,6 +651,8 @@
 
 .authority-recovery-commit--active::before {
   background: var(--authority-accent);
+  opacity: 1;
+  transform: scaleY(1);
 }
 
 .authority-recovery-commit > span {
@@ -894,7 +921,7 @@
     overflow: auto;
   }
 
-  .authority-system-recovery > .authority-context-rail {
+  .authority-system-recovery > .authority-recovery-detail > .authority-recovery-inspector {
     grid-column: 1 / -1;
     min-height: 300px;
     border-top: 1px solid var(--authority-border);
@@ -959,7 +986,7 @@
     max-height: 150px;
   }
 
-  .authority-system-recovery > .authority-context-rail {
+  .authority-system-recovery > .authority-recovery-detail > .authority-recovery-inspector {
     grid-column: auto;
   }
 
@@ -1040,6 +1067,7 @@
   }
 
   .authority-system-recovery {
+    position: relative;
     display: block;
     width: 100%;
     height: 100%;
@@ -1048,11 +1076,20 @@
   }
 
   .authority-recovery-history {
+    position: absolute;
+    inset: 0;
     grid-template-rows: auto auto auto minmax(0, 1fr);
     width: 100%;
     height: 100%;
     max-height: none;
     border: 0;
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      opacity var(--authority-motion-base) var(--authority-ease-standard),
+      transform var(--authority-motion-panel) var(--authority-ease-enter),
+      visibility 0s linear var(--authority-motion-panel);
+    visibility: visible;
   }
 
   .authority-recovery-history__header {
@@ -1086,22 +1123,44 @@
     border-radius: 0;
   }
 
-  .authority-recovery-diff,
-  .authority-recovery-inspector {
-    display: none;
-  }
-
-  [data-mobile-area='system'][data-mobile-surface='system-detail'] .authority-system-recovery {
+  .authority-recovery-detail {
+    position: absolute;
+    inset: 0;
+    display: block;
+    min-height: 0;
     overflow: auto;
+    opacity: 0;
     overscroll-behavior: contain;
+    pointer-events: none;
+    transform: translate3d(24px, 0, 0);
+    transition:
+      opacity var(--authority-motion-base) var(--authority-ease-standard),
+      transform var(--authority-motion-panel) var(--authority-ease-enter),
+      visibility 0s linear var(--authority-motion-panel);
+    visibility: hidden;
   }
 
   [data-mobile-area='system'][data-mobile-surface='system-detail'] .authority-recovery-history {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(-18px, 0, 0);
+    visibility: hidden;
   }
 
-  [data-mobile-area='system'][data-mobile-surface='system-detail'] .authority-recovery-diff,
-  [data-mobile-area='system'][data-mobile-surface='system-detail'] .authority-recovery-inspector {
+  [data-mobile-area='system'][data-mobile-surface='system-detail'] .authority-recovery-detail {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate3d(0, 0, 0);
+    transition-delay: 0s;
+    visibility: visible;
+  }
+
+  [data-mobile-area='system'][data-mobile-surface='none'] .authority-recovery-history {
+    transition-delay: 0s;
+  }
+
+  .authority-recovery-diff,
+  .authority-recovery-inspector {
     display: block;
     width: 100%;
     height: auto;
