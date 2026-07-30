@@ -62,6 +62,8 @@ describe('System and recovery workbench rendering', () => {
         expect(html).toContain('data-action="system-select-checkpoint"');
         expect(html).toContain('data-action="system-recovery-rollback"');
         expect(html).toContain('data-action="system-recovery-resume"');
+        expect(html).toContain('class="authority-mobile-recovery-header authority-mobile-only"');
+        expect(html).toContain('data-action="mobile-close-surface"');
         expect(html).toContain('恢复前自动创建安全检查点');
         expect(html).toContain('node runtime/agent.cjs rescue status --workspace sillytavern');
     });

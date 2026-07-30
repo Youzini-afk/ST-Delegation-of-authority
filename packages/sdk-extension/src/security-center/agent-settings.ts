@@ -37,6 +37,7 @@ export function renderAgentSettings(state: AgentWorkbenchState): string {
                     </nav>
                     <section class="authority-model-editor" aria-label="连接配置">
                         <header>
+                            <button type="button" class="authority-settings-mobile-back authority-mobile-only" data-action="mobile-close-surface" aria-label="返回模型连接列表">‹</button>
                             <div><span class="authority-eyebrow">${selected ? 'EDIT CONNECTION' : 'NEW CONNECTION'}</span><h3>${escapeHtml(selected?.displayName ?? '新增模型连接')}</h3></div>
                             ${selected?.apiKeyConfigured ? '<span class="authority-pill authority-pill--granted">已配置密钥</span>' : '<span class="authority-pill authority-pill--prompt">未配置密钥</span>'}
                         </header>

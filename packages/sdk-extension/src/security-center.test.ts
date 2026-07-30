@@ -151,10 +151,15 @@ describe('Security Center tab interaction', () => {
         expect(mobileDestinations.map(match => match[1])).toEqual(['agent', 'governance', 'system', 'settings']);
         expect(html).toContain('data-action="mobile-close-surface"');
         expect(html).toContain('data-role="mobile-governance-tabs"');
+        expect(html).toContain('data-mobile-surface="governance-inspector"');
         expect(source).toContain("target.closest<HTMLElement>('[data-action^=\"mobile-\"]')");
         expect(source).toContain('this.root.dataset.mobileSurface = this.state.mobile.surface');
         expect(source).toContain('getCenterArea(this.state.selectedTab) !== getCenterArea(tab)');
+        expect(source).toContain("this.state.system.selectedView = 'recovery'");
+        expect(source).toContain("this.setMobileSurface('settings-editor')");
+        expect(source).toContain("this.setMobileSurface('system-detail')");
         expect(css).toContain("[data-mobile-area='governance'][data-mobile-surface='none'] .authority-governance-stage");
+        expect(css).toContain("[data-mobile-area='settings'][data-mobile-surface='settings-editor'] .authority-model-editor");
         expect(css).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))');
     });
 

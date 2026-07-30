@@ -235,6 +235,9 @@ class SecurityCenterView {
             if (actionTab) {
                 const tab = actionTab.dataset.tab;
                 if (isValidCenterTab(tab)) {
+                    if (actionTab.closest('[data-role="mobile-governance-tabs"]')) {
+                        this.state.mobile.surface = 'governance-detail';
+                    }
                     this.switchTab(tab);
                 }
                 return;
@@ -669,10 +672,12 @@ class SecurityCenterView {
                 return;
             case 'agent-edit-profile':
                 this.state.agent.selectedProfileId = element.dataset.profileId ?? null;
+                this.setMobileSurface('settings-editor');
                 this.renderSettingsSection();
                 return;
             case 'agent-new-profile':
                 this.state.agent.selectedProfileId = null;
+                this.setMobileSurface('settings-editor');
                 this.renderSettingsSection();
                 return;
             case 'agent-save-profile':
@@ -796,6 +801,7 @@ class SecurityCenterView {
     }
 
     private selectSystemView(view: SystemView): void {
+        this.setMobileSurface('none');
         this.state.system.selectedView = view;
         this.renderUpdatesSection();
         const activeButton = this.root.querySelector<HTMLElement>(`[data-action="system-select-view"][data-system-view="${view}"]`);
@@ -847,6 +853,8 @@ class SecurityCenterView {
         const commit = this.state.system.workspaceCommits.find(item => item.id === commitId);
         if (!workspace || !commit || this.state.system.recoveryLoading || this.state.system.recoveryBusy) return;
         this.state.system.selectedCommitId = commitId;
+        this.state.system.workspaceDiff = null;
+        this.setMobileSurface('system-detail');
         this.state.system.recoveryLoading = true;
         void this.renderUpdatesSection();
         try {
@@ -1292,6 +1300,7 @@ class SecurityCenterView {
             if (this.state.agent.selectedProfileId === profileId) {
                 this.state.agent.selectedProfileId = null;
             }
+            this.state.mobile.surface = 'none';
             return 'LLM 配置已删除';
         });
     }
@@ -1952,6 +1961,7 @@ class SecurityCenterView {
             const detail = await authorityRequest<ExtensionDetailResponse>(`/extensions/${encodeURIComponent(extensionId)}`);
             this.state.details.set(extensionId, detail);
         }
+        this.state.mobile.surface = 'governance-detail';
         void this.render();
     }
 
@@ -2063,6 +2073,11 @@ class SecurityCenterView {
                 if (!isMobileSurface(surface) || surface === 'none') {
                     return false;
                 }
+                if (surface === 'governance-inspector') {
+                    this.state.selectedTab = 'detail';
+                    this.renderTabs();
+                    this.toggleSections();
+                }
                 this.setMobileSurface(surface);
                 return true;
             }
@@ -2075,7 +2090,16 @@ class SecurityCenterView {
                     return false;
                 }
                 this.state.mobile.surface = 'none';
+                if (tab === 'updates') {
+                    this.state.system.selectedView = 'recovery';
+                }
                 this.switchTab(tab);
+                if (tab === 'updates') {
+                    this.renderUpdatesSection();
+                    if (!this.state.system.recoveryLoaded && !this.state.system.recoveryLoading) {
+                        void this.refreshSystemRecovery();
+                    }
+                }
                 this.renderMobilePresentation();
                 return true;
             }
@@ -2192,6 +2216,7 @@ class SecurityCenterView {
     private renderTabs(): void {
         const tablist = this.root.querySelector<HTMLElement>('[role="tablist"]');
         const activeArea = getCenterArea(this.state.selectedTab);
+        this.root.dataset.admin = this.state.isAdmin ? 'true' : 'false';
 
         for (const areaTab of this.root.querySelectorAll<HTMLElement>('[data-area]')) {
             const area = areaTab.dataset.area as CenterArea | undefined;
@@ -2246,6 +2271,7 @@ class SecurityCenterView {
         const draft = this.captureAgentFormDraft(container);
         container.innerHTML = renderAgentSettings(this.state.agent);
         this.restoreAgentFormDraft(container, draft);
+        this.renderMobilePresentation();
     }
 
     private renderExtensionList(): void {
@@ -2292,6 +2318,7 @@ class SecurityCenterView {
             : '<div class="authority-empty">只有管理员可以使用 Agent 工作台。</div>';
         this.restoreAgentFormDraft(container, draft);
         this.restoreAgentFocus(container, focus);
+        this.renderMobilePresentation();
     }
 
     private renderAgentSurfaces(): void {
@@ -2368,6 +2395,7 @@ class SecurityCenterView {
         container.innerHTML = this.state.isAdmin
             ? renderSystemWorkbench(this.state)
             : '<div class="authority-empty">只有管理员可以使用这里的维护、备份和迁移功能。</div>';
+        this.renderMobilePresentation();
     }
 
     private getRequiredSessionToken(): string {
@@ -2461,7 +2489,15 @@ class SecurityCenterView {
         }
 
         for (const tab of this.root.querySelectorAll<HTMLElement>('[data-role="mobile-governance-tabs"] [data-tab]')) {
-            const isActive = tab.dataset.tab === this.state.selectedTab;
+            const isActive = tab.dataset.tab === this.state.selectedTab
+                && this.state.mobile.surface !== 'governance-inspector';
+            tab.classList.toggle('authority-mobile-governance-tab--active', isActive);
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
+        }
+
+        for (const tab of this.root.querySelectorAll<HTMLElement>('[data-role="mobile-governance-tabs"] [data-mobile-surface]')) {
+            const isActive = tab.dataset.mobileSurface === this.state.mobile.surface;
             tab.classList.toggle('authority-mobile-governance-tab--active', isActive);
             tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
             tab.setAttribute('tabindex', isActive ? '0' : '-1');
@@ -2470,7 +2506,7 @@ class SecurityCenterView {
         const title = this.root.querySelector<HTMLElement>('[data-role="mobile-governance-title"]');
         if (title) {
             const extension = this.state.extensions.find(item => item.id === this.state.selectedExtensionId);
-            title.textContent = this.state.selectedTab === 'detail' && extension ? extension.displayName : '扩展治理';
+            title.textContent = extension ? extension.displayName : '扩展治理';
         }
     }
 

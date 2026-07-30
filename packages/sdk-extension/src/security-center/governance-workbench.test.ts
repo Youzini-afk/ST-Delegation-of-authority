@@ -61,6 +61,7 @@ describe('Extension governance workbench rendering', () => {
         expect(html).toContain('data-action="reset-all-grants"');
         expect(html).toContain('data-tab="activity"');
         expect(html).toContain('authority-storage-strip');
+        expect(html).toContain('authority-extension-inspector');
     });
 
     it('keeps every policy field and adds accessible field names', () => {

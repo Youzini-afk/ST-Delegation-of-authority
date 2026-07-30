@@ -169,6 +169,8 @@ describe('Agent session workbench rendering', () => {
         expect(settings).toContain('data-action="agent-save-profile"');
         expect(settings).toContain('data-action="agent-new-profile"');
         expect(settings).toContain('data-action="agent-delete-profile"');
+        expect(settings).toContain('class="authority-settings-mobile-back authority-mobile-only"');
+        expect(settings).toContain('data-action="mobile-close-surface"');
         expect(settings).not.toContain('工具目录');
         expect(settings).not.toContain('注册工作区');
     });

@@ -4179,6 +4179,10 @@
     background: #17130e;
   }
 
+  [data-admin='false'] .authority-mobile-nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .authority-mobile-nav__item {
     position: relative;
     display: grid;
@@ -4714,5 +4718,298 @@
   .authority-agent-rail,
   .authority-agent-inspector {
     transition: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .authority-governance-stage .authority-view-canvas,
+  .authority-governance-stage .authority-section,
+  .authority-governance-detail,
+  .authority-extension-dossier,
+  .authority-policy-workspace,
+  .authority-governance-page {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .authority-governance-stage .authority-view-canvas {
+    overflow: hidden;
+  }
+
+  .authority-extension-dossier,
+  .authority-policy-workspace {
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  [data-mobile-area='governance'][data-mobile-surface='governance-detail'] .authority-view-canvas .authority-context-rail {
+    display: none;
+  }
+
+  [data-mobile-area='governance'][data-mobile-surface='governance-inspector'] .authority-extension-dossier__main {
+    display: none;
+  }
+
+  [data-mobile-area='governance'][data-mobile-surface='governance-inspector'] .authority-extension-inspector {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    border: 0;
+  }
+
+  .authority-extension-dossier__main,
+  .authority-policy-workspace__main {
+    min-height: 0;
+  }
+
+  .authority-dossier-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 54px;
+    padding: 8px 14px;
+  }
+
+  .authority-dossier-title {
+    min-width: 0;
+  }
+
+  .authority-dossier-title__line h2 {
+    display: none;
+  }
+
+  .authority-dossier-identity {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 0.68em;
+  }
+
+  .authority-dossier-identity span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .authority-dossier-actions {
+    margin-left: auto;
+  }
+
+  .authority-dossier-actions .authority-action-button {
+    min-height: 38px;
+  }
+
+  .authority-extension-dossier__scroll,
+  .authority-policy-workspace__scroll,
+  .authority-governance-page {
+    min-height: 0;
+    padding: 14px 16px 24px;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  .authority-extension-facts,
+  .authority-governance-glance,
+  .authority-storage-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .authority-extension-facts > span {
+    min-height: 54px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--authority-border);
+  }
+
+  .authority-extension-facts > span:nth-child(odd) {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .authority-extension-facts > span:nth-child(-n + 2) {
+    border-top: 0;
+  }
+
+  .authority-capability-row,
+  .authority-grant-settings-row {
+    min-height: 52px;
+  }
+
+  .authority-extension-inspector .authority-context-rail__header {
+    min-height: 48px;
+    padding-inline: 16px;
+  }
+
+  .authority-extension-inspector .authority-context-rail__scroll {
+    min-height: 0;
+    padding-bottom: 24px;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  .authority-policy-workspace__main > .authority-governance-page__header {
+    padding: 12px 14px;
+  }
+
+  .authority-policy-workspace__main > .authority-governance-page__header p,
+  .authority-policy-inspector {
+    display: none;
+  }
+
+  .authority-policy-savebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 9px 12px max(9px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .authority-policy-savebar .authority-action-button {
+    min-height: 40px;
+  }
+
+  .authority-section[data-section='settings'] {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .authority-settings-shell,
+  .authority-settings-content,
+  .authority-model-settings {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .authority-settings-shell {
+    display: block;
+  }
+
+  .authority-settings-nav {
+    display: none;
+  }
+
+  .authority-settings-content {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .authority-settings-content__header {
+    display: flex;
+    align-items: center;
+    min-height: 56px;
+    padding: 9px 14px;
+  }
+
+  .authority-settings-content__header p {
+    display: none;
+  }
+
+  .authority-settings-content__header .authority-action-button {
+    min-height: 40px;
+  }
+
+  .authority-model-settings {
+    display: block;
+    overflow: hidden;
+  }
+
+  .authority-model-profile-list {
+    display: grid;
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    align-content: start;
+    width: 100%;
+    height: 100%;
+    padding: 8px 10px 20px;
+    overflow: auto;
+    border: 0;
+  }
+
+  .authority-model-profile {
+    min-height: 58px;
+    padding: 10px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--authority-border);
+    border-radius: 0;
+  }
+
+  .authority-model-profile--active {
+    border-color: var(--authority-border);
+    box-shadow: inset 2px 0 0 var(--authority-accent);
+  }
+
+  .authority-model-editor {
+    display: none;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    overflow: auto;
+  }
+
+  [data-mobile-area='settings'][data-mobile-surface='settings-editor'] .authority-settings-content__header,
+  [data-mobile-area='settings'][data-mobile-surface='settings-editor'] .authority-model-profile-list {
+    display: none;
+  }
+
+  [data-mobile-area='settings'][data-mobile-surface='settings-editor'] .authority-model-editor {
+    display: grid;
+  }
+
+  .authority-model-editor > header {
+    position: sticky;
+    z-index: 2;
+    top: 0;
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    min-height: 52px;
+    padding: 0 8px;
+    border-bottom: 1px solid var(--authority-border);
+    background: #0d1014;
+  }
+
+  .authority-settings-mobile-back {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    place-items: center;
+    border: 0;
+    background: transparent;
+    color: var(--authority-muted);
+    font-size: 1.2em;
+  }
+
+  .authority-model-editor__section {
+    margin-inline: 16px;
+    padding-block: 16px;
+  }
+
+  .authority-model-editor__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .authority-model-editor .authority-agent-field input,
+  .authority-model-editor .authority-agent-field select {
+    min-height: 44px;
+  }
+
+  .authority-model-editor > footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    padding: 14px 16px max(14px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .authority-model-editor > footer .authority-action-button {
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .authority-impact-dialog {
+    width: min(100%, 560px);
+    max-height: calc(100dvh - 120px);
+    overflow: auto;
   }
 }
