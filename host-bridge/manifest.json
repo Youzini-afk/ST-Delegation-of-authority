@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "bridgeVersion": "1.1.0",
+  "bridgeVersion": "1.1.1",
   "host": "sillytavern",
   "supportedPackageVersions": [
     "1.18.0"
