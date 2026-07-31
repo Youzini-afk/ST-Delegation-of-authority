@@ -5455,7 +5455,7 @@ class AdminPackageService {
         return operation;
     }
     saveOperation(user, operation) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
     }
     toPublicOperation(operation) {
         const { artifactPath: _artifactPath, sourcePath: _sourcePath, ...publicOperation } = operation;
@@ -5847,7 +5847,7 @@ function writeFile(root, args, signal) {
     }
     // ponytail: Node has no portable dirfd-relative atomic rename; repeated realpath/lstat checks cover ordinary races.
     // Move writes into a native openat/handle layer if hostile same-account filesystem races enter the threat model.
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(resolved.absolutePath, content);
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(resolved.absolutePath, content);
     return { path: resolved.relativePath, bytesWritten: Buffer.byteLength(content) };
 }
 function replaceText(root, args, signal) {
@@ -5875,7 +5875,7 @@ function replaceText(root, args, signal) {
     if (signal.aborted) {
         throw abortError(signal);
     }
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(writeTarget.absolutePath, next);
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(writeTarget.absolutePath, next);
     return { path: resolved.relativePath, replacements: replaceAll ? matches : 1 };
 }
 async function runShell(root, args, context, artifacts) {
@@ -6804,7 +6804,7 @@ function readJson(filePath, label) {
     }
 }
 function protectDirectory(dirPath) {
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
     if (process.platform !== 'win32') {
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
     }
@@ -10953,7 +10953,7 @@ function createAndSync(filePath, content) {
         if (descriptor !== null)
             node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
     }
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
 }
 function truncateAndSync(filePath, length) {
     let descriptor = null;
@@ -11095,7 +11095,7 @@ function assertFileId(value, label) {
     }
 }
 function protectDirectory(dirPath) {
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
     if (process.platform !== 'win32')
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
 }
@@ -17560,7 +17560,7 @@ class NativeMigrationService {
                         });
                         this.saveOperation({ ...applying, status: 'needs_rollback', updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(), journal });
                     }
-                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
+                    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
                     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(write.tempPath, write.targetPath);
                     const completedEntry = {
                         archivePath: write.preview.archivePath,
@@ -17651,7 +17651,7 @@ class NativeMigrationService {
         return operation;
     }
     saveOperation(operation) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
     }
     toPublicOperation(operation) {
         const { sourcePath: _sourcePath, rootPath: _rootPath, journal, ...publicOperation } = operation;
@@ -17811,7 +17811,7 @@ function normalizeApplyMode(value) {
     throw new Error(`Unsupported native migration apply mode: ${String(value)}`);
 }
 function prepareNativeWriteTarget(rootPath, relativePath) {
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
     const targetPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(rootPath, relativePath);
     (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
     const realRoot = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
@@ -17861,7 +17861,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
                 continue;
             }
@@ -17880,7 +17880,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
             }
         }
@@ -18634,7 +18634,7 @@ async function scanSafeZip(filePath, options = {}) {
     };
 }
 async function extractSafeZipEntries(filePath, targetRoot, shouldExtract = () => true, options = {}) {
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
     const parsedEntries = parseZipEntries(filePath, options);
     const extracted = [];
     for (const parsedEntry of parsedEntries) {
@@ -18874,7 +18874,7 @@ function readZip64Extra(extra, values) {
     return { compressedSize, uncompressedSize, localHeaderOffset };
 }
 async function extractParsedEntry(filePath, entry, destinationPath) {
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
     const source = node_fs__WEBPACK_IMPORTED_MODULE_1___default().createReadStream(filePath, {
         start: entry.dataStart,
         end: entry.dataStart + entry.compressedSizeBytes - 1,
@@ -19364,7 +19364,7 @@ class StManagerBridgeService {
         return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.statePath, {});
     }
     writeState(state) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
         const tempPath = `${this.statePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, this.statePath);
@@ -19827,7 +19827,7 @@ function readJsonObject(filePath) {
     }
 }
 function atomicWriteBuffer(filePath, buffer) {
-    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
     const tempPath = `${filePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, buffer);
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
@@ -20009,7 +20009,7 @@ class StManagerResourceLocator {
         return candidateReal;
     }
     resolveWritablePath(rootPath, relativePath) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
         const rootReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
         const candidate = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(rootReal, relativePath.split('/').join((node_path__WEBPACK_IMPORTED_MODULE_2___default().sep)));
         (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(candidate));
@@ -22786,7 +22786,7 @@ class WorkspaceHistoryService {
         if (current) {
             this.removeWorkspaceNode(workspace, relativePath, current, warnings);
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
         this.resolveSafeWorkspacePath(workspace, relativePath);
         if (target.kind === 'tree') {
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
@@ -22964,7 +22964,7 @@ class WorkspaceHistoryService {
             this.readCommit(commit.id, commit.workspaceId);
             return;
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
     }
     readCommit(commitId, workspaceId) {
         assertOid(commitId);
@@ -22996,7 +22996,7 @@ class WorkspaceHistoryService {
             stats.reusedBytes += content.byteLength;
             return oid;
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
         stats.storedBytes += content.byteLength;
         return oid;
     }
@@ -23095,7 +23095,7 @@ class WorkspaceHistoryService {
         return ref;
     }
     writeRef(ref) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
     }
     readRegistry() {
         this.ensureStore();
@@ -23116,7 +23116,7 @@ class WorkspaceHistoryService {
         return registry;
     }
     writeRegistry(registry) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
     }
     getStoredWorkspace(workspaceId) {
         if (workspaceId.length > 128 || !isSafeName(workspaceId)) {
@@ -23204,7 +23204,7 @@ class WorkspaceHistoryService {
             }
             return;
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
     }
     removeMatchingRollbackJournal(workspaceId, operationId) {
         const journal = this.readRollbackJournal(workspaceId);
@@ -23222,7 +23222,7 @@ class WorkspaceHistoryService {
     }
     ensureStore() {
         for (const dir of ['objects', 'commits', 'refs', 'journals', 'rollbacks', 'operations', 'locks']) {
-            ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
         }
     }
     registryPath() {
@@ -24714,17 +24714,17 @@ module.exports = require("node:zlib");
 /******/ 	});
 /************************************************************************/
 /******/ 	// The module cache
-/******/ 	const __webpack_module_cache__ = {};
+/******/ 	var __webpack_module_cache__ = {};
 /******/ 	
 /******/ 	// The require function
 /******/ 	function __webpack_require__(moduleId) {
 /******/ 		// Check if module is in cache
-/******/ 		const cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
 /******/ 		if (cachedModule !== undefined) {
 /******/ 			return cachedModule.exports;
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
-/******/ 		const module = __webpack_module_cache__[moduleId] = {
+/******/ 		var module = __webpack_module_cache__[moduleId] = {
 /******/ 			// no module.id needed
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
@@ -24733,7 +24733,7 @@ module.exports = require("node:zlib");
 /******/ 		// Execute the module function
 /******/ 		if (!(moduleId in __webpack_modules__)) {
 /******/ 			delete __webpack_module_cache__[moduleId];
-/******/ 			const e = new Error("Cannot find module '" + moduleId + "'");
+/******/ 			var e = new Error("Cannot find module '" + moduleId + "'");
 /******/ 			e.code = 'MODULE_NOT_FOUND';
 /******/ 			throw e;
 /******/ 		}
@@ -24748,7 +24748,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// getDefaultExport function for compatibility with non-harmony modules
 /******/ 		__webpack_require__.n = (module) => {
-/******/ 			const getter = module && module.__esModule ?
+/******/ 			var getter = module && module.__esModule ?
 /******/ 				() => (module['default']) :
 /******/ 				() => (module);
 /******/ 			__webpack_require__.d(getter, { a: getter });
@@ -24758,26 +24758,11 @@ module.exports = require("node:zlib");
 /******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
-/******/ 		// define getter/value functions for harmony exports
+/******/ 		// define getter functions for harmony exports
 /******/ 		__webpack_require__.d = (exports, definition) => {
-/******/ 			if(Array.isArray(definition)) {
-/******/ 				var i = 0;
-/******/ 				while(i < definition.length) {
-/******/ 					var key = definition[i++];
-/******/ 					var binding = definition[i++];
-/******/ 					if(!__webpack_require__.o(exports, key)) {
-/******/ 						if(binding === 0) {
-/******/ 							Object.defineProperty(exports, key, { enumerable: true, value: definition[i++] });
-/******/ 						} else {
-/******/ 							Object.defineProperty(exports, key, { enumerable: true, get: binding });
-/******/ 						}
-/******/ 					} else if(binding === 0) { i++; }
-/******/ 				}
-/******/ 			} else {
-/******/ 				for(var key in definition) {
-/******/ 					if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
-/******/ 						Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
-/******/ 					}
+/******/ 			for(var key in definition) {
+/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
 /******/ 				}
 /******/ 			}
 /******/ 		};
@@ -24792,7 +24777,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
 /******/ 		__webpack_require__.r = (exports) => {
-/******/ 			if(Symbol.toStringTag) {
+/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
 /******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 /******/ 			}
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
@@ -24800,7 +24785,7 @@ module.exports = require("node:zlib");
 /******/ 	})();
 /******/ 	
 /************************************************************************/
-let __webpack_exports__ = {};
+var __webpack_exports__ = {};
 // This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 /*!**********************!*\
