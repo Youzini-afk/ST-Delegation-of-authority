@@ -24,6 +24,7 @@ import type { StorageService } from './storage-service.js';
 import type { TriviumService } from './trivium-service.js';
 import type { SseBroker } from '../events/sse-broker.js';
 import type { CoreService } from './core-service.js';
+import type { HostEventLedgerService } from './host-event-ledger-service.js';
 import type { PoliciesState, SessionRecord, StoredGrantEntry, UserContext } from '../types.js';
 
 const cleanupDirs: string[] = [];
@@ -129,7 +130,7 @@ function createSession(user: UserContext): SessionRecord {
     };
 }
 
-function createService(core: CoreService = createMockCore()): ModuleHostService {
+function createService(core: CoreService = createMockCore(), hostEvents?: HostEventLedgerService): ModuleHostService {
     const permissions = new PermissionService(new PolicyService(core), core);
     return new ModuleHostService(
         permissions,
@@ -139,6 +140,7 @@ function createService(core: CoreService = createMockCore()): ModuleHostService 
         {} as PrivateFsService,
         {} as JobService,
         {} as SseBroker,
+        hostEvents,
     );
 }
 
@@ -281,6 +283,32 @@ describe('ModuleHostService', () => {
         expect(ctxArg.callerExtensionId).toBe('third-party/test-extension');
         expect(ctxArg.moduleId).toBe('sample-module');
         expect(ctxArg.transactionName).toBe('task.run');
+    });
+
+    it('fences and exposes normalized host context to the handler and response', async () => {
+        const host = {
+            schemaVersion: 1 as const,
+            phase: 'event' as const,
+            conversationId: 'conversation:one',
+            branchId: 'branch:one',
+            hostRevision: 3,
+            baseHostRevision: 3,
+            sourceEventId: 'host-event:one',
+            capturedAt: '2026-08-01T00:00:00.000Z',
+        };
+        const bindModuleContext = vi.fn(async () => host);
+        const service = createService(createMockCore(), { bindModuleContext } as unknown as HostEventLedgerService);
+        const handler = vi.fn().mockImplementation(async (ctx: { host: unknown }) => ({ result: { host: ctx.host } }));
+        service.register(buildManifest(), { 'task.run': handler });
+        const user = createUser(false);
+        const session = createSession(user);
+
+        const response = await service.execute(user, session, 'sample-module', 'task.run', { host });
+
+        expect(bindModuleContext).toHaveBeenCalledWith(user, host, session.extension.id);
+        expect(handler.mock.calls[0]?.[0]).toMatchObject({ host });
+        expect(response.host).toEqual(host);
+        expect(response.result).toEqual({ host });
     });
 
     it('blocks execution when module.execute is denied via persistent grant', async () => {

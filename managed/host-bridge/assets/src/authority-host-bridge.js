@@ -59,14 +59,14 @@ function ensureMessageIdentities(chatData) {
         const messageState = message[MESSAGE_STATE_KEY] && typeof message[MESSAGE_STATE_KEY] === 'object'
             ? message[MESSAGE_STATE_KEY]
             : (message[MESSAGE_STATE_KEY] = {});
-        messageState.messageId ||= randomId('message');
+        messageState.messageUid ||= randomId('message');
         if (!Array.isArray(message.swipe_info)) continue;
         for (const swipeInfo of message.swipe_info) {
             if (!swipeInfo || typeof swipeInfo !== 'object' || Array.isArray(swipeInfo)) continue;
             const swipeState = swipeInfo[MESSAGE_STATE_KEY] && typeof swipeInfo[MESSAGE_STATE_KEY] === 'object'
                 ? swipeInfo[MESSAGE_STATE_KEY]
                 : (swipeInfo[MESSAGE_STATE_KEY] = {});
-            swipeState.swipeId ||= randomId('swipe');
+            swipeState.swipeUid ||= randomId('swipe');
         }
     }
 }
@@ -119,11 +119,19 @@ export function prepareAuthorityChatSave(chatData, filePath, options = {}) {
             eventId,
             transactionId,
             operation: String(transaction.operation || 'chat.save'),
+            rootEventIds: Array.isArray(transaction.rootEventIds)
+                ? transaction.rootEventIds.map(String).filter(Boolean)
+                : [],
+            correlationId: transaction.correlationId ? String(transaction.correlationId) : null,
+            causationId: transaction.causationId ? String(transaction.causationId) : null,
             originExtensionIds: Array.isArray(transaction.originExtensionIds)
                 ? transaction.originExtensionIds.map(String).slice(0, 32)
                 : ['legacy-unmanaged'],
             sourceEventIds: Array.isArray(transaction.sourceEvents)
                 ? transaction.sourceEvents.map(item => String(item?.eventId || '')).filter(Boolean).slice(0, 128)
+                : [],
+            changes: Array.isArray(transaction.changes)
+                ? transaction.changes.map(normalizeChange).filter(Boolean)
                 : [],
         },
     };
@@ -144,8 +152,22 @@ export function prepareAuthorityChatSave(chatData, filePath, options = {}) {
             operation: hostState.lastCommit.operation,
             originExtensionIds: hostState.lastCommit.originExtensionIds,
             sourceEventIds: hostState.lastCommit.sourceEventIds,
+            rootEventIds: hostState.lastCommit.rootEventIds,
+            correlationId: hostState.lastCommit.correlationId,
+            causationId: hostState.lastCommit.causationId,
+            changes: hostState.lastCommit.changes,
         },
     };
+}
+
+function normalizeChange(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const change = { kind: String(value.kind || 'chat.mutate') };
+    if (value.messageUid !== undefined) change.messageUid = value.messageUid === null ? null : String(value.messageUid);
+    if (value.swipeUid !== undefined) change.swipeUid = value.swipeUid === null ? null : String(value.swipeUid);
+    if (Number.isSafeInteger(value.index) && value.index >= 0) change.index = value.index;
+    if (Number.isSafeInteger(value.previousIndex) && value.previousIndex >= 0) change.previousIndex = value.previousIndex;
+    return change;
 }
 
 function parseExpectedRevision(value) {

@@ -189,5 +189,10 @@ export function buildAuthorityFeatureFlags(isAdmin: boolean, moduleCount = 0): A
             registryVersion: AUTHORITY_MODULE_PROTOCOL_VERSION,
             count: moduleCount,
         },
+        host: {
+            bridgeProtocolVersion: 1,
+            eventLedger: true,
+            moduleContext: true,
+        },
     };
 }

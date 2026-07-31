@@ -3,6 +3,7 @@ import type {
     AuthorityModuleManifest,
     AuthorityModuleRecord,
     AuthorityModuleRecordSource,
+    AuthorityHostTransactionContext,
     ModuleErrorCode,
     ModuleGetResponse,
     ModuleListResponse,
@@ -27,6 +28,7 @@ import {
     MODULE_MAX_TIMEOUT_MS,
 } from './module-discovery-service.js';
 import type { PermissionService } from './permission-service.js';
+import { normalizeHostTransactionContext, type HostEventLedgerService } from './host-event-ledger-service.js';
 import type { PrivateFsService } from './private-fs-service.js';
 import type { SseBroker } from '../events/sse-broker.js';
 import type { StorageService } from './storage-service.js';
@@ -50,6 +52,8 @@ export interface ModuleTransactionContext {
     callerExtensionId: string;
     moduleId: string;
     transactionName: string;
+    /** Stable ST host context after server-side normalization/fencing. */
+    host: AuthorityHostTransactionContext | null;
     authorize: (request: PermissionEvaluateRequest) => Promise<boolean>;
     audit: AuditService;
     trivium: TriviumService;
@@ -546,6 +550,7 @@ export class ModuleHostService {
         private readonly files: PrivateFsService,
         private readonly jobs: JobService,
         private readonly events: SseBroker,
+        private readonly hostEvents?: HostEventLedgerService,
     ) {}
 
     register(
@@ -933,6 +938,12 @@ export class ModuleHostService {
             }
         }
 
+        const host = request.host === undefined
+            ? null
+            : this.hostEvents
+                ? await this.hostEvents.bindModuleContext(user, request.host, session.extension.id)
+                : normalizeHostTransactionContext(request.host);
+
         // Phase 3: the host owns the AbortController for timeout
         // enforcement. The same signal is exposed on the ctx (both the
         // built-in ModuleTransactionContext.signal and, via the loader
@@ -956,6 +967,7 @@ export class ModuleHostService {
             callerExtensionId: session.extension.id,
             moduleId,
             transactionName,
+            host,
             authorize,
             audit: this.audit,
             trivium: this.trivium,
@@ -1019,6 +1031,9 @@ export class ModuleHostService {
             : undefined;
         if (idempotencyKey !== undefined) {
             response.idempotencyKey = idempotencyKey;
+        }
+        if (host) {
+            response.host = host;
         }
         if (handlerResult.result !== undefined) {
             response.result = handlerResult.result;
@@ -1092,6 +1107,12 @@ export class ModuleHostService {
             transaction: transactionName,
             transactionVersion: transaction.version,
             ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+            ...(host ? {
+                conversationId: host.conversationId,
+                branchId: host.branchId,
+                hostRevision: host.hostRevision,
+                sourceEventId: host.sourceEventId ?? null,
+            } : {}),
         }).catch(() => undefined);
 
         return response;

@@ -4,6 +4,7 @@ import type {
     AuthorityModuleDiagnostic,
     AuthorityModuleManifest,
     AuthorityModuleRecord,
+    AuthorityHostTransactionContext,
     ModuleStatus,
     ModuleTransactionEffectiveLimits,
     ModuleTransactionManifest,
@@ -442,6 +443,8 @@ export interface CompanionModuleTransactionContext {
     transactionVersion: string;
     callerExtensionId: string;
     requestId: string;
+    /** Server-normalized host transaction context; null outside an ST chat. */
+    host: AuthorityHostTransactionContext | null;
     /** Effective per-transaction limits enforced centrally by the host. */
     limits: ModuleTransactionEffectiveLimits;
     logger: LoaderLogger;
@@ -716,6 +719,7 @@ function buildCompanionHandler(
             transactionVersion,
             callerExtensionId,
             requestId,
+            host: rawCtx.host,
             limits,
             logger,
             audit: auditWrapper,

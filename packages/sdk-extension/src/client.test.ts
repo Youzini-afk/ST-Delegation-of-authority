@@ -49,6 +49,7 @@ describe('AuthorityClient', () => {
         toastrMock.warning.mockReset();
         toastrMock.success.mockReset();
         toastrMock.error.mockReset();
+        delete (globalThis as any).STAuthorityHostBridge;
     });
 
     it('caches probe responses and exposes feature checks', async () => {
@@ -1627,6 +1628,84 @@ describe('AuthorityClient', () => {
         });
     });
 
+    it('automatically attaches the current Host Bridge context to module transactions', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const host = {
+            schemaVersion: 1 as const,
+            phase: 'event' as const,
+            conversationId: 'conversation:one',
+            branchId: 'branch:one',
+            hostRevision: 4,
+            baseHostRevision: 4,
+            sourceEventId: 'host-event:one',
+            messageUid: 'message:one',
+            swipeUid: 'swipe:one',
+            capturedAt: '2026-08-01T00:00:00.000Z',
+        };
+        (globalThis as any).STAuthorityHostBridge = {
+            captureTransactionContext: vi.fn(() => host),
+        };
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const requestWithSession = vi.fn(async () => ({
+            ok: true,
+            moduleId: 'sample-module',
+            transaction: 'task.run',
+            transactionVersion: '1.0.0',
+            host,
+        }));
+        Object.assign(client as object, {
+            requireFeature: vi.fn().mockResolvedValue(undefined),
+            ensurePermission: vi.fn().mockResolvedValue(undefined),
+            requestWithSession,
+        });
+        Object.assign(client.modules as object, { get: vi.fn().mockResolvedValue(buildModuleManifest()) });
+
+        await client.modules.execute('sample-module', 'task.run', { count: 1 });
+
+        expect(requestWithSession).toHaveBeenCalledWith('/modules/sample-module/transactions/task.run', {
+            method: 'POST',
+            body: { input: { count: 1 }, host },
+        });
+        expect(client.host.captureContext()).toEqual(host);
+    });
+
+    it('routes Host Event ledger operations through the extension session', async () => {
+        const { AuthorityClient } = await import('./client.js');
+        const client = new AuthorityClient({
+            extensionId: 'third-party/ext-a',
+            displayName: 'Ext A',
+            version: AUTHORITY_VERSION,
+            installType: 'local',
+            declaredPermissions: {},
+        });
+        const event = {
+            schemaVersion: 1 as const,
+            eventId: 'event:one',
+            transactionId: 'transaction:one',
+            conversationId: 'conversation:one',
+            branchId: 'branch:one',
+            baseRevision: 0,
+            revision: 1,
+            operation: 'chat.save',
+            committedAt: '2026-08-01T00:00:00.000Z',
+        };
+        const requestWithSession = vi.fn(async () => ({ ok: true }));
+        Object.assign(client as object, { requestWithSession });
+
+        await client.host.recordCommit(event);
+
+        expect(requestWithSession).toHaveBeenCalledWith('/host/events/commit', {
+            method: 'POST',
+            body: event,
+        });
+    });
+
     it('omits idempotencyKey/options from modules.execute body when not provided', async () => {
         const { AuthorityClient } = await import('./client.js');
 
@@ -2470,6 +2549,11 @@ function buildProbe(overrides: Partial<{
                 jobsPage: true,
                 benchmarkCore: true,
             },
+            host: {
+                bridgeProtocolVersion: 1,
+                eventLedger: true,
+                moduleContext: true,
+            },
             ...(overrides.modules ? { modules: overrides.modules } : {}),
         },
         limits: {
@@ -2516,6 +2600,15 @@ function buildProbe(overrides: Partial<{
                     },
                 ],
             },
+        },
+        hostBridge: {
+            status: 'ready',
+            message: 'ready',
+            bridgeVersion: '1.0.0',
+            hostPackageVersion: '1.18.0',
+            operationId: 'operation:one',
+            requiresRestart: false,
+            checkedAt: new Date().toISOString(),
         },
         core: {
             enabled: true,

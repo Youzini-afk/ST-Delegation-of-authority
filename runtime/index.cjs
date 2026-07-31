@@ -220,6 +220,11 @@ function buildAuthorityFeatureFlags(isAdmin, moduleCount = 0) {
             registryVersion: AUTHORITY_MODULE_PROTOCOL_VERSION,
             count: moduleCount,
         },
+        host: {
+            bridgeProtocolVersion: 1,
+            eventLedger: true,
+            moduleContext: true,
+        },
     };
 }
 
@@ -343,11 +348,13 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./routes/trivium-routes.js */ "./src/routes/trivium-routes.ts");
 /* harmony import */ var _routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./routes/sql-routes.js */ "./src/routes/sql-routes.ts");
 /* harmony import */ var _routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./routes/http-routes.js */ "./src/routes/http-routes.ts");
-/* harmony import */ var _routes_module_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/module-routes.js */ "./src/routes/module-routes.ts");
-/* harmony import */ var _routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./routes/agent-history-routes.js */ "./src/routes/agent-history-routes.ts");
-/* harmony import */ var _routes_agent_routes_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./routes/agent-routes.js */ "./src/routes/agent-routes.ts");
-/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+/* harmony import */ var _routes_host_routes_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./routes/host-routes.js */ "./src/routes/host-routes.ts");
+/* harmony import */ var _routes_module_routes_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./routes/module-routes.js */ "./src/routes/module-routes.ts");
+/* harmony import */ var _routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./routes/agent-history-routes.js */ "./src/routes/agent-history-routes.ts");
+/* harmony import */ var _routes_agent_routes_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./routes/agent-routes.js */ "./src/routes/agent-routes.ts");
+/* harmony import */ var _runtime_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./runtime.js */ "./src/runtime.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./utils.js */ "./src/utils.ts");
+
 
 
 
@@ -369,7 +376,7 @@ function ok(res, data) {
 function fail(runtime, req, res, extensionId, error) {
     const normalized = normalizeAuthorityError(error);
     try {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
         if (normalized.payload.category === 'permission' && isPermissionErrorDetails(normalized.payload.details)) {
             void runtime.audit.logPermission(user, extensionId, 'Permission denied', {
                 ...normalized.payload.details,
@@ -394,7 +401,7 @@ function buildPermissionErrorPayload(message) {
         return null;
     }
     const target = match[2]?.trim();
-    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.buildPermissionDescriptor)(resource, target);
+    const descriptor = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.buildPermissionDescriptor)(resource, target);
     return {
         error: message,
         code: 'permission_not_granted',
@@ -429,13 +436,13 @@ function isPermissionErrorDetails(value) {
         && 'riskLevel' in value;
 }
 function normalizeAuthorityError(error) {
-    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.isAuthorityServiceError)(error)) {
+    if ((0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.isAuthorityServiceError)(error)) {
         return {
             status: error.status,
             payload: error.toPayload(),
         };
     }
-    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.asErrorMessage)(error);
+    const message = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.asErrorMessage)(error);
     const permissionErrorPayload = buildPermissionErrorPayload(message);
     if (permissionErrorPayload) {
         return {
@@ -631,6 +638,15 @@ async function buildProbeResponse(runtime, user) {
             builtinTypes: [..._constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_TYPES],
             registry: core.health?.jobRegistrySummary ?? _constants_js__WEBPACK_IMPORTED_MODULE_2__.BUILTIN_JOB_REGISTRY_SUMMARY,
         },
+        hostBridge: runtime.hostBridge?.getStatus?.() ?? {
+            status: 'missing',
+            message: 'Authority Host Bridge status is unavailable.',
+            bridgeVersion: null,
+            hostPackageVersion: null,
+            operationId: null,
+            requiresRestart: false,
+            checkedAt: new Date().toISOString(),
+        },
         core,
     };
 }
@@ -815,15 +831,15 @@ function shouldRedactDiagnosticKey(key) {
         || normalized.includes('token')
         || normalized.includes('secret');
 }
-function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_12__.createAuthorityRuntime)()) {
+function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODULE_13__.createAuthorityRuntime)()) {
     router.post('/probe', async (req, res) => {
-        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+        const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
         ok(res, await buildProbeResponse(runtime, user));
     });
     (0,_routes_st_manager_routes_js__WEBPACK_IMPORTED_MODULE_3__.registerStManagerRoutes)(router, runtime, fail);
     router.post('/session/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             const config = (req.body ?? {});
             const session = await runtime.sessions.createSession(user, config);
             const grants = await runtime.permissions.listPersistentGrants(user, session.extension.id);
@@ -838,8 +854,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/session/current', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getSessionToken)(req), user);
             const limits = await runtime.permissions.getEffectiveSessionLimits(user, session.extension.id);
             ok(res, runtime.sessions.buildSessionResponse(session, await runtime.permissions.listPersistentGrants(user, session.extension.id), await runtime.permissions.getPolicyEntries(user, session.extension.id), limits, runtime.modules.visibleCount()));
         }
@@ -849,8 +865,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getSessionToken)(req), user);
             const evaluation = await runtime.permissions.evaluate(user, session, req.body);
             if (evaluation.decision === 'denied' || evaluation.decision === 'blocked') {
                 await runtime.audit.logPermission(user, session.extension.id, 'Permission denied', {
@@ -868,11 +884,11 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/evaluate-batch', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getSessionToken)(req), user);
             const payload = (req.body ?? {});
             if (payload.requests !== undefined && !Array.isArray(payload.requests)) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_13__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_14__.AuthorityServiceError('Permission batch requests must be an array', 400, 'validation_error', 'validation');
             }
             const results = await runtime.permissions.evaluateBatch(user, session, payload.requests ?? []);
             const response = { results };
@@ -884,8 +900,8 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/permissions/resolve', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
-            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getSessionToken)(req), user);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getSessionToken)(req), user);
             const payload = req.body;
             const grant = await runtime.permissions.resolve(user, session, payload, payload.choice);
             await runtime.audit.logPermission(user, session.extension.id, grant.status === 'denied' ? 'Permission denied' : 'Permission granted', {
@@ -902,7 +918,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             const list = await Promise.all((await runtime.extensions.listExtensions(user)).map(async (extension) => {
                 const grants = await runtime.permissions.listPersistentGrants(user, extension.id);
                 const sqlDatabases = (await (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.listPrivateSqlDatabases)(runtime, user, extension.id)).databases;
@@ -922,7 +938,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/extensions/:id', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             const extension = await runtime.extensions.getExtension(user, extensionId);
             if (!extension) {
@@ -950,7 +966,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/extensions/:id/grants/reset', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             const extensionId = decodeURIComponent(req.params?.id ?? '');
             await runtime.permissions.resetPersistentGrants(user, extensionId, req.body?.keys);
             await runtime.audit.logPermission(user, extensionId, 'Persistent grants reset', {
@@ -970,14 +986,15 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     (0,_routes_storage_routes_js__WEBPACK_IMPORTED_MODULE_4__.registerStorageRoutes)(router, runtime, fail);
     (0,_routes_sql_routes_js__WEBPACK_IMPORTED_MODULE_7__.registerSqlRoutes)(router, runtime, fail);
     (0,_routes_trivium_routes_js__WEBPACK_IMPORTED_MODULE_6__.registerTriviumRoutes)(router, runtime, fail);
-    (0,_routes_module_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerModuleRoutes)(router, runtime, fail);
+    (0,_routes_host_routes_js__WEBPACK_IMPORTED_MODULE_9__.registerHostRoutes)(router, runtime, fail);
+    (0,_routes_module_routes_js__WEBPACK_IMPORTED_MODULE_10__.registerModuleRoutes)(router, runtime, fail);
     (0,_routes_http_routes_js__WEBPACK_IMPORTED_MODULE_8__.registerHttpRoutes)(router, runtime, fail);
     (0,_routes_jobs_events_routes_js__WEBPACK_IMPORTED_MODULE_5__.registerJobsAndEventsRoutes)(router, runtime, fail);
-    (0,_routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_10__.registerAgentHistoryRoutes)(router, runtime, fail);
-    (0,_routes_agent_routes_js__WEBPACK_IMPORTED_MODULE_11__.registerAgentRoutes)(router, runtime, fail);
+    (0,_routes_agent_history_routes_js__WEBPACK_IMPORTED_MODULE_11__.registerAgentHistoryRoutes)(router, runtime, fail);
+    (0,_routes_agent_routes_js__WEBPACK_IMPORTED_MODULE_12__.registerAgentRoutes)(router, runtime, fail);
     router.get('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -989,7 +1006,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/policies', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             const result = await runtime.policies.saveGlobalPolicies(user, req.body ?? {});
             await runtime.audit.logUsage(user, 'third-party/st-authority-sdk', 'Policies updated');
             ok(res, result);
@@ -1000,7 +1017,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/usage-summary', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildUsageSummary(runtime, user));
         }
@@ -1010,7 +1027,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/import-export/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.adminPackages.listOperations(user),
@@ -1022,7 +1039,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/export', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.startExport(user, (req.body ?? {}));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Export package started', {
@@ -1037,7 +1054,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import-transfer/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
                 resource: 'fs.private',
@@ -1050,7 +1067,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/import', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1069,7 +1086,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/resume', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.adminPackages.resume(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export operation resumed', {
@@ -1084,7 +1101,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/import-export/operations/:id/open-download', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.getArtifact(user, String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Import/export artifact opened', {
@@ -1099,7 +1116,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/native-migration/operations', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, {
                 operations: runtime.nativeMigrations.listOperations(),
@@ -1111,7 +1128,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/upload/init', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const sizeBytes = parseNativeMigrationSizeBytes(req.body?.sizeBytes);
             ok(res, await runtime.transfers.init(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, {
@@ -1125,7 +1142,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/preview', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const transfer = runtime.transfers.get(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, String(payload.transferId ?? ''), 'fs.private');
@@ -1148,7 +1165,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/apply', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const payload = (req.body ?? {});
             const operation = await runtime.nativeMigrations.apply(String(req.params?.id ?? ''), payload.mode ?? 'skip');
@@ -1168,7 +1185,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/native-migration/operations/:id/rollback', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const operation = runtime.nativeMigrations.rollback(String(req.params?.id ?? ''));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Native migration rolled back', {
@@ -1183,7 +1200,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.get('/admin/diagnostic-bundle', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             ok(res, await buildDiagnosticBundle(runtime, user));
         }
@@ -1193,7 +1210,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/diagnostic-bundle/archive', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             assertAdminUser(user);
             const artifact = runtime.adminPackages.createDiagnosticArchive(user, await buildDiagnosticBundle(runtime, user));
             await runtime.audit.logUsage(user, _constants_js__WEBPACK_IMPORTED_MODULE_2__.AUTHORITY_SDK_EXTENSION_ID, 'Diagnostic archive created', {
@@ -1208,7 +1225,7 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
     });
     router.post('/admin/update', async (req, res) => {
         try {
-            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.getUserContext)(req);
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.getUserContext)(req);
             if (!user.isAdmin) {
                 throw new Error('Forbidden');
             }
@@ -1261,9 +1278,9 @@ function registerRoutes(router, runtime = (0,_runtime_js__WEBPACK_IMPORTED_MODUL
                         : `更新失败后后台服务状态为 ${recovery.state}。`;
                 }
                 catch (recoveryError) {
-                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.asErrorMessage)(recoveryError)}`;
+                    recoveryMessage = `更新失败且后台服务恢复失败：${(0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.asErrorMessage)(recoveryError)}`;
                 }
-                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_13__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
+                throw new Error(`${(0,_utils_js__WEBPACK_IMPORTED_MODULE_14__.asErrorMessage)(error)} ${recoveryMessage}`.trim());
             }
         }
         catch (error) {
@@ -2064,6 +2081,92 @@ function withAuthorityAdmin(runtime, fail, handler) {
             fail(runtime, req, res, extensionId, error);
         }
     };
+}
+
+
+/***/ },
+
+/***/ "./src/routes/host-routes.ts"
+/*!***********************************!*\
+  !*** ./src/routes/host-routes.ts ***!
+  \***********************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   registerHostRoutes: () => (/* binding */ registerHostRoutes)
+/* harmony export */ });
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+function decodeParam(value) {
+    return typeof value === 'string' ? decodeURIComponent(value) : '';
+}
+function registerHostRoutes(router, runtime, fail) {
+    router.post('/host/events/commit', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const response = await runtime.hostEvents.recordCommit(user, req.body, extensionId);
+            await runtime.audit.logUsage(user, extensionId, 'Host commit recorded', {
+                eventId: response.event.eventId,
+                conversationId: response.event.conversationId,
+                revision: response.event.revision,
+                replayed: response.replayed,
+                continuity: response.event.continuity,
+            }).catch(() => undefined);
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/host/events/:eventId', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const response = {
+                event: await runtime.hostEvents.getEvent(user, decodeParam(req.params?.eventId)),
+            };
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.get('/host/conversations/:conversationId', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const response = {
+                conversation: await runtime.hostEvents.getConversation(user, decodeParam(req.params?.conversationId)),
+            };
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
+    router.post('/host/events/list', async (req, res) => {
+        let extensionId = _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_SDK_EXTENSION_ID;
+        try {
+            const user = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUserContext)(req);
+            const session = await runtime.sessions.assertSession((0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getSessionToken)(req), user);
+            extensionId = session.extension.id;
+            const response = await runtime.hostEvents.listEvents(user, (req.body ?? {}));
+            res.json(response);
+        }
+        catch (error) {
+            fail(runtime, req, res, extensionId, error);
+        }
+    });
 }
 
 
@@ -4267,23 +4370,25 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
 /* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
 /* harmony import */ var _services_host_bridge_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/host-bridge-service.js */ "./src/services/host-bridge-service.ts");
-/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
-/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
-/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _services_host_event_ledger_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/host-event-ledger-service.js */ "./src/services/host-event-ledger-service.ts");
+/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
+/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_30__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+
 
 
 
@@ -4320,31 +4425,32 @@ function createAuthorityRuntime() {
     const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_6__.AuditService(core);
     const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_9__.DataTransferService();
     const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_10__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_14__.InstallService();
-    const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_29__.getGlobalAuthorityPaths)();
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_15__.InstallService();
+    const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_30__.getGlobalAuthorityPaths)();
     const hostBridge = new _services_host_bridge_service_js__WEBPACK_IMPORTED_MODULE_12__.HostBridgeService({
         pluginRoot: install.getPluginRoot(),
         stateDir: globalPaths.hostBridgeStateDir,
         resolveSillyTavernRoot: () => install.getSillyTavernRoot(),
     });
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_21__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_20__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_23__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_24__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_25__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_26__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_22__.PrivateFsService(core);
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_22__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_21__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_24__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_25__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_26__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_27__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_23__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_11__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_15__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_27__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_19__.NativeMigrationService();
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_16__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_28__.TriviumService(core);
+    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_17__.LockService();
+    const hostEvents = new _services_host_event_ledger_service_js__WEBPACK_IMPORTED_MODULE_13__.HostEventLedgerService(core, locks);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_20__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_18__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
-    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_17__.ModuleDiscoveryService(install);
-    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_16__.LockService();
-    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_13__.IdempotencyService(storage);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_19__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events, hostEvents);
+    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_18__.ModuleDiscoveryService(install);
+    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_14__.IdempotencyService(storage);
     const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_7__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
-    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_28__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
+    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_29__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
     const agentProfiles = new _services_agent_profile_store_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentProfileStoreService(globalPaths.agentStateDir);
     const agentHostTools = new _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__.AgentHostToolService(workspaceHistory);
     const agentSessions = new _services_agent_session_runtime_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentSessionRuntimeService(new _services_agent_session_store_service_js__WEBPACK_IMPORTED_MODULE_5__.AgentSessionStoreService(globalPaths.agentStateDir), agentProfiles, workspaceHistory, agentHostTools, { moduleHost: modules });
@@ -4357,6 +4463,7 @@ function createAuthorityRuntime() {
         extensions,
         install,
         hostBridge,
+        hostEvents,
         policies,
         permissions,
         sessions,
@@ -5465,7 +5572,7 @@ class AdminPackageService {
         return operation;
     }
     saveOperation(user, operation) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
     }
     toPublicOperation(operation) {
         const { artifactPath: _artifactPath, sourcePath: _sourcePath, ...publicOperation } = operation;
@@ -5857,7 +5964,7 @@ function writeFile(root, args, signal) {
     }
     // ponytail: Node has no portable dirfd-relative atomic rename; repeated realpath/lstat checks cover ordinary races.
     // Move writes into a native openat/handle layer if hostile same-account filesystem races enter the threat model.
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(resolved.absolutePath, content);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(resolved.absolutePath, content);
     return { path: resolved.relativePath, bytesWritten: Buffer.byteLength(content) };
 }
 function replaceText(root, args, signal) {
@@ -5885,7 +5992,7 @@ function replaceText(root, args, signal) {
     if (signal.aborted) {
         throw abortError(signal);
     }
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(writeTarget.absolutePath, next);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(writeTarget.absolutePath, next);
     return { path: resolved.relativePath, replacements: replaceAll ? matches : 1 };
 }
 async function runShell(root, args, context, artifacts) {
@@ -6814,7 +6921,7 @@ function readJson(filePath, label) {
     }
 }
 function protectDirectory(dirPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
     if (process.platform !== 'win32') {
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
     }
@@ -10963,7 +11070,7 @@ function createAndSync(filePath, content) {
         if (descriptor !== null)
             node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
     }
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
 }
 function truncateAndSync(filePath, length) {
     let descriptor = null;
@@ -11105,7 +11212,7 @@ function assertFileId(value, label) {
     }
 }
 function protectDirectory(dirPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
     if (process.platform !== 'win32')
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
 }
@@ -12579,6 +12686,7 @@ function buildCompanionHandler(candidate, transactionName, registration, permiss
             transactionVersion,
             callerExtensionId,
             requestId,
+            host: rawCtx.host,
             limits,
             logger,
             audit: auditWrapper,
@@ -14669,7 +14777,7 @@ class HostBridgeService {
                     if (!target.backupPath || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(target.backupPath)) {
                         return { ok: false, message: `Host Bridge backup is missing: ${target.relativePath}` };
                     }
-                    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(target.backupPath));
+                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(target.backupPath));
                 }
                 else {
                     node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetPath, { force: true });
@@ -14715,7 +14823,7 @@ class HostBridgeService {
         return record?.schemaVersion === RECORD_SCHEMA_VERSION ? record : null;
     }
     writeRecord(record) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.recordPath(record.stRoot), record);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.recordPath(record.stRoot), record);
     }
     resolveHostTarget(stRoot, relativePath) {
         const target = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot, normalizeRelative(relativePath));
@@ -14789,6 +14897,585 @@ function resolveRuntimeRequire() {
         return require;
     }
     return /* createRequire() */ undefined;
+}
+
+
+/***/ },
+
+/***/ "./src/services/host-event-ledger-service.ts"
+/*!***************************************************!*\
+  !*** ./src/services/host-event-ledger-service.ts ***!
+  \***************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   HostEventLedgerService: () => (/* binding */ HostEventLedgerService),
+/* harmony export */   normalizeHostCommitEvent: () => (/* binding */ normalizeHostCommitEvent),
+/* harmony export */   normalizeHostTransactionContext: () => (/* binding */ normalizeHostTransactionContext)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+const HOST_LEDGER_DATABASE = 'host-events';
+const HOST_LEDGER_MIGRATIONS = '_authority_host_migrations';
+const HOST_EVENTS_TABLE = 'authority_host_events';
+const HOST_CONVERSATIONS_TABLE = 'authority_host_conversations';
+const IDENTIFIER_MAX_LENGTH = 512;
+const OPERATION_MAX_LENGTH = 256;
+const LIST_DEFAULT_LIMIT = 200;
+const LIST_MAX_LIMIT = 2_000;
+/**
+ * Per-user append-only ledger of authoritative SillyTavern chat commits.
+ * Domain extensions only receive normalized host context; they never own
+ * this database or the host revision state machine.
+ */
+class HostEventLedgerService {
+    core;
+    locks;
+    schemaPromises = new Map();
+    constructor(core, locks) {
+        this.core = core;
+        this.locks = locks;
+    }
+    async recordCommit(user, input, callerExtensionId) {
+        const event = normalizeHostCommitEvent(input);
+        const caller = normalizeIdentifier(callerExtensionId, 'callerExtensionId');
+        const dbPath = this.databasePath(user);
+        await this.ensureSchema(dbPath);
+        return await this.locks.withLock(`host-event-ledger:${user.handle}:${event.conversationId}`, { timeoutMs: 30_000 }, async () => {
+            const fingerprint = fingerprintEvent(event);
+            const existing = await this.getEventRow(dbPath, event.eventId);
+            if (existing) {
+                if (String(existing.fingerprint) !== fingerprint) {
+                    throw hostConflict('Host event id was reused with a different payload.', {
+                        eventId: event.eventId,
+                        conversationId: event.conversationId,
+                    });
+                }
+                const existingEvent = normalizeHostCommitEvent(eventFromRow(existing));
+                const mergedEvent = mergeCommitEvents(existingEvent, event);
+                if (JSON.stringify(sortJson(mergedEvent)) !== JSON.stringify(sortJson(existingEvent))) {
+                    await this.core.execSql(dbPath, {
+                        statement: `UPDATE ${HOST_EVENTS_TABLE} SET payload_json = ? WHERE event_id = ?`,
+                        params: [JSON.stringify(mergedEvent), event.eventId],
+                    });
+                }
+                const conversation = await this.getConversationByPath(dbPath, event.conversationId);
+                if (!conversation) {
+                    throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Host event exists without its conversation head.', 500, 'core_request_failed', 'core', { code: 'host_ledger_inconsistent', eventId: event.eventId });
+                }
+                return {
+                    ok: true,
+                    replayed: true,
+                    event: {
+                        ...mergedEvent,
+                        callerExtensionId: String(existing.caller_extension_id),
+                        continuity: 'replay',
+                        recordedAt: String(existing.recorded_at),
+                    },
+                    conversation,
+                };
+            }
+            const transactionEvent = await this.getEventRowByTransaction(dbPath, event.transactionId);
+            if (transactionEvent && String(transactionEvent.event_id) !== event.eventId) {
+                throw hostConflict('Host transaction id was reused by a different event.', {
+                    transactionId: event.transactionId,
+                    expectedEventId: String(transactionEvent.event_id),
+                    actualEventId: event.eventId,
+                });
+            }
+            const revisionEvent = await this.getEventRowByRevision(dbPath, event.conversationId, event.revision);
+            if (revisionEvent && String(revisionEvent.event_id) !== event.eventId) {
+                throw hostConflict('A different event is already recorded for this conversation revision.', {
+                    conversationId: event.conversationId,
+                    revision: event.revision,
+                    expectedEventId: String(revisionEvent.event_id),
+                    actualEventId: event.eventId,
+                });
+            }
+            const current = await this.getConversationByPath(dbPath, event.conversationId);
+            const continuity = classifyContinuity(current, event);
+            const recordedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.nowIso)();
+            const record = {
+                ...event,
+                callerExtensionId: caller,
+                continuity,
+                recordedAt,
+            };
+            const advancesHead = !current || event.revision > current.revision;
+            const nextGapCount = (current?.gapCount ?? 0) + (continuity === 'gap' ? 1 : 0);
+            const statements = [{
+                    mode: 'exec',
+                    statement: `INSERT INTO ${HOST_EVENTS_TABLE} (
+                        event_id, transaction_id, conversation_id, branch_id,
+                        base_revision, revision, operation, payload_json, fingerprint,
+                        caller_extension_id, continuity, committed_at, recorded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    params: [
+                        event.eventId,
+                        event.transactionId,
+                        event.conversationId,
+                        event.branchId,
+                        event.baseRevision,
+                        event.revision,
+                        event.operation,
+                        JSON.stringify(event),
+                        fingerprint,
+                        caller,
+                        continuity,
+                        event.committedAt,
+                        recordedAt,
+                    ],
+                }];
+            if (advancesHead) {
+                statements.push({
+                    mode: 'exec',
+                    statement: `INSERT INTO ${HOST_CONVERSATIONS_TABLE} (
+                            conversation_id, branch_id, revision, last_event_id,
+                            last_transaction_id, gap_count, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(conversation_id) DO UPDATE SET
+                            branch_id = excluded.branch_id,
+                            revision = excluded.revision,
+                            last_event_id = excluded.last_event_id,
+                            last_transaction_id = excluded.last_transaction_id,
+                            gap_count = excluded.gap_count,
+                            updated_at = excluded.updated_at`,
+                    params: [
+                        event.conversationId,
+                        event.branchId,
+                        event.revision,
+                        event.eventId,
+                        event.transactionId,
+                        nextGapCount,
+                        recordedAt,
+                    ],
+                });
+            }
+            await this.core.transactionSql(dbPath, { statements });
+            const conversation = advancesHead
+                ? {
+                    conversationId: event.conversationId,
+                    branchId: event.branchId,
+                    revision: event.revision,
+                    lastEventId: event.eventId,
+                    lastTransactionId: event.transactionId,
+                    gapCount: nextGapCount,
+                    updatedAt: recordedAt,
+                }
+                : current;
+            return { ok: true, replayed: false, event: record, conversation };
+        });
+    }
+    async bindModuleContext(user, input, callerExtensionId) {
+        const context = normalizeHostTransactionContext(input);
+        if (context.commitEventId && context.hostRevision > 0) {
+            await this.recordCommit(user, commitFromContext(context), callerExtensionId);
+        }
+        const current = await this.getConversation(user, context.conversationId);
+        if (!current) {
+            return context;
+        }
+        if (current.branchId !== context.branchId || current.revision !== context.hostRevision) {
+            throw staleContext(context, current);
+        }
+        return context;
+    }
+    async getConversation(user, conversationId) {
+        const id = normalizeIdentifier(conversationId, 'conversationId');
+        const dbPath = this.databasePath(user);
+        await this.ensureSchema(dbPath);
+        return await this.getConversationByPath(dbPath, id);
+    }
+    async getEvent(user, eventId) {
+        const id = normalizeIdentifier(eventId, 'eventId');
+        const dbPath = this.databasePath(user);
+        await this.ensureSchema(dbPath);
+        const row = await this.getEventRow(dbPath, id);
+        return row ? eventFromRow(row) : null;
+    }
+    async listEvents(user, input) {
+        const conversationId = normalizeIdentifier(input?.conversationId, 'conversationId');
+        const afterRevision = normalizeOptionalRevision(input?.afterRevision, 'afterRevision') ?? -1;
+        const requestedLimit = input?.limit ?? LIST_DEFAULT_LIMIT;
+        if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > LIST_MAX_LIMIT) {
+            throw validationError(`Host event list limit must be between 1 and ${LIST_MAX_LIMIT}.`);
+        }
+        const dbPath = this.databasePath(user);
+        await this.ensureSchema(dbPath);
+        const result = await this.core.querySql(dbPath, {
+            statement: `SELECT * FROM ${HOST_EVENTS_TABLE}
+                WHERE conversation_id = ? AND revision > ?
+                ORDER BY revision ASC, recorded_at ASC
+                LIMIT ?`,
+            params: [conversationId, afterRevision, requestedLimit],
+        });
+        return {
+            events: result.rows.map(row => eventFromRow(row)),
+            conversation: await this.getConversationByPath(dbPath, conversationId),
+        };
+    }
+    databasePath(user) {
+        return (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_2__.resolvePrivateSqlDatabasePath)(user, _constants_js__WEBPACK_IMPORTED_MODULE_1__.AUTHORITY_SDK_EXTENSION_ID, HOST_LEDGER_DATABASE);
+    }
+    async ensureSchema(dbPath) {
+        let pending = this.schemaPromises.get(dbPath);
+        if (!pending) {
+            pending = this.core.migrateSql(dbPath, {
+                tableName: HOST_LEDGER_MIGRATIONS,
+                migrations: [
+                    {
+                        id: '001_host_events',
+                        statement: `CREATE TABLE IF NOT EXISTS ${HOST_EVENTS_TABLE} (
+                            event_id TEXT PRIMARY KEY,
+                            transaction_id TEXT NOT NULL UNIQUE,
+                            conversation_id TEXT NOT NULL,
+                            branch_id TEXT NOT NULL,
+                            base_revision INTEGER NOT NULL,
+                            revision INTEGER NOT NULL,
+                            operation TEXT NOT NULL,
+                            payload_json TEXT NOT NULL,
+                            fingerprint TEXT NOT NULL,
+                            caller_extension_id TEXT NOT NULL,
+                            continuity TEXT NOT NULL,
+                            committed_at TEXT NOT NULL,
+                            recorded_at TEXT NOT NULL,
+                            UNIQUE (conversation_id, revision)
+                        )`,
+                    },
+                    {
+                        id: '002_host_conversations',
+                        statement: `CREATE TABLE IF NOT EXISTS ${HOST_CONVERSATIONS_TABLE} (
+                            conversation_id TEXT PRIMARY KEY,
+                            branch_id TEXT NOT NULL,
+                            revision INTEGER NOT NULL,
+                            last_event_id TEXT NOT NULL,
+                            last_transaction_id TEXT NOT NULL,
+                            gap_count INTEGER NOT NULL DEFAULT 0,
+                            updated_at TEXT NOT NULL
+                        )`,
+                    },
+                    {
+                        id: '003_host_event_order',
+                        statement: `CREATE INDEX IF NOT EXISTS authority_host_events_by_conversation
+                            ON ${HOST_EVENTS_TABLE} (conversation_id, revision, recorded_at)`,
+                    },
+                ],
+            }).then(() => undefined).catch(error => {
+                this.schemaPromises.delete(dbPath);
+                throw error;
+            });
+            this.schemaPromises.set(dbPath, pending);
+        }
+        await pending;
+    }
+    async getEventRow(dbPath, eventId) {
+        const result = await this.core.querySql(dbPath, {
+            statement: `SELECT * FROM ${HOST_EVENTS_TABLE} WHERE event_id = ? ORDER BY event_id LIMIT 1`,
+            params: [eventId],
+        });
+        return result.rows[0] ?? null;
+    }
+    async getEventRowByTransaction(dbPath, transactionId) {
+        const result = await this.core.querySql(dbPath, {
+            statement: `SELECT * FROM ${HOST_EVENTS_TABLE} WHERE transaction_id = ? ORDER BY transaction_id LIMIT 1`,
+            params: [transactionId],
+        });
+        return result.rows[0] ?? null;
+    }
+    async getEventRowByRevision(dbPath, conversationId, revision) {
+        const result = await this.core.querySql(dbPath, {
+            statement: `SELECT * FROM ${HOST_EVENTS_TABLE}
+                WHERE conversation_id = ? AND revision = ?
+                ORDER BY conversation_id, revision LIMIT 1`,
+            params: [conversationId, revision],
+        });
+        return result.rows[0] ?? null;
+    }
+    async getConversationByPath(dbPath, conversationId) {
+        const result = await this.core.querySql(dbPath, {
+            statement: `SELECT * FROM ${HOST_CONVERSATIONS_TABLE} WHERE conversation_id = ? ORDER BY conversation_id LIMIT 1`,
+            params: [conversationId],
+        });
+        const row = result.rows[0];
+        return row ? conversationFromRow(row) : null;
+    }
+}
+function normalizeHostTransactionContext(input) {
+    const value = objectRecord(input, 'host context');
+    if (value.schemaVersion !== 1)
+        throw validationError('Host context schemaVersion must be 1.');
+    if (value.phase !== 'snapshot' && value.phase !== 'event' && value.phase !== 'committed') {
+        throw validationError('Host context phase is invalid.');
+    }
+    const hostRevision = normalizeRevision(value.hostRevision, 'hostRevision');
+    const baseHostRevision = normalizeRevision(value.baseHostRevision, 'baseHostRevision');
+    if (baseHostRevision > hostRevision) {
+        throw validationError('baseHostRevision cannot exceed hostRevision.');
+    }
+    if (value.phase === 'committed' && hostRevision !== baseHostRevision + 1) {
+        throw validationError('Committed host context must advance exactly one revision.');
+    }
+    return {
+        schemaVersion: 1,
+        phase: value.phase,
+        conversationId: normalizeIdentifier(value.conversationId, 'conversationId'),
+        branchId: normalizeIdentifier(value.branchId, 'branchId'),
+        hostRevision,
+        baseHostRevision,
+        ...optionalIdentifier(value, 'commitEventId'),
+        ...optionalIdentifier(value, 'commitTransactionId'),
+        ...optionalTimestamp(value, 'commitCommittedAt'),
+        ...optionalNamedOperation(value, 'commitOperation'),
+        ...optionalIdentifier(value, 'sourceEventId'),
+        ...optionalIdentifierArray(value, 'sourceEventIds'),
+        ...optionalIdentifier(value, 'rootEventId'),
+        ...optionalIdentifier(value, 'correlationId'),
+        ...optionalNullableIdentifier(value, 'causationId'),
+        ...optionalOperation(value.operation),
+        ...optionalIdentifierArray(value, 'originExtensionIds'),
+        ...optionalNullableIdentifier(value, 'messageUid'),
+        ...optionalNullableIdentifier(value, 'swipeUid'),
+        capturedAt: normalizeTimestamp(value.capturedAt, 'capturedAt'),
+    };
+}
+function normalizeHostCommitEvent(input) {
+    const value = objectRecord(input, 'host commit event');
+    if (value.schemaVersion !== 1)
+        throw validationError('Host commit schemaVersion must be 1.');
+    const baseRevision = normalizeRevision(value.baseRevision, 'baseRevision');
+    const revision = normalizeRevision(value.revision, 'revision');
+    if (revision !== baseRevision + 1) {
+        throw validationError('Host commit revision must advance exactly one revision.');
+    }
+    return {
+        schemaVersion: 1,
+        eventId: normalizeIdentifier(value.eventId, 'eventId'),
+        transactionId: normalizeIdentifier(value.transactionId, 'transactionId'),
+        conversationId: normalizeIdentifier(value.conversationId, 'conversationId'),
+        branchId: normalizeIdentifier(value.branchId, 'branchId'),
+        baseRevision,
+        revision,
+        operation: normalizeOperation(value.operation),
+        ...optionalIdentifierArray(value, 'rootEventIds'),
+        ...optionalIdentifier(value, 'correlationId'),
+        ...optionalNullableIdentifier(value, 'causationId'),
+        ...optionalIdentifierArray(value, 'originExtensionIds'),
+        ...optionalIdentifierArray(value, 'sourceEventIds'),
+        ...(value.changes === undefined ? {} : { changes: normalizeChanges(value.changes) }),
+        committedAt: normalizeTimestamp(value.committedAt, 'committedAt'),
+    };
+}
+function classifyContinuity(current, event) {
+    if (!current)
+        return event.baseRevision === 0 ? 'contiguous' : 'gap';
+    if (current.branchId !== event.branchId) {
+        throw hostConflict('Host conversation branch changed without a new conversation identity.', {
+            conversationId: event.conversationId,
+            expectedBranchId: current.branchId,
+            actualBranchId: event.branchId,
+        });
+    }
+    if (event.revision === current.revision && event.eventId !== current.lastEventId) {
+        throw hostConflict('Two different host events claim the same conversation revision.', {
+            conversationId: event.conversationId,
+            revision: event.revision,
+            expectedEventId: current.lastEventId,
+            actualEventId: event.eventId,
+        });
+    }
+    if (event.revision <= current.revision)
+        return 'late';
+    return event.baseRevision === current.revision && event.revision === current.revision + 1
+        ? 'contiguous'
+        : 'gap';
+}
+function commitFromContext(context) {
+    const baseRevision = context.phase === 'committed'
+        ? context.baseHostRevision
+        : Math.max(0, context.hostRevision - 1);
+    return {
+        schemaVersion: 1,
+        eventId: context.commitEventId,
+        transactionId: context.commitTransactionId ?? `reconciled:${context.commitEventId}`,
+        conversationId: context.conversationId,
+        branchId: context.branchId,
+        baseRevision,
+        revision: context.hostRevision,
+        operation: context.commitOperation ?? (context.phase === 'committed' ? context.operation : undefined) ?? 'chat.save',
+        ...(context.rootEventId ? { rootEventIds: [context.rootEventId] } : {}),
+        ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+        ...(context.causationId !== undefined ? { causationId: context.causationId } : {}),
+        ...(context.originExtensionIds ? { originExtensionIds: context.originExtensionIds } : {}),
+        ...(context.sourceEventIds ? { sourceEventIds: context.sourceEventIds } : {}),
+        committedAt: context.commitCommittedAt ?? context.capturedAt,
+    };
+}
+function staleContext(context, current) {
+    return new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError('Module transaction host context is stale or belongs to another branch.', 409, 'workspace_conflict', 'concurrency', {
+        code: 'host_context_stale',
+        conversationId: context.conversationId,
+        branchId: context.branchId,
+        hostRevision: context.hostRevision,
+        currentBranchId: current?.branchId ?? null,
+        currentRevision: current?.revision ?? null,
+    });
+}
+function conversationFromRow(row) {
+    return {
+        conversationId: String(row.conversation_id),
+        branchId: String(row.branch_id),
+        revision: Number(row.revision),
+        lastEventId: String(row.last_event_id),
+        lastTransactionId: String(row.last_transaction_id),
+        gapCount: Number(row.gap_count),
+        updatedAt: String(row.updated_at),
+    };
+}
+function eventFromRow(row) {
+    const event = normalizeHostCommitEvent(JSON.parse(String(row.payload_json)));
+    return {
+        ...event,
+        callerExtensionId: String(row.caller_extension_id),
+        continuity: String(row.continuity),
+        recordedAt: String(row.recorded_at),
+    };
+}
+function fingerprintEvent(event) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(JSON.stringify(sortJson({
+        schemaVersion: event.schemaVersion,
+        eventId: event.eventId,
+        transactionId: event.transactionId,
+        conversationId: event.conversationId,
+        branchId: event.branchId,
+        baseRevision: event.baseRevision,
+        revision: event.revision,
+        operation: event.operation,
+        committedAt: event.committedAt,
+    }))).digest('hex');
+}
+function mergeCommitEvents(existing, incoming) {
+    return {
+        ...existing,
+        ...incoming,
+        ...mergeArrayField('rootEventIds', existing.rootEventIds, incoming.rootEventIds),
+        ...mergeArrayField('originExtensionIds', existing.originExtensionIds, incoming.originExtensionIds),
+        ...mergeArrayField('sourceEventIds', existing.sourceEventIds, incoming.sourceEventIds),
+        ...(incoming.changes?.length
+            ? { changes: incoming.changes }
+            : existing.changes?.length
+                ? { changes: existing.changes }
+                : {}),
+    };
+}
+function mergeArrayField(key, existing, incoming) {
+    const merged = [...new Set([...(existing ?? []), ...(incoming ?? [])])];
+    return merged.length > 0 ? { [key]: merged } : {};
+}
+function sortJson(value) {
+    if (Array.isArray(value))
+        return value.map(sortJson);
+    if (!value || typeof value !== 'object')
+        return value;
+    return Object.fromEntries(Object.keys(value)
+        .sort()
+        .map(key => [key, sortJson(value[key])]));
+}
+function normalizeChanges(value) {
+    if (!Array.isArray(value))
+        throw validationError('Host commit changes must be an array.');
+    return value.map((item, index) => {
+        const change = objectRecord(item, `changes[${index}]`);
+        return {
+            kind: normalizeOperation(change.kind),
+            ...optionalNullableIdentifier(change, 'messageUid'),
+            ...optionalNullableIdentifier(change, 'swipeUid'),
+            ...optionalIndex(change, 'index'),
+            ...optionalIndex(change, 'previousIndex'),
+        };
+    });
+}
+function optionalIndex(value, key) {
+    if (value[key] === undefined)
+        return {};
+    const index = Number(value[key]);
+    if (!Number.isSafeInteger(index) || index < 0)
+        throw validationError(`${key} must be a non-negative safe integer.`);
+    return { [key]: index };
+}
+function normalizeRevision(value, label) {
+    const revision = Number(value);
+    if (!Number.isSafeInteger(revision) || revision < 0)
+        throw validationError(`${label} must be a non-negative safe integer.`);
+    return revision;
+}
+function normalizeOptionalRevision(value, label) {
+    return value === undefined ? undefined : normalizeRevision(value, label);
+}
+function normalizeIdentifier(value, label) {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized || normalized.length > IDENTIFIER_MAX_LENGTH) {
+        throw validationError(`${label} must be a non-empty string up to ${IDENTIFIER_MAX_LENGTH} characters.`);
+    }
+    return normalized;
+}
+function optionalIdentifier(value, key) {
+    return value[key] === undefined ? {} : { [key]: normalizeIdentifier(value[key], key) };
+}
+function optionalNullableIdentifier(value, key) {
+    if (value[key] === undefined)
+        return {};
+    return { [key]: value[key] === null ? null : normalizeIdentifier(value[key], key) };
+}
+function optionalIdentifierArray(value, key) {
+    if (value[key] === undefined)
+        return {};
+    if (!Array.isArray(value[key]))
+        throw validationError(`${key} must be an array.`);
+    return { [key]: [...new Set(value[key].map((item, index) => normalizeIdentifier(item, `${key}[${index}]`)))] };
+}
+function normalizeOperation(value) {
+    const operation = typeof value === 'string' ? value.trim() : '';
+    if (!operation || operation.length > OPERATION_MAX_LENGTH) {
+        throw validationError(`operation must be a non-empty string up to ${OPERATION_MAX_LENGTH} characters.`);
+    }
+    return operation;
+}
+function optionalOperation(value) {
+    return value === undefined ? {} : { operation: normalizeOperation(value) };
+}
+function optionalNamedOperation(value, key) {
+    return value[key] === undefined ? {} : { [key]: normalizeOperation(value[key]) };
+}
+function optionalTimestamp(value, key) {
+    return value[key] === undefined ? {} : { [key]: normalizeTimestamp(value[key], key) };
+}
+function normalizeTimestamp(value, label) {
+    const timestamp = normalizeIdentifier(value, label);
+    if (!Number.isFinite(Date.parse(timestamp)))
+        throw validationError(`${label} must be an ISO timestamp.`);
+    return timestamp;
+}
+function objectRecord(value, label) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        throw validationError(`${label} must be an object.`);
+    return value;
+}
+function validationError(message) {
+    return new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(message, 400, 'validation_error', 'validation', { code: 'host_validation_error' });
+}
+function hostConflict(message, details) {
+    return new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(message, 409, 'workspace_conflict', 'concurrency', {
+        code: 'host_event_conflict',
+        ...details,
+    });
 }
 
 
@@ -16851,7 +17538,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
 /* harmony import */ var _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var _host_event_ledger_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./host-event-ledger-service.js */ "./src/services/host-event-ledger-service.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
 
 
 
@@ -16859,15 +17548,15 @@ const MODULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TRANSACTION_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 function validateModuleId(moduleId) {
     if (!MODULE_ID_PATTERN.test(moduleId)) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Invalid module id: ${moduleId}`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Invalid module id: ${moduleId}`, 400, 'validation_error', 'validation');
     }
 }
 function validateTransactionName(transactionName) {
     if (transactionName.includes(':')) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
     }
     if (!TRANSACTION_NAME_PATTERN.test(transactionName)) {
-        throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
+        throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Invalid transaction name: ${transactionName}`, 400, 'validation_error', 'validation');
     }
 }
 function assertTransactionManifest(module, transactionName) {
@@ -17205,11 +17894,12 @@ class ModuleHostService {
     files;
     jobs;
     events;
+    hostEvents;
     modules = new Map();
     records = [];
     primaryRecordByModuleId = new Map();
     recordsByOwner = new Map();
-    constructor(permissions, audit, trivium, storage, files, jobs, events) {
+    constructor(permissions, audit, trivium, storage, files, jobs, events, hostEvents) {
         this.permissions = permissions;
         this.audit = audit;
         this.trivium = trivium;
@@ -17217,6 +17907,7 @@ class ModuleHostService {
         this.files = files;
         this.jobs = jobs;
         this.events = events;
+        this.hostEvents = hostEvents;
     }
     register(manifest, handlers, options = {}) {
         this.registerInternal(manifest, handlers, options, 'builtin');
@@ -17236,24 +17927,24 @@ class ModuleHostService {
     registerInternal(manifest, handlers, options, contextMode) {
         validateModuleId(manifest.id);
         if (manifest.protocolVersion !== _constants_js__WEBPACK_IMPORTED_MODULE_0__.AUTHORITY_MODULE_PROTOCOL_VERSION) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Unsupported module protocol version: ${manifest.protocolVersion}`, 400, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Unsupported module protocol version: ${manifest.protocolVersion}`, 400, 'validation_error', 'validation');
         }
         if (this.modules.has(manifest.id)) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module already registered: ${manifest.id}`, 409, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module already registered: ${manifest.id}`, 409, 'validation_error', 'validation');
         }
         const handlerMap = new Map();
         for (const name of Object.keys(manifest.transactions)) {
             validateTransactionName(name);
             const transaction = manifest.transactions[name];
             if (!transaction) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction entry missing for: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction entry missing for: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
             }
             if (transaction.name !== name) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction name mismatch for ${manifest.id}/${name}: declared name '${transaction.name}'`, 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction name mismatch for ${manifest.id}/${name}: declared name '${transaction.name}'`, 400, 'validation_error', 'validation');
             }
             const handler = handlers[name];
             if (!handler) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Missing handler for transaction: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Missing handler for transaction: ${manifest.id}/${name}`, 400, 'validation_error', 'validation');
             }
             handlerMap.set(name, handler);
         }
@@ -17362,7 +18053,7 @@ class ModuleHostService {
             if (record && record.manifest) {
                 return { module: record.manifest, record };
             }
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation');
         }
         return {
             module: module.manifest,
@@ -17386,12 +18077,12 @@ class ModuleHostService {
         validateModuleId(moduleId);
         validateTransactionName(transactionName);
         if (request.options?.dryRun === true) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Dry-run execution is not supported: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation', { code: 'dry_run_unsupported', moduleId, transaction: transactionName });
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Dry-run execution is not supported: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation', { code: 'dry_run_unsupported', moduleId, transaction: transactionName });
         }
         const requestedTimeoutMs = request.options?.timeoutMs;
         if (requestedTimeoutMs !== undefined
             && (!Number.isSafeInteger(requestedTimeoutMs) || requestedTimeoutMs < 1 || requestedTimeoutMs > _module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS)) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction timeoutMs must be an integer between 1 and ${_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS}`, 400, 'validation_error', 'validation', { code: 'validation_error', moduleId, transaction: transactionName, timeoutMs: requestedTimeoutMs });
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction timeoutMs must be an integer between 1 and ${_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_1__.MODULE_MAX_TIMEOUT_MS}`, 400, 'validation_error', 'validation', { code: 'validation_error', moduleId, transaction: transactionName, timeoutMs: requestedTimeoutMs });
         }
         const module = this.modules.get(moduleId);
         if (!module) {
@@ -17401,7 +18092,7 @@ class ModuleHostService {
                 // module_load_error with sanitized diagnostics, NOT the
                 // generic module_not_loaded path. This lets the frontend
                 // distinguish "broken module" from "not yet loaded".
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module failed to load: ${moduleId}`, 409, 'validation_error', 'validation', {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module failed to load: ${moduleId}`, 409, 'validation_error', 'validation', {
                     code: 'module_load_error',
                     moduleId,
                     status: record.status,
@@ -17412,18 +18103,18 @@ class ModuleHostService {
                 // Discovered-but-not-loaded module: structured error so the
                 // frontend can distinguish "missing" from "available but
                 // not activated yet".
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module not loaded: ${moduleId}`, 409, 'validation_error', 'validation', { code: 'module_not_loaded', moduleId, status: record.status });
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module not loaded: ${moduleId}`, 409, 'validation_error', 'validation', { code: 'module_not_loaded', moduleId, status: record.status });
             }
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation', { code: 'module_not_found', moduleId });
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module not found: ${moduleId}`, 404, 'validation_error', 'validation', { code: 'module_not_found', moduleId });
         }
         const transaction = assertTransactionManifest(module, transactionName);
         if (!transaction) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction not found: ${moduleId}/${transactionName}`, 404, 'validation_error', 'validation', { code: 'transaction_not_found', moduleId, transaction: transactionName });
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction not found: ${moduleId}/${transactionName}`, 404, 'validation_error', 'validation', { code: 'transaction_not_found', moduleId, transaction: transactionName });
         }
         if (transaction.idempotency === 'required') {
             const key = typeof request.idempotencyKey === 'string' ? request.idempotencyKey.trim() : '';
             if (!key) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Idempotency key required for transaction: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation', { code: 'idempotency_required', moduleId, transaction: transactionName });
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Idempotency key required for transaction: ${moduleId}/${transactionName}`, 400, 'validation_error', 'validation', { code: 'idempotency_required', moduleId, transaction: transactionName });
             }
         }
         // Resolve effective limits. Built-in modules are NOT accidentally
@@ -17443,7 +18134,7 @@ class ModuleHostService {
         // maxRequestBytes: Infinity and are not constrained.
         const requestBytes = measureRequestBytes(request);
         if (requestBytes > limits.maxRequestBytes) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction request too large: ${moduleId}/${transactionName} (${requestBytes} bytes > ${limits.maxRequestBytes} bytes)`, 413, 'limit_exceeded', 'limit', {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction request too large: ${moduleId}/${transactionName} (${requestBytes} bytes > ${limits.maxRequestBytes} bytes)`, 413, 'limit_exceeded', 'limit', {
                 code: 'module_request_too_large',
                 moduleId,
                 transaction: transactionName,
@@ -17475,6 +18166,11 @@ class ModuleHostService {
                     : `Permission not granted: ${required.resource}`);
             }
         }
+        const host = request.host === undefined
+            ? null
+            : this.hostEvents
+                ? await this.hostEvents.bindModuleContext(user, request.host, session.extension.id)
+                : (0,_host_event_ledger_service_js__WEBPACK_IMPORTED_MODULE_2__.normalizeHostTransactionContext)(request.host);
         // Phase 3: the host owns the AbortController for timeout
         // enforcement. The same signal is exposed on the ctx (both the
         // built-in ModuleTransactionContext.signal and, via the loader
@@ -17497,6 +18193,7 @@ class ModuleHostService {
             callerExtensionId: session.extension.id,
             moduleId,
             transactionName,
+            host,
             authorize,
             audit: this.audit,
             trivium: this.trivium,
@@ -17508,7 +18205,7 @@ class ModuleHostService {
         };
         const handler = module.handlers.get(transactionName);
         if (!handler) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Handler missing for transaction: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core', { code: 'transaction_handler_failed', moduleId, transaction: transactionName, reason: 'handler_missing' });
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Handler missing for transaction: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core', { code: 'transaction_handler_failed', moduleId, transaction: transactionName, reason: 'handler_missing' });
         }
         const input = request.input ?? undefined;
         // For companion modules the handler is already wrapped by the loader
@@ -17540,6 +18237,9 @@ class ModuleHostService {
         if (idempotencyKey !== undefined) {
             response.idempotencyKey = idempotencyKey;
         }
+        if (host) {
+            response.host = host;
+        }
         if (handlerResult.result !== undefined) {
             response.result = handlerResult.result;
         }
@@ -17554,7 +18254,7 @@ class ModuleHostService {
         // Both surface as structured module error codes.
         const validationReason = validateJsonValue(response);
         if (validationReason !== null) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction response is not JSON-serializable: ${moduleId}/${transactionName}: ${validationReason}`, 500, 'core_request_failed', 'core', {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction response is not JSON-serializable: ${moduleId}/${transactionName}: ${validationReason}`, 500, 'core_request_failed', 'core', {
                 code: 'module_response_not_serializable',
                 moduleId,
                 transaction: transactionName,
@@ -17571,7 +18271,7 @@ class ModuleHostService {
             // stringify would throw on, but if a new edge case slips through
             // we still surface it as module_response_not_serializable rather
             // than letting an opaque TypeError reach the route layer.
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction response is not JSON-serializable: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core', {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction response is not JSON-serializable: ${moduleId}/${transactionName}`, 500, 'core_request_failed', 'core', {
                 code: 'module_response_not_serializable',
                 moduleId,
                 transaction: transactionName,
@@ -17579,7 +18279,7 @@ class ModuleHostService {
             });
         }
         if (serializedResponseBytes > limits.maxResponseBytes) {
-            throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction response too large: ${moduleId}/${transactionName} (${serializedResponseBytes} bytes > ${limits.maxResponseBytes} bytes)`, 413, 'limit_exceeded', 'limit', {
+            throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction response too large: ${moduleId}/${transactionName} (${serializedResponseBytes} bytes > ${limits.maxResponseBytes} bytes)`, 413, 'limit_exceeded', 'limit', {
                 code: 'module_response_too_large',
                 moduleId,
                 transaction: transactionName,
@@ -17593,6 +18293,12 @@ class ModuleHostService {
             transaction: transactionName,
             transactionVersion: transaction.version,
             ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+            ...(host ? {
+                conversationId: host.conversationId,
+                branchId: host.branchId,
+                hostRevision: host.hostRevision,
+                sourceEventId: host.sourceEventId ?? null,
+            } : {}),
         }).catch(() => undefined);
         return response;
     }
@@ -17680,7 +18386,7 @@ class ModuleHostService {
         }
         catch (error) {
             if (timedOut || error instanceof ModuleHandlerTimeoutError) {
-                throw new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Module transaction timed out: ${module.manifest.id}/${transaction.name}`, 504, 'timeout', 'timeout', {
+                throw new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Module transaction timed out: ${module.manifest.id}/${transaction.name}`, 504, 'timeout', 'timeout', {
                     code: 'transaction_timeout',
                     moduleId: module.manifest.id,
                     transaction: transaction.name,
@@ -17712,11 +18418,11 @@ class ModuleHostService {
         // error code, preserve it rather than double-wrapping. This lets
         // companion handler wrappers (e.g. the loader's timeout wrapper)
         // surface their own structured codes.
-        if (error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError) {
+        if (error instanceof _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError) {
             return error;
         }
         const message = sanitizeErrorMessage(errorMessage(error));
-        return new _utils_js__WEBPACK_IMPORTED_MODULE_2__.AuthorityServiceError(`Transaction handler failed: ${moduleId}/${transactionName}: ${message}`, 500, 'core_request_failed', 'core', {
+        return new _utils_js__WEBPACK_IMPORTED_MODULE_3__.AuthorityServiceError(`Transaction handler failed: ${moduleId}/${transactionName}: ${message}`, 500, 'core_request_failed', 'core', {
             code: 'transaction_handler_failed',
             moduleId,
             transaction: transactionName,
@@ -17984,7 +18690,7 @@ class NativeMigrationService {
                         });
                         this.saveOperation({ ...applying, status: 'needs_rollback', updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(), journal });
                     }
-                    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
+                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
                     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(write.tempPath, write.targetPath);
                     const completedEntry = {
                         archivePath: write.preview.archivePath,
@@ -18075,7 +18781,7 @@ class NativeMigrationService {
         return operation;
     }
     saveOperation(operation) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
     }
     toPublicOperation(operation) {
         const { sourcePath: _sourcePath, rootPath: _rootPath, journal, ...publicOperation } = operation;
@@ -18235,7 +18941,7 @@ function normalizeApplyMode(value) {
     throw new Error(`Unsupported native migration apply mode: ${String(value)}`);
 }
 function prepareNativeWriteTarget(rootPath, relativePath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
     const targetPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(rootPath, relativePath);
     (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
     const realRoot = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
@@ -18285,7 +18991,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
                 continue;
             }
@@ -18304,7 +19010,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
             }
         }
@@ -19058,7 +19764,7 @@ async function scanSafeZip(filePath, options = {}) {
     };
 }
 async function extractSafeZipEntries(filePath, targetRoot, shouldExtract = () => true, options = {}) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
     const parsedEntries = parseZipEntries(filePath, options);
     const extracted = [];
     for (const parsedEntry of parsedEntries) {
@@ -19298,7 +20004,7 @@ function readZip64Extra(extra, values) {
     return { compressedSize, uncompressedSize, localHeaderOffset };
 }
 async function extractParsedEntry(filePath, entry, destinationPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
     const source = node_fs__WEBPACK_IMPORTED_MODULE_1___default().createReadStream(filePath, {
         start: entry.dataStart,
         end: entry.dataStart + entry.compressedSizeBytes - 1,
@@ -19788,7 +20494,7 @@ class StManagerBridgeService {
         return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.statePath, {});
     }
     writeState(state) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
         const tempPath = `${this.statePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, this.statePath);
@@ -20251,7 +20957,7 @@ function readJsonObject(filePath) {
     }
 }
 function atomicWriteBuffer(filePath, buffer) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
     const tempPath = `${filePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, buffer);
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
@@ -20433,7 +21139,7 @@ class StManagerResourceLocator {
         return candidateReal;
     }
     resolveWritablePath(rootPath, relativePath) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
         const rootReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
         const candidate = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(rootReal, relativePath.split('/').join((node_path__WEBPACK_IMPORTED_MODULE_2___default().sep)));
         (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(candidate));
@@ -23210,7 +23916,7 @@ class WorkspaceHistoryService {
         if (current) {
             this.removeWorkspaceNode(workspace, relativePath, current, warnings);
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
         this.resolveSafeWorkspacePath(workspace, relativePath);
         if (target.kind === 'tree') {
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
@@ -23388,7 +24094,7 @@ class WorkspaceHistoryService {
             this.readCommit(commit.id, commit.workspaceId);
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
     }
     readCommit(commitId, workspaceId) {
         assertOid(commitId);
@@ -23420,7 +24126,7 @@ class WorkspaceHistoryService {
             stats.reusedBytes += content.byteLength;
             return oid;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
         stats.storedBytes += content.byteLength;
         return oid;
     }
@@ -23519,7 +24225,7 @@ class WorkspaceHistoryService {
         return ref;
     }
     writeRef(ref) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
     }
     readRegistry() {
         this.ensureStore();
@@ -23540,7 +24246,7 @@ class WorkspaceHistoryService {
         return registry;
     }
     writeRegistry(registry) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
     }
     getStoredWorkspace(workspaceId) {
         if (workspaceId.length > 128 || !isSafeName(workspaceId)) {
@@ -23628,7 +24334,7 @@ class WorkspaceHistoryService {
             }
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
     }
     removeMatchingRollbackJournal(workspaceId, operationId) {
         const journal = this.readRollbackJournal(workspaceId);
@@ -23646,7 +24352,7 @@ class WorkspaceHistoryService {
     }
     ensureStore() {
         for (const dir of ['objects', 'commits', 'refs', 'journals', 'rollbacks', 'operations', 'locks']) {
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
+            ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
         }
     }
     registryPath() {
@@ -25139,17 +25845,17 @@ module.exports = require("node:zlib");
 /******/ 	});
 /************************************************************************/
 /******/ 	// The module cache
-/******/ 	var __webpack_module_cache__ = {};
+/******/ 	const __webpack_module_cache__ = {};
 /******/ 	
 /******/ 	// The require function
 /******/ 	function __webpack_require__(moduleId) {
 /******/ 		// Check if module is in cache
-/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		const cachedModule = __webpack_module_cache__[moduleId];
 /******/ 		if (cachedModule !== undefined) {
 /******/ 			return cachedModule.exports;
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
-/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 		const module = __webpack_module_cache__[moduleId] = {
 /******/ 			// no module.id needed
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
@@ -25158,7 +25864,7 @@ module.exports = require("node:zlib");
 /******/ 		// Execute the module function
 /******/ 		if (!(moduleId in __webpack_modules__)) {
 /******/ 			delete __webpack_module_cache__[moduleId];
-/******/ 			var e = new Error("Cannot find module '" + moduleId + "'");
+/******/ 			const e = new Error("Cannot find module '" + moduleId + "'");
 /******/ 			e.code = 'MODULE_NOT_FOUND';
 /******/ 			throw e;
 /******/ 		}
@@ -25173,7 +25879,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// getDefaultExport function for compatibility with non-harmony modules
 /******/ 		__webpack_require__.n = (module) => {
-/******/ 			var getter = module && module.__esModule ?
+/******/ 			const getter = module && module.__esModule ?
 /******/ 				() => (module['default']) :
 /******/ 				() => (module);
 /******/ 			__webpack_require__.d(getter, { a: getter });
@@ -25183,11 +25889,26 @@ module.exports = require("node:zlib");
 /******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
-/******/ 		// define getter functions for harmony exports
+/******/ 		// define getter/value functions for harmony exports
 /******/ 		__webpack_require__.d = (exports, definition) => {
-/******/ 			for(var key in definition) {
-/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
-/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 			if(Array.isArray(definition)) {
+/******/ 				var i = 0;
+/******/ 				while(i < definition.length) {
+/******/ 					var key = definition[i++];
+/******/ 					var binding = definition[i++];
+/******/ 					if(!__webpack_require__.o(exports, key)) {
+/******/ 						if(binding === 0) {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, value: definition[i++] });
+/******/ 						} else {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, get: binding });
+/******/ 						}
+/******/ 					} else if(binding === 0) { i++; }
+/******/ 				}
+/******/ 			} else {
+/******/ 				for(var key in definition) {
+/******/ 					if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 						Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 					}
 /******/ 				}
 /******/ 			}
 /******/ 		};
@@ -25202,7 +25923,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
 /******/ 		__webpack_require__.r = (exports) => {
-/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 			if(Symbol.toStringTag) {
 /******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 /******/ 			}
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
@@ -25210,7 +25931,7 @@ module.exports = require("node:zlib");
 /******/ 	})();
 /******/ 	
 /************************************************************************/
-var __webpack_exports__ = {};
+let __webpack_exports__ = {};
 // This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 /*!**********************!*\

@@ -139,6 +139,7 @@ export class AuthorityClient {
     jobs;
     events;
     modules;
+    host;
     agent;
     session = null;
     sessionPromise = null;
@@ -1293,6 +1294,27 @@ export class AuthorityClient {
                 };
             },
         };
+        this.host = {
+            captureContext: () => captureAuthorityHostContext(),
+            recordCommit: async (event) => await this.requestWithSession('/host/events/commit', {
+                method: 'POST',
+                body: event,
+            }),
+            getEvent: async (eventId) => {
+                const id = trimHostIdentifier(eventId, 'eventId');
+                const response = await this.requestWithSession(`/host/events/${encodeURIComponent(id)}`);
+                return response.event;
+            },
+            getConversation: async (conversationId) => {
+                const id = trimHostIdentifier(conversationId, 'conversationId');
+                const response = await this.requestWithSession(`/host/conversations/${encodeURIComponent(id)}`);
+                return response.conversation;
+            },
+            listEvents: async (request) => await this.requestWithSession('/host/events/list', {
+                method: 'POST',
+                body: request,
+            }),
+        };
         this.modules = {
             list: async () => {
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
@@ -1324,10 +1346,14 @@ export class AuthorityClient {
                 if (timeoutMs !== undefined && !(typeof timeoutMs === 'number' && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 600_000)) {
                     throw new Error('Authority modules.execute timeoutMs must be an integer between 1 and 600000');
                 }
+                const hostContext = options?.hostContext === null
+                    ? undefined
+                    : normalizeSdkHostContext(options?.hostContext ?? captureAuthorityHostContext());
                 const body = {
                     ...(input !== undefined ? { input } : {}),
                     ...(trimmedIdempotencyKey ? { idempotencyKey: trimmedIdempotencyKey } : {}),
                     ...(timeoutMs !== undefined ? { options: { timeoutMs } } : {}),
+                    ...(hostContext ? { host: hostContext } : {}),
                 };
                 await this.requireFeature('modules.enabled', 'Authority 当前版本尚未提供模块事务能力');
                 const manifest = await this.modules.get(trimmedModuleId);
@@ -2441,6 +2467,46 @@ export class AuthorityClient {
         }
         return [...grants.values()].sort((left, right) => left.key.localeCompare(right.key));
     }
+}
+function captureAuthorityHostContext() {
+    const bridge = globalThis.STAuthorityHostBridge;
+    if (typeof bridge?.captureTransactionContext !== 'function')
+        return null;
+    try {
+        return normalizeSdkHostContext(bridge.captureTransactionContext()) ?? null;
+    }
+    catch (error) {
+        console.warn('Authority Host Bridge returned an invalid transaction context.', error);
+        return null;
+    }
+}
+function normalizeSdkHostContext(value) {
+    if (value === undefined || value === null)
+        return undefined;
+    if (!isObjectRecord(value) || value.schemaVersion !== 1) {
+        throw new Error('Authority hostContext schemaVersion must be 1');
+    }
+    if (value.phase !== 'snapshot' && value.phase !== 'event' && value.phase !== 'committed') {
+        throw new Error('Authority hostContext phase is invalid');
+    }
+    trimHostIdentifier(value.conversationId, 'conversationId');
+    trimHostIdentifier(value.branchId, 'branchId');
+    if (!Number.isSafeInteger(value.hostRevision) || Number(value.hostRevision) < 0) {
+        throw new Error('Authority hostContext hostRevision must be a non-negative safe integer');
+    }
+    if (!Number.isSafeInteger(value.baseHostRevision) || Number(value.baseHostRevision) < 0) {
+        throw new Error('Authority hostContext baseHostRevision must be a non-negative safe integer');
+    }
+    if (typeof value.capturedAt !== 'string' || !Number.isFinite(Date.parse(value.capturedAt))) {
+        throw new Error('Authority hostContext capturedAt must be an ISO timestamp');
+    }
+    return structuredClone(value);
+}
+function trimHostIdentifier(value, label) {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized)
+        throw new Error(`Authority host ${label} is required`);
+    return normalized;
 }
 function cloneInitConfig(config) {
     const clone = {

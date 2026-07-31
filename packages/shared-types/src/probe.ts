@@ -46,6 +46,21 @@ export interface AuthorityFeatureFlags {
         registryVersion: number;
         count: number;
     };
+    host: {
+        bridgeProtocolVersion: number;
+        eventLedger: boolean;
+        moduleContext: boolean;
+    };
+}
+
+export interface AuthorityProbeHostBridgeStatus {
+    status: 'missing' | 'ready' | 'installed' | 'updated' | 'rolled_back' | 'conflict' | 'error';
+    message: string;
+    bridgeVersion: string | null;
+    hostPackageVersion: string | null;
+    operationId: string | null;
+    requiresRestart: boolean;
+    checkedAt: string;
 }
 
 export interface AuthorityJobRegistrySummary {
@@ -152,5 +167,6 @@ export interface AuthorityProbeResponse {
         builtinTypes: string[];
         registry: AuthorityJobRegistrySummary;
     };
+    hostBridge: AuthorityProbeHostBridgeStatus;
     core: AuthorityProbeCoreStatus;
 }

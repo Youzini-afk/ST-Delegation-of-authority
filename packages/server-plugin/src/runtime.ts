@@ -11,6 +11,7 @@ import { DataTransferService } from './services/data-transfer-service.js';
 import { ExtensionService } from './services/extension-service.js';
 import { HttpService } from './services/http-service.js';
 import { HostBridgeService } from './services/host-bridge-service.js';
+import { HostEventLedgerService } from './services/host-event-ledger-service.js';
 import { IdempotencyService } from './services/idempotency-service.js';
 import { InstallService } from './services/install-service.js';
 import { JobService } from './services/job-service.js';
@@ -38,6 +39,7 @@ export interface AuthorityRuntime {
     extensions: ExtensionService;
     install: InstallService;
     hostBridge: HostBridgeService;
+    hostEvents: HostEventLedgerService;
     policies: PolicyService;
     permissions: PermissionService;
     sessions: SessionService;
@@ -103,11 +105,12 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const http = new HttpService(core);
     const jobs = new JobService(core);
     const trivium = new TriviumService(core);
+    const locks = new LockService();
+    const hostEvents = new HostEventLedgerService(core, locks);
     const nativeMigrations = new NativeMigrationService();
     const adminPackages = new AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const modules = new ModuleHostService(permissions, audit, trivium, storage, files, jobs, events, hostEvents);
     const moduleDiscovery = new ModuleDiscoveryService(install);
-    const locks = new LockService();
     const idempotency = new IdempotencyService(storage);
     const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
     const workspaceHistory = new WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
@@ -130,6 +133,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         extensions,
         install,
         hostBridge,
+        hostEvents,
         policies,
         permissions,
         sessions,

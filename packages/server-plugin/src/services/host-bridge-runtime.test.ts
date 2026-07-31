@@ -62,8 +62,8 @@ describe('Authority Host Bridge runtimes', () => {
         expect(first.host.revision).toBe(1);
         expect(first.host.baseRevision).toBe(0);
         expect(first.host.conversationId).not.toBe('client-provisional');
-        expect(firstChat[1].authority.messageId).toMatch(/^message:/);
-        expect(firstChat[2].swipe_info[0].authority.swipeId).toMatch(/^swipe:/);
+        expect(firstChat[1].authority.messageUid).toMatch(/^message:/);
+        expect(firstChat[2].swipe_info[0].authority.swipeUid).toMatch(/^swipe:/);
 
         const second = await runtime.prepareAuthorityChatSave(firstChat, chatPath, {
             expectedRevision: 1,
@@ -82,7 +82,7 @@ describe('Authority Host Bridge runtimes', () => {
         const chatPath = path.join(root, 'chat.jsonl');
         const persisted = [
             { chat_metadata: { authority: { conversationId: 'conversation:one', branchId: 'branch:one', revision: 4 } } },
-            { is_user: true, mes: 'persisted', authority: { messageId: 'message:one' } },
+            { is_user: true, mes: 'persisted', authority: { messageUid: 'message:one' } },
         ];
         writeChat(chatPath, persisted);
         const incoming = structuredClone(persisted);
@@ -140,6 +140,16 @@ describe('Authority Host Bridge runtimes', () => {
         (globalThis as any).SillyTavern = { getContext: () => active };
 
         const eventA = runtime.beginAuthorityEvent('message_edited', [0]);
+        const activeContext = runtime.captureAuthorityHostContext();
+        expect(activeContext).toMatchObject({
+            phase: 'event',
+            sourceEventId: eventA.eventId,
+            conversationId: eventA.conversationId,
+            branchId: eventA.branchId,
+            hostRevision: 0,
+            baseHostRevision: 0,
+        });
+        expect(activeContext.messageUid).toMatch(/^message:/);
         runtime.endAuthorityEvent(eventA);
         const firstA = runtime.prepareAuthorityChatCommit({
             metadata: chats.a.chatMetadata,
@@ -168,6 +178,7 @@ describe('Authority Host Bridge runtimes', () => {
         expect(isolatedA.transaction.sourceEvents.map((event: any) => event.eventId)).toEqual([eventA.eventId]);
         expect(firstB.transaction.sourceEvents.map((event: any) => event.eventId)).toEqual([eventB.eventId]);
 
+        active = chats.a;
         await runtime.completeAuthorityChatCommit(isolatedA, {
             host: {
                 conversationId: isolatedA.transaction.conversationId,
@@ -175,6 +186,14 @@ describe('Authority Host Bridge runtimes', () => {
                 revision: 1,
             },
         }, { metadata: chats.a.chatMetadata, messages: chats.a.chat });
+        const snapshotContext = runtime.captureAuthorityHostContext();
+        expect(snapshotContext).toMatchObject({
+            phase: 'snapshot',
+            hostRevision: 1,
+            baseHostRevision: 0,
+            commitEventId: isolatedA.transaction.eventId,
+            commitTransactionId: isolatedA.transaction.transactionId,
+        });
         const afterCommitA = runtime.prepareAuthorityChatCommit({
             metadata: chats.a.chatMetadata,
             messages: chats.a.chat,

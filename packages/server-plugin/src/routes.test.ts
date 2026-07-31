@@ -126,6 +126,8 @@ describe('registerRoutes', () => {
             '/extensions/:id',
             '/sql/databases',
             '/trivium/databases',
+            '/host/events/:eventId',
+            '/host/conversations/:conversationId',
             '/modules',
             '/modules/:moduleId',
             '/modules/:moduleId/record',
@@ -236,6 +238,8 @@ describe('registerRoutes', () => {
             '/trivium/check-mappings-integrity',
             '/trivium/delete-orphan-mappings',
             '/trivium/list-mappings',
+            '/host/events/commit',
+            '/host/events/list',
             '/modules/:moduleId/transactions/:transactionName',
             '/http/fetch',
             '/http/fetch-open',
@@ -943,6 +947,73 @@ describe('registerRoutes', () => {
         expect(runtime.nativeMigrations.preview).toHaveBeenCalledWith('data', '/tmp/upload.zip', { sourceFileName: 'old-data.zip', adoptSource: true });
         expect(runtime.transfers.discard).toHaveBeenCalledWith(expect.anything(), 'third-party/st-authority-sdk', 'transfer-001');
         expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ id: 'migration-001' }));
+    });
+
+    it('records Host Bridge commit receipts behind the caller session', async () => {
+        const posts = new Map<string, (req: any, res: any) => void | Promise<void>>();
+        const router = {
+            get() { return undefined; },
+            post(path: string, handler: (req: any, res: any) => void | Promise<void>) { posts.set(path, handler); },
+        };
+        const event = {
+            schemaVersion: 1,
+            eventId: 'event:one',
+            transactionId: 'transaction:one',
+            conversationId: 'conversation:one',
+            branchId: 'branch:one',
+            baseRevision: 0,
+            revision: 1,
+            operation: 'chat.save',
+            committedAt: '2026-08-01T00:00:00.000Z',
+        };
+        const runtime = {
+            sessions: {
+                assertSession: vi.fn().mockResolvedValue({ extension: { id: 'third-party/st-authority-sdk' } }),
+            },
+            hostEvents: {
+                recordCommit: vi.fn().mockResolvedValue({
+                    ok: true,
+                    replayed: false,
+                    event: { ...event, callerExtensionId: 'third-party/st-authority-sdk', continuity: 'contiguous', recordedAt: event.committedAt },
+                    conversation: {
+                        conversationId: event.conversationId,
+                        branchId: event.branchId,
+                        revision: 1,
+                        lastEventId: event.eventId,
+                        lastTransactionId: event.transactionId,
+                        gapCount: 0,
+                        updatedAt: event.committedAt,
+                    },
+                }),
+            },
+            audit: {
+                logUsage: vi.fn().mockResolvedValue(undefined),
+                logError: vi.fn().mockResolvedValue(undefined),
+                logPermission: vi.fn().mockResolvedValue(undefined),
+            },
+        } as unknown as AuthorityRuntime;
+        const response = {
+            status: vi.fn().mockReturnThis(),
+            json: vi.fn(),
+            send: vi.fn(),
+            setHeader: vi.fn(),
+            write: vi.fn(),
+            end: vi.fn(),
+        };
+
+        registerRoutes(router, runtime);
+        await posts.get('/host/events/commit')?.({
+            user: { profile: { handle: 'alice', admin: false }, directories: { root: 'C:/users/alice' } },
+            headers: { 'x-authority-session-token': 'session-token' },
+            body: event,
+        }, response);
+
+        expect(runtime.hostEvents.recordCommit).toHaveBeenCalledWith(
+            expect.objectContaining({ handle: 'alice' }),
+            event,
+            'third-party/st-authority-sdk',
+        );
+        expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true, replayed: false }));
     });
 
     it('exposes module manifest listings and single-module lookups behind a session', async () => {

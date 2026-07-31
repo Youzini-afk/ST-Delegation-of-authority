@@ -491,7 +491,7 @@ describe('CompanionModuleLoaderService', () => {
                 module.exports.activate = async function activate(ctx) {
                     ctx.registerTransaction('task.run', {
                         handler: async (txCtx, input) => ({
-                            result: { keys: Object.keys(txCtx).sort(), input },
+                            result: { keys: Object.keys(txCtx).sort(), input, host: txCtx.host },
                         }),
                     });
                 };
@@ -508,8 +508,19 @@ describe('CompanionModuleLoaderService', () => {
         const session = createSession(user);
         const response = await runtime.modules.execute(user, session, 'third-party.introspect-extension', 'task.run', {
             input: { ok: true },
+            host: {
+                schemaVersion: 1,
+                phase: 'event',
+                conversationId: 'conversation:one',
+                branchId: 'branch:one',
+                hostRevision: 2,
+                baseHostRevision: 2,
+                sourceEventId: 'host-event:one',
+                capturedAt: '2026-08-01T00:00:00.000Z',
+            },
         });
-        const keys = (response.result as { keys: string[] }).keys;
+        const companionResult = response.result as { keys: string[]; host: { sourceEventId: string } };
+        const keys = companionResult.keys;
         // Companion tx ctx exposes only safe fields.
         expect(keys).toEqual(expect.arrayContaining([
             'moduleId',
@@ -517,6 +528,7 @@ describe('CompanionModuleLoaderService', () => {
             'transactionName',
             'callerExtensionId',
             'requestId',
+            'host',
             'logger',
             'audit',
             'authorize',
@@ -524,6 +536,7 @@ describe('CompanionModuleLoaderService', () => {
             'trivium',
             'sql',
         ]));
+        expect(companionResult.host.sourceEventId).toBe('host-event:one');
         // Raw services MUST be absent. Note: 'trivium' and 'sql' are now
         // present as SAFE WRAPPERS (not raw TriviumService / CoreService),
         // so they are excluded from the forbidden list below.

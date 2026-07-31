@@ -77,8 +77,8 @@ function ensureSwipeIdentity(swipeInfo) {
     const state = swipeInfo[MESSAGE_STATE_KEY] && typeof swipeInfo[MESSAGE_STATE_KEY] === 'object'
         ? swipeInfo[MESSAGE_STATE_KEY]
         : (swipeInfo[MESSAGE_STATE_KEY] = {});
-    state.swipeId ||= randomId('swipe');
-    return state.swipeId;
+    state.swipeUid ||= randomId('swipe');
+    return state.swipeUid;
 }
 
 function ensureMessageIdentity(message) {
@@ -88,13 +88,13 @@ function ensureMessageIdentity(message) {
     const state = message[MESSAGE_STATE_KEY] && typeof message[MESSAGE_STATE_KEY] === 'object'
         ? message[MESSAGE_STATE_KEY]
         : (message[MESSAGE_STATE_KEY] = {});
-    state.messageId ||= randomId('message');
+    state.messageUid ||= randomId('message');
     if (Array.isArray(message.swipe_info)) {
         for (const swipeInfo of message.swipe_info) {
             ensureSwipeIdentity(swipeInfo);
         }
     }
-    return state.messageId;
+    return state.messageUid;
 }
 
 export function ensureAuthorityChatState(metadata, messages) {
@@ -112,9 +112,9 @@ function snapshotMessages(metadata, messages) {
     const records = Array.isArray(messages)
         ? messages.map((message, index) => ({
             index,
-            messageId: message?.[MESSAGE_STATE_KEY]?.messageId ?? null,
-            swipeId: Array.isArray(message?.swipe_info)
-                ? message.swipe_info[normalizeRevision(message.swipe_id)]?.[MESSAGE_STATE_KEY]?.swipeId ?? null
+            messageUid: message?.[MESSAGE_STATE_KEY]?.messageUid ?? null,
+            swipeUid: Array.isArray(message?.swipe_info)
+                ? message.swipe_info[normalizeRevision(message.swipe_id)]?.[MESSAGE_STATE_KEY]?.swipeUid ?? null
                 : null,
             digest: stableDigest(message),
         }))
@@ -149,25 +149,25 @@ function diffSnapshots(previous, current) {
     if (!previous || previous.conversationId !== current.conversationId) {
         return current.records.map(record => ({
             kind: 'message-present',
-            messageId: record.messageId,
-            swipeId: record.swipeId,
+            messageUid: record.messageUid,
+            swipeUid: record.swipeUid,
             index: record.index,
         }));
     }
-    const oldById = new Map(previous.records.map(record => [record.messageId, record]));
-    const newById = new Map(current.records.map(record => [record.messageId, record]));
+    const oldById = new Map(previous.records.map(record => [record.messageUid, record]));
+    const newById = new Map(current.records.map(record => [record.messageUid, record]));
     const changes = [];
     for (const record of current.records) {
-        const old = oldById.get(record.messageId);
+        const old = oldById.get(record.messageUid);
         if (!old) {
-            changes.push({ kind: 'message-inserted', messageId: record.messageId, swipeId: record.swipeId, index: record.index });
+            changes.push({ kind: 'message-inserted', messageUid: record.messageUid, swipeUid: record.swipeUid, index: record.index });
         } else if (old.digest !== record.digest || old.index !== record.index) {
-            changes.push({ kind: 'message-updated', messageId: record.messageId, swipeId: record.swipeId, index: record.index });
+            changes.push({ kind: 'message-updated', messageUid: record.messageUid, swipeUid: record.swipeUid, index: record.index });
         }
     }
     for (const record of previous.records) {
-        if (!newById.has(record.messageId)) {
-            changes.push({ kind: 'message-deleted', messageId: record.messageId, swipeId: record.swipeId, previousIndex: record.index });
+        if (!newById.has(record.messageUid)) {
+            changes.push({ kind: 'message-deleted', messageUid: record.messageUid, swipeUid: record.swipeUid, previousIndex: record.index });
         }
     }
     return changes;
@@ -223,6 +223,7 @@ export function beginAuthorityEvent(eventName, args = []) {
     const hostState = metadata && Array.isArray(messages)
         ? ensureAuthorityChatState(metadata, messages)
         : null;
+    const messageRef = resolveMessageRef(args, messages);
     const context = {
         schemaVersion: BRIDGE_SCHEMA_VERSION,
         eventId,
@@ -233,6 +234,8 @@ export function beginAuthorityEvent(eventName, args = []) {
         conversationId: hostState?.conversationId ?? parent?.conversationId ?? null,
         branchId: hostState?.branchId ?? parent?.branchId ?? null,
         baseRevision: hostState?.revision ?? parent?.baseRevision ?? null,
+        messageUid: messageRef?.messageUid ?? null,
+        swipeUid: messageRef?.swipeUid ?? null,
         occurredAt: nowIso(),
         argsSummary: summarizeEventArgs(args),
     };
@@ -278,8 +281,32 @@ export function endAuthorityEvent(context) {
         if (metadata && Array.isArray(messages)) {
             const snapshot = snapshotMessages(metadata, messages);
             committedSnapshots.set(snapshot.conversationId, snapshot);
+            const latestCommit = getLatestAuthorityCommit(metadata);
+            if (latestCommit) {
+                dispatchAuthorityCustomEvent('authority:chat-loaded', latestCommit);
+            }
         }
     }
+}
+
+function resolveMessageRef(args, messages) {
+    if (!Array.isArray(messages)) return null;
+    const first = args?.[0];
+    const candidate = typeof first === 'number'
+        ? first
+        : first && typeof first === 'object'
+            ? first.messageId ?? first.message_id ?? first.mesId ?? first.mes_id
+            : null;
+    const index = Number(candidate);
+    if (!Number.isSafeInteger(index) || index < 0 || index >= messages.length) return null;
+    const message = messages[index];
+    ensureMessageIdentity(message);
+    return {
+        messageUid: message?.[MESSAGE_STATE_KEY]?.messageUid ?? null,
+        swipeUid: Array.isArray(message?.swipe_info)
+            ? message.swipe_info[normalizeRevision(message.swipe_id)]?.[MESSAGE_STATE_KEY]?.swipeUid ?? null
+            : null,
+    };
 }
 
 function summarizeEventArgs(args) {
@@ -303,6 +330,71 @@ function summarizeEventArgs(args) {
 export function getAuthorityEventContext() {
     const context = eventStack.at(-1);
     return context ? structuredClone(context) : null;
+}
+
+export function captureAuthorityHostContext() {
+    const context = readHostContext();
+    const metadata = context?.chatMetadata ?? context?.chat_metadata;
+    const messages = context?.chat;
+    if (!metadata || !Array.isArray(messages)) return null;
+    const host = ensureAuthorityChatState(metadata, messages);
+    const event = eventStack.at(-1) ?? null;
+    const hostRevision = normalizeRevision(host.revision);
+    const hasCommittedEvent = Boolean(host.lastEventId) && hostRevision > 0;
+    return {
+        schemaVersion: BRIDGE_SCHEMA_VERSION,
+        phase: event ? 'event' : 'snapshot',
+        conversationId: host.conversationId,
+        branchId: host.branchId,
+        hostRevision,
+        baseHostRevision: event ? hostRevision : (hasCommittedEvent ? hostRevision - 1 : hostRevision),
+        ...(host.lastEventId ? { commitEventId: host.lastEventId } : {}),
+        ...(host.lastTransactionId ? { commitTransactionId: host.lastTransactionId } : {}),
+        ...(host.committedAt ? { commitCommittedAt: host.committedAt } : {}),
+        ...(host.lastCommit?.operation ? { commitOperation: host.lastCommit.operation } : {}),
+        ...(event?.eventId ? { sourceEventId: event.eventId } : {}),
+        ...(!event && Array.isArray(host.lastCommit?.sourceEventIds)
+            ? { sourceEventIds: [...host.lastCommit.sourceEventIds] }
+            : {}),
+        ...(event?.rootEventId ? { rootEventId: event.rootEventId } : {}),
+        ...(event?.rootEventId ? { correlationId: event.rootEventId } : {}),
+        ...(event?.parentEventId !== undefined ? { causationId: event.parentEventId } : {}),
+        ...(event?.eventName || host.lastCommit?.operation
+            ? { operation: event?.eventName ? `host.event.${event.eventName}` : host.lastCommit.operation }
+            : {}),
+        ...(event?.originExtensionId
+            ? { originExtensionIds: [event.originExtensionId] }
+            : Array.isArray(host.lastCommit?.originExtensionIds)
+                ? { originExtensionIds: [...host.lastCommit.originExtensionIds] }
+                : {}),
+        ...(event?.messageUid !== undefined ? { messageUid: event.messageUid } : {}),
+        ...(event?.swipeUid !== undefined ? { swipeUid: event.swipeUid } : {}),
+        capturedAt: nowIso(),
+    };
+}
+
+export function getLatestAuthorityCommit(metadata) {
+    const host = metadata?.[HOST_STATE_KEY];
+    const revision = normalizeRevision(host?.revision);
+    if (!host?.conversationId || !host?.branchId || !host?.lastEventId || revision < 1) return null;
+    const lastCommit = host.lastCommit && typeof host.lastCommit === 'object' ? host.lastCommit : {};
+    return {
+        schemaVersion: BRIDGE_SCHEMA_VERSION,
+        eventId: host.lastEventId,
+        transactionId: host.lastTransactionId ?? `reconciled:${host.lastEventId}`,
+        conversationId: host.conversationId,
+        branchId: host.branchId,
+        baseRevision: revision - 1,
+        revision,
+        operation: lastCommit.operation ?? 'chat.save',
+        ...(Array.isArray(lastCommit.rootEventIds) ? { rootEventIds: [...lastCommit.rootEventIds] } : {}),
+        ...(lastCommit.correlationId ? { correlationId: lastCommit.correlationId } : {}),
+        ...(lastCommit.causationId !== undefined ? { causationId: lastCommit.causationId } : {}),
+        ...(Array.isArray(lastCommit.originExtensionIds) ? { originExtensionIds: [...lastCommit.originExtensionIds] } : {}),
+        ...(Array.isArray(lastCommit.sourceEventIds) ? { sourceEventIds: [...lastCommit.sourceEventIds] } : {}),
+        ...(Array.isArray(lastCommit.changes) ? { changes: structuredClone(lastCommit.changes) } : {}),
+        committedAt: host.committedAt ?? nowIso(),
+    };
 }
 
 export function prepareAuthorityChatCommit({ metadata, messages, chatKey = null, groupId = null } = {}) {
@@ -373,12 +465,29 @@ export async function completeAuthorityChatCommit(commit, receipt, { metadata, m
         branchId: host.branchId,
         revision: host.revision,
         baseRevision: normalizeRevision(authoritative.baseRevision ?? commit?.expectedRevision),
+        sourceEventIds: Array.isArray(authoritative.sourceEventIds)
+            ? [...authoritative.sourceEventIds]
+            : (commit?.transaction?.sourceEvents ?? []).map(event => event?.eventId).filter(Boolean),
     };
-    globalThis.dispatchEvent?.(new CustomEvent('authority:chat-committed', { detail }));
+    host.lastCommit = {
+        operation: detail.operation ?? 'chat.save',
+        rootEventIds: [...(detail.rootEventIds ?? [])],
+        correlationId: detail.correlationId ?? null,
+        causationId: detail.causationId ?? null,
+        originExtensionIds: [...(detail.originExtensionIds ?? [])],
+        sourceEventIds: [...detail.sourceEventIds],
+        changes: structuredClone(detail.changes ?? []),
+    };
+    dispatchAuthorityCustomEvent('authority:chat-committed', detail);
     if (eventSource?.emit) {
         await eventSource.emit('authority_chat_committed', detail);
     }
     return detail;
+}
+
+function dispatchAuthorityCustomEvent(name, detail) {
+    if (typeof globalThis.dispatchEvent !== 'function' || typeof globalThis.CustomEvent !== 'function') return;
+    globalThis.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
 function acknowledgeMutationEvents(conversationId, committedEvents) {
@@ -399,7 +508,7 @@ export async function failAuthorityChatCommit(commit, error, { eventSource } = {
         error: error instanceof Error ? error.message : String(error),
         failedAt: nowIso(),
     };
-    globalThis.dispatchEvent?.(new CustomEvent('authority:chat-commit-failed', { detail }));
+    dispatchAuthorityCustomEvent('authority:chat-commit-failed', detail);
     if (eventSource?.emit) {
         await eventSource.emit('authority_chat_commit_failed', detail);
     }
@@ -410,5 +519,10 @@ globalThis.STAuthorityHostBridge = Object.freeze({
     schemaVersion: BRIDGE_SCHEMA_VERSION,
     ensureChatState: ensureAuthorityChatState,
     getEventContext: getAuthorityEventContext,
+    captureTransactionContext: captureAuthorityHostContext,
+    getLatestCommit() {
+        const context = readHostContext();
+        return getLatestAuthorityCommit(context?.chatMetadata ?? context?.chat_metadata);
+    },
     prepareChatCommit: prepareAuthorityChatCommit,
 });

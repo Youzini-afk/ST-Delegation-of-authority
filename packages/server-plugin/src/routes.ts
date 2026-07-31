@@ -51,6 +51,7 @@ import { registerJobsAndEventsRoutes } from './routes/jobs-events-routes.js';
 import { listPrivateTriviumDatabases, registerTriviumRoutes } from './routes/trivium-routes.js';
 import { listPrivateSqlDatabases, registerSqlRoutes } from './routes/sql-routes.js';
 import { registerHttpRoutes } from './routes/http-routes.js';
+import { registerHostRoutes } from './routes/host-routes.js';
 import { registerModuleRoutes } from './routes/module-routes.js';
 import { registerAgentHistoryRoutes } from './routes/agent-history-routes.js';
 import { registerAgentRoutes } from './routes/agent-routes.js';
@@ -371,6 +372,15 @@ async function buildProbeResponse(runtime: AuthorityRuntime, user: ReturnType<ty
         jobs: {
             builtinTypes: [...BUILTIN_JOB_TYPES],
             registry: core.health?.jobRegistrySummary ?? BUILTIN_JOB_REGISTRY_SUMMARY,
+        },
+        hostBridge: runtime.hostBridge?.getStatus?.() ?? {
+            status: 'missing',
+            message: 'Authority Host Bridge status is unavailable.',
+            bridgeVersion: null,
+            hostPackageVersion: null,
+            operationId: null,
+            requiresRestart: false,
+            checkedAt: new Date().toISOString(),
         },
         core,
     };
@@ -764,6 +774,8 @@ export function registerRoutes(router: RouterLike, runtime = createAuthorityRunt
     registerSqlRoutes(router, runtime, fail);
 
     registerTriviumRoutes(router, runtime, fail);
+
+    registerHostRoutes(router, runtime, fail);
 
     registerModuleRoutes(router, runtime, fail);
 

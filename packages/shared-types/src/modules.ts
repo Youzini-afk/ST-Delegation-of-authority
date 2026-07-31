@@ -1,4 +1,5 @@
 import type { PermissionResource, RiskLevel } from './permissions.js';
+import type { AuthorityHostTransactionContext } from './host.js';
 
 /**
  * Authority module transaction host shared types.
@@ -131,6 +132,8 @@ export interface ModuleTransactionRequest {
     idempotencyKey?: string;
     input?: unknown;
     options?: ModuleTransactionRequestOptions;
+    /** Stable SillyTavern conversation/event context captured by the SDK. */
+    host?: AuthorityHostTransactionContext;
 }
 
 /** Diagnostics returned alongside a module transaction result. */
@@ -146,6 +149,8 @@ export interface ModuleTransactionResponse {
     transaction: ModuleTransactionName;
     transactionVersion: ModuleTransactionVersion;
     idempotencyKey?: string;
+    /** Server-normalized host context used for this execution. */
+    host?: AuthorityHostTransactionContext;
     result?: unknown;
     diagnostics?: ModuleTransactionDiagnostics;
 }

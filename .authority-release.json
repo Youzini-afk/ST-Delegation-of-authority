@@ -3,7 +3,7 @@
   "pluginVersion": "1.6.5",
   "sdkExtensionId": "third-party/st-authority-sdk",
   "sdkVersion": "1.6.5",
-  "assetHash": "a21eb24ad901022cb3678db3e0de462c53334fde3e20b5a839ffd13d0366b680",
+  "assetHash": "788e707d0c00804baa6fa391ab41525d3164e9688f67e3b5a4428cc82d5b8703",
   "coreVersion": "1.6.5",
   "coreArtifactHash": "d1a6a94e66e54a8b4d4fe4bb3919d1081587474b17f8fad602e9518485b4b36f",
   "coreArtifactPlatform": "linux-x64",
@@ -53,7 +53,7 @@
     }
   },
   "coreBinarySha256": "a7a4ccb97b79087e3e67dc4e9c5fe5b7c278e03ef5ba1a45b860677f5f4b561e",
-  "hostBridgeVersion": "1.0.0",
-  "hostBridgeArtifactHash": "09660ac7215230bfb45ff176a2ac0adff1ecba6e24ab0be0ad16da95c9c256a6",
-  "buildTime": "2026-07-31T19:16:34.983Z"
+  "hostBridgeVersion": "1.1.0",
+  "hostBridgeArtifactHash": "03e2539c63b90af1fa5dd1e814eedc518f8113c15676a4824605ce7aaa3cc69d",
+  "buildTime": "2026-07-31T19:36:41.879Z"
 }
