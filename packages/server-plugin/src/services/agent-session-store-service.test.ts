@@ -31,7 +31,6 @@ describe('AgentSessionStoreService', () => {
             profileId: 'profile',
             mode: 'ask',
             allowedTools: ['host_read_file', 'host_write_file'],
-            maxSteps: 8,
         });
         append(writer, runEvent('entry-run-started', 'run.started'));
         append(writer, stepStarted('entry-step-1', 'step-1', 1));
@@ -352,6 +351,86 @@ describe('AgentSessionStoreService', () => {
         writer.close();
     });
 
+    it('persists compaction as an append-only checkpoint and rejects a non-suffix retention set', () => {
+        const store = createStore();
+        const session = createSession(store);
+        const writer = store.openWriter(session.session.id);
+        append(writer, message('message-one', null, 'user', 'Old context'));
+        append(writer, message('message-two', 'message-one', 'user', 'Recent context'));
+        const sourceLastSequence = writer.snapshot().lastSequence;
+        append(writer, {
+            id: 'compaction-one',
+            type: 'conversation.compacted',
+            timestamp: tick(),
+            ref: 'main',
+            parentId: 'message-two',
+            summary: 'Old context was summarized.',
+            sourceLeafEntryId: 'message-two',
+            sourceLastSequence,
+            firstKeptEntryId: 'message-two',
+            retainedEntryIds: ['message-two'],
+            tokensBefore: 900,
+            tokensAfter: 220,
+            contextWindowTokens: 1_024,
+        });
+        expect(writer.snapshot().conversation.at(-1)).toMatchObject({
+            id: 'compaction-one',
+            kind: 'compaction',
+            retainedEntryIds: ['message-two'],
+            tokensBefore: 900,
+            tokensAfter: 220,
+        });
+        writer.close();
+        expect(store.readSession(session.session.id).snapshot.conversation.at(-1)).toMatchObject({ id: 'compaction-one' });
+
+        const invalidStore = createStore();
+        const invalidSession = createSession(invalidStore);
+        const invalidWriter = invalidStore.openWriter(invalidSession.session.id);
+        append(invalidWriter, message('invalid-one', null, 'user', 'Old'));
+        append(invalidWriter, message('invalid-two', 'invalid-one', 'user', 'Recent'));
+        expect(() => append(invalidWriter, {
+            id: 'invalid-compaction',
+            type: 'conversation.compacted',
+            timestamp: tick(),
+            ref: 'main',
+            parentId: 'invalid-two',
+            summary: 'Invalid checkpoint',
+            sourceLeafEntryId: 'invalid-two',
+            sourceLastSequence: invalidWriter.snapshot().lastSequence,
+            firstKeptEntryId: 'invalid-one',
+            retainedEntryIds: ['invalid-one'],
+            contextWindowTokens: 1_024,
+        })).toThrow(/active path suffix/);
+        invalidWriter.close();
+    });
+
+    it('replays compacted records written by the original v1 journal schema', () => {
+        const store = createStore();
+        const session = createSession(store);
+        const writer = store.openWriter(session.session.id);
+        append(writer, message('legacy-message-one', null, 'user', 'Old context'));
+        append(writer, message('legacy-message-two', 'legacy-message-one', 'assistant', 'Recent context'));
+        append(writer, {
+            id: 'legacy-compaction',
+            type: 'conversation.compacted',
+            timestamp: tick(),
+            ref: 'main',
+            parentId: 'legacy-message-two',
+            summary: 'Legacy checkpoint',
+            firstKeptEntryId: 'legacy-message-two',
+            retainedEntryIds: ['legacy-message-two'],
+            tokensBefore: 900,
+        });
+        writer.close();
+
+        expect(store.readSession(session.session.id).snapshot.conversation.at(-1)).toMatchObject({
+            id: 'legacy-compaction',
+            kind: 'compaction',
+            summary: 'Legacy checkpoint',
+            retainedEntryIds: ['legacy-message-two'],
+        });
+    });
+
     it('rejects conversation metadata that points to a missing or different run', () => {
         const store = createStore();
         const session = createSession(store);
@@ -367,7 +446,6 @@ describe('AgentSessionStoreService', () => {
             profileId: 'profile',
             mode: 'ask',
             allowedTools: [],
-            maxSteps: 4,
         });
         append(writer, { id: 'entry-main-start', type: 'run.started', timestamp: tick(), runId: 'run-main' });
         append(writer, { id: 'entry-main-step', type: 'step.started', timestamp: tick(), runId: 'run-main', stepId: 'step-main', index: 1 });
@@ -401,7 +479,6 @@ describe('AgentSessionStoreService', () => {
             profileId: 'profile',
             mode: 'ask',
             allowedTools: [],
-            maxSteps: 4,
         });
         append(writer, { id: 'entry-alt-start', type: 'run.started', timestamp: tick(), runId: 'run-alt' });
         append(writer, { id: 'entry-alt-step', type: 'step.started', timestamp: tick(), runId: 'run-alt', stepId: 'step-alt', index: 1 });
@@ -412,6 +489,25 @@ describe('AgentSessionStoreService', () => {
             stepId: 'step-alt',
         })).toThrow(/step belongs to another run/);
         writer.close();
+    });
+
+    it('rotates journal segments without imposing a total session size limit', () => {
+        const store = createStore({ targetSegmentBytes: 600 });
+        const session = createSession(store);
+        const writer = store.openWriter(session.session.id);
+        let parentId: string | null = null;
+        for (let index = 0; index < 12; index += 1) {
+            const id = `segment-message-${index}`;
+            append(writer, message(id, parentId, 'user', `message ${index} ${'x'.repeat(400)}`));
+            parentId = id;
+        }
+        const snapshot = writer.snapshot();
+        writer.close();
+
+        const files = fs.readdirSync(path.dirname(journalPath(store, session.session.id)))
+            .filter(name => /^journal(?:\.\d{6})?\.jsonl$/.test(name));
+        expect(files.length).toBeGreaterThan(2);
+        expect(store.readSession(session.session.id).snapshot).toEqual(snapshot);
     });
 
     it('validates the next prefix before writing it', () => {
@@ -478,7 +574,6 @@ function createSession(store: AgentSessionStoreService) {
         profileId: 'profile',
         mode: 'ask',
         allowedTools: ['host_read_file', 'host_write_file'],
-        maxSteps: 8,
     });
 }
 

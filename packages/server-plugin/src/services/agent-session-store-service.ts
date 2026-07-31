@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AgentExecutionMode, AgentToolExecution } from '@stdo/shared-types';
-import { atomicWriteFile, ensureDir } from '../utils.js';
+import { atomicWriteFile, ensureDir, fsyncDirectory } from '../utils.js';
 import {
     applyAgentSessionRecord,
     createAgentSessionProjection,
@@ -19,8 +19,7 @@ const JOURNAL_FORMAT = 'authority-agent-session-journal/v1' as const;
 const LOCK_FORMAT = 'authority-agent-session-writer-lock/v1' as const;
 const SAFE_FILE_ID = /^[a-zA-Z0-9._-]+$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
-const DEFAULT_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
-const DEFAULT_MAX_JOURNAL_BYTES = 512 * 1024 * 1024;
+const DEFAULT_TARGET_SEGMENT_BYTES = 32 * 1024 * 1024;
 const DEFAULT_STALE_LOCK_MS = 5 * 60_000;
 
 export interface AgentSessionCreateInput {
@@ -32,7 +31,6 @@ export interface AgentSessionCreateInput {
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
-    maxSteps: number;
 }
 
 export interface AgentSessionStoreOptions {
@@ -40,8 +38,7 @@ export interface AgentSessionStoreOptions {
     hostname?: string;
     pid?: number;
     isProcessAlive?: (pid: number) => boolean;
-    maxEntryBytes?: number;
-    maxJournalBytes?: number;
+    targetSegmentBytes?: number;
     staleLockMs?: number;
 }
 
@@ -80,7 +77,9 @@ interface LoadedJournal {
     recordsByEntryId: Map<string, AgentSessionJournalRecord>;
     tail: AgentSessionJournalTail;
     validBytes: number;
-    totalBytes: number;
+    activeJournalPath: string;
+    activeSegmentIndex: number;
+    activeSegmentBytes: number;
 }
 
 export class AgentSessionStoreService {
@@ -88,8 +87,7 @@ export class AgentSessionStoreService {
     private readonly hostname: string;
     private readonly pid: number;
     private readonly isProcessAlive: (pid: number) => boolean;
-    private readonly maxEntryBytes: number;
-    private readonly maxJournalBytes: number;
+    private readonly targetSegmentBytes: number;
     private readonly staleLockMs: number;
 
     constructor(
@@ -101,8 +99,7 @@ export class AgentSessionStoreService {
         this.hostname = options.hostname ?? os.hostname();
         this.pid = options.pid ?? process.pid;
         this.isProcessAlive = options.isProcessAlive ?? processIsAlive;
-        this.maxEntryBytes = positiveInteger(options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES, 'Agent session entry byte limit');
-        this.maxJournalBytes = positiveInteger(options.maxJournalBytes ?? DEFAULT_MAX_JOURNAL_BYTES, 'Agent session journal byte limit');
+        this.targetSegmentBytes = positiveInteger(options.targetSegmentBytes ?? DEFAULT_TARGET_SEGMENT_BYTES, 'Agent session journal segment target');
         this.staleLockMs = nonNegativeInteger(options.staleLockMs ?? DEFAULT_STALE_LOCK_MS, 'Agent session stale lock duration');
     }
 
@@ -127,13 +124,11 @@ export class AgentSessionStoreService {
             title: requiredText(input.title, 'Agent session title', 500),
             profileId: requiredText(input.profileId, 'Agent session profile', 200),
             mode: executionMode(input.mode),
-            allowedTools: textArray(input.allowedTools, 'Agent session allowed tools', 512),
-            maxSteps: boundedInteger(input.maxSteps, 'Agent session max steps', 1, 1_000),
+            allowedTools: textArray(input.allowedTools, 'Agent session allowed tools'),
         };
         validateJournalEntry(entry);
         const record = createRecord(sessionId, 1, null, entry);
         const serialized = `${JSON.stringify(record)}\n`;
-        this.assertEntrySize(serialized);
 
         const sessionDir = this.sessionDir(sessionId);
         try {
@@ -146,6 +141,7 @@ export class AgentSessionStoreService {
         try {
             atomicWriteFile(this.journalPath(sessionId), serialized);
             protectFile(this.journalPath(sessionId));
+            fsyncDirectory(this.sessionsDir());
             return this.readSession(sessionId).snapshot;
         } catch (error) {
             fs.rmSync(sessionDir, { recursive: true, force: true });
@@ -186,23 +182,22 @@ export class AgentSessionStoreService {
         try {
             const loaded = this.loadJournal(sessionId);
             if (loaded.tail.tornTailBytes > 0) {
-                truncateAndSync(this.journalPath(sessionId), loaded.validBytes);
-                loaded.totalBytes = loaded.validBytes;
+                truncateAndSync(loaded.activeJournalPath, loaded.validBytes);
+                loaded.activeSegmentBytes = loaded.validBytes;
                 loaded.tail.tornTailBytes = 0;
             }
             if (loaded.tail.missingFinalNewline) {
-                appendAndSync(this.journalPath(sessionId), '\n');
-                loaded.totalBytes += 1;
+                appendAndSync(loaded.activeJournalPath, '\n');
+                loaded.activeSegmentBytes += 1;
                 loaded.tail.missingFinalNewline = false;
             }
             return new AgentSessionWriter(
                 sessionId,
-                this.journalPath(sessionId),
+                this.sessionDir(sessionId),
                 this.writerLockPath(sessionId),
                 lock,
                 loaded,
-                this.maxEntryBytes,
-                this.maxJournalBytes,
+                this.targetSegmentBytes,
             );
         } catch (error) {
             releaseWriterLock(this.writerLockPath(sessionId), lock.token);
@@ -212,48 +207,53 @@ export class AgentSessionStoreService {
 
     private loadJournal(sessionId: string): LoadedJournal {
         assertFileId(sessionId, 'Agent session id');
-        const journalPath = this.journalPath(sessionId);
-        const stats = fs.statSync(journalPath);
-        if (stats.size > this.maxJournalBytes) {
-            throw new Error(`Agent session journal exceeds the ${this.maxJournalBytes} byte limit: ${sessionId}`);
-        }
-        const buffer = fs.readFileSync(journalPath);
+        const journalPaths = this.journalPaths(sessionId);
         const projection = createAgentSessionProjection();
         const records: AgentSessionJournalRecord[] = [];
         const recordsByEntryId = new Map<string, AgentSessionJournalRecord>();
-        let cursor = 0;
         let validBytes = 0;
         let tornTailBytes = 0;
         let missingFinalNewline = false;
+        let activeSegmentBytes = 0;
 
-        while (cursor < buffer.length) {
-            const newline = buffer.indexOf(0x0a, cursor);
-            const isTail = newline === -1;
-            const end = isTail ? buffer.length : newline;
-            const line = buffer.subarray(cursor, end);
-            if (line.length === 0) {
-                if (isTail) break;
-                throw new Error(`Agent session journal contains an empty record at byte ${cursor}: ${sessionId}`);
+        for (let segmentIndex = 0; segmentIndex < journalPaths.length; segmentIndex += 1) {
+            const journalPath = journalPaths[segmentIndex]!;
+            const finalSegment = segmentIndex === journalPaths.length - 1;
+            const buffer = fs.readFileSync(journalPath);
+            let cursor = 0;
+            validBytes = 0;
+            while (cursor < buffer.length) {
+                const newline = buffer.indexOf(0x0a, cursor);
+                const isTail = newline === -1;
+                const end = isTail ? buffer.length : newline;
+                const line = buffer.subarray(cursor, end);
+                if (line.length === 0) {
+                    if (isTail && finalSegment) break;
+                    throw new Error(`Agent session journal contains an empty record in ${path.basename(journalPath)} at byte ${cursor}: ${sessionId}`);
+                }
+                let parsed: unknown;
+                try {
+                    parsed = JSON.parse(line.toString('utf8')) as unknown;
+                } catch (error) {
+                    if (!isTail || !finalSegment) throw error;
+                    tornTailBytes = buffer.length - cursor;
+                    break;
+                }
+                const record = parseJournalRecord(parsed, sessionId);
+                const canonicalEntry = canonicalJson(record.entry);
+                applyAgentSessionRecord(projection, record, canonicalEntry);
+                records.push(record);
+                recordsByEntryId.set(record.entry.id, record);
+                validBytes = isTail ? end : end + 1;
+                if (isTail) {
+                    if (!finalSegment) {
+                        throw new Error(`Agent session journal segment is missing its final newline: ${path.basename(journalPath)}`);
+                    }
+                    missingFinalNewline = true;
+                }
+                cursor = end + 1;
             }
-            if (line.length > this.maxEntryBytes) {
-                throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit: ${sessionId}`);
-            }
-            let parsed: unknown;
-            try {
-                parsed = JSON.parse(line.toString('utf8')) as unknown;
-            } catch (error) {
-                if (!isTail) throw error;
-                tornTailBytes = buffer.length - cursor;
-                break;
-            }
-            const record = parseJournalRecord(parsed, sessionId);
-            const canonicalEntry = canonicalJson(record.entry);
-            applyAgentSessionRecord(projection, record, canonicalEntry);
-            records.push(record);
-            recordsByEntryId.set(record.entry.id, record);
-            validBytes = isTail ? end : end + 1;
-            if (isTail) missingFinalNewline = true;
-            cursor = end + 1;
+            if (finalSegment) activeSegmentBytes = buffer.length;
         }
         if (records.length === 0) throw new Error(`Agent session journal has no valid records: ${sessionId}`);
         return {
@@ -262,8 +262,28 @@ export class AgentSessionStoreService {
             recordsByEntryId,
             tail: { tornTailBytes, missingFinalNewline },
             validBytes,
-            totalBytes: buffer.length,
+            activeJournalPath: journalPaths.at(-1)!,
+            activeSegmentIndex: journalPaths.length - 1,
+            activeSegmentBytes,
         };
+    }
+
+    private journalPaths(sessionId: string): string[] {
+        const sessionDir = this.sessionDir(sessionId);
+        const base = this.journalPath(sessionId);
+        if (!fs.existsSync(base)) throw new Error(`Agent session journal is missing: ${sessionId}`);
+        const segments = fs.readdirSync(sessionDir)
+            .flatMap(name => {
+                const match = /^journal\.(\d{6})\.jsonl$/.exec(name);
+                return match ? [{ index: Number(match[1]), path: path.join(sessionDir, name) }] : [];
+            })
+            .sort((left, right) => left.index - right.index);
+        for (let index = 0; index < segments.length; index += 1) {
+            if (segments[index]!.index !== index + 1) {
+                throw new Error(`Agent session journal segments are not contiguous: ${sessionId}`);
+            }
+        }
+        return [base, ...segments.map(segment => segment.path)];
     }
 
     private acquireWriterLock(sessionId: string): WriterLockRecord {
@@ -326,13 +346,6 @@ export class AgentSessionStoreService {
         }
     }
 
-    private assertEntrySize(serialized: string): void {
-        const bytes = Buffer.byteLength(serialized, 'utf8');
-        if (bytes > this.maxEntryBytes) {
-            throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit`);
-        }
-    }
-
     private sessionsDir(): string {
         return path.join(this.stateDir, 'sessions');
     }
@@ -355,23 +368,26 @@ export class AgentSessionWriter {
     private projection: AgentSessionProjection;
     private readonly records: AgentSessionJournalRecord[];
     private readonly recordsByEntryId: Map<string, AgentSessionJournalRecord>;
-    private totalBytes: number;
+    private activeJournalPath: string;
+    private activeSegmentIndex: number;
+    private activeSegmentBytes: number;
     private closed = false;
     private faulted = false;
 
     constructor(
         public readonly sessionId: string,
-        private readonly journalPath: string,
+        private readonly sessionDir: string,
         private readonly lockPath: string,
         private readonly lock: WriterLockRecord,
         loaded: LoadedJournal,
-        private readonly maxEntryBytes: number,
-        private readonly maxJournalBytes: number,
+        private readonly targetSegmentBytes: number,
     ) {
         this.projection = loaded.projection;
         this.records = loaded.records;
         this.recordsByEntryId = loaded.recordsByEntryId;
-        this.totalBytes = loaded.totalBytes;
+        this.activeJournalPath = loaded.activeJournalPath;
+        this.activeSegmentIndex = loaded.activeSegmentIndex;
+        this.activeSegmentBytes = loaded.activeSegmentBytes;
     }
 
     append(entry: AgentSessionJournalEntry): AgentSessionJournalRecord {
@@ -392,15 +408,22 @@ export class AgentSessionWriter {
         );
         const serialized = `${JSON.stringify(record)}\n`;
         const entryBytes = Buffer.byteLength(serialized, 'utf8');
-        if (entryBytes > this.maxEntryBytes) throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit`);
-        if (this.totalBytes + entryBytes > this.maxJournalBytes) {
-            throw new Error(`Agent session journal exceeds the ${this.maxJournalBytes} byte limit: ${this.sessionId}`);
-        }
 
         const nextProjection = structuredClone(this.projection);
         applyAgentSessionRecord(nextProjection, record, canonicalEntry);
         try {
-            appendAndSync(this.journalPath, serialized);
+            if (this.activeSegmentBytes > 0 && this.activeSegmentBytes + entryBytes > this.targetSegmentBytes) {
+                const nextIndex = this.activeSegmentIndex + 1;
+                const nextPath = path.join(this.sessionDir, `journal.${String(nextIndex).padStart(6, '0')}.jsonl`);
+                createAndSync(nextPath, serialized);
+                protectFile(nextPath);
+                this.activeJournalPath = nextPath;
+                this.activeSegmentIndex = nextIndex;
+                this.activeSegmentBytes = entryBytes;
+            } else {
+                appendAndSync(this.activeJournalPath, serialized);
+                this.activeSegmentBytes += entryBytes;
+            }
         } catch (error) {
             this.faulted = true;
             throw error;
@@ -408,7 +431,6 @@ export class AgentSessionWriter {
         this.projection = nextProjection;
         this.records.push(record);
         this.recordsByEntryId.set(entry.id, record);
-        this.totalBytes += entryBytes;
         return structuredClone(record);
     }
 
@@ -493,15 +515,13 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
             requiredText(value.title, 'Agent session title', 500);
             requiredText(value.profileId, 'Agent session profile', 200);
             executionMode(value.mode);
-            textArray(value.allowedTools, 'Agent session allowed tools', 512);
-            boundedInteger(value.maxSteps, 'Agent session max steps', 1, 1_000);
+            textArray(value.allowedTools, 'Agent session allowed tools');
             return;
         case 'session.updated':
             optionalText(value.title, 'Agent session title', 500);
             optionalText(value.profileId, 'Agent session profile', 200);
             if (value.mode !== undefined) executionMode(value.mode);
-            if (value.allowedTools !== undefined) textArray(value.allowedTools, 'Agent session allowed tools', 512);
-            if (value.maxSteps !== undefined) boundedInteger(value.maxSteps, 'Agent session max steps', 1, 1_000);
+            if (value.allowedTools !== undefined) textArray(value.allowedTools, 'Agent session allowed tools');
             if (value.archived !== undefined && typeof value.archived !== 'boolean') throw new Error('Agent session archived must be boolean');
             return;
         case 'ref.created':
@@ -515,7 +535,7 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
         case 'conversation.message':
             conversationBase(value);
             enumValue(value.role, ['system', 'user', 'assistant', 'tool'], 'Agent conversation role');
-            nullableText(value.content, 'Agent conversation content', 8 * 1024 * 1024);
+            nullableText(value.content, 'Agent conversation content');
             optionalIdentifier(value.toolCallId, 'Agent tool call id');
             optionalIdentifier(value.runId, 'Agent run id');
             optionalIdentifier(value.stepId, 'Agent step id');
@@ -524,23 +544,34 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
             return;
         case 'conversation.compacted':
             conversationBase(value);
-            requiredText(value.summary, 'Agent compaction summary', 2 * 1024 * 1024);
-            requiredIdentifier(value.firstKeptEntryId, 'Agent compaction boundary');
-            identifierArray(value.retainedEntryIds, 'Agent compaction retained entries', 100_000);
+            requiredText(value.summary, 'Agent compaction summary');
+            if (value.sourceLeafEntryId === undefined) {
+                // Legacy v1 checkpoints predate source snapshot metadata.
+                if (value.sourceLastSequence !== undefined || value.contextWindowTokens !== undefined) {
+                    throw new Error('Agent compaction source metadata must be complete');
+                }
+            } else {
+                requiredIdentifier(value.sourceLeafEntryId, 'Agent compaction source leaf');
+                nonNegativeInteger(value.sourceLastSequence, 'Agent compaction source sequence');
+                positiveInteger(value.contextWindowTokens, 'Agent compaction context window');
+            }
+            nullableIdentifier(value.firstKeptEntryId, 'Agent compaction boundary');
+            identifierArray(value.retainedEntryIds, 'Agent compaction retained entries');
             if (value.tokensBefore !== undefined) nonNegativeInteger(value.tokensBefore, 'Agent compaction tokens');
+            if (value.tokensAfter !== undefined) nonNegativeInteger(value.tokensAfter, 'Agent compacted tokens');
             optionalIdentifier(value.runId, 'Agent run id');
             return;
         case 'conversation.branch_summary':
             conversationBase(value);
             requiredIdentifier(value.fromEntryId, 'Agent branch source');
-            requiredText(value.summary, 'Agent branch summary', 2 * 1024 * 1024);
+            requiredText(value.summary, 'Agent branch summary');
             optionalIdentifier(value.runId, 'Agent run id');
             return;
         case 'queue.added':
             requiredIdentifier(value.queueId, 'Agent queue id');
             requiredIdentifier(value.ref, 'Agent session ref');
             enumValue(value.kind, ['steer', 'follow_up', 'next_run'], 'Agent queue kind');
-            requiredText(value.content, 'Agent queued message', 2 * 1024 * 1024);
+            requiredText(value.content, 'Agent queued message');
             optionalIdentifier(value.runId, 'Agent run id');
             return;
         case 'queue.removed':
@@ -553,8 +584,7 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
             requiredIdentifier(value.triggerMessageId, 'Agent run trigger');
             requiredText(value.profileId, 'Agent run profile', 200);
             executionMode(value.mode);
-            textArray(value.allowedTools, 'Agent run allowed tools', 512);
-            boundedInteger(value.maxSteps, 'Agent run max steps', 1, 1_000);
+            textArray(value.allowedTools, 'Agent run allowed tools');
             return;
         case 'run.started':
         case 'run.resumed':
@@ -563,25 +593,26 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
             return;
         case 'run.suspended':
             requiredIdentifier(value.runId, 'Agent run id');
-            requiredText(value.reason, 'Agent run suspension reason', 20_000);
+            requiredText(value.reason, 'Agent run suspension reason');
             return;
         case 'run.finished':
             requiredIdentifier(value.runId, 'Agent run id');
             enumValue(value.outcome, ['completed', 'failed', 'cancelled'], 'Agent run outcome');
-            optionalText(value.finalText, 'Agent final text', 2 * 1024 * 1024);
-            optionalText(value.error, 'Agent run error', 100_000);
+            optionalText(value.finalText, 'Agent final text');
+            optionalText(value.error, 'Agent run error');
             return;
         case 'step.started':
             requiredIdentifier(value.runId, 'Agent run id');
             requiredIdentifier(value.stepId, 'Agent step id');
             positiveInteger(value.index, 'Agent step index');
+            if (value.kind !== undefined) enumValue(value.kind, ['generation', 'compaction'], 'Agent step kind');
             return;
         case 'step.finished':
             requiredIdentifier(value.runId, 'Agent run id');
             requiredIdentifier(value.stepId, 'Agent step id');
             enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'interrupted'], 'Agent step outcome');
             optionalNullableText(value.finishReason, 'Agent step finish reason', 1_000);
-            optionalText(value.error, 'Agent step error', 100_000);
+            optionalText(value.error, 'Agent step error');
             return;
         case 'generation.started':
             requiredIdentifier(value.runId, 'Agent run id');
@@ -601,7 +632,7 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
             );
             optionalIdentifier(value.providerRequestId, 'Agent provider request id');
             optionalNullableText(value.finishReason, 'Agent generation finish reason', 1_000);
-            optionalText(value.error, 'Agent generation error', 100_000);
+            optionalText(value.error, 'Agent generation error');
             return;
         case 'tool.requested':
             requiredIdentifier(value.runId, 'Agent run id');
@@ -629,7 +660,7 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
         case 'tool.waiting':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
             enumValue(value.reason, ['browser'], 'Agent tool wait reason');
-            isoTimestamp(value.deadlineAt, 'Agent tool wait deadline');
+            optionalTimestamp(value.deadlineAt, 'Agent tool wait deadline');
             return;
         case 'tool.started':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
@@ -639,7 +670,7 @@ function validateJournalEntry(value: unknown): asserts value is AgentSessionJour
         case 'tool.finished':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
             enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'outcome_unknown', 'timed_out'], 'Agent tool outcome');
-            optionalText(value.error, 'Agent tool error', 100_000);
+            optionalText(value.error, 'Agent tool error');
             return;
         case 'workspace.checkpointed':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
@@ -657,12 +688,12 @@ function conversationBase(value: Record<string, unknown>): void {
 }
 
 function validateToolCalls(value: unknown): void {
-    if (!Array.isArray(value) || value.length > 128) throw new Error('Agent tool calls must be a bounded array');
+    if (!Array.isArray(value)) throw new Error('Agent tool calls must be an array');
     for (const call of value) {
         if (!isObject(call)) throw new Error('Agent tool call must be an object');
         requiredIdentifier(call.id, 'Agent tool call id');
         requiredIdentifier(call.name, 'Agent tool call name');
-        requiredText(call.arguments, 'Agent tool call arguments', 2 * 1024 * 1024, true);
+        requiredText(call.arguments, 'Agent tool call arguments', undefined, true);
     }
 }
 
@@ -700,6 +731,18 @@ function appendAndSync(filePath: string, content: string): void {
     } finally {
         if (descriptor !== null) fs.closeSync(descriptor);
     }
+}
+
+function createAndSync(filePath: string, content: string): void {
+    let descriptor: number | null = null;
+    try {
+        descriptor = fs.openSync(filePath, 'wx');
+        fs.writeFileSync(descriptor, content);
+        fs.fsyncSync(descriptor);
+    } finally {
+        if (descriptor !== null) fs.closeSync(descriptor);
+    }
+    fsyncDirectory(path.dirname(filePath));
 }
 
 function truncateAndSync(filePath: string, length: number): void {
@@ -751,18 +794,18 @@ function assertJsonValue(value: unknown, label: string, ancestors = new Set<obje
     ancestors.delete(value);
 }
 
-function requiredText(value: unknown, label: string, maxLength: number, allowEmpty = false): string {
+function requiredText(value: unknown, label: string, maxLength?: number, allowEmpty = false): string {
     if (typeof value !== 'string' || (!allowEmpty && !value.trim())) throw new Error(`${label} is required`);
-    if (value.length > maxLength) throw new Error(`${label} exceeds ${maxLength} characters`);
+    if (maxLength !== undefined && value.length > maxLength) throw new Error(`${label} exceeds ${maxLength} characters`);
     return value;
 }
 
-function optionalText(value: unknown, label: string, maxLength: number): string | undefined {
+function optionalText(value: unknown, label: string, maxLength?: number): string | undefined {
     if (value === undefined) return undefined;
     return requiredText(value, label, maxLength);
 }
 
-function nullableText(value: unknown, label: string, maxLength: number): string | null {
+function nullableText(value: unknown, label: string, maxLength?: number): string | null {
     if (value === null) return null;
     return requiredText(value, label, maxLength, true);
 }
@@ -806,13 +849,13 @@ function enumValue<const T extends string>(value: unknown, values: readonly T[],
     return value as T;
 }
 
-function textArray(value: unknown, label: string, maxItems: number): string[] {
-    if (!Array.isArray(value) || value.length > maxItems) throw new Error(`${label} must be a bounded array`);
+function textArray(value: unknown, label: string, maxItems?: number): string[] {
+    if (!Array.isArray(value) || (maxItems !== undefined && value.length > maxItems)) throw new Error(`${label} must be an array`);
     return value.map(item => requiredText(item, label, 500));
 }
 
-function identifierArray(value: unknown, label: string, maxItems: number): string[] {
-    if (!Array.isArray(value) || value.length > maxItems) throw new Error(`${label} must be a bounded array`);
+function identifierArray(value: unknown, label: string, maxItems?: number): string[] {
+    if (!Array.isArray(value) || (maxItems !== undefined && value.length > maxItems)) throw new Error(`${label} must be an array`);
     return value.map(item => requiredIdentifier(item, label));
 }
 

@@ -157,7 +157,7 @@ if (accepted.runId) {
 }
 ```
 
-Agent 忙碌时的新消息可作为 steer 或 follow-up 排队；前端插件也可通过 `client.agent.browser.*` 注册自己的领域工具。完整产品边界见 [Authority Agent 平台](docs/server/agent-platform.md)，会话日志和恢复语义见 [持久会话运行时](docs/server/agent-session-runtime.md)。
+Agent 忙碌时的新消息可作为 steer 或 follow-up 排队；前端插件也可通过 `client.agent.browser.*` 注册自己的领域工具。DOA 不限制 Run 的总步数或工具调用次数；管理员在模型连接中填写上下文窗口，长会话会自动生成可审计的摘要检查点并保留原始日志。完整产品边界见 [Authority Agent 平台](docs/server/agent-platform.md)，会话日志和恢复语义见 [持久会话运行时](docs/server/agent-session-runtime.md)。
 
 ---
 

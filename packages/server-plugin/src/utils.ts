@@ -263,7 +263,7 @@ function looksLikeAbsoluteUrl(value: string): boolean {
     return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
 }
 
-function fsyncDirectory(dirPath: string): void {
+export function fsyncDirectory(dirPath: string): void {
     let fileDescriptor: number | null = null;
     try {
         fileDescriptor = fs.openSync(dirPath, 'r');

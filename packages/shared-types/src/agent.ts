@@ -33,8 +33,9 @@ export interface AgentLlmProfileInput {
     model: string;
     apiKey?: string;
     temperature?: number;
-    maxOutputTokens?: number;
-    timeoutMs?: number;
+    contextWindowTokens: number;
+    maxOutputTokens: number;
+    timeoutMs?: number | null;
 }
 
 export interface AgentLlmProfile {
@@ -47,8 +48,9 @@ export interface AgentLlmProfile {
     apiKeyMasked: string | null;
     apiKeyFingerprint: string | null;
     temperature: number | null;
+    contextWindowTokens: number | null;
     maxOutputTokens: number | null;
-    timeoutMs: number;
+    timeoutMs: number | null;
     createdAt: string;
     updatedAt: string;
 }
@@ -97,7 +99,6 @@ export interface AgentSessionCreateRequest {
     title?: string;
     mode?: AgentExecutionMode;
     allowedTools?: string[];
-    maxSteps?: number;
     message?: string;
     instructions?: string;
     context?: unknown;
@@ -108,7 +109,6 @@ export interface AgentSessionUpdateRequest {
     profileId?: string;
     mode?: AgentExecutionMode;
     allowedTools?: string[];
-    maxSteps?: number;
     archived?: boolean;
 }
 
@@ -127,7 +127,6 @@ export interface AgentSessionDefinition {
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
-    maxSteps: number;
     createdAt: string;
     updatedAt: string;
     archivedAt?: string;
@@ -188,9 +187,13 @@ export interface AgentSessionConversationMessage extends AgentSessionConversatio
 export interface AgentSessionConversationCompaction extends AgentSessionConversationEntryBase {
     kind: 'compaction';
     summary: string;
-    firstKeptEntryId: string;
+    sourceLeafEntryId?: string;
+    sourceLastSequence?: number;
+    firstKeptEntryId: string | null;
     retainedEntryIds: string[];
     tokensBefore?: number;
+    tokensAfter?: number;
+    contextWindowTokens?: number;
 }
 
 export interface AgentSessionConversationBranchSummary extends AgentSessionConversationEntryBase {
@@ -213,7 +216,6 @@ export interface AgentSessionRun {
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
-    maxSteps: number;
     stepCount: number;
     createdAt: string;
     updatedAt: string;
@@ -231,6 +233,7 @@ export interface AgentSessionStep {
     id: string;
     runId: string;
     index: number;
+    kind: 'generation' | 'compaction';
     status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
     createdAt: string;
     updatedAt: string;

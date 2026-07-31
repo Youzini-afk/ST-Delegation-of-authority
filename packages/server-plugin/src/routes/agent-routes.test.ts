@@ -418,7 +418,6 @@ function buildSnapshot(options: { extensionId?: string; userHandle?: string } = 
             profileId: 'profile-1',
             mode: 'ask',
             allowedTools: ['browser.inspect'],
-            maxSteps: 24,
             createdAt: timestamp,
             updatedAt: timestamp,
         },
@@ -432,10 +431,10 @@ function buildSnapshot(options: { extensionId?: string; userHandle?: string } = 
         activePaths: { main: ['message-1', 'message-2'] },
         runs: [{
             id: 'run-1', ref: 'main', triggerMessageId: 'message-1', status: 'running', profileId: 'profile-1',
-            mode: 'ask', allowedTools: ['browser.inspect'], maxSteps: 24, stepCount: 1,
+            mode: 'ask', allowedTools: ['browser.inspect'], stepCount: 1,
             createdAt: timestamp, updatedAt: timestamp, startedAt: timestamp, resumeCount: 0,
         }],
-        steps: [{ id: 'step-1', runId: 'run-1', index: 0, status: 'running', createdAt: timestamp, updatedAt: timestamp }],
+        steps: [{ id: 'step-1', runId: 'run-1', index: 0, kind: 'generation', status: 'running', createdAt: timestamp, updatedAt: timestamp }],
         generations: [],
         invocations: [{
             id: 'invocation-1', runId: 'run-1', stepId: 'step-1', callId: 'call-1', toolId: 'browser.inspect',

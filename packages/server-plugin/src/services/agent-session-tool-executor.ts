@@ -40,7 +40,7 @@ export interface AgentSessionToolExecutorHost {
 
 export interface AgentSessionToolExecutorOptions {
     moduleHost?: ModuleHostService;
-    browserToolTimeoutMs: number;
+    browserToolTimeoutMs: number | null;
 }
 
 /**
@@ -49,7 +49,7 @@ export interface AgentSessionToolExecutorOptions {
  */
 export class AgentSessionToolExecutor {
     private readonly moduleHost: ModuleHostService | undefined;
-    private readonly browserToolTimeoutMs: number;
+    private readonly browserToolTimeoutMs: number | null;
 
     constructor(
         private readonly history: WorkspaceHistoryService,
@@ -75,7 +75,9 @@ export class AgentSessionToolExecutor {
         const descriptor = this.descriptor(snapshot, invocation.toolId);
         if (descriptor.execution === 'browser') {
             const timestamp = this.host.now();
-            const deadlineAt = new Date(Date.parse(timestamp) + this.browserToolTimeoutMs).toISOString();
+            const deadlineAt = this.browserToolTimeoutMs === null
+                ? undefined
+                : new Date(Date.parse(timestamp) + this.browserToolTimeoutMs).toISOString();
             const waiting = await this.host.perform(sessionId, writer => {
                 const currentSnapshot = writer.snapshot();
                 const current = currentSnapshot.invocations.find(item => item.id === invocationId);
@@ -105,7 +107,7 @@ export class AgentSessionToolExecutor {
                     timestamp,
                     invocationId,
                     reason: 'browser',
-                    deadlineAt,
+                    ...(deadlineAt ? { deadlineAt } : {}),
                 });
                 return writer.snapshot().invocations.find(item => item.id === invocationId)!;
             });
@@ -136,7 +138,9 @@ export class AgentSessionToolExecutor {
                     },
                 }, { kind: 'agent', id: invocation.runId }, () => this.hostTools.execute(descriptor.id, invocation!.arguments, {
                     workspace,
+                    sessionId,
                     runId: invocation!.runId,
+                    invocationId: invocation!.id,
                     signal,
                 }), {
                     beforeCheckpoint: async checkpoint => {
@@ -218,7 +222,9 @@ export class AgentSessionToolExecutor {
                 if (descriptor.execution === 'host') {
                     result = await this.hostTools.execute(descriptor.id, invocation.arguments, {
                         workspace,
+                        sessionId,
                         runId: invocation.runId,
+                        invocationId: invocation.id,
                         signal,
                     });
                 } else if (descriptor.execution === 'module' && descriptor.source.kind === 'module') {

@@ -43,10 +43,13 @@ Session 是产品 UI 和插件 SDK 的主要对象。Run、Step 与 Generation �
 ```text
 <agent-state>/sessions/<session-id>/
   journal.jsonl
+  journal.000001.jsonl
+  journal.000002.jsonl
+  ...
   writer.lock
 ```
 
-`journal.jsonl` 是唯一事实源。每条记录包含：
+连续的 journal segments 共同构成唯一事实源。每条记录包含：
 
 - 会话 ID；
 - 单调、连续的 sequence；
@@ -54,7 +57,7 @@ Session 是产品 UI 和插件 SDK 的主要对象。Run、Step 与 Generation �
 - 带稳定 ID 和时间戳的 typed entry；
 - 当前记录的 SHA-256。
 
-hash 使用递归排序键名的 canonical JSON 计算。完整记录损坏、乱序、断链或语义不合法时拒绝打开；只允许忽略最后一条不完整写入形成的 torn tail。
+hash 使用递归排序键名的 canonical JSON 计算并跨 segment 延续。segment 按目标大小轮转，不设 Session 总容量上限。完整记录损坏、segment 缺口、乱序、断链或语义不合法时拒绝打开；只允许忽略最后一个 segment 的最后一条不完整写入形成的 torn tail。
 
 写入规则：
 
@@ -129,9 +132,11 @@ Agent 活动期间的新输入分为：
 
 ## 7. 上下文与压缩
 
-模型上下文从活动 ref 的 leaf 沿 `parentId` 回溯构建，不从历史 Run 文件拼接。
+模型上下文从活动 ref 的 leaf 沿 `parentId` 回溯构建，不从历史 Run 文件拼接。LLM profile 明确提供 `contextWindowTokens` 与 `maxOutputTokens`；每次 Generation 前，运行时先计算实际请求的可用输入窗口。最近一次 provider usage 是主信号，本地 Unicode-aware 估算用于首轮、尾部增量和无 usage 的 provider。
 
-压缩是新的对话 entry，不删除或覆写原始历史。它记录摘要、保留边界和保留 entry；上下文投影使用最新压缩加保留尾部，审计与分支仍可读取完整日志。
+达到窗口前，运行时选择满足预算所需的最小旧前缀，并用当前 Run 绑定的同一模型生成结构化 checkpoint；超大前缀按该模型窗口分段更新摘要。provider 明确返回 context overflow 时也会进入同一流程并在请求确实缩短后重试，而不是依赖固定字符阈值。
+
+压缩是新的 `conversation.compacted` entry，不删除或覆写原始历史。它记录 source leaf/sequence、摘要、上下文窗口、压缩前后 token 估算、保留边界和严格的 active-path suffix；上下文投影使用最新压缩加保留尾部，审计与分支仍可读取完整日志。摘要调用本身记录为 `kind=compaction` 的 Step/Generation，因此中断会沿既有恢复协议暂停，不会把半份摘要当成事实。
 
 ## 8. 快照与实时事件
 
@@ -164,7 +169,7 @@ event(lastSequence + 2)
 - module transaction 的权限、审计、超时与幂等合同；
 - 变异前后 workspace checkpoint；
 - content-addressed 工作区历史、回退 journal 和独立 rescue CLI；
-- 并发、公平调度、频率和资源上限。
+- 并发执行槽、公平调度和服务背压；它们不得转化为 Session/Run 的任务配额或静默内容截断。
 
 新的会话日志负责执行事实的持久与恢复，不替代工作区版本树，也不把网络、module 或 browser 副作用伪装成可由文件回退撤销。
 

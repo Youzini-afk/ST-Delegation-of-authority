@@ -1185,13 +1185,11 @@ class SecurityCenterView {
             return;
         }
         const mode = this.agentFieldValue('agent-new-mode');
-        const maxSteps = Number(this.agentFieldValue('agent-new-max-steps'));
         const request = {
             message,
             workspaceId,
             profileId,
             mode,
-            maxSteps,
         };
         await this.performAgentMutation(async (client) => {
             const snapshot = await client.agent.sessions.create(request);
@@ -1247,7 +1245,6 @@ class SecurityCenterView {
             title: this.agentFieldValue('agent-session-title'),
             profileId: this.agentFieldValue('agent-session-profile'),
             mode: this.agentFieldValue('agent-session-mode'),
-            maxSteps: Number(this.agentFieldValue('agent-session-max-steps')),
         };
         await this.performAgentMutation(async (client) => {
             this.applySelectedAgentSession(await client.agent.sessions.update(sessionId, request));
@@ -1309,6 +1306,12 @@ class SecurityCenterView {
     buildAgentProfileInput() {
         const id = this.agentFieldValue('agent-profile-id');
         const apiKey = this.agentFieldValue('agent-profile-api-key');
+        const timeoutMs = Number(this.agentFieldValue('agent-profile-timeout'));
+        const contextWindowTokens = this.requiredAgentTokenField('agent-profile-context-window', '请填写模型的上下文窗口 tokens。');
+        const maxOutputTokens = this.requiredAgentTokenField('agent-profile-max-tokens', '请填写模型的最大输出 tokens。');
+        if (maxOutputTokens >= contextWindowTokens) {
+            throw new Error('最大输出 tokens 必须小于上下文窗口 tokens。');
+        }
         return {
             ...(id ? { id } : {}),
             displayName: this.agentFieldValue('agent-profile-name'),
@@ -1317,13 +1320,14 @@ class SecurityCenterView {
             model: this.agentFieldValue('agent-profile-model'),
             ...(apiKey ? { apiKey } : {}),
             temperature: Number(this.agentFieldValue('agent-profile-temperature')),
-            maxOutputTokens: Number(this.agentFieldValue('agent-profile-max-tokens')),
-            timeoutMs: Number(this.agentFieldValue('agent-profile-timeout')),
+            contextWindowTokens,
+            maxOutputTokens,
+            timeoutMs: timeoutMs > 0 ? timeoutMs : null,
         };
     }
     async saveAgentProfile() {
-        const input = this.buildAgentProfileInput();
         await this.performAgentMutation(async (client) => {
+            const input = this.buildAgentProfileInput();
             const profile = await client.agent.admin.profiles.upsert(input);
             this.state.agent.selectedProfileId = profile.id;
             this.clearAgentFields('agent-profile-api-key');
@@ -1402,6 +1406,15 @@ class SecurityCenterView {
     }
     agentFieldValue(role) {
         return this.root.querySelector(`[data-role="${role}"]`)?.value.trim() ?? '';
+    }
+    requiredAgentTokenField(role, emptyMessage) {
+        const raw = this.agentFieldValue(role);
+        if (!/^\d+$/.test(raw))
+            throw new Error(emptyMessage);
+        const value = Number(raw);
+        if (!Number.isSafeInteger(value) || value < 1)
+            throw new Error(emptyMessage);
+        return value;
     }
     clearAgentFields(...roles) {
         for (const role of roles) {

@@ -9,13 +9,6 @@ import type {
     AgentSessionToolInvocationState,
 } from './agent-session-model.js';
 
-export const MAX_CONTEXT_CHARS = 64 * 1024;
-export const MAX_MESSAGE_CHARS = 2 * 1024 * 1024;
-export const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
-export const MAX_TOOL_RESULT_CHARS = 256 * 1024;
-export const MAX_ACTIVE_RUNS = 100;
-export const MAX_ACTIVE_RUNS_PER_USER = 32;
-export const MAX_ACTIVE_RUNS_PER_CALLER = 16;
 export const TERMINAL_RUNS = new Set<AgentSessionRunState['status']>(['completed', 'failed', 'cancelled']);
 export const TERMINAL_TOOLS = new Set<AgentSessionToolInvocationState['status']>([
     'completed', 'failed', 'cancelled', 'outcome_unknown', 'timed_out',
@@ -112,26 +105,14 @@ export function normalizeMode(value: unknown): AgentExecutionMode {
 export function normalizeAllowedTools(value: unknown, available: AgentToolDescriptor[]): string[] {
     const ids = new Set(available.map(tool => tool.id));
     if (value === undefined) return [...ids];
-    if (!Array.isArray(value) || value.length > 128 || value.some(item => typeof item !== 'string')) {
-        throw new Error('allowedTools must be an array of at most 128 tool ids');
+    if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+        throw new Error('allowedTools must be an array of tool ids');
     }
     const result = [...new Set(value as string[])];
     for (const id of result) {
         if (!ids.has(id)) throw new Error(`Unknown Agent tool: ${id}`);
     }
     return result;
-}
-
-export function assertRunCapacity(current: AgentSessionSnapshot, sessions: AgentSessionSnapshot[]): void {
-    const active = sessions.flatMap(snapshot => snapshot.runs.map(run => ({ snapshot, run })))
-        .filter(item => !TERMINAL_RUNS.has(item.run.status));
-    const userRuns = active.filter(item => item.snapshot.session.callerUserHandle === current.session.callerUserHandle);
-    const callerRuns = userRuns.filter(item => item.snapshot.session.callerExtensionId === current.session.callerExtensionId);
-    if (active.length >= MAX_ACTIVE_RUNS
-        || userRuns.length >= MAX_ACTIVE_RUNS_PER_USER
-        || callerRuns.length >= MAX_ACTIVE_RUNS_PER_CALLER) {
-        throw new Error('Agent session run queue limit reached');
-    }
 }
 
 export function selectOne<T>(requestedId: string | undefined, items: T[], id: (item: T) => string, label: string): T {
@@ -149,7 +130,6 @@ export function selectOne<T>(requestedId: string | undefined, items: T[], id: (i
 }
 
 export function parseToolArguments(value: string): unknown {
-    if (value.length > MAX_TOOL_ARGUMENT_CHARS) throw new Error('Tool arguments exceed the 128 KB limit');
     let parsed: unknown;
     try {
         parsed = JSON.parse(value);
@@ -163,21 +143,14 @@ export function parseToolArguments(value: string): unknown {
 }
 
 export function boundedToolValue(value: unknown): unknown {
-    const normalized = value === undefined ? null : value;
-    const serialized = JSON.stringify(normalized);
-    if (serialized.length <= MAX_TOOL_RESULT_CHARS) return normalized;
-    return {
-        truncated: true,
-        originalChars: serialized.length,
-        preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS - 1_000),
-    };
+    return value === undefined ? null : value;
 }
 
 export function formatInitialMessage(message: unknown, instructions?: string, context?: unknown): string {
-    const content = requiredText(message, 'Agent message', MAX_MESSAGE_CHARS);
+    const content = requiredText(message, 'Agent message');
     const normalizedInstructions = instructions === undefined
         ? undefined
-        : requiredText(instructions, 'Agent instructions', 20_000);
+        : requiredText(instructions, 'Agent instructions');
     let serializedContext: string | undefined;
     if (context !== undefined) {
         try {
@@ -185,7 +158,6 @@ export function formatInitialMessage(message: unknown, instructions?: string, co
         } catch (error) {
             throw new Error(`Agent context must be JSON serializable: ${errorMessage(error)}`);
         }
-        if (serializedContext.length > MAX_CONTEXT_CHARS) throw new Error('Agent context exceeds the 64 KB limit');
     }
     return [
         content,
@@ -216,10 +188,10 @@ function systemPrompt(workspaceId: string, mode: AgentExecutionMode): string {
     ].join('\n');
 }
 
-export function requiredText(value: unknown, label: string, maxLength: number): string {
+export function requiredText(value: unknown, label: string, maxLength?: number): string {
     if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
     const result = value.trim();
-    if (result.length > maxLength) throw new Error(`${label} exceeds ${maxLength} characters`);
+    if (maxLength !== undefined && result.length > maxLength) throw new Error(`${label} exceeds ${maxLength} characters`);
     return result;
 }
 

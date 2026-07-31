@@ -293,8 +293,8 @@ export class WorkspaceHistoryService {
     }
 
     listCommits(workspaceId: string, limit = 100): WorkspaceCommitObject[] {
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
-            throw validationError('Workspace commit limit must be an integer between 1 and 500');
+        if (!Number.isSafeInteger(limit) || limit < 1) {
+            throw validationError('Workspace commit limit must be a positive integer');
         }
         const workspace = this.getStoredWorkspace(workspaceId);
         const ref = this.readRef(workspace);

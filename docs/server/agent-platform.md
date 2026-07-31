@@ -36,9 +36,9 @@ Security Center / third-party extension
        -> WorkspaceHistoryService         checkpoint / diff / rollback
 ```
 
-模型调用采用 OpenAI-compatible Chat Completions tool-call 协议。LLM profile 由管理员配置并保存在服务端；API key 不返回前端，只暴露已配置状态、mask 和 fingerprint。远程 endpoint 必须使用 HTTPS，本机回环地址可以使用 HTTP。
+模型调用采用 OpenAI-compatible Chat Completions tool-call 协议。LLM profile 由管理员配置并保存在服务端；API key 不返回前端，只暴露已配置状态、mask 和 fingerprint。每个 profile 还必须声明模型的上下文窗口与最大输出 tokens，运行时据此管理长会话。远程 endpoint 必须使用 HTTPS，本机回环地址可以使用 HTTP。
 
-运行时限制模型步数、请求与响应大小、消息和工具参数大小、全局并发以及单用户启动频率。调度按用户公平分配执行槽，单个用户不能长期独占全部容量。
+DOA 不限制一次 Run 的总步数、工具调用次数或总运行时长，也不因活跃 Run 数量拒绝已经授权的会话。调度器仍以有限执行槽公平推进不同用户的 Run；这是吞吐调度，不是任务配额，排队不会改变或截断任务。
 
 ## Session 日志与恢复
 
@@ -47,10 +47,13 @@ Security Center / third-party extension
 ```text
 <DATA_ROOT>/_authority-global/authority/state/agent/sessions/<session-id>/
   journal.jsonl
+  journal.000001.jsonl
+  journal.000002.jsonl
+  ...
   writer.lock
 ```
 
-日志是带连续 sequence 和 SHA-256 前向链的 append-only JSONL。写入先在内存副本验证，再追加、`fsync`，最后发布新投影；同一 Session 只允许一个持有可核验 token 的 writer。完整损坏、乱序或断链会拒绝打开，仅最后一条未写完整的 torn tail 可被安全截断。
+日志是带连续 sequence 和 SHA-256 前向链的 append-only JSONL。`journal.jsonl` 达到轮转目标后继续写入编号 segment，不设置 Session 总大小上限；hash chain 跨 segment 连续。写入先在内存副本验证，再追加、`fsync`，最后发布新投影；同一 Session 只允许一个持有可核验 token 的 writer。完整损坏、乱序、segment 缺口或断链会拒绝打开，仅最后一个 segment 的最后一条未写完整记录可被安全截断。
 
 工具副作用遵守“意图先落盘、效果随后发生、结果最后落盘”。重启时恢复器只根据已有事实裁决：
 
@@ -72,7 +75,7 @@ Session 不因一次 Run 被暂停而终结。用户仍可查看会话、审批�
 - `module`：直接映射既有 `ModuleHostService.execute()`，继续复用 session、权限、超时、审计和幂等合同。
 - `browser`：由前端插件按 session/browser instance 注册，服务端持久化 invocation，浏览器认领后回传结果。
 
-第一批 host 工具保持 IDE 原语：列目录、读文件、文本搜索、原子写入、精确替换、终端、状态、历史和 diff。模型只看到 workspace ID 与相对路径；文件工具不跟随 symlink，读取、搜索、命令输出与环境变量继承都有上限。
+第一批 host 工具保持 IDE 原语：列目录、读文件、文本搜索、原子写入、精确替换、终端、状态、历史和 diff。模型只看到 workspace ID 与相对路径；文件工具不跟随 symlink。DOA 不截断文件、搜索结果或写入内容；终端超长输出会完整保存为 Session 所属 artifact，并通过 `host_read_artifact` 按需读取，模型上下文只携带预览和可恢复引用。
 
 浏览器注册采用短租约。工具描述变化会产生新的 registration ID；调用先持久化，再由同一用户、扩展和 browser instance 以稳定 claim ID 认领并回传。同一 claim 重试幂等，其他 claim 不能重复执行。SSE 只负责通知，invocation、结果与终态以 Session 日志和 HTTP 快照为准。
 
@@ -153,7 +156,7 @@ node plugins/authority/runtime/agent.cjs rescue resume
 ## 数据与升级边界
 
 - LLM profile 继续使用 `agent/profiles.json`，以便管理员现有模型配置正常保留。
-- 当前运行时只读取 `agent/sessions/*/journal.jsonl`；旧 run-first 的 `agent/runs/*.json` 不读取、不迁移，也不主动删除。
+- 当前运行时读取 `agent/sessions/*/journal.jsonl` 及其连续编号 segments；旧 run-first 的 `agent/runs/*.json` 不读取、不迁移，也不主动删除。
 - 工作区版本树独立位于 `state/agent-workspaces`，不属于 Session 日志，升级时不得覆盖。
 - profile 和 Agent 状态目录包含密钥及敏感对话；POSIX 权限会收紧，Windows 依赖 ST data 目录的本机账户 ACL，备份应按密钥材料保护。
 

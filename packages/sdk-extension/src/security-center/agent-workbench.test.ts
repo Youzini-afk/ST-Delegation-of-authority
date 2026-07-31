@@ -45,7 +45,7 @@ describe('Agent session workbench rendering', () => {
 
         const failed = workbenchState();
         failed.selectedSession = sessionSnapshot('failed');
-        failed.selectedSession.runs[0]!.error = 'step limit reached; Authorization: Bearer hidden-token';
+        failed.selectedSession.runs[0]!.error = 'provider failed; Authorization: Bearer hidden-token';
         const failedHtml = renderAgentWorkbench(failed);
         expect(failedHtml).toContain('data-action="agent-continue-failed-run"');
         expect(failedHtml).toContain('从当前状态继续');
@@ -172,7 +172,7 @@ describe('Agent session workbench rendering', () => {
 
         expect(html).toContain('data-role="agent-new-message"');
         expect(html).toContain('data-role="agent-new-mode"');
-        expect(html).toContain('data-role="agent-new-max-steps"');
+        expect(html).not.toContain('max-steps');
         expect(html).toContain('data-action="agent-create-session"');
         expect(html).toContain('data-action="agent-use-prompt"');
         expect(html).toContain('作用域：整个 SillyTavern');
@@ -190,6 +190,8 @@ describe('Agent session workbench rendering', () => {
         expect(agent).not.toContain('data-role="agent-profile-api-key"');
         expect(agent).not.toContain('data-action="agent-save-profile"');
         expect(settings).toContain('data-role="agent-profile-api-key"');
+        expect(settings).toContain('data-role="agent-profile-context-window"');
+        expect(settings).toContain('上下文窗口 tokens');
         expect(settings).toContain('data-action="agent-save-profile"');
         expect(settings).toContain('data-action="agent-test-profile"');
         expect(settings).toContain('data-action="agent-new-profile"');
@@ -198,6 +200,18 @@ describe('Agent session workbench rendering', () => {
         expect(settings).toContain('data-action="mobile-close-surface"');
         expect(settings).not.toContain('工具目录');
         expect(settings).not.toContain('注册工作区');
+    });
+
+    it('marks legacy model profiles that still need context settings', () => {
+        const state = workbenchState();
+        state.profiles[0]!.contextWindowTokens = null;
+        state.profiles[0]!.maxOutputTokens = null;
+
+        const settings = renderAgentSettings(state);
+
+        expect(settings).toContain('旧版模型配置');
+        expect(settings).toContain('data-role="agent-profile-context-window" type="number" min="1" value=""');
+        expect(settings).toContain('data-role="agent-profile-max-tokens" type="number" min="1" value=""');
     });
 
     it('renders inline model-test feedback and an expanded line-level code diff', () => {
@@ -284,6 +298,7 @@ function workbenchState(): AgentWorkbenchState {
             apiKeyMasked: '****',
             apiKeyFingerprint: 'fingerprint',
             temperature: 0.2,
+            contextWindowTokens: 128000,
             maxOutputTokens: 8192,
             timeoutMs: 120000,
         }],
@@ -364,7 +379,6 @@ function sessionSnapshot(status: AgentSessionSnapshot['runs'][number]['status'])
             profileId: 'profile',
             mode: 'ask',
             allowedTools: ['host_write_file'],
-            maxSteps: 4,
             createdAt: timestamp,
             updatedAt: timestamp,
         },
@@ -406,7 +420,6 @@ function sessionSnapshot(status: AgentSessionSnapshot['runs'][number]['status'])
             profileId: 'profile',
             mode: 'ask',
             allowedTools: ['host_write_file'],
-            maxSteps: 4,
             stepCount: 1,
             createdAt: timestamp,
             updatedAt: timestamp,
@@ -416,6 +429,7 @@ function sessionSnapshot(status: AgentSessionSnapshot['runs'][number]['status'])
             id: 'step-1',
             runId: 'run-1',
             index: 0,
+            kind: 'generation',
             status: 'running',
             createdAt: timestamp,
             updatedAt: timestamp,

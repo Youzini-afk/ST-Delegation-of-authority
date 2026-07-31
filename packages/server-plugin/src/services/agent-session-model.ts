@@ -31,7 +31,6 @@ export interface AgentSessionDefinition {
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
-    maxSteps: number;
     createdAt: string;
     updatedAt: string;
     archivedAt?: string;
@@ -71,9 +70,16 @@ export interface AgentConversationMessageEntry extends AgentConversationEntryBas
 export interface AgentConversationCompactionEntry extends AgentConversationEntryBase {
     kind: 'compaction';
     summary: string;
-    firstKeptEntryId: string;
+    /** Missing only on checkpoints written by the legacy v1 schema. */
+    sourceLeafEntryId?: string;
+    /** Missing only on checkpoints written by the legacy v1 schema. */
+    sourceLastSequence?: number;
+    firstKeptEntryId: string | null;
     retainedEntryIds: string[];
     tokensBefore?: number;
+    tokensAfter?: number;
+    /** Missing only on checkpoints written before model context was configurable. */
+    contextWindowTokens?: number;
 }
 
 export interface AgentConversationBranchSummaryEntry extends AgentConversationEntryBase {
@@ -96,7 +102,6 @@ export interface AgentSessionRunState {
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
-    maxSteps: number;
     stepCount: number;
     createdAt: string;
     updatedAt: string;
@@ -114,6 +119,7 @@ export interface AgentSessionStepState {
     id: string;
     runId: string;
     index: number;
+    kind: 'generation' | 'compaction';
     status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
     createdAt: string;
     updatedAt: string;
@@ -217,7 +223,6 @@ export interface AgentSessionCreatedEntry extends AgentSessionEntryBase {
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
-    maxSteps: number;
 }
 
 export interface AgentSessionUpdatedEntry extends AgentSessionEntryBase {
@@ -226,7 +231,6 @@ export interface AgentSessionUpdatedEntry extends AgentSessionEntryBase {
     profileId?: string;
     mode?: AgentExecutionMode;
     allowedTools?: string[];
-    maxSteps?: number;
     archived?: boolean;
 }
 
@@ -260,9 +264,16 @@ export interface AgentSessionConversationCompactedLogEntry extends AgentSessionE
     ref: string;
     parentId: string | null;
     summary: string;
-    firstKeptEntryId: string;
+    /** Added after the original v1 journal shipped; omitted by legacy records. */
+    sourceLeafEntryId?: string;
+    /** Added after the original v1 journal shipped; omitted by legacy records. */
+    sourceLastSequence?: number;
+    firstKeptEntryId: string | null;
     retainedEntryIds: string[];
     tokensBefore?: number;
+    tokensAfter?: number;
+    /** Added after the original v1 journal shipped; omitted by legacy records. */
+    contextWindowTokens?: number;
     runId?: string;
 }
 
@@ -299,7 +310,6 @@ export interface AgentSessionRunAcceptedEntry extends AgentSessionEntryBase {
     profileId: string;
     mode: AgentExecutionMode;
     allowedTools: string[];
-    maxSteps: number;
 }
 
 export interface AgentSessionRunStartedEntry extends AgentSessionEntryBase {
@@ -336,6 +346,7 @@ export interface AgentSessionStepStartedEntry extends AgentSessionEntryBase {
     runId: string;
     stepId: string;
     index: number;
+    kind?: 'generation' | 'compaction';
 }
 
 export interface AgentSessionStepFinishedEntry extends AgentSessionEntryBase {
@@ -411,7 +422,7 @@ export interface AgentSessionToolWaitingEntry extends AgentSessionEntryBase {
     type: 'tool.waiting';
     invocationId: string;
     reason: 'browser';
-    deadlineAt: string;
+    deadlineAt?: string;
 }
 
 export interface AgentSessionToolFinishedEntry extends AgentSessionEntryBase {
@@ -567,7 +578,6 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
                 profileId: entry.profileId,
                 mode: entry.mode,
                 allowedTools: [...entry.allowedTools],
-                maxSteps: entry.maxSteps,
                 createdAt: entry.timestamp,
                 updatedAt: entry.timestamp,
             };
@@ -586,7 +596,6 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             if (entry.profileId !== undefined) session.profileId = entry.profileId;
             if (entry.mode !== undefined) session.mode = entry.mode;
             if (entry.allowedTools !== undefined) session.allowedTools = [...entry.allowedTools];
-            if (entry.maxSteps !== undefined) session.maxSteps = entry.maxSteps;
             if (entry.archived === true) session.archivedAt = entry.timestamp;
             if (entry.archived === false) delete session.archivedAt;
             return;
@@ -647,8 +656,32 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             if (entry.runId !== undefined && requireRun(projection, entry.runId).ref !== entry.ref) {
                 throw new Error(`Agent compaction run belongs to another ref: ${entry.runId}`);
             }
-            requireConversationEntry(projection, entry.firstKeptEntryId);
-            for (const retainedId of entry.retainedEntryIds) requireConversationEntry(projection, retainedId);
+            const legacy = entry.sourceLeafEntryId === undefined;
+            if (legacy) {
+                // Original v1 checkpoints did not record their source snapshot and
+                // accepted any existing retained ids. Replay them exactly as written;
+                // all newly written checkpoints take the strict branch below.
+                if (entry.firstKeptEntryId === null) {
+                    throw new Error('Legacy Agent compaction boundary is required');
+                }
+                requireConversationEntry(projection, entry.firstKeptEntryId);
+                for (const retainedId of entry.retainedEntryIds) requireConversationEntry(projection, retainedId);
+            } else {
+                if (entry.sourceLastSequence === undefined || entry.contextWindowTokens === undefined) {
+                    throw new Error('Agent compaction source metadata is incomplete');
+                }
+                if (entry.sourceLeafEntryId !== entry.parentId || entry.sourceLastSequence > projection.lastSequence) {
+                    throw new Error('Agent compaction source snapshot does not match the active ref');
+                }
+                const sourcePath = activePath(projection, entry.sourceLeafEntryId);
+                const boundary = entry.firstKeptEntryId === null ? sourcePath.length : sourcePath.indexOf(entry.firstKeptEntryId);
+                if (boundary === -1) throw new Error('Agent compaction boundary is not on the active ref path');
+                const expectedRetained = sourcePath.slice(boundary);
+                if (expectedRetained.length !== entry.retainedEntryIds.length
+                    || expectedRetained.some((id, index) => id !== entry.retainedEntryIds[index])) {
+                    throw new Error('Agent compaction retained entries must be the active path suffix');
+                }
+            }
             projection.conversation.set(entry.id, {
                 id: entry.id,
                 kind: 'compaction' as const,
@@ -657,9 +690,13 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
                 parentId: entry.parentId,
                 timestamp: entry.timestamp,
                 summary: entry.summary,
+                ...(entry.sourceLeafEntryId === undefined ? {} : { sourceLeafEntryId: entry.sourceLeafEntryId }),
+                ...(entry.sourceLastSequence === undefined ? {} : { sourceLastSequence: entry.sourceLastSequence }),
                 firstKeptEntryId: entry.firstKeptEntryId,
                 retainedEntryIds: [...entry.retainedEntryIds],
                 ...(entry.tokensBefore === undefined ? {} : { tokensBefore: entry.tokensBefore }),
+                ...(entry.tokensAfter === undefined ? {} : { tokensAfter: entry.tokensAfter }),
+                ...(entry.contextWindowTokens === undefined ? {} : { contextWindowTokens: entry.contextWindowTokens }),
                 ...(entry.runId === undefined ? {} : { runId: entry.runId }),
             });
             advanceRef(ref, entry.id, entry.timestamp);
@@ -736,7 +773,6 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
                 profileId: entry.profileId,
                 mode: entry.mode,
                 allowedTools: [...entry.allowedTools],
-                maxSteps: entry.maxSteps,
                 stepCount: 0,
                 createdAt: entry.timestamp,
                 updatedAt: entry.timestamp,
@@ -795,11 +831,12 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             const run = requireRunStatus(projection, entry.runId, ['running']);
             if (projection.steps.has(entry.stepId)) throw new Error(`Agent step already exists: ${entry.stepId}`);
             if (activeStep(projection, entry.runId)) throw new Error(`Agent run already has an active step: ${entry.runId}`);
-            if (entry.index !== run.stepCount + 1 || entry.index > run.maxSteps) throw new Error(`Invalid Agent step index: ${entry.index}`);
+            if (entry.index !== run.stepCount + 1) throw new Error(`Invalid Agent step index: ${entry.index}`);
             projection.steps.set(entry.stepId, {
                 id: entry.stepId,
                 runId: entry.runId,
                 index: entry.index,
+                kind: entry.kind ?? 'generation',
                 status: 'running',
                 createdAt: entry.timestamp,
                 updatedAt: entry.timestamp,
@@ -925,7 +962,7 @@ function applyEntry(projection: AgentSessionProjection, record: AgentSessionJour
             if (invocation.execution !== 'browser' || entry.reason !== 'browser') {
                 throw new Error(`Only browser tools may wait for an external executor: ${entry.invocationId}`);
             }
-            invocation.deadlineAt = entry.deadlineAt;
+            if (entry.deadlineAt !== undefined) invocation.deadlineAt = entry.deadlineAt;
             invocation.updatedAt = entry.timestamp;
             const run = requireRunStatus(projection, invocation.runId, ['running']);
             run.status = 'waiting_tool';

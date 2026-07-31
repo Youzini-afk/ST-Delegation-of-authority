@@ -40,6 +40,9 @@ export function renderAgentSettings(state) {
                             ${selected?.apiKeyConfigured ? '<span class="authority-pill authority-pill--granted">已配置密钥</span>' : '<span class="authority-pill authority-pill--prompt">未配置密钥</span>'}
                         </header>
                         <input data-role="agent-profile-id" type="hidden" value="${escapeHtml(selected?.id ?? '')}" />
+                        ${selected && (selected.contextWindowTokens === null || selected.maxOutputTokens === null)
+        ? '<div class="authority-inline-note">这是旧版模型配置。请补充“上下文窗口”和“最大输出 tokens”，保存后 Agent 才能运行并自动整理上下文。</div>'
+        : ''}
                         <div class="authority-model-editor__section">
                             <h4>连接</h4>
                             <label class="authority-agent-field">显示名称<input data-role="agent-profile-name" type="text" value="${escapeHtml(selected?.displayName ?? '')}" placeholder="主 Agent" ${disabled} /></label>
@@ -53,8 +56,9 @@ export function renderAgentSettings(state) {
                             <label class="authority-agent-field">模型<input data-role="agent-profile-model" type="text" value="${escapeHtml(selected?.model ?? '')}" placeholder="gpt-5.1" ${disabled} /></label>
                             <div class="authority-model-editor__grid">
                                 <label class="authority-agent-field">Temperature<input data-role="agent-profile-temperature" type="number" min="0" max="2" step="0.1" value="${escapeHtml(String(selected?.temperature ?? 0.2))}" ${disabled} /></label>
-                                <label class="authority-agent-field">最大输出 tokens<input data-role="agent-profile-max-tokens" type="number" min="1" max="1000000" value="${escapeHtml(String(selected?.maxOutputTokens ?? 8192))}" ${disabled} /></label>
-                                <label class="authority-agent-field">超时（ms）<input data-role="agent-profile-timeout" type="number" min="1000" max="600000" value="${escapeHtml(String(selected?.timeoutMs ?? 120000))}" ${disabled} /></label>
+                                <label class="authority-agent-field">上下文窗口 tokens<input data-role="agent-profile-context-window" type="number" min="1" value="${escapeHtml(String(selected?.contextWindowTokens ?? ''))}" placeholder="例如 128000" required ${disabled} /></label>
+                                <label class="authority-agent-field">最大输出 tokens<input data-role="agent-profile-max-tokens" type="number" min="1" value="${escapeHtml(String(selected?.maxOutputTokens ?? (selected ? '' : 8192)))}" required ${disabled} /></label>
+                                <label class="authority-agent-field">请求超时（ms，0 为不限制）<input data-role="agent-profile-timeout" type="number" min="0" value="${escapeHtml(String(selected?.timeoutMs ?? 0))}" ${disabled} /></label>
                             </div>
                         </div>
                         ${state.profileTest ? `<div class="authority-connection-test authority-connection-test--${state.profileTest.status}" data-role="agent-profile-test-result" role="status"><i aria-hidden="true"></i><span>${escapeHtml(state.profileTest.message)}</span></div>` : ''}

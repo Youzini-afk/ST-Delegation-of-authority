@@ -10,6 +10,14 @@ import type {
     AgentLlmCompletionResponse,
     AgentLlmToolDefinition,
 } from './agent-llm-client.js';
+import {
+    estimateCompactedTokens,
+    estimateRequestTokens,
+    nextCompactionRequestChunk,
+    prepareAgentCompaction,
+    type AgentCompactionPlan,
+    type AgentCompactionRequestChunk,
+} from './agent-session-compaction.js';
 import type {
     AgentConversationMessageEntry,
     AgentSessionApprovalState,
@@ -46,9 +54,14 @@ export interface AgentSessionRunExecutorHost extends AgentSessionToolExecutorHos
     ): string | null;
 }
 
+function isContextOverflowError(error: unknown): boolean {
+    return /context(?: length| window)|maximum context|prompt (?:is )?too long|too many (?:input )?tokens|tokens?.*(?:exceed|overflow)/i
+        .test(errorMessage(error));
+}
+
 export interface AgentSessionRunExecutorOptions {
     requestCompletion: AgentCompletionRequester;
-    approvalTimeoutMs: number;
+    approvalTimeoutMs: number | null;
 }
 
 interface PreparedGeneration {
@@ -59,6 +72,13 @@ interface PreparedGeneration {
     generationId: string;
 }
 
+interface PreparedCompaction {
+    plan: AgentCompactionPlan;
+    stepId: string;
+    tools: AgentLlmToolDefinition[];
+    systemMessage: AgentLlmMessage;
+}
+
 /**
  * Executes one durable Run. Scheduling, writer ownership, timers and public
  * commands stay in the runtime coordinator; this class owns the model/tool
@@ -66,7 +86,7 @@ interface PreparedGeneration {
  */
 export class AgentSessionRunExecutor {
     private readonly requestCompletion: AgentCompletionRequester;
-    private readonly approvalTimeoutMs: number;
+    private readonly approvalTimeoutMs: number | null;
 
     constructor(
         private readonly profileStore: AgentProfileStoreService,
@@ -94,6 +114,8 @@ export class AgentSessionRunExecutor {
                 });
             }
         });
+        let forceCompaction = false;
+        let lastOverflowEstimate: number | null = null;
         while (!signal.aborted && !this.host.isStopping()) {
             const snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
             const run = requireRun(snapshot, runId);
@@ -102,6 +124,15 @@ export class AgentSessionRunExecutor {
             if (step) {
                 const shouldContinue = await this.continueStep(sessionId, runId, step.id, signal);
                 if (!shouldContinue) return;
+                continue;
+            }
+            const compaction = await this.host.perform(
+                sessionId,
+                writer => this.prepareCompaction(writer, runId, forceCompaction),
+            );
+            if (compaction) {
+                if (!await this.executeCompaction(sessionId, runId, compaction, signal)) return;
+                forceCompaction = false;
                 continue;
             }
             const prepared = await this.host.perform(sessionId, writer => this.prepareGeneration(writer, runId));
@@ -114,6 +145,30 @@ export class AgentSessionRunExecutor {
                     signal,
                 });
             } catch (error) {
+                if (!signal.aborted && isContextOverflowError(error)) {
+                    const overflowEstimate = estimateRequestTokens(prepared.messages, prepared.tools);
+                    await this.host.perform(sessionId, writer => {
+                        this.finishContextOverflowGeneration(writer, runId, prepared, error);
+                    });
+                    if (lastOverflowEstimate !== null && overflowEstimate >= lastOverflowEstimate) {
+                        await this.host.perform(sessionId, writer => {
+                            const run = requireRun(writer.snapshot(), runId);
+                            if (run.status === 'running') {
+                                this.host.append(writer, {
+                                    id: crypto.randomUUID(),
+                                    type: 'run.suspended',
+                                    timestamp: this.host.now(),
+                                    runId,
+                                    reason: 'Provider still rejected the context after compaction and the request did not become smaller',
+                                });
+                            }
+                        });
+                        return;
+                    }
+                    lastOverflowEstimate = overflowEstimate;
+                    forceCompaction = true;
+                    continue;
+                }
                 await this.host.perform(sessionId, writer => {
                     this.finishGenerationFailure(writer, runId, prepared, error, signal);
                 });
@@ -135,22 +190,412 @@ export class AgentSessionRunExecutor {
         });
     }
 
+    private prepareCompaction(writer: AgentSessionWriter, runId: string, force: boolean): PreparedCompaction | null {
+        this.consumeSteeringMessages(writer, runId);
+        const snapshot = writer.snapshot();
+        const run = requireRun(snapshot, runId);
+        if (run.status !== 'running') return null;
+        const catalog = this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId);
+        const availableIds = new Set(catalog.map(tool => tool.id));
+        if (run.allowedTools.some(id => !availableIds.has(id))) return null;
+        const descriptors = catalog.filter(tool => run.allowedTools.includes(tool.id)
+            && (run.mode !== 'plan' || isPlanSafeTool(tool)));
+        const mapped = mapLlmTools(descriptors);
+        const messages = conversationMessages(snapshot, run);
+        const plan = prepareAgentCompaction(
+            snapshot,
+            run,
+            messages,
+            mapped.definitions,
+            this.profileStore.getProfileForRequest(run.profileId),
+            force,
+        );
+        if (!plan) return null;
+        const stepId = crypto.randomUUID();
+        this.host.append(writer, {
+            id: crypto.randomUUID(),
+            type: 'step.started',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            index: run.stepCount + 1,
+            kind: 'compaction',
+        });
+        return {
+            plan,
+            stepId,
+            tools: mapped.definitions,
+            systemMessage: messages[0]!,
+        };
+    }
+
+    private async executeCompaction(
+        sessionId: string,
+        runId: string,
+        prepared: PreparedCompaction,
+        signal: AbortSignal,
+    ): Promise<boolean> {
+        const profile = this.profileStore.getProfileForRequest(prepared.plan.profileId);
+        let offset = 0;
+        let summary = prepared.plan.previousSummary;
+        let attempt = 0;
+        let maxSourceChars: number | undefined;
+        let summaryOutputTokens = prepared.plan.summaryOutputTokens;
+
+        while (offset < prepared.plan.sourceText.length) {
+            let chunk: AgentCompactionRequestChunk;
+            try {
+                chunk = nextCompactionRequestChunk(prepared.plan, offset, summary, {
+                    ...(maxSourceChars === undefined ? {} : { maxSourceChars }),
+                    summaryOutputTokens,
+                });
+            } catch (error) {
+                await this.host.perform(sessionId, writer => {
+                    this.finishCompactionStepFailure(writer, runId, prepared.stepId, error, signal);
+                });
+                return false;
+            }
+            const generationId = crypto.randomUUID();
+            attempt += 1;
+            const started = await this.host.perform(sessionId, writer => {
+                const snapshot = writer.snapshot();
+                const run = requireRun(snapshot, runId);
+                const step = activeStep(snapshot, runId);
+                const ref = requireRef(snapshot, prepared.plan.ref);
+                if (run.status !== 'running' || step?.id !== prepared.stepId) return false;
+                if (ref.leafEntryId !== prepared.plan.sourceLeafEntryId) {
+                    this.host.append(writer, {
+                        id: crypto.randomUUID(),
+                        type: 'step.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        outcome: 'interrupted',
+                        error: 'Conversation changed while context compaction was being prepared',
+                    });
+                    return false;
+                }
+                this.host.append(writer, {
+                    id: crypto.randomUUID(),
+                    type: 'generation.started',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: prepared.stepId,
+                    generationId,
+                    attempt,
+                });
+                return true;
+            });
+            if (!started) return true;
+
+            let completion: AgentLlmCompletionResponse;
+            try {
+                completion = await this.requestCompletion(profile, {
+                    messages: chunk.messages,
+                    tools: [],
+                    signal,
+                    maxOutputTokens: summaryOutputTokens,
+                });
+                if (!completion.message.content?.trim() || completion.message.toolCalls?.length) {
+                    throw new Error('Context summarization returned no usable summary');
+                }
+            } catch (error) {
+                if (!signal.aborted && isContextOverflowError(error)) {
+                    await this.host.perform(sessionId, writer => {
+                        this.finishCompactionAttemptFailure(
+                            writer,
+                            runId,
+                            prepared.stepId,
+                            generationId,
+                            error,
+                            signal,
+                        );
+                    });
+                    if (chunk.consumedChars > 1) {
+                        // Provider tokenization is authoritative. Converge by
+                        // monotonically shrinking this source slice instead of
+                        // relying on a fixed retry count or tokenizer guess.
+                        maxSourceChars = Math.max(1, Math.floor(chunk.consumedChars / 2));
+                        continue;
+                    }
+                    if (summaryOutputTokens > 1) {
+                        // If even one source character overflows, progressively
+                        // release reserved output space and retry from the same
+                        // durable offset. This also converges to a one-token floor.
+                        summaryOutputTokens = Math.max(1, Math.floor(summaryOutputTokens / 2));
+                        maxSourceChars = 1;
+                        continue;
+                    }
+                    await this.host.perform(sessionId, writer => {
+                        this.finishCompactionStepFailure(writer, runId, prepared.stepId, error, signal);
+                    });
+                    return false;
+                }
+                await this.host.perform(sessionId, writer => {
+                    this.finishCompactionFailure(writer, runId, prepared.stepId, generationId, error, signal);
+                });
+                return false;
+            }
+
+            const accepted = await this.host.perform(sessionId, writer => {
+                const snapshot = writer.snapshot();
+                const run = requireRun(snapshot, runId);
+                const generation = snapshot.generations.find(item => item.id === generationId);
+                if (!generation || generation.status !== 'running') return false;
+                if (run.status === 'cancelling') {
+                    this.host.append(writer, {
+                        id: crypto.randomUUID(),
+                        type: 'generation.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        generationId,
+                        outcome: 'cancelled',
+                        providerRequestState: 'response_received',
+                        ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                        error: 'Context summary arrived after cancellation was requested',
+                    });
+                    this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
+                    return false;
+                }
+                if (run.status !== 'running') return false;
+                if (this.host.isStopping()) {
+                    const message = 'Context summary arrived after the Agent host began stopping';
+                    this.host.append(writer, {
+                        id: crypto.randomUUID(),
+                        type: 'generation.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        generationId,
+                        outcome: 'interrupted',
+                        providerRequestState: 'response_received',
+                        ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                        error: message,
+                    });
+                    this.host.append(writer, {
+                        id: crypto.randomUUID(),
+                        type: 'step.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        outcome: 'interrupted',
+                        error: message,
+                    });
+                    this.host.append(writer, {
+                        id: crypto.randomUUID(),
+                        type: 'run.suspended',
+                        timestamp: this.host.now(),
+                        runId,
+                        reason: `${message}; resume explicitly to generate a fresh checkpoint`,
+                    });
+                    return false;
+                }
+                this.host.append(writer, {
+                    id: crypto.randomUUID(),
+                    type: 'generation.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: prepared.stepId,
+                    generationId,
+                    outcome: 'completed',
+                    providerRequestState: 'response_received',
+                    ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                    finishReason: completion.finishReason,
+                    ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+                });
+                return true;
+            });
+            if (!accepted) return false;
+            summary = completion.message.content!.trim();
+            offset += chunk.consumedChars;
+            maxSourceChars = undefined;
+        }
+
+        if (!summary) throw new Error('Agent context compaction produced no summary');
+        return await this.host.perform(sessionId, writer => {
+            const snapshot = writer.snapshot();
+            const run = requireRun(snapshot, runId);
+            const step = activeStep(snapshot, runId);
+            const ref = requireRef(snapshot, prepared.plan.ref);
+            if (run.status !== 'running' || step?.id !== prepared.stepId) return false;
+            if (ref.leafEntryId !== prepared.plan.sourceLeafEntryId) {
+                this.host.append(writer, {
+                    id: crypto.randomUUID(),
+                    type: 'step.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: prepared.stepId,
+                    outcome: 'interrupted',
+                    error: 'Conversation changed before the context summary could be committed',
+                });
+                return true;
+            }
+            const tokensAfter = estimateCompactedTokens(
+                prepared.plan,
+                summary,
+                prepared.tools,
+                prepared.systemMessage,
+            );
+            this.host.append(writer, {
+                id: crypto.randomUUID(),
+                type: 'conversation.compacted',
+                timestamp: this.host.now(),
+                ref: prepared.plan.ref,
+                parentId: prepared.plan.sourceLeafEntryId,
+                summary,
+                sourceLeafEntryId: prepared.plan.sourceLeafEntryId,
+                sourceLastSequence: prepared.plan.sourceLastSequence,
+                firstKeptEntryId: prepared.plan.firstKeptEntryId,
+                retainedEntryIds: prepared.plan.retainedEntryIds,
+                tokensBefore: prepared.plan.tokensBefore,
+                tokensAfter,
+                contextWindowTokens: prepared.plan.contextWindowTokens,
+                runId,
+            });
+            this.host.append(writer, {
+                id: crypto.randomUUID(),
+                type: 'step.finished',
+                timestamp: this.host.now(),
+                runId,
+                stepId: prepared.stepId,
+                outcome: 'completed',
+                finishReason: 'context_compacted',
+            });
+            const inputBudget = prepared.plan.contextWindowTokens - prepared.plan.maxOutputTokens;
+            if (tokensAfter > inputBudget && tokensAfter >= prepared.plan.tokensBefore) {
+                this.host.append(writer, {
+                    id: crypto.randomUUID(),
+                    type: 'run.suspended',
+                    timestamp: this.host.now(),
+                    runId,
+                    reason: 'Context compaction could not reduce the request enough to fit the configured model window',
+                });
+                return false;
+            }
+            return true;
+        });
+    }
+
+    private finishCompactionFailure(
+        writer: AgentSessionWriter,
+        runId: string,
+        stepId: string,
+        generationId: string,
+        error: unknown,
+        signal: AbortSignal,
+    ): void {
+        this.finishCompactionAttemptFailure(writer, runId, stepId, generationId, error, signal);
+        this.finishCompactionStepFailure(writer, runId, stepId, error, signal);
+    }
+
+    private finishCompactionAttemptFailure(
+        writer: AgentSessionWriter,
+        runId: string,
+        stepId: string,
+        generationId: string,
+        error: unknown,
+        signal: AbortSignal,
+    ): void {
+        const snapshot = writer.snapshot();
+        const generation = snapshot.generations.find(item => item.id === generationId);
+        if (!generation || generation.status !== 'running') return;
+        const run = requireRun(snapshot, runId);
+        const message = errorMessage(error);
+        const cancelled = run.status === 'cancelling' || signal.aborted;
+        this.host.append(writer, {
+            id: crypto.randomUUID(),
+            type: 'generation.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            generationId,
+            outcome: cancelled ? 'cancelled' : (isTimeoutMessage(message) ? 'timed_out' : 'failed'),
+            providerRequestState: 'sent_or_unknown',
+            error: message,
+        });
+    }
+
+    private finishCompactionStepFailure(
+        writer: AgentSessionWriter,
+        runId: string,
+        stepId: string,
+        error: unknown,
+        signal: AbortSignal,
+    ): void {
+        const snapshot = writer.snapshot();
+        const run = requireRun(snapshot, runId);
+        const step = snapshot.steps.find(item => item.id === stepId);
+        if (!step || step.status !== 'running') return;
+        const message = errorMessage(error);
+        const cancelled = run.status === 'cancelling' || signal.aborted;
+        this.host.append(writer, {
+            id: crypto.randomUUID(),
+            type: 'step.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            outcome: cancelled ? 'cancelled' : 'failed',
+            error: message,
+        });
+        if (run.status === 'cancelling') {
+            this.host.append(writer, {
+                id: crypto.randomUUID(),
+                type: 'run.finished',
+                timestamp: this.host.now(),
+                runId,
+                outcome: 'cancelled',
+                error: 'Cancelled by user',
+            });
+        } else {
+            this.host.append(writer, {
+                id: crypto.randomUUID(),
+                type: 'run.suspended',
+                timestamp: this.host.now(),
+                runId,
+                reason: `Context summarization failed without altering conversation history: ${message}`,
+            });
+        }
+    }
+
+    private finishContextOverflowGeneration(
+        writer: AgentSessionWriter,
+        runId: string,
+        prepared: PreparedGeneration,
+        error: unknown,
+    ): void {
+        const snapshot = writer.snapshot();
+        const generation = snapshot.generations.find(item => item.id === prepared.generationId);
+        if (!generation || generation.status !== 'running') return;
+        const message = errorMessage(error);
+        this.host.append(writer, {
+            id: crypto.randomUUID(),
+            type: 'generation.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId: prepared.stepId,
+            generationId: prepared.generationId,
+            outcome: 'failed',
+            providerRequestState: 'sent_or_unknown',
+            error: message,
+        });
+        this.host.append(writer, {
+            id: crypto.randomUUID(),
+            type: 'step.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId: prepared.stepId,
+            outcome: 'failed',
+            finishReason: 'context_overflow',
+            error: message,
+        });
+    }
+
     private prepareGeneration(writer: AgentSessionWriter, runId: string): PreparedGeneration | null {
         this.consumeSteeringMessages(writer, runId);
         let snapshot = writer.snapshot();
         const run = requireRun(snapshot, runId);
         if (run.status !== 'running') return null;
-        if (run.stepCount >= run.maxSteps) {
-            const nextRunId = this.host.finishRunAndStartFollowUp(
-                writer,
-                runId,
-                'failed',
-                undefined,
-                `Agent reached the ${run.maxSteps} step limit`,
-            );
-            if (nextRunId) queueMicrotask(() => this.host.enqueue(snapshot.session.id, nextRunId));
-            return null;
-        }
         const catalog = this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId);
         const availableIds = new Set(catalog.map(tool => tool.id));
         const missing = run.allowedTools.filter(id => !availableIds.has(id));
@@ -175,6 +620,7 @@ export class AgentSessionRunExecutor {
             runId,
             stepId,
             index: run.stepCount + 1,
+            kind: 'generation',
         });
         this.host.append(writer, {
             id: crypto.randomUUID(),
@@ -478,7 +924,9 @@ export class AgentSessionRunExecutor {
                             summary: this.approvalSummary(descriptor, input),
                             arguments: input,
                             riskLevel: descriptor.riskLevel,
-                            expiresAt: new Date(Date.parse(timestamp) + this.approvalTimeoutMs).toISOString(),
+                            ...(this.approvalTimeoutMs === null
+                                ? {}
+                                : { expiresAt: new Date(Date.parse(timestamp) + this.approvalTimeoutMs).toISOString() }),
                         });
                     }
                 });

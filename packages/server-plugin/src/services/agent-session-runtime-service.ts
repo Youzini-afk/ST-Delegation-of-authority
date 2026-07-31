@@ -34,12 +34,10 @@ import { AgentSessionToolExecutor } from './agent-session-tool-executor.js';
 import { AgentToolRegistryService } from './agent-tool-registry-service.js';
 import type { ModuleHostService } from './module-host-service.js';
 import {
-    assertRunCapacity,
     boundedToolValue,
     delay,
     errorMessage,
     formatInitialMessage,
-    MAX_MESSAGE_CHARS,
     normalizeAllowedTools,
     normalizeMode,
     requiredText,
@@ -51,11 +49,6 @@ import {
 } from './agent-session-runtime-support.js';
 import { WorkspaceHistoryService } from './workspace-history-service.js';
 
-const DEFAULT_MAX_STEPS = 24;
-const HARD_MAX_STEPS = 64;
-const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60_000;
-const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 2 * 60_000;
-const MAX_CONCURRENT_RUNS = 16;
 const FAILED_RUN_CONTINUATION_MESSAGE = '继续完成上一轮未完成的任务。先检查当前工作区和已经完成的操作，再从安全边界继续，不要重复已有副作用。';
 
 export interface AgentSessionCallerContext {
@@ -84,8 +77,8 @@ export interface AgentSessionRuntimeOptions {
     requestCompletion?: AgentCompletionRequester;
     moduleHost?: ModuleHostService;
     maxConcurrentRuns?: number;
-    approvalTimeoutMs?: number;
-    browserToolTimeoutMs?: number;
+    approvalTimeoutMs?: number | null;
+    browserToolTimeoutMs?: number | null;
     shutdownTimeoutMs?: number;
     now?: () => string;
 }
@@ -123,8 +116,8 @@ export class AgentSessionRuntimeService {
     private readonly executor: AgentSessionRunExecutor;
     private readonly maxConcurrentRuns: number;
     private readonly maxConcurrentRunsPerUser: number;
-    private readonly approvalTimeoutMs: number;
-    private readonly browserToolTimeoutMs: number;
+    private readonly approvalTimeoutMs: number | null;
+    private readonly browserToolTimeoutMs: number | null;
     private readonly shutdownTimeoutMs: number;
     private readonly requestCompletion: AgentCompletionRequester;
     private readonly now: () => string;
@@ -154,26 +147,23 @@ export class AgentSessionRuntimeService {
         const client = new AgentLlmClient();
         this.requestCompletion = options.requestCompletion ?? client.complete.bind(client);
         this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
-        this.approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
-        this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? DEFAULT_BROWSER_TOOL_TIMEOUT_MS;
+        this.approvalTimeoutMs = options.approvalTimeoutMs ?? null;
+        this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? null;
         this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
         this.now = options.now ?? (() => new Date().toISOString());
         this.tools = new AgentToolRegistryService(hostTools, options.moduleHost);
         if (!Number.isSafeInteger(this.maxConcurrentRuns)
-            || this.maxConcurrentRuns < 1
-            || this.maxConcurrentRuns > MAX_CONCURRENT_RUNS) {
-            throw new Error(`maxConcurrentRuns must be an integer between 1 and ${MAX_CONCURRENT_RUNS}`);
+            || this.maxConcurrentRuns < 1) {
+            throw new Error('maxConcurrentRuns must be a positive integer');
         }
         this.maxConcurrentRunsPerUser = Math.max(1, this.maxConcurrentRuns - 1);
-        if (!Number.isSafeInteger(this.approvalTimeoutMs)
-            || this.approvalTimeoutMs < 1
-            || this.approvalTimeoutMs > 24 * 60 * 60_000) {
-            throw new Error('approvalTimeoutMs must be an integer between 1 ms and 24 hours');
+        if (this.approvalTimeoutMs !== null
+            && (!Number.isSafeInteger(this.approvalTimeoutMs) || this.approvalTimeoutMs < 1)) {
+            throw new Error('approvalTimeoutMs must be null or a positive integer');
         }
-        if (!Number.isSafeInteger(this.browserToolTimeoutMs)
-            || this.browserToolTimeoutMs < 1_000
-            || this.browserToolTimeoutMs > 10 * 60_000) {
-            throw new Error('browserToolTimeoutMs must be an integer between 1000 and 600000 ms');
+        if (this.browserToolTimeoutMs !== null
+            && (!Number.isSafeInteger(this.browserToolTimeoutMs) || this.browserToolTimeoutMs < 1)) {
+            throw new Error('browserToolTimeoutMs must be null or a positive integer');
         }
         if (!Number.isSafeInteger(this.shutdownTimeoutMs)
             || this.shutdownTimeoutMs < 1
@@ -248,7 +238,7 @@ export class AgentSessionRuntimeService {
             await this.requestCompletion({
                 ...profile,
                 maxOutputTokens: Math.min(profile.maxOutputTokens ?? 32, 32),
-                timeoutMs: Math.min(profile.timeoutMs, 30_000),
+                timeoutMs: Math.min(profile.timeoutMs ?? 30_000, 30_000),
             }, {
                 messages: [{ role: 'user', content: 'Reply with OK to confirm this connection.' }],
                 tools: [],
@@ -350,13 +340,12 @@ export class AgentSessionRuntimeService {
             this.history.assertWorkspaceAccess(workspace.id, callerUserHandle, callerContext.user.isAdmin);
         }
         const profile = selectOne(request.profileId, this.profileStore.listProfiles(), item => item.id, 'LLM profile');
+        if (profile.contextWindowTokens === null || profile.maxOutputTokens === null) {
+            throw new Error('Agent LLM profile requires contextWindowTokens and maxOutputTokens before it can run');
+        }
         const mode = normalizeMode(request.mode);
         const availableTools = this.tools.list(callerUserHandle, caller);
         const allowedTools = normalizeAllowedTools(request.allowedTools, availableTools);
-        const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
-        if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > HARD_MAX_STEPS) {
-            throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
-        }
         const firstMessage = request.message === undefined
             ? undefined
             : formatInitialMessage(request.message, request.instructions, request.context);
@@ -374,7 +363,6 @@ export class AgentSessionRuntimeService {
             profileId: profile.id,
             mode,
             allowedTools,
-            maxSteps,
         });
         if (callerContext) this.contexts.set(snapshot.session.id, callerContext);
         if (firstMessage === undefined) return snapshot;
@@ -409,12 +397,16 @@ export class AgentSessionRuntimeService {
                 update.title = requiredText(request.title, 'Agent session title', 500);
             }
             if (request.profileId !== undefined) {
-                update.profileId = selectOne(
+                const profile = selectOne(
                     request.profileId,
                     this.profileStore.listProfiles(),
                     item => item.id,
                     'LLM profile',
-                ).id;
+                );
+                if (profile.contextWindowTokens === null || profile.maxOutputTokens === null) {
+                    throw new Error('Agent LLM profile requires contextWindowTokens and maxOutputTokens before it can run');
+                }
+                update.profileId = profile.id;
             }
             if (request.mode !== undefined) update.mode = normalizeMode(request.mode);
             if (request.allowedTools !== undefined) {
@@ -422,14 +414,6 @@ export class AgentSessionRuntimeService {
                     request.allowedTools,
                     this.tools.list(current.session.callerUserHandle, current.session.callerExtensionId),
                 );
-            }
-            if (request.maxSteps !== undefined) {
-                if (!Number.isSafeInteger(request.maxSteps)
-                    || request.maxSteps < 1
-                    || request.maxSteps > HARD_MAX_STEPS) {
-                    throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
-                }
-                update.maxSteps = request.maxSteps;
             }
             if (request.archived !== undefined) {
                 if (typeof request.archived !== 'boolean') throw new Error('Agent session archived must be boolean');
@@ -467,7 +451,7 @@ export class AgentSessionRuntimeService {
         callerContext?: AgentSessionCallerContext,
     ): Promise<AgentSessionSendResult> {
         this.assertRunning();
-        const content = requiredText(request.content, 'Agent message', MAX_MESSAGE_CHARS);
+        const content = requiredText(request.content, 'Agent message');
         const actor = this.actor(sessionId);
         const result = await actor.perform(writer => {
             const before = writer.snapshot();
@@ -1019,7 +1003,6 @@ export class AgentSessionRuntimeService {
         continuedFromRunId?: string,
     ): string {
         const snapshot = writer.snapshot();
-        assertRunCapacity(snapshot, this.listSessions());
         const runId = crypto.randomUUID();
         this.append(writer, {
             id: crypto.randomUUID(),
@@ -1032,7 +1015,6 @@ export class AgentSessionRuntimeService {
             profileId: snapshot.session.profileId,
             mode: snapshot.session.mode,
             allowedTools: snapshot.session.allowedTools,
-            maxSteps: snapshot.session.maxSteps,
         });
         return runId;
     }

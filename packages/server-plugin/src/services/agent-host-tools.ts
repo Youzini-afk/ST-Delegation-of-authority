@@ -1,29 +1,30 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AgentToolDescriptor, AgentWorkspaceRecord } from '@stdo/shared-types';
-import { atomicWriteFile, isPathInside } from '../utils.js';
+import { atomicWriteFile, ensureDir, fsyncDirectory, isPathInside } from '../utils.js';
 import { WorkspaceHistoryService } from './workspace-history-service.js';
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const MAX_TOOL_TEXT = 256 * 1024;
-const MAX_LIST_ENTRIES = 1_000;
-const MAX_SEARCH_FILES = 5_000;
-const MAX_SEARCH_RESULTS = 200;
-const MAX_SEARCH_BYTES = 32 * 1024 * 1024;
-const MAX_SEARCH_MS = 2_000;
+const SHELL_OUTPUT_PREVIEW_BYTES = 256 * 1024;
+const ARTIFACT_DEFAULT_PAGE_BYTES = 256 * 1024;
 const SKIPPED_SEARCH_DIRS = new Set(['.git', 'node_modules']);
 
 export interface AgentHostToolContext {
     workspace: AgentWorkspaceRecord;
+    sessionId: string;
     runId: string;
+    invocationId: string;
     signal: AbortSignal;
 }
 
 export class AgentHostToolService {
     private readonly descriptors = createDescriptors();
+    private readonly artifacts: AgentToolArtifactStore;
 
-    constructor(private readonly history: WorkspaceHistoryService) {}
+    constructor(private readonly history: WorkspaceHistoryService, artifactRoot?: string) {
+        this.artifacts = new AgentToolArtifactStore(artifactRoot ?? path.join(history.storeDir, 'agent-tool-artifacts'));
+    }
 
     list(): AgentToolDescriptor[] {
         return this.descriptors.map(descriptor => structuredClone(descriptor));
@@ -70,17 +71,19 @@ export class AgentHostToolService {
             case 'host_read_file':
                 return readFile(context.workspace.rootPath, args);
             case 'host_search_text':
-                return searchText(context.workspace.rootPath, args);
+                return searchText(context.workspace.rootPath, args, context.signal);
             case 'host_write_file':
                 return writeFile(context.workspace.rootPath, args, context.signal);
             case 'host_replace_text':
                 return replaceText(context.workspace.rootPath, args, context.signal);
             case 'host_shell':
-                return await runShell(context.workspace.rootPath, args, context.runId, context.signal);
+                return await runShell(context.workspace.rootPath, args, context, this.artifacts);
+            case 'host_read_artifact':
+                return this.artifacts.read(context.sessionId, args);
             case 'host_workspace_status':
                 return await this.history.status(context.workspace.id);
             case 'host_workspace_history':
-                return this.history.listCommits(context.workspace.id, optionalInteger(args.limit, 'limit', 1, 100) ?? 20);
+                return this.history.listCommits(context.workspace.id, optionalInteger(args.limit, 'limit', 1) ?? 20);
             case 'host_workspace_diff': {
                 const from = optionalCommitId(args.fromCommitId, 'fromCommitId');
                 const to = optionalCommitId(args.toCommitId, 'toCommitId');
@@ -109,7 +112,7 @@ function createDescriptors(): AgentToolDescriptor[] {
             description: 'List files and directories without following symbolic links.',
             inputSchema: objectSchema({
                 path: { type: 'string', description: 'Workspace-relative path; defaults to .' },
-                maxDepth: { type: 'integer', minimum: 0, maximum: 10 },
+                maxDepth: { type: 'integer', minimum: 0 },
             }),
             riskLevel: 'low',
             approvalPolicy: 'never',
@@ -136,7 +139,7 @@ function createDescriptors(): AgentToolDescriptor[] {
                 query: { type: 'string' },
                 path: { type: 'string', description: 'Workspace-relative path; defaults to .' },
                 caseSensitive: { type: 'boolean' },
-                maxDepth: { type: 'integer', minimum: 0, maximum: 20 },
+                maxDepth: { type: 'integer', minimum: 0 },
             }, ['query']),
             riskLevel: 'low',
             approvalPolicy: 'never',
@@ -172,11 +175,25 @@ function createDescriptors(): AgentToolDescriptor[] {
             description: 'Run an unrestricted host shell command with the workspace as cwd. The workspace is checkpointed except .git and node_modules; those paths and effects outside it cannot be rolled back, so approval is always required.',
             inputSchema: objectSchema({
                 command: { type: 'string' },
-                timeoutMs: { type: 'integer', minimum: 1_000, maximum: 600_000 },
+                timeoutMs: { type: 'integer', minimum: 1 },
             }, ['command']),
             riskLevel: 'high',
             approvalPolicy: 'always',
             mutatesWorkspace: true,
+        }),
+        host({
+            id: 'host_read_artifact',
+            title: 'Read complete tool output',
+            description: 'Page through a persistent Authority tool-output artifact by byte offset. Omit length for the next 256 KiB page; dataBase64 preserves the exact bytes.',
+            inputSchema: objectSchema({
+                artifactId: { type: 'string' },
+                startByte: { type: 'integer', minimum: 0 },
+                length: { type: 'integer', minimum: 1 },
+                verify: { type: 'boolean', description: 'Stream and verify the complete artifact SHA-256 before returning this page.' },
+            }, ['artifactId']),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
         }),
         host({
             id: 'host_workspace_status',
@@ -191,7 +208,7 @@ function createDescriptors(): AgentToolDescriptor[] {
             id: 'host_workspace_history',
             title: 'Inspect workspace history',
             description: 'List recent recoverable Authority workspace commits.',
-            inputSchema: objectSchema({ limit: { type: 'integer', minimum: 1, maximum: 100 } }),
+            inputSchema: objectSchema({ limit: { type: 'integer', minimum: 1 } }),
             riskLevel: 'low',
             approvalPolicy: 'never',
             mutatesWorkspace: false,
@@ -213,23 +230,12 @@ function createDescriptors(): AgentToolDescriptor[] {
 
 function listFiles(root: string, args: Record<string, unknown>): unknown {
     const relativePath = optionalString(args.path, 'path', 2_000) ?? '.';
-    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0, 10) ?? 2;
+    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0) ?? 2;
     const start = resolveSafePath(root, relativePath, true);
     const entries: Array<{ path: string; kind: 'file' | 'directory' | 'symlink'; sizeBytes?: number }> = [];
-    let outputBytes = 0;
-    let truncated = false;
     const visit = (absolutePath: string, logicalPath: string, depth: number): void => {
-        if (entries.length >= MAX_LIST_ENTRIES) {
-            truncated = true;
-            return;
-        }
         const stat = fs.lstatSync(absolutePath);
         const kind = stat.isSymbolicLink() ? 'symlink' : stat.isDirectory() ? 'directory' : 'file';
-        outputBytes += Buffer.byteLength(logicalPath) + 64;
-        if (outputBytes > MAX_TOOL_TEXT) {
-            truncated = true;
-            return;
-        }
         entries.push({ path: logicalPath, kind, ...(stat.isFile() ? { sizeBytes: stat.size } : {}) });
         if (kind !== 'directory' || depth >= maxDepth) {
             return;
@@ -238,7 +244,7 @@ function listFiles(root: string, args: Record<string, unknown>): unknown {
         const directory = fs.opendirSync(absolutePath);
         try {
             let entry: fs.Dirent | null;
-            while (!truncated && (entry = directory.readSync()) !== null) {
+            while ((entry = directory.readSync()) !== null) {
                 visit(path.join(absolutePath, entry.name), joinLogical(logicalPath, entry.name), depth + 1);
             }
         } finally {
@@ -246,7 +252,7 @@ function listFiles(root: string, args: Record<string, unknown>): unknown {
         }
     };
     visit(start.absolutePath, start.relativePath, 0);
-    return { entries, truncated };
+    return { entries, truncated: false };
 }
 
 function readFile(root: string, args: Record<string, unknown>): unknown {
@@ -265,31 +271,26 @@ function readFile(root: string, args: Record<string, unknown>): unknown {
         startLine,
         endLine: Math.min(endLine, lines.length),
         totalLines: lines.length,
-        content: selected.slice(0, MAX_TOOL_TEXT),
-        truncated: selected.length > MAX_TOOL_TEXT,
+        content: selected,
+        truncated: false,
     };
 }
 
-function searchText(root: string, args: Record<string, unknown>): unknown {
-    const query = requiredString(args.query, 'query', 500, false);
+function searchText(root: string, args: Record<string, unknown>, signal: AbortSignal): unknown {
+    const query = requiredString(args.query, 'query', undefined, false);
     if (!query) {
         throw new Error('query must not be empty');
     }
     const relativePath = optionalString(args.path, 'path', 2_000) ?? '.';
     const caseSensitive = optionalBoolean(args.caseSensitive, 'caseSensitive') ?? false;
-    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0, 20) ?? 8;
+    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0) ?? 8;
     const start = resolveSafePath(root, relativePath, true);
     const needle = caseSensitive ? query : query.toLocaleLowerCase();
     const results: Array<{ path: string; line: number; text: string }> = [];
     let filesScanned = 0;
     let bytesScanned = 0;
-    let truncated = false;
-    const deadline = Date.now() + MAX_SEARCH_MS;
     const visit = (absolutePath: string, logicalPath: string, depth: number): void => {
-        if (truncated || Date.now() >= deadline) {
-            truncated = true;
-            return;
-        }
+        if (signal.aborted) throw abortError(signal);
         const stat = fs.lstatSync(absolutePath);
         if (stat.isSymbolicLink()) {
             return;
@@ -302,7 +303,7 @@ function searchText(root: string, args: Record<string, unknown>): unknown {
             const directory = fs.opendirSync(absolutePath);
             try {
                 let entry: fs.Dirent | null;
-                while (!truncated && (entry = directory.readSync()) !== null) {
+                while ((entry = directory.readSync()) !== null) {
                     if (entry.isDirectory() && SKIPPED_SEARCH_DIRS.has(entry.name)) {
                         continue;
                     }
@@ -313,15 +314,11 @@ function searchText(root: string, args: Record<string, unknown>): unknown {
             }
             return;
         }
-        if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
+        if (!stat.isFile()) {
             return;
         }
         filesScanned += 1;
         bytesScanned += stat.size;
-        if (filesScanned > MAX_SEARCH_FILES || bytesScanned > MAX_SEARCH_BYTES) {
-            truncated = true;
-            return;
-        }
         const content = readTextFile(root, absolutePath, logicalPath);
         if (content.includes('\0')) {
             return;
@@ -331,24 +328,17 @@ function searchText(root: string, args: Record<string, unknown>): unknown {
             const line = lines[index] ?? '';
             const haystack = caseSensitive ? line : line.toLocaleLowerCase();
             if (haystack.includes(needle)) {
-                results.push({ path: logicalPath, line: index + 1, text: line.slice(0, 500) });
-                if (results.length >= MAX_SEARCH_RESULTS) {
-                    truncated = true;
-                    return;
-                }
+                results.push({ path: logicalPath, line: index + 1, text: line });
             }
         }
     };
     visit(start.absolutePath, start.relativePath, 0);
-    return { query, results, filesScanned: Math.min(filesScanned, MAX_SEARCH_FILES), bytesScanned: Math.min(bytesScanned, MAX_SEARCH_BYTES), truncated };
+    return { query, results, filesScanned, bytesScanned, truncated: false };
 }
 
 function writeFile(root: string, args: Record<string, unknown>, signal: AbortSignal): unknown {
     const relativePath = requiredString(args.path, 'path', 2_000);
-    const content = requiredString(args.content, 'content', MAX_FILE_BYTES, false);
-    if (Buffer.byteLength(content) > MAX_FILE_BYTES) {
-        throw new Error(`content exceeds the ${MAX_FILE_BYTES} byte file limit`);
-    }
+    const content = requiredString(args.content, 'content', undefined, false);
     const resolved = resolveSafeWritePath(root, relativePath);
     if (signal.aborted) {
         throw abortError(signal);
@@ -361,8 +351,8 @@ function writeFile(root: string, args: Record<string, unknown>, signal: AbortSig
 
 function replaceText(root: string, args: Record<string, unknown>, signal: AbortSignal): unknown {
     const relativePath = requiredString(args.path, 'path', 2_000);
-    const find = requiredString(args.find, 'find', MAX_FILE_BYTES, false);
-    const replacement = requiredString(args.replace, 'replace', MAX_FILE_BYTES, false);
+    const find = requiredString(args.find, 'find', undefined, false);
+    const replacement = requiredString(args.replace, 'replace', undefined, false);
     if (!find) {
         throw new Error('find must not be empty');
     }
@@ -377,9 +367,6 @@ function replaceText(root: string, args: Record<string, unknown>, signal: AbortS
             : `Expected ${expectedMatches} matches in ${relativePath}, found ${matches}`);
     }
     const next = replaceAll ? content.split(find).join(replacement) : content.replace(find, replacement);
-    if (Buffer.byteLength(next) > MAX_FILE_BYTES) {
-        throw new Error(`Replacement exceeds the ${MAX_FILE_BYTES} byte file limit`);
-    }
     const writeTarget = resolveSafeWritePath(root, relativePath);
     if (readTextFile(root, writeTarget.absolutePath, relativePath) !== content) {
         throw new Error(`Workspace file changed before replacement: ${relativePath}`);
@@ -394,25 +381,25 @@ function replaceText(root: string, args: Record<string, unknown>, signal: AbortS
 async function runShell(
     root: string,
     args: Record<string, unknown>,
-    runId: string,
-    signal: AbortSignal,
+    context: AgentHostToolContext,
+    artifacts: AgentToolArtifactStore,
 ): Promise<unknown> {
     assertWorkspaceRoot(root);
-    const command = requiredString(args.command, 'command', 32_000);
-    const timeoutMs = optionalInteger(args.timeoutMs, 'timeoutMs', 1_000, 600_000) ?? 120_000;
-    if (signal.aborted) {
-        throw abortError(signal);
+    const command = requiredString(args.command, 'command');
+    const timeoutMs = optionalInteger(args.timeoutMs, 'timeoutMs', 1);
+    if (context.signal.aborted) {
+        throw abortError(context.signal);
     }
     const child = spawn(command, {
         cwd: root,
-        env: sanitizedEnvironment(runId),
+        env: sanitizedEnvironment(context.runId),
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         detached: process.platform !== 'win32',
     });
-    const stdout = new CappedOutput(MAX_TOOL_TEXT);
-    const stderr = new CappedOutput(MAX_TOOL_TEXT);
+    const stdout = artifacts.capture(context.sessionId, context.invocationId, 'stdout');
+    const stderr = artifacts.capture(context.sessionId, context.invocationId, 'stderr');
     child.stdout?.on('data', chunk => stdout.push(Buffer.from(chunk)));
     child.stderr?.on('data', chunk => stderr.push(Buffer.from(chunk)));
     let timedOut = false;
@@ -422,8 +409,8 @@ async function runShell(
         aborted = true;
         forceKillTimer ??= terminateProcessTree(child);
     };
-    signal.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => {
+    context.signal.addEventListener('abort', onAbort, { once: true });
+    const timer = timeoutMs === null ? null : setTimeout(() => {
         timedOut = true;
         forceKillTimer ??= terminateProcessTree(child);
     }, timeoutMs);
@@ -433,48 +420,228 @@ async function runShell(
             child.once('close', (code, exitSignal) => resolve({ code, signal: exitSignal }));
         });
         if (aborted) {
-            throw abortError(signal);
+            throw abortError(context.signal);
         }
+        const stdoutResult = stdout.finish();
+        const stderrResult = stderr.finish();
         return {
             command,
             exitCode: exit.code,
             signal: exit.signal,
             timedOut,
-            stdout: stdout.text(),
-            stderr: stderr.text(),
-            stdoutTruncated: stdout.truncated,
-            stderrTruncated: stderr.truncated,
+            stdout: stdoutResult.preview,
+            stderr: stderrResult.preview,
+            stdoutTruncated: stdoutResult.artifact !== undefined,
+            stderrTruncated: stderrResult.artifact !== undefined,
+            ...(stdoutResult.artifact ? { stdoutArtifact: stdoutResult.artifact } : {}),
+            ...(stderrResult.artifact ? { stderrArtifact: stderrResult.artifact } : {}),
         };
+    } catch (error) {
+        stdout.discard();
+        stderr.discard();
+        throw error;
     } finally {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         if (forceKillTimer) {
             clearTimeout(forceKillTimer);
         }
-        signal.removeEventListener('abort', onAbort);
+        context.signal.removeEventListener('abort', onAbort);
     }
 }
 
-class CappedOutput {
-    private readonly chunks: Buffer[] = [];
-    private length = 0;
-    truncated = false;
+interface AgentToolArtifactMetadata {
+    format: 'authority-agent-tool-artifact/v1';
+    artifactId: string;
+    invocationId: string;
+    stream: string;
+    bytes: number;
+    sha256: string;
+    encoding: 'utf8';
+    createdAt: string;
+}
 
-    constructor(private readonly limit: number) {}
+class AgentToolArtifactStore {
+    constructor(private readonly root: string) {
+        ensureDir(this.root);
+    }
 
-    push(chunk: Buffer): void {
-        const remaining = this.limit - this.length;
-        if (remaining > 0) {
-            const kept = chunk.subarray(0, remaining);
-            this.chunks.push(kept);
-            this.length += kept.length;
+    capture(sessionId: string, invocationId: string, stream: string): AgentToolArtifactCapture {
+        const sessionDir = this.sessionDir(sessionId);
+        const existed = fs.existsSync(sessionDir);
+        ensureDir(sessionDir);
+        if (!existed) fsyncDirectory(this.root);
+        return new AgentToolArtifactCapture(sessionDir, invocationId, stream);
+    }
+
+    read(sessionId: string, args: Record<string, unknown>): unknown {
+        const artifactId = requiredString(args.artifactId, 'artifactId', 128);
+        if (!/^[a-zA-Z0-9._-]+$/.test(artifactId)) throw new Error('artifactId is invalid');
+        const sessionDir = this.sessionDir(sessionId);
+        const metadataPath = path.join(sessionDir, `${artifactId}.json`);
+        const contentPath = path.join(sessionDir, `${artifactId}.txt`);
+        const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8')) as AgentToolArtifactMetadata;
+        if (metadata.format !== 'authority-agent-tool-artifact/v1'
+            || metadata.artifactId !== artifactId
+            || !Number.isSafeInteger(metadata.bytes)
+            || metadata.bytes < 0
+            || !/^[a-f0-9]{64}$/.test(metadata.sha256)
+            || typeof metadata.stream !== 'string'
+            || metadata.encoding !== 'utf8') {
+            throw new Error(`Tool artifact metadata is invalid: ${artifactId}`);
         }
-        if (chunk.length > remaining) {
-            this.truncated = true;
+        const stats = fs.lstatSync(contentPath);
+        if (!stats.isFile() || stats.isSymbolicLink() || stats.size !== metadata.bytes) {
+            throw new Error(`Tool artifact content does not match its metadata: ${artifactId}`);
+        }
+        const startByte = optionalInteger(args.startByte, 'startByte', 0) ?? 0;
+        const requestedLength = optionalInteger(args.length, 'length', 1);
+        if (startByte > metadata.bytes) throw new Error(`startByte exceeds tool artifact size: ${metadata.bytes}`);
+        const length = Math.min(requestedLength ?? ARTIFACT_DEFAULT_PAGE_BYTES, metadata.bytes - startByte);
+        const verify = optionalBoolean(args.verify, 'verify') ?? false;
+        if (verify && sha256File(contentPath) !== metadata.sha256) {
+            throw new Error(`Tool artifact failed SHA-256 verification: ${artifactId}`);
+        }
+        const descriptor = fs.openSync(contentPath, 'r');
+        try {
+            const buffer = Buffer.alloc(length);
+            const bytesRead = length > 0 ? fs.readSync(descriptor, buffer, 0, length, startByte) : 0;
+            const endByte = startByte + bytesRead;
+            return {
+                artifactId,
+                stream: metadata.stream,
+                encoding: metadata.encoding,
+                sha256: metadata.sha256,
+                startByte,
+                endByte,
+                totalBytes: metadata.bytes,
+                content: buffer.subarray(0, bytesRead).toString('utf8'),
+                contentEncoding: 'utf8-lossy',
+                dataBase64: buffer.subarray(0, bytesRead).toString('base64'),
+                integrityVerified: verify,
+                nextByte: endByte < metadata.bytes ? endByte : null,
+            };
+        } finally {
+            fs.closeSync(descriptor);
         }
     }
 
-    text(): string {
-        return Buffer.concat(this.chunks).toString('utf8');
+    private sessionDir(sessionId: string): string {
+        if (!/^[a-zA-Z0-9._-]+$/.test(sessionId)) throw new Error('Agent session id is invalid');
+        return path.join(this.root, sessionId);
+    }
+}
+
+class AgentToolArtifactCapture {
+    private readonly artifactId = crypto.randomUUID();
+    private readonly temporaryPath: string;
+    private readonly finalPath: string;
+    private readonly metadataPath: string;
+    private readonly descriptor: number;
+    private readonly digest = crypto.createHash('sha256');
+    private readonly previewChunks: Buffer[] = [];
+    private previewBytes = 0;
+    private totalBytes = 0;
+    private closed = false;
+    private descriptorOpen = true;
+
+    constructor(
+        sessionDir: string,
+        private readonly invocationId: string,
+        private readonly stream: string,
+    ) {
+        this.temporaryPath = path.join(sessionDir, `${this.artifactId}.tmp`);
+        this.finalPath = path.join(sessionDir, `${this.artifactId}.txt`);
+        this.metadataPath = path.join(sessionDir, `${this.artifactId}.json`);
+        this.descriptor = fs.openSync(this.temporaryPath, 'wx');
+    }
+
+    push(chunk: Buffer): void {
+        if (this.closed) return;
+        fs.writeSync(this.descriptor, chunk);
+        this.digest.update(chunk);
+        this.totalBytes += chunk.length;
+        const remaining = SHELL_OUTPUT_PREVIEW_BYTES - this.previewBytes;
+        if (remaining > 0) {
+            const preview = chunk.subarray(0, remaining);
+            this.previewChunks.push(preview);
+            this.previewBytes += preview.length;
+        }
+    }
+
+    finish(): { preview: string; artifact?: Omit<AgentToolArtifactMetadata, 'format' | 'invocationId' | 'createdAt'> } {
+        if (this.closed) throw new Error('Tool artifact capture is already closed');
+        try {
+            try {
+                fs.fsyncSync(this.descriptor);
+            } finally {
+                fs.closeSync(this.descriptor);
+                this.descriptorOpen = false;
+            }
+            const preview = Buffer.concat(this.previewChunks).toString('utf8');
+            if (this.totalBytes <= SHELL_OUTPUT_PREVIEW_BYTES) {
+                fs.rmSync(this.temporaryPath, { force: true });
+                this.closed = true;
+                return { preview };
+            }
+            const metadata: AgentToolArtifactMetadata = {
+                format: 'authority-agent-tool-artifact/v1',
+                artifactId: this.artifactId,
+                invocationId: this.invocationId,
+                stream: this.stream,
+                bytes: this.totalBytes,
+                sha256: this.digest.digest('hex'),
+                encoding: 'utf8',
+                createdAt: new Date().toISOString(),
+            };
+            fs.renameSync(this.temporaryPath, this.finalPath);
+            atomicWriteFile(this.metadataPath, `${JSON.stringify(metadata)}\n`);
+            this.closed = true;
+            return {
+                preview: `${preview}\n\n[Complete output is available through host_read_artifact: ${this.artifactId}]`,
+                artifact: {
+                    artifactId: metadata.artifactId,
+                    stream: metadata.stream,
+                    bytes: metadata.bytes,
+                    sha256: metadata.sha256,
+                    encoding: metadata.encoding,
+                },
+            };
+        } catch (error) {
+            this.closed = true;
+            fs.rmSync(this.temporaryPath, { force: true });
+            fs.rmSync(this.finalPath, { force: true });
+            fs.rmSync(this.metadataPath, { force: true });
+            throw error;
+        }
+    }
+
+    discard(): void {
+        if (this.closed) return;
+        this.closed = true;
+        try {
+            if (this.descriptorOpen) {
+                fs.closeSync(this.descriptor);
+                this.descriptorOpen = false;
+            }
+        } finally {
+            fs.rmSync(this.temporaryPath, { force: true });
+        }
+    }
+}
+
+function sha256File(filePath: string): string {
+    const digest = crypto.createHash('sha256');
+    const descriptor = fs.openSync(filePath, 'r');
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    try {
+        while (true) {
+            const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+            if (bytesRead === 0) break;
+            digest.update(buffer.subarray(0, bytesRead));
+        }
+        return digest.digest('hex');
+    } finally {
+        fs.closeSync(descriptor);
     }
 }
 
@@ -566,7 +733,7 @@ function resolveSafeWritePath(root: string, input: string): { absolutePath: stri
 
 function readTextFile(root: string, absolutePath: string, logicalPath: string): string {
     const before = fs.lstatSync(absolutePath);
-    if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_FILE_BYTES) {
+    if (!before.isFile() || before.isSymbolicLink()) {
         throw new Error(`Not a readable text file: ${logicalPath}`);
     }
     const realRoot = assertWorkspaceRoot(root);
@@ -665,13 +832,15 @@ function objectInput(input: unknown): Record<string, unknown> {
     return input as Record<string, unknown>;
 }
 
-function requiredString(value: unknown, label: string, maxLength: number, trim = true): string {
+function requiredString(value: unknown, label: string, maxLength?: number, trim = true): string {
     if (typeof value !== 'string') {
         throw new Error(`${label} must be a string`);
     }
     const result = trim ? value.trim() : value;
-    if ((trim && !result) || result.length > maxLength) {
-        throw new Error(`${label} must contain between ${trim ? 1 : 0} and ${maxLength} characters`);
+    if ((trim && !result) || (maxLength !== undefined && result.length > maxLength)) {
+        throw new Error(maxLength === undefined
+            ? `${label} must ${trim ? 'not be empty' : 'be a string'}`
+            : `${label} must contain between ${trim ? 1 : 0} and ${maxLength} characters`);
     }
     return result;
 }
@@ -690,7 +859,7 @@ function optionalBoolean(value: unknown, label: string): boolean | null {
     return value;
 }
 
-function optionalInteger(value: unknown, label: string, minimum: number, maximum: number): number | null {
+function optionalInteger(value: unknown, label: string, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number | null {
     if (value === undefined || value === null) {
         return null;
     }

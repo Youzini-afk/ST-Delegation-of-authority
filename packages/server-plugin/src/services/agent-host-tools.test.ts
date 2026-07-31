@@ -15,9 +15,9 @@ afterEach(() => {
 });
 
 describe('AgentHostToolService', () => {
-    it('provides bounded text tools and rejects symlink escapes', async () => {
+    it('provides complete text tools and rejects symlink escapes', async () => {
         const fixture = await createFixture();
-        const context = { workspace: fixture.workspace, runId: 'run-1', signal: new AbortController().signal };
+        const context = toolContext(fixture.workspace);
         await fixture.tools.execute('host_write_file', { path: 'src/a.txt', content: 'alpha\nbeta\nalpha' }, context);
         expect(await fixture.tools.execute('host_search_text', { path: 'src', query: 'ALPHA' }, context)).toMatchObject({
             results: [{ path: 'src/a.txt', line: 1 }, { path: 'src/a.txt', line: 3 }],
@@ -57,7 +57,9 @@ describe('AgentHostToolService', () => {
         const command = `"${process.execPath}" -e "${script}"`;
         const result = await fixture.tools.execute('host_shell', { command }, {
             workspace: fixture.workspace,
+            sessionId: 'session-1',
             runId: 'run-42',
+            invocationId: 'invocation-1',
             signal: new AbortController().signal,
         }) as any;
         expect(result).toMatchObject({ exitCode: 0, stdout: 'run-42|undefined', timedOut: false });
@@ -76,10 +78,63 @@ describe('AgentHostToolService', () => {
             }
             throw error;
         }
-        const context = { workspace: fixture.workspace, runId: 'run-1', signal: new AbortController().signal };
+        const context = toolContext(fixture.workspace);
         await expect(fixture.tools.execute('host_write_file', { path: 'linked/escape.txt', content: 'no' }, context)).rejects.toThrow(/non-directory|escapes/);
         await expect(fixture.tools.execute('host_list_files', { path: 'linked' }, context)).rejects.toThrow(/symbolic link|escapes/);
         expect(fs.existsSync(path.join(outside, 'escape.txt'))).toBe(false);
+    });
+
+    it('persists complete shell output and lets the Agent page through it', async () => {
+        const fixture = await createFixture();
+        const context = toolContext(fixture.workspace);
+        const command = `"${process.execPath}" -e "process.stdout.write('x'.repeat(300000))"`;
+        const result = await fixture.tools.execute('host_shell', { command }, context) as any;
+
+        expect(result.stdoutTruncated).toBe(true);
+        expect(result.stdoutArtifact).toMatchObject({ bytes: 300000, encoding: 'utf8' });
+        const page = await fixture.tools.execute('host_read_artifact', {
+            artifactId: result.stdoutArtifact.artifactId,
+            startByte: 275000,
+            length: 1000,
+        }, context) as any;
+        expect(page).toMatchObject({ startByte: 275000, endByte: 276000, totalBytes: 300000 });
+        expect(page.content).toBe('x'.repeat(1000));
+        expect(Buffer.from(page.dataBase64, 'base64').toString('utf8')).toBe('x'.repeat(1000));
+
+        const defaultPage = await fixture.tools.execute('host_read_artifact', {
+            artifactId: result.stdoutArtifact.artifactId,
+        }, context) as any;
+        expect(defaultPage).toMatchObject({
+            startByte: 0,
+            endByte: 256 * 1024,
+            nextByte: 256 * 1024,
+            integrityVerified: false,
+        });
+
+        const verifiedPage = await fixture.tools.execute('host_read_artifact', {
+            artifactId: result.stdoutArtifact.artifactId,
+            startByte: 299000,
+            length: 1000,
+            verify: true,
+        }, context) as any;
+        expect(verifiedPage).toMatchObject({ endByte: 300000, nextByte: null, integrityVerified: true });
+
+        const artifactPath = path.join(
+            fixture.history.storeDir,
+            'agent-tool-artifacts',
+            context.sessionId,
+            `${result.stdoutArtifact.artifactId}.txt`,
+        );
+        const descriptor = fs.openSync(artifactPath, 'r+');
+        try {
+            fs.writeSync(descriptor, Buffer.from('y'), 0, 1, 0);
+        } finally {
+            fs.closeSync(descriptor);
+        }
+        await expect(fixture.tools.execute('host_read_artifact', {
+            artifactId: result.stdoutArtifact.artifactId,
+            verify: true,
+        }, context)).rejects.toThrow(/SHA-256 verification/);
     });
 });
 
@@ -92,4 +147,14 @@ async function createFixture() {
     const history = new WorkspaceHistoryService(store);
     const workspace = await history.registerWorkspace({ id: 'test', rootPath: root });
     return { base, root, history, workspace, tools: new AgentHostToolService(history) };
+}
+
+function toolContext(workspace: Awaited<ReturnType<WorkspaceHistoryService['registerWorkspace']>>) {
+    return {
+        workspace,
+        sessionId: 'session-1',
+        runId: 'run-1',
+        invocationId: 'invocation-1',
+        signal: new AbortController().signal,
+    };
 }

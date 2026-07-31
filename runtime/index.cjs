@@ -5455,7 +5455,7 @@ class AdminPackageService {
         return operation;
     }
     saveOperation(user, operation) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
     }
     toPublicOperation(operation) {
         const { artifactPath: _artifactPath, sourcePath: _sourcePath, ...publicOperation } = operation;
@@ -5511,28 +5511,28 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:child_process */ "node:child_process");
 /* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:fs */ "node:fs");
-/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:path */ "node:path");
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
 
 
 
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const MAX_TOOL_TEXT = 256 * 1024;
-const MAX_LIST_ENTRIES = 1_000;
-const MAX_SEARCH_FILES = 5_000;
-const MAX_SEARCH_RESULTS = 200;
-const MAX_SEARCH_BYTES = 32 * 1024 * 1024;
-const MAX_SEARCH_MS = 2_000;
+
+const SHELL_OUTPUT_PREVIEW_BYTES = 256 * 1024;
+const ARTIFACT_DEFAULT_PAGE_BYTES = 256 * 1024;
 const SKIPPED_SEARCH_DIRS = new Set(['.git', 'node_modules']);
 class AgentHostToolService {
     history;
     descriptors = createDescriptors();
-    constructor(history) {
+    artifacts;
+    constructor(history, artifactRoot) {
         this.history = history;
+        this.artifacts = new AgentToolArtifactStore(artifactRoot ?? node_path__WEBPACK_IMPORTED_MODULE_3___default().join(history.storeDir, 'agent-tool-artifacts'));
     }
     list() {
         return this.descriptors.map(descriptor => structuredClone(descriptor));
@@ -5575,17 +5575,19 @@ class AgentHostToolService {
             case 'host_read_file':
                 return readFile(context.workspace.rootPath, args);
             case 'host_search_text':
-                return searchText(context.workspace.rootPath, args);
+                return searchText(context.workspace.rootPath, args, context.signal);
             case 'host_write_file':
                 return writeFile(context.workspace.rootPath, args, context.signal);
             case 'host_replace_text':
                 return replaceText(context.workspace.rootPath, args, context.signal);
             case 'host_shell':
-                return await runShell(context.workspace.rootPath, args, context.runId, context.signal);
+                return await runShell(context.workspace.rootPath, args, context, this.artifacts);
+            case 'host_read_artifact':
+                return this.artifacts.read(context.sessionId, args);
             case 'host_workspace_status':
                 return await this.history.status(context.workspace.id);
             case 'host_workspace_history':
-                return this.history.listCommits(context.workspace.id, optionalInteger(args.limit, 'limit', 1, 100) ?? 20);
+                return this.history.listCommits(context.workspace.id, optionalInteger(args.limit, 'limit', 1) ?? 20);
             case 'host_workspace_diff': {
                 const from = optionalCommitId(args.fromCommitId, 'fromCommitId');
                 const to = optionalCommitId(args.toCommitId, 'toCommitId');
@@ -5613,7 +5615,7 @@ function createDescriptors() {
             description: 'List files and directories without following symbolic links.',
             inputSchema: objectSchema({
                 path: { type: 'string', description: 'Workspace-relative path; defaults to .' },
-                maxDepth: { type: 'integer', minimum: 0, maximum: 10 },
+                maxDepth: { type: 'integer', minimum: 0 },
             }),
             riskLevel: 'low',
             approvalPolicy: 'never',
@@ -5640,7 +5642,7 @@ function createDescriptors() {
                 query: { type: 'string' },
                 path: { type: 'string', description: 'Workspace-relative path; defaults to .' },
                 caseSensitive: { type: 'boolean' },
-                maxDepth: { type: 'integer', minimum: 0, maximum: 20 },
+                maxDepth: { type: 'integer', minimum: 0 },
             }, ['query']),
             riskLevel: 'low',
             approvalPolicy: 'never',
@@ -5676,11 +5678,25 @@ function createDescriptors() {
             description: 'Run an unrestricted host shell command with the workspace as cwd. The workspace is checkpointed except .git and node_modules; those paths and effects outside it cannot be rolled back, so approval is always required.',
             inputSchema: objectSchema({
                 command: { type: 'string' },
-                timeoutMs: { type: 'integer', minimum: 1_000, maximum: 600_000 },
+                timeoutMs: { type: 'integer', minimum: 1 },
             }, ['command']),
             riskLevel: 'high',
             approvalPolicy: 'always',
             mutatesWorkspace: true,
+        }),
+        host({
+            id: 'host_read_artifact',
+            title: 'Read complete tool output',
+            description: 'Page through a persistent Authority tool-output artifact by byte offset. Omit length for the next 256 KiB page; dataBase64 preserves the exact bytes.',
+            inputSchema: objectSchema({
+                artifactId: { type: 'string' },
+                startByte: { type: 'integer', minimum: 0 },
+                length: { type: 'integer', minimum: 1 },
+                verify: { type: 'boolean', description: 'Stream and verify the complete artifact SHA-256 before returning this page.' },
+            }, ['artifactId']),
+            riskLevel: 'low',
+            approvalPolicy: 'never',
+            mutatesWorkspace: false,
         }),
         host({
             id: 'host_workspace_status',
@@ -5695,7 +5711,7 @@ function createDescriptors() {
             id: 'host_workspace_history',
             title: 'Inspect workspace history',
             description: 'List recent recoverable Authority workspace commits.',
-            inputSchema: objectSchema({ limit: { type: 'integer', minimum: 1, maximum: 100 } }),
+            inputSchema: objectSchema({ limit: { type: 'integer', minimum: 1 } }),
             riskLevel: 'low',
             approvalPolicy: 'never',
             mutatesWorkspace: false,
@@ -5716,33 +5732,22 @@ function createDescriptors() {
 }
 function listFiles(root, args) {
     const relativePath = optionalString(args.path, 'path', 2_000) ?? '.';
-    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0, 10) ?? 2;
+    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0) ?? 2;
     const start = resolveSafePath(root, relativePath, true);
     const entries = [];
-    let outputBytes = 0;
-    let truncated = false;
     const visit = (absolutePath, logicalPath, depth) => {
-        if (entries.length >= MAX_LIST_ENTRIES) {
-            truncated = true;
-            return;
-        }
-        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(absolutePath);
         const kind = stat.isSymbolicLink() ? 'symlink' : stat.isDirectory() ? 'directory' : 'file';
-        outputBytes += Buffer.byteLength(logicalPath) + 64;
-        if (outputBytes > MAX_TOOL_TEXT) {
-            truncated = true;
-            return;
-        }
         entries.push({ path: logicalPath, kind, ...(stat.isFile() ? { sizeBytes: stat.size } : {}) });
         if (kind !== 'directory' || depth >= maxDepth) {
             return;
         }
         assertContainedDirectory(root, absolutePath);
-        const directory = node_fs__WEBPACK_IMPORTED_MODULE_1___default().opendirSync(absolutePath);
+        const directory = node_fs__WEBPACK_IMPORTED_MODULE_2___default().opendirSync(absolutePath);
         try {
             let entry;
-            while (!truncated && (entry = directory.readSync()) !== null) {
-                visit(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(absolutePath, entry.name), joinLogical(logicalPath, entry.name), depth + 1);
+            while ((entry = directory.readSync()) !== null) {
+                visit(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(absolutePath, entry.name), joinLogical(logicalPath, entry.name), depth + 1);
             }
         }
         finally {
@@ -5750,7 +5755,7 @@ function listFiles(root, args) {
         }
     };
     visit(start.absolutePath, start.relativePath, 0);
-    return { entries, truncated };
+    return { entries, truncated: false };
 }
 function readFile(root, args) {
     const relativePath = requiredString(args.path, 'path', 2_000);
@@ -5768,31 +5773,27 @@ function readFile(root, args) {
         startLine,
         endLine: Math.min(endLine, lines.length),
         totalLines: lines.length,
-        content: selected.slice(0, MAX_TOOL_TEXT),
-        truncated: selected.length > MAX_TOOL_TEXT,
+        content: selected,
+        truncated: false,
     };
 }
-function searchText(root, args) {
-    const query = requiredString(args.query, 'query', 500, false);
+function searchText(root, args, signal) {
+    const query = requiredString(args.query, 'query', undefined, false);
     if (!query) {
         throw new Error('query must not be empty');
     }
     const relativePath = optionalString(args.path, 'path', 2_000) ?? '.';
     const caseSensitive = optionalBoolean(args.caseSensitive, 'caseSensitive') ?? false;
-    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0, 20) ?? 8;
+    const maxDepth = optionalInteger(args.maxDepth, 'maxDepth', 0) ?? 8;
     const start = resolveSafePath(root, relativePath, true);
     const needle = caseSensitive ? query : query.toLocaleLowerCase();
     const results = [];
     let filesScanned = 0;
     let bytesScanned = 0;
-    let truncated = false;
-    const deadline = Date.now() + MAX_SEARCH_MS;
     const visit = (absolutePath, logicalPath, depth) => {
-        if (truncated || Date.now() >= deadline) {
-            truncated = true;
-            return;
-        }
-        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        if (signal.aborted)
+            throw abortError(signal);
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(absolutePath);
         if (stat.isSymbolicLink()) {
             return;
         }
@@ -5801,14 +5802,14 @@ function searchText(root, args) {
                 return;
             }
             assertContainedDirectory(root, absolutePath);
-            const directory = node_fs__WEBPACK_IMPORTED_MODULE_1___default().opendirSync(absolutePath);
+            const directory = node_fs__WEBPACK_IMPORTED_MODULE_2___default().opendirSync(absolutePath);
             try {
                 let entry;
-                while (!truncated && (entry = directory.readSync()) !== null) {
+                while ((entry = directory.readSync()) !== null) {
                     if (entry.isDirectory() && SKIPPED_SEARCH_DIRS.has(entry.name)) {
                         continue;
                     }
-                    visit(node_path__WEBPACK_IMPORTED_MODULE_2___default().join(absolutePath, entry.name), joinLogical(logicalPath, entry.name), depth + 1);
+                    visit(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(absolutePath, entry.name), joinLogical(logicalPath, entry.name), depth + 1);
                 }
             }
             finally {
@@ -5816,15 +5817,11 @@ function searchText(root, args) {
             }
             return;
         }
-        if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
+        if (!stat.isFile()) {
             return;
         }
         filesScanned += 1;
         bytesScanned += stat.size;
-        if (filesScanned > MAX_SEARCH_FILES || bytesScanned > MAX_SEARCH_BYTES) {
-            truncated = true;
-            return;
-        }
         const content = readTextFile(root, absolutePath, logicalPath);
         if (content.includes('\0')) {
             return;
@@ -5834,36 +5831,29 @@ function searchText(root, args) {
             const line = lines[index] ?? '';
             const haystack = caseSensitive ? line : line.toLocaleLowerCase();
             if (haystack.includes(needle)) {
-                results.push({ path: logicalPath, line: index + 1, text: line.slice(0, 500) });
-                if (results.length >= MAX_SEARCH_RESULTS) {
-                    truncated = true;
-                    return;
-                }
+                results.push({ path: logicalPath, line: index + 1, text: line });
             }
         }
     };
     visit(start.absolutePath, start.relativePath, 0);
-    return { query, results, filesScanned: Math.min(filesScanned, MAX_SEARCH_FILES), bytesScanned: Math.min(bytesScanned, MAX_SEARCH_BYTES), truncated };
+    return { query, results, filesScanned, bytesScanned, truncated: false };
 }
 function writeFile(root, args, signal) {
     const relativePath = requiredString(args.path, 'path', 2_000);
-    const content = requiredString(args.content, 'content', MAX_FILE_BYTES, false);
-    if (Buffer.byteLength(content) > MAX_FILE_BYTES) {
-        throw new Error(`content exceeds the ${MAX_FILE_BYTES} byte file limit`);
-    }
+    const content = requiredString(args.content, 'content', undefined, false);
     const resolved = resolveSafeWritePath(root, relativePath);
     if (signal.aborted) {
         throw abortError(signal);
     }
     // ponytail: Node has no portable dirfd-relative atomic rename; repeated realpath/lstat checks cover ordinary races.
     // Move writes into a native openat/handle layer if hostile same-account filesystem races enter the threat model.
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteFile)(resolved.absolutePath, content);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(resolved.absolutePath, content);
     return { path: resolved.relativePath, bytesWritten: Buffer.byteLength(content) };
 }
 function replaceText(root, args, signal) {
     const relativePath = requiredString(args.path, 'path', 2_000);
-    const find = requiredString(args.find, 'find', MAX_FILE_BYTES, false);
-    const replacement = requiredString(args.replace, 'replace', MAX_FILE_BYTES, false);
+    const find = requiredString(args.find, 'find', undefined, false);
+    const replacement = requiredString(args.replace, 'replace', undefined, false);
     if (!find) {
         throw new Error('find must not be empty');
     }
@@ -5878,9 +5868,6 @@ function replaceText(root, args, signal) {
             : `Expected ${expectedMatches} matches in ${relativePath}, found ${matches}`);
     }
     const next = replaceAll ? content.split(find).join(replacement) : content.replace(find, replacement);
-    if (Buffer.byteLength(next) > MAX_FILE_BYTES) {
-        throw new Error(`Replacement exceeds the ${MAX_FILE_BYTES} byte file limit`);
-    }
     const writeTarget = resolveSafeWritePath(root, relativePath);
     if (readTextFile(root, writeTarget.absolutePath, relativePath) !== content) {
         throw new Error(`Workspace file changed before replacement: ${relativePath}`);
@@ -5888,26 +5875,26 @@ function replaceText(root, args, signal) {
     if (signal.aborted) {
         throw abortError(signal);
     }
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.atomicWriteFile)(writeTarget.absolutePath, next);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(writeTarget.absolutePath, next);
     return { path: resolved.relativePath, replacements: replaceAll ? matches : 1 };
 }
-async function runShell(root, args, runId, signal) {
+async function runShell(root, args, context, artifacts) {
     assertWorkspaceRoot(root);
-    const command = requiredString(args.command, 'command', 32_000);
-    const timeoutMs = optionalInteger(args.timeoutMs, 'timeoutMs', 1_000, 600_000) ?? 120_000;
-    if (signal.aborted) {
-        throw abortError(signal);
+    const command = requiredString(args.command, 'command');
+    const timeoutMs = optionalInteger(args.timeoutMs, 'timeoutMs', 1);
+    if (context.signal.aborted) {
+        throw abortError(context.signal);
     }
     const child = (0,node_child_process__WEBPACK_IMPORTED_MODULE_0__.spawn)(command, {
         cwd: root,
-        env: sanitizedEnvironment(runId),
+        env: sanitizedEnvironment(context.runId),
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         detached: process.platform !== 'win32',
     });
-    const stdout = new CappedOutput(MAX_TOOL_TEXT);
-    const stderr = new CappedOutput(MAX_TOOL_TEXT);
+    const stdout = artifacts.capture(context.sessionId, context.invocationId, 'stdout');
+    const stderr = artifacts.capture(context.sessionId, context.invocationId, 'stderr');
     child.stdout?.on('data', chunk => stdout.push(Buffer.from(chunk)));
     child.stderr?.on('data', chunk => stderr.push(Buffer.from(chunk)));
     let timedOut = false;
@@ -5917,8 +5904,8 @@ async function runShell(root, args, runId, signal) {
         aborted = true;
         forceKillTimer ??= terminateProcessTree(child);
     };
-    signal.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => {
+    context.signal.addEventListener('abort', onAbort, { once: true });
+    const timer = timeoutMs === null ? null : setTimeout(() => {
         timedOut = true;
         forceKillTimer ??= terminateProcessTree(child);
     }, timeoutMs);
@@ -5928,48 +5915,225 @@ async function runShell(root, args, runId, signal) {
             child.once('close', (code, exitSignal) => resolve({ code, signal: exitSignal }));
         });
         if (aborted) {
-            throw abortError(signal);
+            throw abortError(context.signal);
         }
+        const stdoutResult = stdout.finish();
+        const stderrResult = stderr.finish();
         return {
             command,
             exitCode: exit.code,
             signal: exit.signal,
             timedOut,
-            stdout: stdout.text(),
-            stderr: stderr.text(),
-            stdoutTruncated: stdout.truncated,
-            stderrTruncated: stderr.truncated,
+            stdout: stdoutResult.preview,
+            stderr: stderrResult.preview,
+            stdoutTruncated: stdoutResult.artifact !== undefined,
+            stderrTruncated: stderrResult.artifact !== undefined,
+            ...(stdoutResult.artifact ? { stdoutArtifact: stdoutResult.artifact } : {}),
+            ...(stderrResult.artifact ? { stderrArtifact: stderrResult.artifact } : {}),
         };
     }
+    catch (error) {
+        stdout.discard();
+        stderr.discard();
+        throw error;
+    }
     finally {
-        clearTimeout(timer);
+        if (timer)
+            clearTimeout(timer);
         if (forceKillTimer) {
             clearTimeout(forceKillTimer);
         }
-        signal.removeEventListener('abort', onAbort);
+        context.signal.removeEventListener('abort', onAbort);
     }
 }
-class CappedOutput {
-    limit;
-    chunks = [];
-    length = 0;
-    truncated = false;
-    constructor(limit) {
-        this.limit = limit;
+class AgentToolArtifactStore {
+    root;
+    constructor(root) {
+        this.root = root;
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(this.root);
+    }
+    capture(sessionId, invocationId, stream) {
+        const sessionDir = this.sessionDir(sessionId);
+        const existed = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(sessionDir);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(sessionDir);
+        if (!existed)
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(this.root);
+        return new AgentToolArtifactCapture(sessionDir, invocationId, stream);
+    }
+    read(sessionId, args) {
+        const artifactId = requiredString(args.artifactId, 'artifactId', 128);
+        if (!/^[a-zA-Z0-9._-]+$/.test(artifactId))
+            throw new Error('artifactId is invalid');
+        const sessionDir = this.sessionDir(sessionId);
+        const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sessionDir, `${artifactId}.json`);
+        const contentPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sessionDir, `${artifactId}.txt`);
+        const metadata = JSON.parse(node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(metadataPath, 'utf8'));
+        if (metadata.format !== 'authority-agent-tool-artifact/v1'
+            || metadata.artifactId !== artifactId
+            || !Number.isSafeInteger(metadata.bytes)
+            || metadata.bytes < 0
+            || !/^[a-f0-9]{64}$/.test(metadata.sha256)
+            || typeof metadata.stream !== 'string'
+            || metadata.encoding !== 'utf8') {
+            throw new Error(`Tool artifact metadata is invalid: ${artifactId}`);
+        }
+        const stats = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(contentPath);
+        if (!stats.isFile() || stats.isSymbolicLink() || stats.size !== metadata.bytes) {
+            throw new Error(`Tool artifact content does not match its metadata: ${artifactId}`);
+        }
+        const startByte = optionalInteger(args.startByte, 'startByte', 0) ?? 0;
+        const requestedLength = optionalInteger(args.length, 'length', 1);
+        if (startByte > metadata.bytes)
+            throw new Error(`startByte exceeds tool artifact size: ${metadata.bytes}`);
+        const length = Math.min(requestedLength ?? ARTIFACT_DEFAULT_PAGE_BYTES, metadata.bytes - startByte);
+        const verify = optionalBoolean(args.verify, 'verify') ?? false;
+        if (verify && sha256File(contentPath) !== metadata.sha256) {
+            throw new Error(`Tool artifact failed SHA-256 verification: ${artifactId}`);
+        }
+        const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_2___default().openSync(contentPath, 'r');
+        try {
+            const buffer = Buffer.alloc(length);
+            const bytesRead = length > 0 ? node_fs__WEBPACK_IMPORTED_MODULE_2___default().readSync(descriptor, buffer, 0, length, startByte) : 0;
+            const endByte = startByte + bytesRead;
+            return {
+                artifactId,
+                stream: metadata.stream,
+                encoding: metadata.encoding,
+                sha256: metadata.sha256,
+                startByte,
+                endByte,
+                totalBytes: metadata.bytes,
+                content: buffer.subarray(0, bytesRead).toString('utf8'),
+                contentEncoding: 'utf8-lossy',
+                dataBase64: buffer.subarray(0, bytesRead).toString('base64'),
+                integrityVerified: verify,
+                nextByte: endByte < metadata.bytes ? endByte : null,
+            };
+        }
+        finally {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().closeSync(descriptor);
+        }
+    }
+    sessionDir(sessionId) {
+        if (!/^[a-zA-Z0-9._-]+$/.test(sessionId))
+            throw new Error('Agent session id is invalid');
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.root, sessionId);
+    }
+}
+class AgentToolArtifactCapture {
+    invocationId;
+    stream;
+    artifactId = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().randomUUID();
+    temporaryPath;
+    finalPath;
+    metadataPath;
+    descriptor;
+    digest = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256');
+    previewChunks = [];
+    previewBytes = 0;
+    totalBytes = 0;
+    closed = false;
+    descriptorOpen = true;
+    constructor(sessionDir, invocationId, stream) {
+        this.invocationId = invocationId;
+        this.stream = stream;
+        this.temporaryPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sessionDir, `${this.artifactId}.tmp`);
+        this.finalPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sessionDir, `${this.artifactId}.txt`);
+        this.metadataPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sessionDir, `${this.artifactId}.json`);
+        this.descriptor = node_fs__WEBPACK_IMPORTED_MODULE_2___default().openSync(this.temporaryPath, 'wx');
     }
     push(chunk) {
-        const remaining = this.limit - this.length;
+        if (this.closed)
+            return;
+        node_fs__WEBPACK_IMPORTED_MODULE_2___default().writeSync(this.descriptor, chunk);
+        this.digest.update(chunk);
+        this.totalBytes += chunk.length;
+        const remaining = SHELL_OUTPUT_PREVIEW_BYTES - this.previewBytes;
         if (remaining > 0) {
-            const kept = chunk.subarray(0, remaining);
-            this.chunks.push(kept);
-            this.length += kept.length;
-        }
-        if (chunk.length > remaining) {
-            this.truncated = true;
+            const preview = chunk.subarray(0, remaining);
+            this.previewChunks.push(preview);
+            this.previewBytes += preview.length;
         }
     }
-    text() {
-        return Buffer.concat(this.chunks).toString('utf8');
+    finish() {
+        if (this.closed)
+            throw new Error('Tool artifact capture is already closed');
+        try {
+            try {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().fsyncSync(this.descriptor);
+            }
+            finally {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().closeSync(this.descriptor);
+                this.descriptorOpen = false;
+            }
+            const preview = Buffer.concat(this.previewChunks).toString('utf8');
+            if (this.totalBytes <= SHELL_OUTPUT_PREVIEW_BYTES) {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(this.temporaryPath, { force: true });
+                this.closed = true;
+                return { preview };
+            }
+            const metadata = {
+                format: 'authority-agent-tool-artifact/v1',
+                artifactId: this.artifactId,
+                invocationId: this.invocationId,
+                stream: this.stream,
+                bytes: this.totalBytes,
+                sha256: this.digest.digest('hex'),
+                encoding: 'utf8',
+                createdAt: new Date().toISOString(),
+            };
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().renameSync(this.temporaryPath, this.finalPath);
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(this.metadataPath, `${JSON.stringify(metadata)}\n`);
+            this.closed = true;
+            return {
+                preview: `${preview}\n\n[Complete output is available through host_read_artifact: ${this.artifactId}]`,
+                artifact: {
+                    artifactId: metadata.artifactId,
+                    stream: metadata.stream,
+                    bytes: metadata.bytes,
+                    sha256: metadata.sha256,
+                    encoding: metadata.encoding,
+                },
+            };
+        }
+        catch (error) {
+            this.closed = true;
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(this.temporaryPath, { force: true });
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(this.finalPath, { force: true });
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(this.metadataPath, { force: true });
+            throw error;
+        }
+    }
+    discard() {
+        if (this.closed)
+            return;
+        this.closed = true;
+        try {
+            if (this.descriptorOpen) {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().closeSync(this.descriptor);
+                this.descriptorOpen = false;
+            }
+        }
+        finally {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(this.temporaryPath, { force: true });
+        }
+    }
+}
+function sha256File(filePath) {
+    const digest = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256');
+    const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_2___default().openSync(filePath, 'r');
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    try {
+        while (true) {
+            const bytesRead = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readSync(descriptor, buffer, 0, buffer.length, null);
+            if (bytesRead === 0)
+                break;
+            digest.update(buffer.subarray(0, bytesRead));
+        }
+        return digest.digest('hex');
+    }
+    finally {
+        node_fs__WEBPACK_IMPORTED_MODULE_2___default().closeSync(descriptor);
     }
 }
 function terminateProcessTree(child) {
@@ -6026,29 +6190,29 @@ function resolveSafeWritePath(root, input) {
     const realRoot = assertWorkspaceRoot(root);
     let current = realRoot;
     for (const segment of segments.slice(0, -1)) {
-        current = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, segment);
+        current = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, segment);
         try {
-            node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(current);
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().mkdirSync(current);
         }
         catch (error) {
             if (!isFsError(error, 'EEXIST')) {
                 throw error;
             }
         }
-        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(current);
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(current);
         if (!stat.isDirectory() || stat.isSymbolicLink()) {
             throw new Error(`Workspace path traverses a non-directory: ${relativePath}`);
         }
         assertContainedDirectory(realRoot, current);
     }
-    const absolutePath = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(realRoot, ...segments);
+    const absolutePath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(realRoot, ...segments);
     try {
-        const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
+        const stat = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(absolutePath);
         if (stat.isSymbolicLink() || !stat.isFile()) {
             throw new Error(`Workspace write target is not a regular file: ${relativePath}`);
         }
-        const realTarget = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
-        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(realRoot, realTarget) || !samePath(absolutePath, realTarget)) {
+        const realTarget = node_fs__WEBPACK_IMPORTED_MODULE_2___default().realpathSync.native(absolutePath);
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.isPathInside)(realRoot, realTarget) || !samePath(absolutePath, realTarget)) {
             throw new Error(`Workspace write target escapes its root: ${relativePath}`);
         }
     }
@@ -6060,34 +6224,34 @@ function resolveSafeWritePath(root, input) {
     return { absolutePath, relativePath };
 }
 function readTextFile(root, absolutePath, logicalPath) {
-    const before = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
-    if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_FILE_BYTES) {
+    const before = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(absolutePath);
+    if (!before.isFile() || before.isSymbolicLink()) {
         throw new Error(`Not a readable text file: ${logicalPath}`);
     }
     const realRoot = assertWorkspaceRoot(root);
-    const realTarget = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
-    if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(realRoot, realTarget) || !samePath(absolutePath, realTarget)) {
+    const realTarget = node_fs__WEBPACK_IMPORTED_MODULE_2___default().realpathSync.native(absolutePath);
+    if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.isPathInside)(realRoot, realTarget) || !samePath(absolutePath, realTarget)) {
         throw new Error(`Workspace file escapes its root: ${logicalPath}`);
     }
-    const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(absolutePath, (node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_RDONLY | ((node_fs__WEBPACK_IMPORTED_MODULE_1___default().constants).O_NOFOLLOW ?? 0));
+    const descriptor = node_fs__WEBPACK_IMPORTED_MODULE_2___default().openSync(absolutePath, (node_fs__WEBPACK_IMPORTED_MODULE_2___default().constants).O_RDONLY | ((node_fs__WEBPACK_IMPORTED_MODULE_2___default().constants).O_NOFOLLOW ?? 0));
     try {
-        const opened = node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor);
+        const opened = node_fs__WEBPACK_IMPORTED_MODULE_2___default().fstatSync(descriptor);
         assertSameFile(before, opened, logicalPath);
-        const content = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(descriptor, 'utf8');
-        assertSameFile(opened, node_fs__WEBPACK_IMPORTED_MODULE_1___default().fstatSync(descriptor), logicalPath);
+        const content = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(descriptor, 'utf8');
+        assertSameFile(opened, node_fs__WEBPACK_IMPORTED_MODULE_2___default().fstatSync(descriptor), logicalPath);
         if (content.includes('\0')) {
             throw new Error(`File is not UTF-8 text: ${logicalPath}`);
         }
         return content;
     }
     finally {
-        node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+        node_fs__WEBPACK_IMPORTED_MODULE_2___default().closeSync(descriptor);
     }
 }
 function assertContainedDirectory(root, absolutePath) {
-    const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolutePath);
-    const real = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || !(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(root, real) || !samePath(absolutePath, real)) {
+    const stat = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(absolutePath);
+    const real = node_fs__WEBPACK_IMPORTED_MODULE_2___default().realpathSync.native(absolutePath);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.isPathInside)(root, real) || !samePath(absolutePath, real)) {
         throw new Error(`Workspace directory escapes its root: ${absolutePath}`);
     }
 }
@@ -6103,27 +6267,27 @@ function assertSameFile(before, after, logicalPath) {
 function resolveSafePath(root, input, allowRoot) {
     const relativePath = normalizeRelativePath(input, allowRoot);
     const realRoot = assertWorkspaceRoot(root);
-    const absolutePath = relativePath === '.' ? realRoot : node_path__WEBPACK_IMPORTED_MODULE_2___default().join(realRoot, ...relativePath.split('/'));
+    const absolutePath = relativePath === '.' ? realRoot : node_path__WEBPACK_IMPORTED_MODULE_3___default().join(realRoot, ...relativePath.split('/'));
     let current = realRoot;
     if (relativePath !== '.') {
         for (const segment of relativePath.split('/')) {
-            current = node_path__WEBPACK_IMPORTED_MODULE_2___default().join(current, segment);
-            const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(current);
+            current = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(current, segment);
+            const stat = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(current);
             if (stat.isSymbolicLink()) {
                 throw new Error(`Workspace path traverses a symbolic link: ${relativePath}`);
             }
         }
     }
-    const real = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolutePath);
-    if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.isPathInside)(realRoot, real) || !samePath(absolutePath, real)) {
+    const real = node_fs__WEBPACK_IMPORTED_MODULE_2___default().realpathSync.native(absolutePath);
+    if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.isPathInside)(realRoot, real) || !samePath(absolutePath, real)) {
         throw new Error(`Workspace path escapes its root: ${relativePath}`);
     }
     return { absolutePath: real, relativePath };
 }
 function assertWorkspaceRoot(root) {
-    const absolute = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(root);
-    const stat = node_fs__WEBPACK_IMPORTED_MODULE_1___default().lstatSync(absolute);
-    const real = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync.native(absolute);
+    const absolute = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(root);
+    const stat = node_fs__WEBPACK_IMPORTED_MODULE_2___default().lstatSync(absolute);
+    const real = node_fs__WEBPACK_IMPORTED_MODULE_2___default().realpathSync.native(absolute);
     if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(absolute, real)) {
         throw new Error(`Workspace root is not a real directory: ${root}`);
     }
@@ -6131,10 +6295,10 @@ function assertWorkspaceRoot(root) {
 }
 function normalizeRelativePath(input, allowRoot) {
     const raw = requiredString(input, 'path', 2_000).replace(/\\/g, '/');
-    if (raw.includes('\0') || node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.isAbsolute(raw) || node_path__WEBPACK_IMPORTED_MODULE_2___default().win32.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw)) {
+    if (raw.includes('\0') || node_path__WEBPACK_IMPORTED_MODULE_3___default().posix.isAbsolute(raw) || node_path__WEBPACK_IMPORTED_MODULE_3___default().win32.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw)) {
         throw new Error(`Invalid workspace path: ${input}`);
     }
-    const normalized = node_path__WEBPACK_IMPORTED_MODULE_2___default().posix.normalize(raw).replace(/^\.\//, '').replace(/\/$/, '');
+    const normalized = node_path__WEBPACK_IMPORTED_MODULE_3___default().posix.normalize(raw).replace(/^\.\//, '').replace(/\/$/, '');
     if (!normalized || normalized === '.') {
         if (allowRoot) {
             return '.';
@@ -6157,8 +6321,10 @@ function requiredString(value, label, maxLength, trim = true) {
         throw new Error(`${label} must be a string`);
     }
     const result = trim ? value.trim() : value;
-    if ((trim && !result) || result.length > maxLength) {
-        throw new Error(`${label} must contain between ${trim ? 1 : 0} and ${maxLength} characters`);
+    if ((trim && !result) || (maxLength !== undefined && result.length > maxLength)) {
+        throw new Error(maxLength === undefined
+            ? `${label} must ${trim ? 'not be empty' : 'be a string'}`
+            : `${label} must contain between ${trim ? 1 : 0} and ${maxLength} characters`);
     }
     return result;
 }
@@ -6174,7 +6340,7 @@ function optionalBoolean(value, label) {
     }
     return value;
 }
-function optionalInteger(value, label, minimum, maximum) {
+function optionalInteger(value, label, minimum, maximum = Number.MAX_SAFE_INTEGER) {
     if (value === undefined || value === null) {
         return null;
     }
@@ -6210,8 +6376,8 @@ function joinLogical(parent, child) {
 }
 function samePath(left, right) {
     return process.platform === 'win32'
-        ? node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(left).toLowerCase() === node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(right).toLowerCase()
-        : node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(left) === node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(right);
+        ? node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(left).toLowerCase() === node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(right).toLowerCase()
+        : node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(left) === node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(right);
 }
 function isFsError(error, code) {
     return error instanceof Error && error.code === code;
@@ -6236,12 +6402,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   AgentLlmClient: () => (/* binding */ AgentLlmClient)
 /* harmony export */ });
-const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
-const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
-const MAX_ASSISTANT_CONTENT_CHARS = 256 * 1024;
-const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
-const MAX_TOTAL_TOOL_ARGUMENT_CHARS = 1024 * 1024;
-const MAX_USAGE_CHARS = 16 * 1024;
 class AgentLlmClient {
     fetchImpl;
     constructor(fetchImpl = fetch) {
@@ -6256,7 +6416,9 @@ class AgentLlmClient {
         else {
             request.signal.addEventListener('abort', forwardAbort, { once: true });
         }
-        const timer = setTimeout(() => controller.abort(new Error(`LLM request timed out after ${profile.timeoutMs} ms`)), profile.timeoutMs);
+        const timer = profile.timeoutMs === null
+            ? null
+            : setTimeout(() => controller.abort(new Error(`LLM request timed out after ${profile.timeoutMs} ms`)), profile.timeoutMs);
         try {
             throwIfAborted(controller.signal);
             const body = JSON.stringify({
@@ -6265,11 +6427,10 @@ class AgentLlmClient {
                 stream: false,
                 ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: 'auto' } : {}),
                 ...(profile.temperature === null ? {} : { temperature: profile.temperature }),
-                ...(profile.maxOutputTokens === null ? {} : { max_tokens: profile.maxOutputTokens }),
+                ...((request.maxOutputTokens ?? profile.maxOutputTokens) === null
+                    ? {}
+                    : { max_tokens: request.maxOutputTokens ?? profile.maxOutputTokens }),
             });
-            if (Buffer.byteLength(body, 'utf8') > MAX_REQUEST_BYTES) {
-                throw new Error('LLM request exceeded the 8 MB limit');
-            }
             const response = await this.fetchImpl(completionUrl(profile.baseUrl), {
                 method: 'POST',
                 headers: {
@@ -6279,7 +6440,7 @@ class AgentLlmClient {
                 body,
                 signal: controller.signal,
             });
-            const text = await readLimitedText(response);
+            const text = await response.text();
             throwIfAborted(controller.signal);
             if (!response.ok) {
                 throw new Error(`LLM request failed (${response.status}): ${redact(text.slice(0, 4_000), profile.apiKey)}`);
@@ -6295,34 +6456,10 @@ class AgentLlmClient {
             throw error;
         }
         finally {
-            clearTimeout(timer);
+            if (timer)
+                clearTimeout(timer);
             request.signal.removeEventListener('abort', forwardAbort);
         }
-    }
-}
-async function readLimitedText(response) {
-    const declaredLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-        throw new Error('LLM response exceeded the 10 MB limit');
-    }
-    if (!response.body) {
-        return '';
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let total = 0;
-    let text = '';
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-            return text + decoder.decode();
-        }
-        total += value.byteLength;
-        if (total > MAX_RESPONSE_BYTES) {
-            await reader.cancel();
-            throw new Error('LLM response exceeded the 10 MB limit');
-        }
-        text += decoder.decode(value, { stream: true });
     }
 }
 function redact(value, secret) {
@@ -6371,9 +6508,6 @@ function parseCompletion(text, responseRequestId) {
         throw new Error('LLM response did not include an assistant message');
     }
     const content = message.content === null || typeof message.content === 'string' ? message.content : null;
-    if (content !== null && content.length > MAX_ASSISTANT_CONTENT_CHARS) {
-        throw new Error('LLM assistant content exceeded the 256 KB limit');
-    }
     const toolCalls = message.tool_calls === undefined ? undefined : parseToolCalls(message.tool_calls);
     if ((content === null || !content.trim()) && !toolCalls?.length) {
         throw new Error('LLM assistant message was empty');
@@ -6386,7 +6520,7 @@ function parseCompletion(text, responseRequestId) {
             ...(toolCalls?.length ? { toolCalls } : {}),
         },
         finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
-        ...(payload.usage === undefined ? {} : { usage: boundedUsage(payload.usage) }),
+        ...(payload.usage === undefined ? {} : { usage: payload.usage }),
         ...(requestId ? { providerRequestId: requestId } : {}),
     };
 }
@@ -6395,11 +6529,10 @@ function providerRequestId(headerValue, payloadValue) {
     return value && value.length <= 500 ? value : undefined;
 }
 function parseToolCalls(value) {
-    if (!Array.isArray(value) || value.length > 32) {
+    if (!Array.isArray(value)) {
         throw new Error('LLM response contained invalid tool calls');
     }
     const ids = new Set();
-    let totalArgumentChars = 0;
     return value.map((call, index) => {
         const id = call?.id;
         const name = call?.function?.name;
@@ -6411,24 +6544,12 @@ function parseToolCalls(value) {
             || ids.has(id)
             || typeof name !== 'string'
             || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)
-            || typeof args !== 'string'
-            || args.length > MAX_TOOL_ARGUMENT_CHARS) {
+            || typeof args !== 'string') {
             throw new Error(`LLM response contained an invalid tool call at index ${index}`);
-        }
-        totalArgumentChars += args.length;
-        if (totalArgumentChars > MAX_TOTAL_TOOL_ARGUMENT_CHARS) {
-            throw new Error('LLM response tool arguments exceeded the 1 MB combined limit');
         }
         ids.add(id);
         return { id, name, arguments: args };
     });
-}
-function boundedUsage(value) {
-    const serialized = JSON.stringify(value);
-    if (typeof serialized === 'string' && serialized.length <= MAX_USAGE_CHARS) {
-        return value;
-    }
-    return { truncated: true };
 }
 
 
@@ -6529,9 +6650,15 @@ class AgentProfileStoreService {
         const model = requiredText(input.model, 'LLM profile model', 200);
         const baseUrl = normalizeBaseUrl(input.baseUrl);
         const temperature = optionalNumber(input.temperature, 'LLM profile temperature', 0, 2);
-        const maxOutputTokens = optionalInteger(input.maxOutputTokens, 'LLM profile maxOutputTokens', 1, 1_000_000);
-        const timeoutMs = optionalInteger(input.timeoutMs, 'LLM profile timeoutMs', 1_000, 600_000) ?? 120_000;
+        const contextWindowTokens = positiveInteger(input.contextWindowTokens, 'LLM profile contextWindowTokens');
+        const maxOutputTokens = positiveInteger(input.maxOutputTokens, 'LLM profile maxOutputTokens');
+        if (maxOutputTokens >= contextWindowTokens) {
+            throw new Error('LLM profile maxOutputTokens must be smaller than contextWindowTokens');
+        }
         const existing = requestedId ? profiles.profiles.find(profile => profile.id === requestedId) : undefined;
+        const timeoutMs = input.timeoutMs === undefined
+            ? existing?.timeoutMs ?? null
+            : nullablePositiveInteger(input.timeoutMs, 'LLM profile timeoutMs');
         if (existing && input.apiKey === undefined && new URL(existing.baseUrl).origin !== new URL(baseUrl).origin) {
             throw new Error('LLM profile apiKey must be supplied or explicitly cleared when baseUrl origin changes');
         }
@@ -6550,6 +6677,7 @@ class AgentProfileStoreService {
             apiKeyMasked: maskSecret(apiKey),
             apiKeyFingerprint: fingerprintSecret(apiKey),
             temperature,
+            contextWindowTokens,
             maxOutputTokens,
             timeoutMs,
             createdAt: existing?.createdAt ?? timestamp,
@@ -6565,6 +6693,7 @@ class AgentProfileStoreService {
         if (value.format !== PROFILE_FORMAT || !Array.isArray(value.profiles)) {
             throw new Error('Invalid Agent LLM profile store');
         }
+        value.profiles = value.profiles.map(normalizeStoredProfile);
         return value;
     }
     getStoredProfile(profileId) {
@@ -6581,7 +6710,20 @@ class AgentProfileStoreService {
 }
 function publicProfile(profile) {
     const { apiKey: _apiKey, ...value } = profile;
-    return structuredClone(value);
+    return structuredClone({
+        ...value,
+        contextWindowTokens: value.contextWindowTokens ?? null,
+        maxOutputTokens: value.maxOutputTokens ?? null,
+        timeoutMs: value.timeoutMs ?? null,
+    });
+}
+function normalizeStoredProfile(profile) {
+    return {
+        ...profile,
+        contextWindowTokens: profile.contextWindowTokens ?? null,
+        maxOutputTokens: profile.maxOutputTokens ?? null,
+        timeoutMs: profile.timeoutMs ?? null,
+    };
 }
 function normalizeBaseUrl(value) {
     const raw = requiredText(value, 'LLM profile baseUrl', 2_000);
@@ -6628,6 +6770,17 @@ function optionalInteger(value, label, minimum, maximum) {
     }
     return result;
 }
+function positiveInteger(value, label) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+        throw new Error(`${label} must be a positive integer`);
+    }
+    return value;
+}
+function nullablePositiveInteger(value, label) {
+    if (value === null)
+        return null;
+    return positiveInteger(value, label);
+}
 function maskSecret(secret) {
     if (!secret) {
         return null;
@@ -6651,7 +6804,7 @@ function readJson(filePath, label) {
     }
 }
 function protectDirectory(dirPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
     if (process.platform !== 'win32') {
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
     }
@@ -6660,6 +6813,320 @@ function protectFile(filePath) {
     if (process.platform !== 'win32') {
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(filePath, 0o600);
     }
+}
+
+
+/***/ },
+
+/***/ "./src/services/agent-session-compaction.ts"
+/*!**************************************************!*\
+  !*** ./src/services/agent-session-compaction.ts ***!
+  \**************************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   estimateCompactedTokens: () => (/* binding */ estimateCompactedTokens),
+/* harmony export */   estimateRequestTokens: () => (/* binding */ estimateRequestTokens),
+/* harmony export */   estimateTextTokens: () => (/* binding */ estimateTextTokens),
+/* harmony export */   nextCompactionRequestChunk: () => (/* binding */ nextCompactionRequestChunk),
+/* harmony export */   prepareAgentCompaction: () => (/* binding */ prepareAgentCompaction),
+/* harmony export */   providerUsageTokens: () => (/* binding */ providerUsageTokens)
+/* harmony export */ });
+const SUMMARIZATION_SYSTEM_PROMPT = [
+    'You are a context summarization assistant.',
+    'Read the supplied Authority Agent conversation and produce only the structured checkpoint requested.',
+    'Do not continue the task, answer the user, or call tools.',
+].join(' ');
+const CREATE_SUMMARY_PROMPT = `Create a compact, loss-aware checkpoint that another Agent can use to continue the work.
+
+Use this exact structure:
+
+## Goal
+## Constraints & Preferences
+## Progress
+### Done
+### In Progress
+### Blocked
+## Key Decisions
+## Next Steps
+## Critical Context
+
+Preserve exact file paths, symbols, commands, identifiers, error messages, user decisions, unresolved tool outcomes, and verification status. Distinguish facts from assumptions. Be concise and do not repeat information.`;
+const UPDATE_SUMMARY_PROMPT = `Update the checkpoint in <previous-summary> with the new conversation segment.
+
+Keep the same structure. Preserve still-valid details, merge new progress and decisions, remove only information that is demonstrably obsolete, and keep exact file paths, symbols, commands, identifiers, error messages, user decisions, unresolved tool outcomes, and verification status. Output only the updated checkpoint.`;
+function prepareAgentCompaction(snapshot, run, messages, tools, profile, force = false) {
+    const contextWindowTokens = profile.contextWindowTokens;
+    const maxOutputTokens = profile.maxOutputTokens;
+    if (contextWindowTokens === null || maxOutputTokens === null) {
+        throw new Error('Agent LLM profile requires contextWindowTokens and maxOutputTokens');
+    }
+    const inputBudget = contextWindowTokens - maxOutputTokens;
+    if (inputBudget < 1)
+        throw new Error('Agent LLM profile has no usable input context');
+    const active = activeConversation(snapshot, run.ref);
+    const tokensBefore = estimateContextTokens(snapshot, active, messages, tools);
+    if (!force && tokensBefore <= inputBudget)
+        return null;
+    const sourceLeafEntryId = active.at(-1)?.id;
+    if (!sourceLeafEntryId) {
+        throw new Error('Agent context exceeds the configured window before any conversation can be compacted');
+    }
+    const latestCompaction = [...active].reverse().find(entry => entry.kind === 'compaction');
+    const visible = visibleConversation(active, latestCompaction);
+    const requiredReduction = Math.max(1, tokensBefore - inputBudget);
+    let removedTokens = 0;
+    let boundaryPathIndex = active.length;
+    let foundBoundary = false;
+    for (let index = 0; index < visible.length; index += 1) {
+        const item = visible[index];
+        const projected = projectEntry(item.entry);
+        if (projected)
+            removedTokens += estimateMessageTokens(projected);
+        const next = visible[index + 1];
+        if (removedTokens < requiredReduction || !next || !isPreferredBoundary(next.entry))
+            continue;
+        boundaryPathIndex = next.pathIndex;
+        foundBoundary = true;
+        break;
+    }
+    if (!foundBoundary && removedTokens < requiredReduction && latestCompaction && visible.length === 0) {
+        const previousSummary = latestCompaction.summary;
+        return {
+            runId: run.id,
+            ref: run.ref,
+            profileId: run.profileId,
+            sourceLeafEntryId,
+            sourceLastSequence: snapshot.lastSequence,
+            firstKeptEntryId: null,
+            retainedEntryIds: [],
+            retainedMessages: [],
+            sourceText: previousSummary,
+            tokensBefore,
+            contextWindowTokens,
+            maxOutputTokens,
+            summaryOutputTokens: summaryOutputBudget(contextWindowTokens, maxOutputTokens),
+            forced: force,
+        };
+    }
+    const firstKeptEntryId = boundaryPathIndex < active.length ? active[boundaryPathIndex].id : null;
+    const retainedEntries = active.slice(boundaryPathIndex);
+    const retainedEntryIds = retainedEntries.map(entry => entry.id);
+    const retainedMessages = retainedEntries.flatMap(entry => {
+        const message = projectEntry(entry);
+        return message ? [message] : [];
+    });
+    const messagesToSummarize = visible
+        .filter(item => item.pathIndex < boundaryPathIndex)
+        .flatMap(item => {
+        const message = projectEntry(item.entry);
+        return message ? [message] : [];
+    });
+    const previousSummary = latestCompaction?.summary;
+    const sourceText = serializeConversation(messagesToSummarize);
+    if (!sourceText && !previousSummary) {
+        throw new Error('Agent context exceeds the configured window, but no conversation prefix can be compacted');
+    }
+    return {
+        runId: run.id,
+        ref: run.ref,
+        profileId: run.profileId,
+        sourceLeafEntryId,
+        sourceLastSequence: snapshot.lastSequence,
+        firstKeptEntryId,
+        retainedEntryIds,
+        retainedMessages,
+        sourceText: sourceText || previousSummary,
+        ...(sourceText && previousSummary ? { previousSummary } : {}),
+        tokensBefore,
+        contextWindowTokens,
+        maxOutputTokens,
+        summaryOutputTokens: summaryOutputBudget(contextWindowTokens, maxOutputTokens),
+        forced: force,
+    };
+}
+function nextCompactionRequestChunk(plan, offset, previousSummary, options = {}) {
+    if (offset < 0 || offset >= plan.sourceText.length) {
+        throw new Error('Agent compaction source offset is outside the prepared conversation');
+    }
+    const summaryOutputTokens = options.summaryOutputTokens ?? plan.summaryOutputTokens;
+    if (!Number.isSafeInteger(summaryOutputTokens) || summaryOutputTokens < 1
+        || summaryOutputTokens >= plan.contextWindowTokens) {
+        throw new Error('Agent compaction output budget is invalid');
+    }
+    const inputBudget = plan.contextWindowTokens - summaryOutputTokens;
+    const available = plan.sourceText.length - offset;
+    const requestedChars = options.maxSourceChars === undefined
+        ? available
+        : Math.min(available, Math.max(1, Math.floor(options.maxSourceChars)));
+    const remaining = plan.sourceText.slice(offset, offset + requestedChars);
+    const createRequest = (segment) => {
+        const content = [
+            `<conversation>\n${segment}\n</conversation>`,
+            ...(previousSummary ? [`<previous-summary>\n${previousSummary}\n</previous-summary>`] : []),
+            previousSummary ? UPDATE_SUMMARY_PROMPT : CREATE_SUMMARY_PROMPT,
+        ].join('\n\n');
+        return [
+            { role: 'system', content: SUMMARIZATION_SYSTEM_PROMPT },
+            { role: 'user', content },
+        ];
+    };
+    const whole = createRequest(remaining);
+    if (estimateRequestTokens(whole, []) <= inputBudget) {
+        return { messages: whole, consumedChars: remaining.length };
+    }
+    let low = 1;
+    let high = remaining.length;
+    let best = 0;
+    while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const end = safeSliceEnd(remaining, middle);
+        const candidate = createRequest(remaining.slice(0, end));
+        if (estimateRequestTokens(candidate, []) <= inputBudget) {
+            best = end;
+            low = middle + 1;
+        }
+        else {
+            high = middle - 1;
+        }
+    }
+    if (best < 1) {
+        throw new Error('Agent context window is too small for the compaction prompt and configured summary output');
+    }
+    return { messages: createRequest(remaining.slice(0, best)), consumedChars: best };
+}
+function estimateCompactedTokens(plan, summary, tools, systemMessage) {
+    return estimateRequestTokens([
+        systemMessage,
+        { role: 'system', content: `Conversation summary:\n${summary}` },
+        ...plan.retainedMessages,
+    ], tools);
+}
+function estimateRequestTokens(messages, tools) {
+    return estimateTextTokens(safeJson({ messages, tools }));
+}
+function estimateTextTokens(value) {
+    let asciiChars = 0;
+    let otherTokens = 0;
+    for (const character of value) {
+        if (character.codePointAt(0) <= 0x7f)
+            asciiChars += 1;
+        else
+            otherTokens += 1;
+    }
+    return Math.ceil(asciiChars / 4) + otherTokens;
+}
+function providerUsageTokens(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return 0;
+    const usage = value;
+    const total = firstFinite(usage.total_tokens, usage.totalTokens, usage.total);
+    if (total > 0)
+        return Math.ceil(total);
+    return Math.ceil(firstFinite(usage.prompt_tokens, usage.input_tokens, usage.inputTokens, usage.input)
+        + firstFinite(usage.completion_tokens, usage.output_tokens, usage.outputTokens, usage.output)
+        + firstFinite(usage.cache_read_input_tokens, usage.cacheRead, usage.cache_read)
+        + firstFinite(usage.cache_creation_input_tokens, usage.cacheWrite, usage.cache_write));
+}
+function estimateContextTokens(snapshot, active, messages, tools) {
+    const local = estimateRequestTokens(messages, tools);
+    const visible = visibleConversation(active, [...active].reverse().find(entry => entry.kind === 'compaction'));
+    let assistantIndex = -1;
+    for (let index = visible.length - 1; index >= 0; index -= 1) {
+        const entry = visible[index].entry;
+        if (entry.kind === 'message' && entry.role === 'assistant' && entry.stepId !== undefined) {
+            assistantIndex = index;
+            break;
+        }
+    }
+    if (assistantIndex === -1)
+        return local;
+    const assistant = visible[assistantIndex].entry;
+    if (assistant.kind !== 'message' || !assistant.stepId)
+        return local;
+    const generation = [...snapshot.generations].reverse().find(item => item.stepId === assistant.stepId
+        && item.status === 'completed');
+    const provider = providerUsageTokens(generation?.usage);
+    if (provider <= 0)
+        return local;
+    const trailing = visible.slice(assistantIndex + 1).reduce((total, item) => {
+        const message = projectEntry(item.entry);
+        return total + (message ? estimateMessageTokens(message) : 0);
+    }, 0);
+    return Math.max(local, provider + trailing);
+}
+function activeConversation(snapshot, ref) {
+    const byId = new Map(snapshot.conversation.map(entry => [entry.id, entry]));
+    return (snapshot.activePaths[ref] ?? []).map(id => byId.get(id)).filter((entry) => Boolean(entry));
+}
+function visibleConversation(active, latestCompaction) {
+    if (!latestCompaction)
+        return active.map((entry, pathIndex) => ({ entry, pathIndex }));
+    const retained = new Set(latestCompaction.retainedEntryIds);
+    return active.flatMap((entry, pathIndex) => {
+        if (entry.kind === 'compaction')
+            return [];
+        if (entry.sequence <= latestCompaction.sequence && !retained.has(entry.id))
+            return [];
+        return [{ entry, pathIndex }];
+    });
+}
+function projectEntry(entry) {
+    if (entry.kind === 'compaction')
+        return null;
+    if (entry.kind === 'branch_summary') {
+        return { role: 'system', content: `Earlier branch summary:\n${entry.summary}` };
+    }
+    return {
+        role: entry.role,
+        content: entry.content,
+        ...(entry.toolCallId ? { toolCallId: entry.toolCallId } : {}),
+        ...(entry.toolCalls ? { toolCalls: entry.toolCalls } : {}),
+    };
+}
+function isPreferredBoundary(entry) {
+    return entry.kind === 'message' && (entry.role === 'user' || entry.role === 'assistant');
+}
+function estimateMessageTokens(message) {
+    return estimateTextTokens(safeJson(message));
+}
+function serializeConversation(messages) {
+    return messages.map(message => {
+        const details = [
+            `[${message.role}]`,
+            message.content ?? '',
+            ...(message.toolCalls?.length
+                ? [`Tool calls:\n${message.toolCalls.map(call => `${call.name}(${call.arguments}) [${call.id}]`).join('\n')}`]
+                : []),
+            ...(message.toolCallId ? [`Tool call id: ${message.toolCallId}`] : []),
+        ].filter(Boolean);
+        return details.join('\n');
+    }).join('\n\n');
+}
+function summaryOutputBudget(contextWindowTokens, maxOutputTokens) {
+    return Math.min(maxOutputTokens, Math.max(1, Math.floor(contextWindowTokens / 4)));
+}
+function safeSliceEnd(value, requested) {
+    if (requested >= value.length)
+        return value.length;
+    const code = value.charCodeAt(requested - 1);
+    return code >= 0xd800 && code <= 0xdbff ? requested - 1 : requested;
+}
+function safeJson(value) {
+    try {
+        return JSON.stringify(value) ?? 'null';
+    }
+    catch {
+        return String(value);
+    }
+}
+function firstFinite(...values) {
+    for (const value of values) {
+        if (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+            return value;
+    }
+    return 0;
 }
 
 
@@ -6961,7 +7428,6 @@ function applyEntry(projection, record) {
                 profileId: entry.profileId,
                 mode: entry.mode,
                 allowedTools: [...entry.allowedTools],
-                maxSteps: entry.maxSteps,
                 createdAt: entry.timestamp,
                 updatedAt: entry.timestamp,
             };
@@ -6984,8 +7450,6 @@ function applyEntry(projection, record) {
                 session.mode = entry.mode;
             if (entry.allowedTools !== undefined)
                 session.allowedTools = [...entry.allowedTools];
-            if (entry.maxSteps !== undefined)
-                session.maxSteps = entry.maxSteps;
             if (entry.archived === true)
                 session.archivedAt = entry.timestamp;
             if (entry.archived === false)
@@ -7054,9 +7518,35 @@ function applyEntry(projection, record) {
             if (entry.runId !== undefined && requireRun(projection, entry.runId).ref !== entry.ref) {
                 throw new Error(`Agent compaction run belongs to another ref: ${entry.runId}`);
             }
-            requireConversationEntry(projection, entry.firstKeptEntryId);
-            for (const retainedId of entry.retainedEntryIds)
-                requireConversationEntry(projection, retainedId);
+            const legacy = entry.sourceLeafEntryId === undefined;
+            if (legacy) {
+                // Original v1 checkpoints did not record their source snapshot and
+                // accepted any existing retained ids. Replay them exactly as written;
+                // all newly written checkpoints take the strict branch below.
+                if (entry.firstKeptEntryId === null) {
+                    throw new Error('Legacy Agent compaction boundary is required');
+                }
+                requireConversationEntry(projection, entry.firstKeptEntryId);
+                for (const retainedId of entry.retainedEntryIds)
+                    requireConversationEntry(projection, retainedId);
+            }
+            else {
+                if (entry.sourceLastSequence === undefined || entry.contextWindowTokens === undefined) {
+                    throw new Error('Agent compaction source metadata is incomplete');
+                }
+                if (entry.sourceLeafEntryId !== entry.parentId || entry.sourceLastSequence > projection.lastSequence) {
+                    throw new Error('Agent compaction source snapshot does not match the active ref');
+                }
+                const sourcePath = activePath(projection, entry.sourceLeafEntryId);
+                const boundary = entry.firstKeptEntryId === null ? sourcePath.length : sourcePath.indexOf(entry.firstKeptEntryId);
+                if (boundary === -1)
+                    throw new Error('Agent compaction boundary is not on the active ref path');
+                const expectedRetained = sourcePath.slice(boundary);
+                if (expectedRetained.length !== entry.retainedEntryIds.length
+                    || expectedRetained.some((id, index) => id !== entry.retainedEntryIds[index])) {
+                    throw new Error('Agent compaction retained entries must be the active path suffix');
+                }
+            }
             projection.conversation.set(entry.id, {
                 id: entry.id,
                 kind: 'compaction',
@@ -7065,9 +7555,13 @@ function applyEntry(projection, record) {
                 parentId: entry.parentId,
                 timestamp: entry.timestamp,
                 summary: entry.summary,
+                ...(entry.sourceLeafEntryId === undefined ? {} : { sourceLeafEntryId: entry.sourceLeafEntryId }),
+                ...(entry.sourceLastSequence === undefined ? {} : { sourceLastSequence: entry.sourceLastSequence }),
                 firstKeptEntryId: entry.firstKeptEntryId,
                 retainedEntryIds: [...entry.retainedEntryIds],
                 ...(entry.tokensBefore === undefined ? {} : { tokensBefore: entry.tokensBefore }),
+                ...(entry.tokensAfter === undefined ? {} : { tokensAfter: entry.tokensAfter }),
+                ...(entry.contextWindowTokens === undefined ? {} : { contextWindowTokens: entry.contextWindowTokens }),
                 ...(entry.runId === undefined ? {} : { runId: entry.runId }),
             });
             advanceRef(ref, entry.id, entry.timestamp);
@@ -7150,7 +7644,6 @@ function applyEntry(projection, record) {
                 profileId: entry.profileId,
                 mode: entry.mode,
                 allowedTools: [...entry.allowedTools],
-                maxSteps: entry.maxSteps,
                 stepCount: 0,
                 createdAt: entry.timestamp,
                 updatedAt: entry.timestamp,
@@ -7215,12 +7708,13 @@ function applyEntry(projection, record) {
                 throw new Error(`Agent step already exists: ${entry.stepId}`);
             if (activeStep(projection, entry.runId))
                 throw new Error(`Agent run already has an active step: ${entry.runId}`);
-            if (entry.index !== run.stepCount + 1 || entry.index > run.maxSteps)
+            if (entry.index !== run.stepCount + 1)
                 throw new Error(`Invalid Agent step index: ${entry.index}`);
             projection.steps.set(entry.stepId, {
                 id: entry.stepId,
                 runId: entry.runId,
                 index: entry.index,
+                kind: entry.kind ?? 'generation',
                 status: 'running',
                 createdAt: entry.timestamp,
                 updatedAt: entry.timestamp,
@@ -7366,7 +7860,8 @@ function applyEntry(projection, record) {
             if (invocation.execution !== 'browser' || entry.reason !== 'browser') {
                 throw new Error(`Only browser tools may wait for an external executor: ${entry.invocationId}`);
             }
-            invocation.deadlineAt = entry.deadlineAt;
+            if (entry.deadlineAt !== undefined)
+                invocation.deadlineAt = entry.deadlineAt;
             invocation.updatedAt = entry.timestamp;
             const run = requireRunStatus(projection, invocation.runId, ['running']);
             run.status = 'waiting_tool';
@@ -7733,9 +8228,15 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-session-runtime-support.js */ "./src/services/agent-session-runtime-support.ts");
+/* harmony import */ var _agent_session_compaction_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./agent-session-compaction.js */ "./src/services/agent-session-compaction.ts");
+/* harmony import */ var _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./agent-session-runtime-support.js */ "./src/services/agent-session-runtime-support.ts");
 
 
+
+function isContextOverflowError(error) {
+    return /context(?: length| window)|maximum context|prompt (?:is )?too long|too many (?:input )?tokens|tokens?.*(?:exceed|overflow)/i
+        .test((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.errorMessage)(error));
+}
 /**
  * Executes one durable Run. Scheduling, writer ownership, timers and public
  * commands stay in the runtime coordinator; this class owns the model/tool
@@ -7764,7 +8265,7 @@ class AgentSessionRunExecutor {
     }
     async execute(sessionId, runId, signal) {
         await this.host.perform(sessionId, writer => {
-            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(writer.snapshot(), runId);
             if (run.status === 'queued') {
                 this.host.append(writer, {
                     id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
@@ -7774,16 +8275,25 @@ class AgentSessionRunExecutor {
                 });
             }
         });
+        let forceCompaction = false;
+        let lastOverflowEstimate = null;
         while (!signal.aborted && !this.host.isStopping()) {
             const snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
-            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
             if (run.status !== 'running')
                 return;
-            const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(snapshot, runId);
+            const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.activeStep)(snapshot, runId);
             if (step) {
                 const shouldContinue = await this.continueStep(sessionId, runId, step.id, signal);
                 if (!shouldContinue)
                     return;
+                continue;
+            }
+            const compaction = await this.host.perform(sessionId, writer => this.prepareCompaction(writer, runId, forceCompaction));
+            if (compaction) {
+                if (!await this.executeCompaction(sessionId, runId, compaction, signal))
+                    return;
+                forceCompaction = false;
                 continue;
             }
             const prepared = await this.host.perform(sessionId, writer => this.prepareGeneration(writer, runId));
@@ -7798,6 +8308,30 @@ class AgentSessionRunExecutor {
                 });
             }
             catch (error) {
+                if (!signal.aborted && isContextOverflowError(error)) {
+                    const overflowEstimate = (0,_agent_session_compaction_js__WEBPACK_IMPORTED_MODULE_1__.estimateRequestTokens)(prepared.messages, prepared.tools);
+                    await this.host.perform(sessionId, writer => {
+                        this.finishContextOverflowGeneration(writer, runId, prepared, error);
+                    });
+                    if (lastOverflowEstimate !== null && overflowEstimate >= lastOverflowEstimate) {
+                        await this.host.perform(sessionId, writer => {
+                            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(writer.snapshot(), runId);
+                            if (run.status === 'running') {
+                                this.host.append(writer, {
+                                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                                    type: 'run.suspended',
+                                    timestamp: this.host.now(),
+                                    runId,
+                                    reason: 'Provider still rejected the context after compaction and the request did not become smaller',
+                                });
+                            }
+                        });
+                        return;
+                    }
+                    lastOverflowEstimate = overflowEstimate;
+                    forceCompaction = true;
+                    continue;
+                }
                 await this.host.perform(sessionId, writer => {
                     this.finishGenerationFailure(writer, runId, prepared, error, signal);
                 });
@@ -7808,7 +8342,7 @@ class AgentSessionRunExecutor {
                 return;
         }
         await this.host.perform(sessionId, writer => {
-            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(writer.snapshot(), runId);
             if (run.status === 'cancelling') {
                 this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
             }
@@ -7817,18 +8351,370 @@ class AgentSessionRunExecutor {
             }
         });
     }
+    prepareCompaction(writer, runId, force) {
+        this.consumeSteeringMessages(writer, runId);
+        const snapshot = writer.snapshot();
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
+        if (run.status !== 'running')
+            return null;
+        const catalog = this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId);
+        const availableIds = new Set(catalog.map(tool => tool.id));
+        if (run.allowedTools.some(id => !availableIds.has(id)))
+            return null;
+        const descriptors = catalog.filter(tool => run.allowedTools.includes(tool.id)
+            && (run.mode !== 'plan' || (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.isPlanSafeTool)(tool)));
+        const mapped = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.mapLlmTools)(descriptors);
+        const messages = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.conversationMessages)(snapshot, run);
+        const plan = (0,_agent_session_compaction_js__WEBPACK_IMPORTED_MODULE_1__.prepareAgentCompaction)(snapshot, run, messages, mapped.definitions, this.profileStore.getProfileForRequest(run.profileId), force);
+        if (!plan)
+            return null;
+        const stepId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'step.started',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            index: run.stepCount + 1,
+            kind: 'compaction',
+        });
+        return {
+            plan,
+            stepId,
+            tools: mapped.definitions,
+            systemMessage: messages[0],
+        };
+    }
+    async executeCompaction(sessionId, runId, prepared, signal) {
+        const profile = this.profileStore.getProfileForRequest(prepared.plan.profileId);
+        let offset = 0;
+        let summary = prepared.plan.previousSummary;
+        let attempt = 0;
+        let maxSourceChars;
+        let summaryOutputTokens = prepared.plan.summaryOutputTokens;
+        while (offset < prepared.plan.sourceText.length) {
+            let chunk;
+            try {
+                chunk = (0,_agent_session_compaction_js__WEBPACK_IMPORTED_MODULE_1__.nextCompactionRequestChunk)(prepared.plan, offset, summary, {
+                    ...(maxSourceChars === undefined ? {} : { maxSourceChars }),
+                    summaryOutputTokens,
+                });
+            }
+            catch (error) {
+                await this.host.perform(sessionId, writer => {
+                    this.finishCompactionStepFailure(writer, runId, prepared.stepId, error, signal);
+                });
+                return false;
+            }
+            const generationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
+            attempt += 1;
+            const started = await this.host.perform(sessionId, writer => {
+                const snapshot = writer.snapshot();
+                const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
+                const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.activeStep)(snapshot, runId);
+                const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRef)(snapshot, prepared.plan.ref);
+                if (run.status !== 'running' || step?.id !== prepared.stepId)
+                    return false;
+                if (ref.leafEntryId !== prepared.plan.sourceLeafEntryId) {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'step.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        outcome: 'interrupted',
+                        error: 'Conversation changed while context compaction was being prepared',
+                    });
+                    return false;
+                }
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'generation.started',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: prepared.stepId,
+                    generationId,
+                    attempt,
+                });
+                return true;
+            });
+            if (!started)
+                return true;
+            let completion;
+            try {
+                completion = await this.requestCompletion(profile, {
+                    messages: chunk.messages,
+                    tools: [],
+                    signal,
+                    maxOutputTokens: summaryOutputTokens,
+                });
+                if (!completion.message.content?.trim() || completion.message.toolCalls?.length) {
+                    throw new Error('Context summarization returned no usable summary');
+                }
+            }
+            catch (error) {
+                if (!signal.aborted && isContextOverflowError(error)) {
+                    await this.host.perform(sessionId, writer => {
+                        this.finishCompactionAttemptFailure(writer, runId, prepared.stepId, generationId, error, signal);
+                    });
+                    if (chunk.consumedChars > 1) {
+                        // Provider tokenization is authoritative. Converge by
+                        // monotonically shrinking this source slice instead of
+                        // relying on a fixed retry count or tokenizer guess.
+                        maxSourceChars = Math.max(1, Math.floor(chunk.consumedChars / 2));
+                        continue;
+                    }
+                    if (summaryOutputTokens > 1) {
+                        // If even one source character overflows, progressively
+                        // release reserved output space and retry from the same
+                        // durable offset. This also converges to a one-token floor.
+                        summaryOutputTokens = Math.max(1, Math.floor(summaryOutputTokens / 2));
+                        maxSourceChars = 1;
+                        continue;
+                    }
+                    await this.host.perform(sessionId, writer => {
+                        this.finishCompactionStepFailure(writer, runId, prepared.stepId, error, signal);
+                    });
+                    return false;
+                }
+                await this.host.perform(sessionId, writer => {
+                    this.finishCompactionFailure(writer, runId, prepared.stepId, generationId, error, signal);
+                });
+                return false;
+            }
+            const accepted = await this.host.perform(sessionId, writer => {
+                const snapshot = writer.snapshot();
+                const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
+                const generation = snapshot.generations.find(item => item.id === generationId);
+                if (!generation || generation.status !== 'running')
+                    return false;
+                if (run.status === 'cancelling') {
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'generation.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        generationId,
+                        outcome: 'cancelled',
+                        providerRequestState: 'response_received',
+                        ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                        error: 'Context summary arrived after cancellation was requested',
+                    });
+                    this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
+                    return false;
+                }
+                if (run.status !== 'running')
+                    return false;
+                if (this.host.isStopping()) {
+                    const message = 'Context summary arrived after the Agent host began stopping';
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'generation.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        generationId,
+                        outcome: 'interrupted',
+                        providerRequestState: 'response_received',
+                        ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                        error: message,
+                    });
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'step.finished',
+                        timestamp: this.host.now(),
+                        runId,
+                        stepId: prepared.stepId,
+                        outcome: 'interrupted',
+                        error: message,
+                    });
+                    this.host.append(writer, {
+                        id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                        type: 'run.suspended',
+                        timestamp: this.host.now(),
+                        runId,
+                        reason: `${message}; resume explicitly to generate a fresh checkpoint`,
+                    });
+                    return false;
+                }
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'generation.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: prepared.stepId,
+                    generationId,
+                    outcome: 'completed',
+                    providerRequestState: 'response_received',
+                    ...(completion.providerRequestId ? { providerRequestId: completion.providerRequestId } : {}),
+                    finishReason: completion.finishReason,
+                    ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+                });
+                return true;
+            });
+            if (!accepted)
+                return false;
+            summary = completion.message.content.trim();
+            offset += chunk.consumedChars;
+            maxSourceChars = undefined;
+        }
+        if (!summary)
+            throw new Error('Agent context compaction produced no summary');
+        return await this.host.perform(sessionId, writer => {
+            const snapshot = writer.snapshot();
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
+            const step = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.activeStep)(snapshot, runId);
+            const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRef)(snapshot, prepared.plan.ref);
+            if (run.status !== 'running' || step?.id !== prepared.stepId)
+                return false;
+            if (ref.leafEntryId !== prepared.plan.sourceLeafEntryId) {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'step.finished',
+                    timestamp: this.host.now(),
+                    runId,
+                    stepId: prepared.stepId,
+                    outcome: 'interrupted',
+                    error: 'Conversation changed before the context summary could be committed',
+                });
+                return true;
+            }
+            const tokensAfter = (0,_agent_session_compaction_js__WEBPACK_IMPORTED_MODULE_1__.estimateCompactedTokens)(prepared.plan, summary, prepared.tools, prepared.systemMessage);
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'conversation.compacted',
+                timestamp: this.host.now(),
+                ref: prepared.plan.ref,
+                parentId: prepared.plan.sourceLeafEntryId,
+                summary,
+                sourceLeafEntryId: prepared.plan.sourceLeafEntryId,
+                sourceLastSequence: prepared.plan.sourceLastSequence,
+                firstKeptEntryId: prepared.plan.firstKeptEntryId,
+                retainedEntryIds: prepared.plan.retainedEntryIds,
+                tokensBefore: prepared.plan.tokensBefore,
+                tokensAfter,
+                contextWindowTokens: prepared.plan.contextWindowTokens,
+                runId,
+            });
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'step.finished',
+                timestamp: this.host.now(),
+                runId,
+                stepId: prepared.stepId,
+                outcome: 'completed',
+                finishReason: 'context_compacted',
+            });
+            const inputBudget = prepared.plan.contextWindowTokens - prepared.plan.maxOutputTokens;
+            if (tokensAfter > inputBudget && tokensAfter >= prepared.plan.tokensBefore) {
+                this.host.append(writer, {
+                    id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                    type: 'run.suspended',
+                    timestamp: this.host.now(),
+                    runId,
+                    reason: 'Context compaction could not reduce the request enough to fit the configured model window',
+                });
+                return false;
+            }
+            return true;
+        });
+    }
+    finishCompactionFailure(writer, runId, stepId, generationId, error, signal) {
+        this.finishCompactionAttemptFailure(writer, runId, stepId, generationId, error, signal);
+        this.finishCompactionStepFailure(writer, runId, stepId, error, signal);
+    }
+    finishCompactionAttemptFailure(writer, runId, stepId, generationId, error, signal) {
+        const snapshot = writer.snapshot();
+        const generation = snapshot.generations.find(item => item.id === generationId);
+        if (!generation || generation.status !== 'running')
+            return;
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
+        const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.errorMessage)(error);
+        const cancelled = run.status === 'cancelling' || signal.aborted;
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'generation.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            generationId,
+            outcome: cancelled ? 'cancelled' : ((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.isTimeoutMessage)(message) ? 'timed_out' : 'failed'),
+            providerRequestState: 'sent_or_unknown',
+            error: message,
+        });
+    }
+    finishCompactionStepFailure(writer, runId, stepId, error, signal) {
+        const snapshot = writer.snapshot();
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
+        const step = snapshot.steps.find(item => item.id === stepId);
+        if (!step || step.status !== 'running')
+            return;
+        const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.errorMessage)(error);
+        const cancelled = run.status === 'cancelling' || signal.aborted;
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'step.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId,
+            outcome: cancelled ? 'cancelled' : 'failed',
+            error: message,
+        });
+        if (run.status === 'cancelling') {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.finished',
+                timestamp: this.host.now(),
+                runId,
+                outcome: 'cancelled',
+                error: 'Cancelled by user',
+            });
+        }
+        else {
+            this.host.append(writer, {
+                id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+                type: 'run.suspended',
+                timestamp: this.host.now(),
+                runId,
+                reason: `Context summarization failed without altering conversation history: ${message}`,
+            });
+        }
+    }
+    finishContextOverflowGeneration(writer, runId, prepared, error) {
+        const snapshot = writer.snapshot();
+        const generation = snapshot.generations.find(item => item.id === prepared.generationId);
+        if (!generation || generation.status !== 'running')
+            return;
+        const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.errorMessage)(error);
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'generation.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId: prepared.stepId,
+            generationId: prepared.generationId,
+            outcome: 'failed',
+            providerRequestState: 'sent_or_unknown',
+            error: message,
+        });
+        this.host.append(writer, {
+            id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
+            type: 'step.finished',
+            timestamp: this.host.now(),
+            runId,
+            stepId: prepared.stepId,
+            outcome: 'failed',
+            finishReason: 'context_overflow',
+            error: message,
+        });
+    }
     prepareGeneration(writer, runId) {
         this.consumeSteeringMessages(writer, runId);
         let snapshot = writer.snapshot();
-        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
         if (run.status !== 'running')
             return null;
-        if (run.stepCount >= run.maxSteps) {
-            const nextRunId = this.host.finishRunAndStartFollowUp(writer, runId, 'failed', undefined, `Agent reached the ${run.maxSteps} step limit`);
-            if (nextRunId)
-                queueMicrotask(() => this.host.enqueue(snapshot.session.id, nextRunId));
-            return null;
-        }
         const catalog = this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId);
         const availableIds = new Set(catalog.map(tool => tool.id));
         const missing = run.allowedTools.filter(id => !availableIds.has(id));
@@ -7843,7 +8729,7 @@ class AgentSessionRunExecutor {
             return null;
         }
         const descriptors = catalog.filter(tool => run.allowedTools.includes(tool.id)
-            && (run.mode !== 'plan' || (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isPlanSafeTool)(tool)));
+            && (run.mode !== 'plan' || (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.isPlanSafeTool)(tool)));
         const stepId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         const generationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         this.host.append(writer, {
@@ -7853,6 +8739,7 @@ class AgentSessionRunExecutor {
             runId,
             stepId,
             index: run.stepCount + 1,
+            kind: 'generation',
         });
         this.host.append(writer, {
             id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
@@ -7866,15 +8753,15 @@ class AgentSessionRunExecutor {
         snapshot = writer.snapshot();
         return {
             profileId: run.profileId,
-            messages: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.conversationMessages)(snapshot, run),
-            tools: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.mapLlmTools)(descriptors).definitions,
+            messages: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.conversationMessages)(snapshot, run),
+            tools: (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.mapLlmTools)(descriptors).definitions,
             stepId,
             generationId,
         };
     }
     acceptCompletion(writer, runId, prepared, completion) {
         const snapshot = writer.snapshot();
-        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
         const generation = snapshot.generations.find(item => item.id === prepared.generationId);
         if (!generation || generation.status !== 'running')
             return false;
@@ -7941,7 +8828,7 @@ class AgentSessionRunExecutor {
             finishReason: completion.finishReason,
             ...(completion.usage === undefined ? {} : { usage: completion.usage }),
         });
-        const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRef)(writer.snapshot(), run.ref);
+        const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRef)(writer.snapshot(), run.ref);
         this.host.append(writer, {
             id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
             type: 'conversation.message',
@@ -7961,8 +8848,8 @@ class AgentSessionRunExecutor {
         const generation = snapshot.generations.find(item => item.id === prepared.generationId);
         if (!generation || generation.status !== 'running')
             return;
-        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
-        const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.errorMessage)(error);
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
+        const message = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.errorMessage)(error);
         const cancelled = run.status === 'cancelling' || signal.aborted;
         const stopping = this.host.isStopping();
         this.host.append(writer, {
@@ -7972,7 +8859,7 @@ class AgentSessionRunExecutor {
             runId,
             stepId: prepared.stepId,
             generationId: prepared.generationId,
-            outcome: cancelled ? (stopping ? 'interrupted' : 'cancelled') : ((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isTimeoutMessage)(message) ? 'timed_out' : 'failed'),
+            outcome: cancelled ? (stopping ? 'interrupted' : 'cancelled') : ((0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.isTimeoutMessage)(message) ? 'timed_out' : 'failed'),
             providerRequestState: 'sent_or_unknown',
             error: message,
         });
@@ -8010,7 +8897,7 @@ class AgentSessionRunExecutor {
     async continueStep(sessionId, runId, stepId, signal) {
         while (!signal.aborted && !this.host.isStopping()) {
             const snapshot = await this.host.perform(sessionId, writer => writer.snapshot());
-            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+            const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
             if (run.status === 'cancelling') {
                 await this.host.perform(sessionId, writer => {
                     this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
@@ -8049,7 +8936,7 @@ class AgentSessionRunExecutor {
                 return completed.keepRunning;
             }
             const descriptors = this.allowedDescriptors(snapshot, run);
-            const mapped = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.mapLlmTools)(descriptors);
+            const mapped = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.mapLlmTools)(descriptors);
             let yielded = false;
             for (const call of calls) {
                 let current = await this.host.perform(sessionId, writer => writer.snapshot());
@@ -8067,7 +8954,7 @@ class AgentSessionRunExecutor {
                         await this.host.perform(sessionId, writer => this.toolExecutor.interruptClaimedInvocation(writer, invocation, 'Execution ownership was lost before the tool result was recorded'));
                         return false;
                     }
-                    if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(invocation.status)) {
+                    if (_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.TERMINAL_TOOLS.has(invocation.status)) {
                         await this.host.perform(sessionId, writer => this.journal.ensureToolResultMessage(writer, invocation.id));
                         continue;
                     }
@@ -8078,16 +8965,16 @@ class AgentSessionRunExecutor {
                     continue;
                 }
                 const descriptor = descriptors.find(tool => tool.id === toolId);
-                if (run.mode === 'plan' && !(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isPlanSafeTool)(descriptor)) {
+                if (run.mode === 'plan' && !(0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.isPlanSafeTool)(descriptor)) {
                     await this.host.perform(sessionId, writer => this.journal.appendToolProtocolError(writer, runId, stepId, call.id, `Tool is unavailable in plan mode: ${descriptor.id}`));
                     continue;
                 }
                 let input;
                 try {
-                    input = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.parseToolArguments)(call.arguments);
+                    input = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.parseToolArguments)(call.arguments);
                 }
                 catch (error) {
-                    await this.host.perform(sessionId, writer => this.journal.appendToolProtocolError(writer, runId, stepId, call.id, (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.errorMessage)(error)));
+                    await this.host.perform(sessionId, writer => this.journal.appendToolProtocolError(writer, runId, stepId, call.id, (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.errorMessage)(error)));
                     continue;
                 }
                 const invocationId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
@@ -8120,7 +9007,9 @@ class AgentSessionRunExecutor {
                             summary: this.approvalSummary(descriptor, input),
                             arguments: input,
                             riskLevel: descriptor.riskLevel,
-                            expiresAt: new Date(Date.parse(timestamp) + this.approvalTimeoutMs).toISOString(),
+                            ...(this.approvalTimeoutMs === null
+                                ? {}
+                                : { expiresAt: new Date(Date.parse(timestamp) + this.approvalTimeoutMs).toISOString() }),
                         });
                     }
                 });
@@ -8141,10 +9030,10 @@ class AgentSessionRunExecutor {
             if (yielded)
                 return false;
             const after = await this.host.perform(sessionId, writer => writer.snapshot());
-            const afterRun = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(after, runId);
+            const afterRun = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(after, runId);
             if (afterRun.status === 'cancelling' || signal.aborted || this.host.isStopping()) {
                 await this.host.perform(sessionId, writer => {
-                    const currentRun = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(writer.snapshot(), runId);
+                    const currentRun = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(writer.snapshot(), runId);
                     if (currentRun.status === 'cancelling') {
                         this.journal.finalizeCancellation(writer, runId, 'Cancelled by user');
                     }
@@ -8156,11 +9045,11 @@ class AgentSessionRunExecutor {
             }
             if (afterRun.status !== 'running')
                 return false;
-            const unfinished = after.invocations.some(item => item.stepId === stepId && !_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.TERMINAL_TOOLS.has(item.status));
+            const unfinished = after.invocations.some(item => item.stepId === stepId && !_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.TERMINAL_TOOLS.has(item.status));
             if (unfinished)
                 return false;
             await this.host.perform(sessionId, writer => {
-                const active = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.activeStep)(writer.snapshot(), runId);
+                const active = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.activeStep)(writer.snapshot(), runId);
                 if (active?.id === stepId) {
                     this.host.append(writer, {
                         id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
@@ -8181,13 +9070,13 @@ class AgentSessionRunExecutor {
     }
     consumeSteeringMessages(writer, runId) {
         let snapshot = writer.snapshot();
-        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRun)(snapshot, runId);
+        const run = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRun)(snapshot, runId);
         const messages = snapshot.pendingMessages
             .filter(item => item.ref === run.ref && item.runId === runId && item.kind === 'steer')
             .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
         for (const message of messages) {
             snapshot = writer.snapshot();
-            const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.requireRef)(snapshot, run.ref);
+            const ref = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.requireRef)(snapshot, run.ref);
             this.host.append(writer, {
                 id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
                 type: 'conversation.message',
@@ -8210,7 +9099,7 @@ class AgentSessionRunExecutor {
     allowedDescriptors(snapshot, run) {
         const allowed = new Set(run.allowedTools);
         return this.tools.list(snapshot.session.callerUserHandle, snapshot.session.callerExtensionId)
-            .filter(tool => allowed.has(tool.id) && (run.mode !== 'plan' || (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_1__.isPlanSafeTool)(tool)));
+            .filter(tool => allowed.has(tool.id) && (run.mode !== 'plan' || (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_2__.isPlanSafeTool)(tool)));
     }
 }
 
@@ -8246,11 +9135,6 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
-const DEFAULT_MAX_STEPS = 24;
-const HARD_MAX_STEPS = 64;
-const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60_000;
-const DEFAULT_BROWSER_TOOL_TIMEOUT_MS = 2 * 60_000;
-const MAX_CONCURRENT_RUNS = 16;
 const FAILED_RUN_CONTINUATION_MESSAGE = '继续完成上一轮未完成的任务。先检查当前工作区和已经完成的操作，再从安全边界继续，不要重复已有副作用。';
 class SessionActor {
     writer;
@@ -8305,26 +9189,23 @@ class AgentSessionRuntimeService {
         const client = new _agent_llm_client_js__WEBPACK_IMPORTED_MODULE_1__.AgentLlmClient();
         this.requestCompletion = options.requestCompletion ?? client.complete.bind(client);
         this.maxConcurrentRuns = options.maxConcurrentRuns ?? 2;
-        this.approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
-        this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? DEFAULT_BROWSER_TOOL_TIMEOUT_MS;
+        this.approvalTimeoutMs = options.approvalTimeoutMs ?? null;
+        this.browserToolTimeoutMs = options.browserToolTimeoutMs ?? null;
         this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
         this.now = options.now ?? (() => new Date().toISOString());
         this.tools = new _agent_tool_registry_service_js__WEBPACK_IMPORTED_MODULE_7__.AgentToolRegistryService(hostTools, options.moduleHost);
         if (!Number.isSafeInteger(this.maxConcurrentRuns)
-            || this.maxConcurrentRuns < 1
-            || this.maxConcurrentRuns > MAX_CONCURRENT_RUNS) {
-            throw new Error(`maxConcurrentRuns must be an integer between 1 and ${MAX_CONCURRENT_RUNS}`);
+            || this.maxConcurrentRuns < 1) {
+            throw new Error('maxConcurrentRuns must be a positive integer');
         }
         this.maxConcurrentRunsPerUser = Math.max(1, this.maxConcurrentRuns - 1);
-        if (!Number.isSafeInteger(this.approvalTimeoutMs)
-            || this.approvalTimeoutMs < 1
-            || this.approvalTimeoutMs > 24 * 60 * 60_000) {
-            throw new Error('approvalTimeoutMs must be an integer between 1 ms and 24 hours');
+        if (this.approvalTimeoutMs !== null
+            && (!Number.isSafeInteger(this.approvalTimeoutMs) || this.approvalTimeoutMs < 1)) {
+            throw new Error('approvalTimeoutMs must be null or a positive integer');
         }
-        if (!Number.isSafeInteger(this.browserToolTimeoutMs)
-            || this.browserToolTimeoutMs < 1_000
-            || this.browserToolTimeoutMs > 10 * 60_000) {
-            throw new Error('browserToolTimeoutMs must be an integer between 1000 and 600000 ms');
+        if (this.browserToolTimeoutMs !== null
+            && (!Number.isSafeInteger(this.browserToolTimeoutMs) || this.browserToolTimeoutMs < 1)) {
+            throw new Error('browserToolTimeoutMs must be null or a positive integer');
         }
         if (!Number.isSafeInteger(this.shutdownTimeoutMs)
             || this.shutdownTimeoutMs < 1
@@ -8373,7 +9254,7 @@ class AgentSessionRuntimeService {
             await this.requestCompletion({
                 ...profile,
                 maxOutputTokens: Math.min(profile.maxOutputTokens ?? 32, 32),
-                timeoutMs: Math.min(profile.timeoutMs, 30_000),
+                timeoutMs: Math.min(profile.timeoutMs ?? 30_000, 30_000),
             }, {
                 messages: [{ role: 'user', content: 'Reply with OK to confirm this connection.' }],
                 tools: [],
@@ -8479,13 +9360,12 @@ class AgentSessionRuntimeService {
             this.history.assertWorkspaceAccess(workspace.id, callerUserHandle, callerContext.user.isAdmin);
         }
         const profile = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.selectOne)(request.profileId, this.profileStore.listProfiles(), item => item.id, 'LLM profile');
+        if (profile.contextWindowTokens === null || profile.maxOutputTokens === null) {
+            throw new Error('Agent LLM profile requires contextWindowTokens and maxOutputTokens before it can run');
+        }
         const mode = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeMode)(request.mode);
         const availableTools = this.tools.list(callerUserHandle, caller);
         const allowedTools = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeAllowedTools)(request.allowedTools, availableTools);
-        const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
-        if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > HARD_MAX_STEPS) {
-            throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
-        }
         const firstMessage = request.message === undefined
             ? undefined
             : (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.formatInitialMessage)(request.message, request.instructions, request.context);
@@ -8503,7 +9383,6 @@ class AgentSessionRuntimeService {
             profileId: profile.id,
             mode,
             allowedTools,
-            maxSteps,
         });
         if (callerContext)
             this.contexts.set(snapshot.session.id, callerContext);
@@ -8529,20 +9408,16 @@ class AgentSessionRuntimeService {
                 update.title = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.title, 'Agent session title', 500);
             }
             if (request.profileId !== undefined) {
-                update.profileId = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.selectOne)(request.profileId, this.profileStore.listProfiles(), item => item.id, 'LLM profile').id;
+                const profile = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.selectOne)(request.profileId, this.profileStore.listProfiles(), item => item.id, 'LLM profile');
+                if (profile.contextWindowTokens === null || profile.maxOutputTokens === null) {
+                    throw new Error('Agent LLM profile requires contextWindowTokens and maxOutputTokens before it can run');
+                }
+                update.profileId = profile.id;
             }
             if (request.mode !== undefined)
                 update.mode = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeMode)(request.mode);
             if (request.allowedTools !== undefined) {
                 update.allowedTools = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.normalizeAllowedTools)(request.allowedTools, this.tools.list(current.session.callerUserHandle, current.session.callerExtensionId));
-            }
-            if (request.maxSteps !== undefined) {
-                if (!Number.isSafeInteger(request.maxSteps)
-                    || request.maxSteps < 1
-                    || request.maxSteps > HARD_MAX_STEPS) {
-                    throw new Error(`Agent maxSteps must be an integer between 1 and ${HARD_MAX_STEPS}`);
-                }
-                update.maxSteps = request.maxSteps;
             }
             if (request.archived !== undefined) {
                 if (typeof request.archived !== 'boolean')
@@ -8576,7 +9451,7 @@ class AgentSessionRuntimeService {
     }
     async sendMessage(sessionId, request, callerExtensionId, callerContext) {
         this.assertRunning();
-        const content = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.content, 'Agent message', _agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.MAX_MESSAGE_CHARS);
+        const content = (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.requiredText)(request.content, 'Agent message');
         const actor = this.actor(sessionId);
         const result = await actor.perform(writer => {
             const before = writer.snapshot();
@@ -9068,7 +9943,6 @@ class AgentSessionRuntimeService {
     }
     acceptRun(writer, refName, triggerMessageId, continuedFromRunId) {
         const snapshot = writer.snapshot();
-        (0,_agent_session_runtime_support_js__WEBPACK_IMPORTED_MODULE_8__.assertRunCapacity)(snapshot, this.listSessions());
         const runId = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID();
         this.append(writer, {
             id: node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID(),
@@ -9081,7 +9955,6 @@ class AgentSessionRuntimeService {
             profileId: snapshot.session.profileId,
             mode: snapshot.session.mode,
             allowedTools: snapshot.session.allowedTools,
-            maxSteps: snapshot.session.maxSteps,
         });
         return runId;
     }
@@ -9171,19 +10044,11 @@ function classifyLlmConnectionFailure(error) {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   MAX_ACTIVE_RUNS: () => (/* binding */ MAX_ACTIVE_RUNS),
-/* harmony export */   MAX_ACTIVE_RUNS_PER_CALLER: () => (/* binding */ MAX_ACTIVE_RUNS_PER_CALLER),
-/* harmony export */   MAX_ACTIVE_RUNS_PER_USER: () => (/* binding */ MAX_ACTIVE_RUNS_PER_USER),
-/* harmony export */   MAX_CONTEXT_CHARS: () => (/* binding */ MAX_CONTEXT_CHARS),
-/* harmony export */   MAX_MESSAGE_CHARS: () => (/* binding */ MAX_MESSAGE_CHARS),
-/* harmony export */   MAX_TOOL_ARGUMENT_CHARS: () => (/* binding */ MAX_TOOL_ARGUMENT_CHARS),
-/* harmony export */   MAX_TOOL_RESULT_CHARS: () => (/* binding */ MAX_TOOL_RESULT_CHARS),
 /* harmony export */   TERMINAL_RUNS: () => (/* binding */ TERMINAL_RUNS),
 /* harmony export */   TERMINAL_TOOLS: () => (/* binding */ TERMINAL_TOOLS),
 /* harmony export */   activeGeneration: () => (/* binding */ activeGeneration),
 /* harmony export */   activeInvocation: () => (/* binding */ activeInvocation),
 /* harmony export */   activeStep: () => (/* binding */ activeStep),
-/* harmony export */   assertRunCapacity: () => (/* binding */ assertRunCapacity),
 /* harmony export */   boundedToolValue: () => (/* binding */ boundedToolValue),
 /* harmony export */   conversationMessages: () => (/* binding */ conversationMessages),
 /* harmony export */   delay: () => (/* binding */ delay),
@@ -9205,13 +10070,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
 
-const MAX_CONTEXT_CHARS = 64 * 1024;
-const MAX_MESSAGE_CHARS = 2 * 1024 * 1024;
-const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
-const MAX_TOOL_RESULT_CHARS = 256 * 1024;
-const MAX_ACTIVE_RUNS = 100;
-const MAX_ACTIVE_RUNS_PER_USER = 32;
-const MAX_ACTIVE_RUNS_PER_CALLER = 16;
 const TERMINAL_RUNS = new Set(['completed', 'failed', 'cancelled']);
 const TERMINAL_TOOLS = new Set([
     'completed', 'failed', 'cancelled', 'outcome_unknown', 'timed_out',
@@ -9303,8 +10161,8 @@ function normalizeAllowedTools(value, available) {
     const ids = new Set(available.map(tool => tool.id));
     if (value === undefined)
         return [...ids];
-    if (!Array.isArray(value) || value.length > 128 || value.some(item => typeof item !== 'string')) {
-        throw new Error('allowedTools must be an array of at most 128 tool ids');
+    if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+        throw new Error('allowedTools must be an array of tool ids');
     }
     const result = [...new Set(value)];
     for (const id of result) {
@@ -9312,17 +10170,6 @@ function normalizeAllowedTools(value, available) {
             throw new Error(`Unknown Agent tool: ${id}`);
     }
     return result;
-}
-function assertRunCapacity(current, sessions) {
-    const active = sessions.flatMap(snapshot => snapshot.runs.map(run => ({ snapshot, run })))
-        .filter(item => !TERMINAL_RUNS.has(item.run.status));
-    const userRuns = active.filter(item => item.snapshot.session.callerUserHandle === current.session.callerUserHandle);
-    const callerRuns = userRuns.filter(item => item.snapshot.session.callerExtensionId === current.session.callerExtensionId);
-    if (active.length >= MAX_ACTIVE_RUNS
-        || userRuns.length >= MAX_ACTIVE_RUNS_PER_USER
-        || callerRuns.length >= MAX_ACTIVE_RUNS_PER_CALLER) {
-        throw new Error('Agent session run queue limit reached');
-    }
 }
 function selectOne(requestedId, items, id, label) {
     if (requestedId !== undefined) {
@@ -9339,8 +10186,6 @@ function selectOne(requestedId, items, id, label) {
     return items[0];
 }
 function parseToolArguments(value) {
-    if (value.length > MAX_TOOL_ARGUMENT_CHARS)
-        throw new Error('Tool arguments exceed the 128 KB limit');
     let parsed;
     try {
         parsed = JSON.parse(value);
@@ -9354,21 +10199,13 @@ function parseToolArguments(value) {
     return parsed;
 }
 function boundedToolValue(value) {
-    const normalized = value === undefined ? null : value;
-    const serialized = JSON.stringify(normalized);
-    if (serialized.length <= MAX_TOOL_RESULT_CHARS)
-        return normalized;
-    return {
-        truncated: true,
-        originalChars: serialized.length,
-        preview: serialized.slice(0, MAX_TOOL_RESULT_CHARS - 1_000),
-    };
+    return value === undefined ? null : value;
 }
 function formatInitialMessage(message, instructions, context) {
-    const content = requiredText(message, 'Agent message', MAX_MESSAGE_CHARS);
+    const content = requiredText(message, 'Agent message');
     const normalizedInstructions = instructions === undefined
         ? undefined
-        : requiredText(instructions, 'Agent instructions', 20_000);
+        : requiredText(instructions, 'Agent instructions');
     let serializedContext;
     if (context !== undefined) {
         try {
@@ -9377,8 +10214,6 @@ function formatInitialMessage(message, instructions, context) {
         catch (error) {
             throw new Error(`Agent context must be JSON serializable: ${errorMessage(error)}`);
         }
-        if (serializedContext.length > MAX_CONTEXT_CHARS)
-            throw new Error('Agent context exceeds the 64 KB limit');
     }
     return [
         content,
@@ -9410,7 +10245,7 @@ function requiredText(value, label, maxLength) {
     if (typeof value !== 'string' || !value.trim())
         throw new Error(`${label} is required`);
     const result = value.trim();
-    if (result.length > maxLength)
+    if (maxLength !== undefined && result.length > maxLength)
         throw new Error(`${label} exceeds ${maxLength} characters`);
     return result;
 }
@@ -9461,8 +10296,7 @@ const JOURNAL_FORMAT = 'authority-agent-session-journal/v1';
 const LOCK_FORMAT = 'authority-agent-session-writer-lock/v1';
 const SAFE_FILE_ID = /^[a-zA-Z0-9._-]+$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
-const DEFAULT_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
-const DEFAULT_MAX_JOURNAL_BYTES = 512 * 1024 * 1024;
+const DEFAULT_TARGET_SEGMENT_BYTES = 32 * 1024 * 1024;
 const DEFAULT_STALE_LOCK_MS = 5 * 60_000;
 class AgentSessionStoreService {
     stateDir;
@@ -9470,8 +10304,7 @@ class AgentSessionStoreService {
     hostname;
     pid;
     isProcessAlive;
-    maxEntryBytes;
-    maxJournalBytes;
+    targetSegmentBytes;
     staleLockMs;
     constructor(stateDir, options = {}) {
         this.stateDir = stateDir;
@@ -9480,8 +10313,7 @@ class AgentSessionStoreService {
         this.hostname = options.hostname ?? node_os__WEBPACK_IMPORTED_MODULE_2___default().hostname();
         this.pid = options.pid ?? process.pid;
         this.isProcessAlive = options.isProcessAlive ?? processIsAlive;
-        this.maxEntryBytes = positiveInteger(options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES, 'Agent session entry byte limit');
-        this.maxJournalBytes = positiveInteger(options.maxJournalBytes ?? DEFAULT_MAX_JOURNAL_BYTES, 'Agent session journal byte limit');
+        this.targetSegmentBytes = positiveInteger(options.targetSegmentBytes ?? DEFAULT_TARGET_SEGMENT_BYTES, 'Agent session journal segment target');
         this.staleLockMs = nonNegativeInteger(options.staleLockMs ?? DEFAULT_STALE_LOCK_MS, 'Agent session stale lock duration');
     }
     start() {
@@ -9504,13 +10336,11 @@ class AgentSessionStoreService {
             title: requiredText(input.title, 'Agent session title', 500),
             profileId: requiredText(input.profileId, 'Agent session profile', 200),
             mode: executionMode(input.mode),
-            allowedTools: textArray(input.allowedTools, 'Agent session allowed tools', 512),
-            maxSteps: boundedInteger(input.maxSteps, 'Agent session max steps', 1, 1_000),
+            allowedTools: textArray(input.allowedTools, 'Agent session allowed tools'),
         };
         validateJournalEntry(entry);
         const record = createRecord(sessionId, 1, null, entry);
         const serialized = `${JSON.stringify(record)}\n`;
-        this.assertEntrySize(serialized);
         const sessionDir = this.sessionDir(sessionId);
         try {
             node_fs__WEBPACK_IMPORTED_MODULE_1___default().mkdirSync(sessionDir);
@@ -9524,6 +10354,7 @@ class AgentSessionStoreService {
         try {
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(this.journalPath(sessionId), serialized);
             protectFile(this.journalPath(sessionId));
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(this.sessionsDir());
             return this.readSession(sessionId).snapshot;
         }
         catch (error) {
@@ -9564,16 +10395,16 @@ class AgentSessionStoreService {
         try {
             const loaded = this.loadJournal(sessionId);
             if (loaded.tail.tornTailBytes > 0) {
-                truncateAndSync(this.journalPath(sessionId), loaded.validBytes);
-                loaded.totalBytes = loaded.validBytes;
+                truncateAndSync(loaded.activeJournalPath, loaded.validBytes);
+                loaded.activeSegmentBytes = loaded.validBytes;
                 loaded.tail.tornTailBytes = 0;
             }
             if (loaded.tail.missingFinalNewline) {
-                appendAndSync(this.journalPath(sessionId), '\n');
-                loaded.totalBytes += 1;
+                appendAndSync(loaded.activeJournalPath, '\n');
+                loaded.activeSegmentBytes += 1;
                 loaded.tail.missingFinalNewline = false;
             }
-            return new AgentSessionWriter(sessionId, this.journalPath(sessionId), this.writerLockPath(sessionId), lock, loaded, this.maxEntryBytes, this.maxJournalBytes);
+            return new AgentSessionWriter(sessionId, this.sessionDir(sessionId), this.writerLockPath(sessionId), lock, loaded, this.targetSegmentBytes);
         }
         catch (error) {
             releaseWriterLock(this.writerLockPath(sessionId), lock.token);
@@ -9582,51 +10413,56 @@ class AgentSessionStoreService {
     }
     loadJournal(sessionId) {
         assertFileId(sessionId, 'Agent session id');
-        const journalPath = this.journalPath(sessionId);
-        const stats = node_fs__WEBPACK_IMPORTED_MODULE_1___default().statSync(journalPath);
-        if (stats.size > this.maxJournalBytes) {
-            throw new Error(`Agent session journal exceeds the ${this.maxJournalBytes} byte limit: ${sessionId}`);
-        }
-        const buffer = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(journalPath);
+        const journalPaths = this.journalPaths(sessionId);
         const projection = (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.createAgentSessionProjection)();
         const records = [];
         const recordsByEntryId = new Map();
-        let cursor = 0;
         let validBytes = 0;
         let tornTailBytes = 0;
         let missingFinalNewline = false;
-        while (cursor < buffer.length) {
-            const newline = buffer.indexOf(0x0a, cursor);
-            const isTail = newline === -1;
-            const end = isTail ? buffer.length : newline;
-            const line = buffer.subarray(cursor, end);
-            if (line.length === 0) {
-                if (isTail)
+        let activeSegmentBytes = 0;
+        for (let segmentIndex = 0; segmentIndex < journalPaths.length; segmentIndex += 1) {
+            const journalPath = journalPaths[segmentIndex];
+            const finalSegment = segmentIndex === journalPaths.length - 1;
+            const buffer = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readFileSync(journalPath);
+            let cursor = 0;
+            validBytes = 0;
+            while (cursor < buffer.length) {
+                const newline = buffer.indexOf(0x0a, cursor);
+                const isTail = newline === -1;
+                const end = isTail ? buffer.length : newline;
+                const line = buffer.subarray(cursor, end);
+                if (line.length === 0) {
+                    if (isTail && finalSegment)
+                        break;
+                    throw new Error(`Agent session journal contains an empty record in ${node_path__WEBPACK_IMPORTED_MODULE_3___default().basename(journalPath)} at byte ${cursor}: ${sessionId}`);
+                }
+                let parsed;
+                try {
+                    parsed = JSON.parse(line.toString('utf8'));
+                }
+                catch (error) {
+                    if (!isTail || !finalSegment)
+                        throw error;
+                    tornTailBytes = buffer.length - cursor;
                     break;
-                throw new Error(`Agent session journal contains an empty record at byte ${cursor}: ${sessionId}`);
+                }
+                const record = parseJournalRecord(parsed, sessionId);
+                const canonicalEntry = canonicalJson(record.entry);
+                (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.applyAgentSessionRecord)(projection, record, canonicalEntry);
+                records.push(record);
+                recordsByEntryId.set(record.entry.id, record);
+                validBytes = isTail ? end : end + 1;
+                if (isTail) {
+                    if (!finalSegment) {
+                        throw new Error(`Agent session journal segment is missing its final newline: ${node_path__WEBPACK_IMPORTED_MODULE_3___default().basename(journalPath)}`);
+                    }
+                    missingFinalNewline = true;
+                }
+                cursor = end + 1;
             }
-            if (line.length > this.maxEntryBytes) {
-                throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit: ${sessionId}`);
-            }
-            let parsed;
-            try {
-                parsed = JSON.parse(line.toString('utf8'));
-            }
-            catch (error) {
-                if (!isTail)
-                    throw error;
-                tornTailBytes = buffer.length - cursor;
-                break;
-            }
-            const record = parseJournalRecord(parsed, sessionId);
-            const canonicalEntry = canonicalJson(record.entry);
-            (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.applyAgentSessionRecord)(projection, record, canonicalEntry);
-            records.push(record);
-            recordsByEntryId.set(record.entry.id, record);
-            validBytes = isTail ? end : end + 1;
-            if (isTail)
-                missingFinalNewline = true;
-            cursor = end + 1;
+            if (finalSegment)
+                activeSegmentBytes = buffer.length;
         }
         if (records.length === 0)
             throw new Error(`Agent session journal has no valid records: ${sessionId}`);
@@ -9636,8 +10472,28 @@ class AgentSessionStoreService {
             recordsByEntryId,
             tail: { tornTailBytes, missingFinalNewline },
             validBytes,
-            totalBytes: buffer.length,
+            activeJournalPath: journalPaths.at(-1),
+            activeSegmentIndex: journalPaths.length - 1,
+            activeSegmentBytes,
         };
+    }
+    journalPaths(sessionId) {
+        const sessionDir = this.sessionDir(sessionId);
+        const base = this.journalPath(sessionId);
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_1___default().existsSync(base))
+            throw new Error(`Agent session journal is missing: ${sessionId}`);
+        const segments = node_fs__WEBPACK_IMPORTED_MODULE_1___default().readdirSync(sessionDir)
+            .flatMap(name => {
+            const match = /^journal\.(\d{6})\.jsonl$/.exec(name);
+            return match ? [{ index: Number(match[1]), path: node_path__WEBPACK_IMPORTED_MODULE_3___default().join(sessionDir, name) }] : [];
+        })
+            .sort((left, right) => left.index - right.index);
+        for (let index = 0; index < segments.length; index += 1) {
+            if (segments[index].index !== index + 1) {
+                throw new Error(`Agent session journal segments are not contiguous: ${sessionId}`);
+            }
+        }
+        return [base, ...segments.map(segment => segment.path)];
     }
     acquireWriterLock(sessionId) {
         const lockPath = this.writerLockPath(sessionId);
@@ -9708,12 +10564,6 @@ class AgentSessionStoreService {
             return false;
         }
     }
-    assertEntrySize(serialized) {
-        const bytes = Buffer.byteLength(serialized, 'utf8');
-        if (bytes > this.maxEntryBytes) {
-            throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit`);
-        }
-    }
     sessionsDir() {
         return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.stateDir, 'sessions');
     }
@@ -9730,28 +10580,30 @@ class AgentSessionStoreService {
 }
 class AgentSessionWriter {
     sessionId;
-    journalPath;
+    sessionDir;
     lockPath;
     lock;
-    maxEntryBytes;
-    maxJournalBytes;
+    targetSegmentBytes;
     projection;
     records;
     recordsByEntryId;
-    totalBytes;
+    activeJournalPath;
+    activeSegmentIndex;
+    activeSegmentBytes;
     closed = false;
     faulted = false;
-    constructor(sessionId, journalPath, lockPath, lock, loaded, maxEntryBytes, maxJournalBytes) {
+    constructor(sessionId, sessionDir, lockPath, lock, loaded, targetSegmentBytes) {
         this.sessionId = sessionId;
-        this.journalPath = journalPath;
+        this.sessionDir = sessionDir;
         this.lockPath = lockPath;
         this.lock = lock;
-        this.maxEntryBytes = maxEntryBytes;
-        this.maxJournalBytes = maxJournalBytes;
+        this.targetSegmentBytes = targetSegmentBytes;
         this.projection = loaded.projection;
         this.records = loaded.records;
         this.recordsByEntryId = loaded.recordsByEntryId;
-        this.totalBytes = loaded.totalBytes;
+        this.activeJournalPath = loaded.activeJournalPath;
+        this.activeSegmentIndex = loaded.activeSegmentIndex;
+        this.activeSegmentBytes = loaded.activeSegmentBytes;
     }
     append(entry) {
         this.assertWritable();
@@ -9766,15 +10618,22 @@ class AgentSessionWriter {
         const record = createRecord(this.sessionId, this.projection.lastSequence + 1, this.projection.lastHash || null, entry);
         const serialized = `${JSON.stringify(record)}\n`;
         const entryBytes = Buffer.byteLength(serialized, 'utf8');
-        if (entryBytes > this.maxEntryBytes)
-            throw new Error(`Agent session entry exceeds the ${this.maxEntryBytes} byte limit`);
-        if (this.totalBytes + entryBytes > this.maxJournalBytes) {
-            throw new Error(`Agent session journal exceeds the ${this.maxJournalBytes} byte limit: ${this.sessionId}`);
-        }
         const nextProjection = structuredClone(this.projection);
         (0,_agent_session_model_js__WEBPACK_IMPORTED_MODULE_5__.applyAgentSessionRecord)(nextProjection, record, canonicalEntry);
         try {
-            appendAndSync(this.journalPath, serialized);
+            if (this.activeSegmentBytes > 0 && this.activeSegmentBytes + entryBytes > this.targetSegmentBytes) {
+                const nextIndex = this.activeSegmentIndex + 1;
+                const nextPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.sessionDir, `journal.${String(nextIndex).padStart(6, '0')}.jsonl`);
+                createAndSync(nextPath, serialized);
+                protectFile(nextPath);
+                this.activeJournalPath = nextPath;
+                this.activeSegmentIndex = nextIndex;
+                this.activeSegmentBytes = entryBytes;
+            }
+            else {
+                appendAndSync(this.activeJournalPath, serialized);
+                this.activeSegmentBytes += entryBytes;
+            }
         }
         catch (error) {
             this.faulted = true;
@@ -9783,7 +10642,6 @@ class AgentSessionWriter {
         this.projection = nextProjection;
         this.records.push(record);
         this.recordsByEntryId.set(entry.id, record);
-        this.totalBytes += entryBytes;
         return structuredClone(record);
     }
     snapshot() {
@@ -9860,8 +10718,7 @@ function validateJournalEntry(value) {
             requiredText(value.title, 'Agent session title', 500);
             requiredText(value.profileId, 'Agent session profile', 200);
             executionMode(value.mode);
-            textArray(value.allowedTools, 'Agent session allowed tools', 512);
-            boundedInteger(value.maxSteps, 'Agent session max steps', 1, 1_000);
+            textArray(value.allowedTools, 'Agent session allowed tools');
             return;
         case 'session.updated':
             optionalText(value.title, 'Agent session title', 500);
@@ -9869,9 +10726,7 @@ function validateJournalEntry(value) {
             if (value.mode !== undefined)
                 executionMode(value.mode);
             if (value.allowedTools !== undefined)
-                textArray(value.allowedTools, 'Agent session allowed tools', 512);
-            if (value.maxSteps !== undefined)
-                boundedInteger(value.maxSteps, 'Agent session max steps', 1, 1_000);
+                textArray(value.allowedTools, 'Agent session allowed tools');
             if (value.archived !== undefined && typeof value.archived !== 'boolean')
                 throw new Error('Agent session archived must be boolean');
             return;
@@ -9886,7 +10741,7 @@ function validateJournalEntry(value) {
         case 'conversation.message':
             conversationBase(value);
             enumValue(value.role, ['system', 'user', 'assistant', 'tool'], 'Agent conversation role');
-            nullableText(value.content, 'Agent conversation content', 8 * 1024 * 1024);
+            nullableText(value.content, 'Agent conversation content');
             optionalIdentifier(value.toolCallId, 'Agent tool call id');
             optionalIdentifier(value.runId, 'Agent run id');
             optionalIdentifier(value.stepId, 'Agent step id');
@@ -9896,24 +10751,37 @@ function validateJournalEntry(value) {
             return;
         case 'conversation.compacted':
             conversationBase(value);
-            requiredText(value.summary, 'Agent compaction summary', 2 * 1024 * 1024);
-            requiredIdentifier(value.firstKeptEntryId, 'Agent compaction boundary');
-            identifierArray(value.retainedEntryIds, 'Agent compaction retained entries', 100_000);
+            requiredText(value.summary, 'Agent compaction summary');
+            if (value.sourceLeafEntryId === undefined) {
+                // Legacy v1 checkpoints predate source snapshot metadata.
+                if (value.sourceLastSequence !== undefined || value.contextWindowTokens !== undefined) {
+                    throw new Error('Agent compaction source metadata must be complete');
+                }
+            }
+            else {
+                requiredIdentifier(value.sourceLeafEntryId, 'Agent compaction source leaf');
+                nonNegativeInteger(value.sourceLastSequence, 'Agent compaction source sequence');
+                positiveInteger(value.contextWindowTokens, 'Agent compaction context window');
+            }
+            nullableIdentifier(value.firstKeptEntryId, 'Agent compaction boundary');
+            identifierArray(value.retainedEntryIds, 'Agent compaction retained entries');
             if (value.tokensBefore !== undefined)
                 nonNegativeInteger(value.tokensBefore, 'Agent compaction tokens');
+            if (value.tokensAfter !== undefined)
+                nonNegativeInteger(value.tokensAfter, 'Agent compacted tokens');
             optionalIdentifier(value.runId, 'Agent run id');
             return;
         case 'conversation.branch_summary':
             conversationBase(value);
             requiredIdentifier(value.fromEntryId, 'Agent branch source');
-            requiredText(value.summary, 'Agent branch summary', 2 * 1024 * 1024);
+            requiredText(value.summary, 'Agent branch summary');
             optionalIdentifier(value.runId, 'Agent run id');
             return;
         case 'queue.added':
             requiredIdentifier(value.queueId, 'Agent queue id');
             requiredIdentifier(value.ref, 'Agent session ref');
             enumValue(value.kind, ['steer', 'follow_up', 'next_run'], 'Agent queue kind');
-            requiredText(value.content, 'Agent queued message', 2 * 1024 * 1024);
+            requiredText(value.content, 'Agent queued message');
             optionalIdentifier(value.runId, 'Agent run id');
             return;
         case 'queue.removed':
@@ -9926,8 +10794,7 @@ function validateJournalEntry(value) {
             requiredIdentifier(value.triggerMessageId, 'Agent run trigger');
             requiredText(value.profileId, 'Agent run profile', 200);
             executionMode(value.mode);
-            textArray(value.allowedTools, 'Agent run allowed tools', 512);
-            boundedInteger(value.maxSteps, 'Agent run max steps', 1, 1_000);
+            textArray(value.allowedTools, 'Agent run allowed tools');
             return;
         case 'run.started':
         case 'run.resumed':
@@ -9936,25 +10803,27 @@ function validateJournalEntry(value) {
             return;
         case 'run.suspended':
             requiredIdentifier(value.runId, 'Agent run id');
-            requiredText(value.reason, 'Agent run suspension reason', 20_000);
+            requiredText(value.reason, 'Agent run suspension reason');
             return;
         case 'run.finished':
             requiredIdentifier(value.runId, 'Agent run id');
             enumValue(value.outcome, ['completed', 'failed', 'cancelled'], 'Agent run outcome');
-            optionalText(value.finalText, 'Agent final text', 2 * 1024 * 1024);
-            optionalText(value.error, 'Agent run error', 100_000);
+            optionalText(value.finalText, 'Agent final text');
+            optionalText(value.error, 'Agent run error');
             return;
         case 'step.started':
             requiredIdentifier(value.runId, 'Agent run id');
             requiredIdentifier(value.stepId, 'Agent step id');
             positiveInteger(value.index, 'Agent step index');
+            if (value.kind !== undefined)
+                enumValue(value.kind, ['generation', 'compaction'], 'Agent step kind');
             return;
         case 'step.finished':
             requiredIdentifier(value.runId, 'Agent run id');
             requiredIdentifier(value.stepId, 'Agent step id');
             enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'interrupted'], 'Agent step outcome');
             optionalNullableText(value.finishReason, 'Agent step finish reason', 1_000);
-            optionalText(value.error, 'Agent step error', 100_000);
+            optionalText(value.error, 'Agent step error');
             return;
         case 'generation.started':
             requiredIdentifier(value.runId, 'Agent run id');
@@ -9970,7 +10839,7 @@ function validateJournalEntry(value) {
             enumValue(value.providerRequestState, ['not_sent', 'sent_or_unknown', 'response_received'], 'Agent provider request state');
             optionalIdentifier(value.providerRequestId, 'Agent provider request id');
             optionalNullableText(value.finishReason, 'Agent generation finish reason', 1_000);
-            optionalText(value.error, 'Agent generation error', 100_000);
+            optionalText(value.error, 'Agent generation error');
             return;
         case 'tool.requested':
             requiredIdentifier(value.runId, 'Agent run id');
@@ -9998,7 +10867,7 @@ function validateJournalEntry(value) {
         case 'tool.waiting':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
             enumValue(value.reason, ['browser'], 'Agent tool wait reason');
-            isoTimestamp(value.deadlineAt, 'Agent tool wait deadline');
+            optionalTimestamp(value.deadlineAt, 'Agent tool wait deadline');
             return;
         case 'tool.started':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
@@ -10008,7 +10877,7 @@ function validateJournalEntry(value) {
         case 'tool.finished':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
             enumValue(value.outcome, ['completed', 'failed', 'cancelled', 'outcome_unknown', 'timed_out'], 'Agent tool outcome');
-            optionalText(value.error, 'Agent tool error', 100_000);
+            optionalText(value.error, 'Agent tool error');
             return;
         case 'workspace.checkpointed':
             requiredIdentifier(value.invocationId, 'Agent invocation id');
@@ -10024,14 +10893,14 @@ function conversationBase(value) {
     nullableIdentifier(value.parentId, 'Agent conversation parent');
 }
 function validateToolCalls(value) {
-    if (!Array.isArray(value) || value.length > 128)
-        throw new Error('Agent tool calls must be a bounded array');
+    if (!Array.isArray(value))
+        throw new Error('Agent tool calls must be an array');
     for (const call of value) {
         if (!isObject(call))
             throw new Error('Agent tool call must be an object');
         requiredIdentifier(call.id, 'Agent tool call id');
         requiredIdentifier(call.name, 'Agent tool call name');
-        requiredText(call.arguments, 'Agent tool call arguments', 2 * 1024 * 1024, true);
+        requiredText(call.arguments, 'Agent tool call arguments', undefined, true);
     }
 }
 function readWriterLock(lockPath) {
@@ -10072,6 +10941,19 @@ function appendAndSync(filePath, content) {
         if (descriptor !== null)
             node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
     }
+}
+function createAndSync(filePath, content) {
+    let descriptor = null;
+    try {
+        descriptor = node_fs__WEBPACK_IMPORTED_MODULE_1___default().openSync(filePath, 'wx');
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(descriptor, content);
+        node_fs__WEBPACK_IMPORTED_MODULE_1___default().fsyncSync(descriptor);
+    }
+    finally {
+        if (descriptor !== null)
+            node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
+    }
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
 }
 function truncateAndSync(filePath, length) {
     let descriptor = null;
@@ -10134,7 +11016,7 @@ function assertJsonValue(value, label, ancestors = new Set()) {
 function requiredText(value, label, maxLength, allowEmpty = false) {
     if (typeof value !== 'string' || (!allowEmpty && !value.trim()))
         throw new Error(`${label} is required`);
-    if (value.length > maxLength)
+    if (maxLength !== undefined && value.length > maxLength)
         throw new Error(`${label} exceeds ${maxLength} characters`);
     return value;
 }
@@ -10186,13 +11068,13 @@ function enumValue(value, values, label) {
     return value;
 }
 function textArray(value, label, maxItems) {
-    if (!Array.isArray(value) || value.length > maxItems)
-        throw new Error(`${label} must be a bounded array`);
+    if (!Array.isArray(value) || (maxItems !== undefined && value.length > maxItems))
+        throw new Error(`${label} must be an array`);
     return value.map(item => requiredText(item, label, 500));
 }
 function identifierArray(value, label, maxItems) {
-    if (!Array.isArray(value) || value.length > maxItems)
-        throw new Error(`${label} must be a bounded array`);
+    if (!Array.isArray(value) || (maxItems !== undefined && value.length > maxItems))
+        throw new Error(`${label} must be an array`);
     return value.map(item => requiredIdentifier(item, label));
 }
 function positiveInteger(value, label) {
@@ -10213,7 +11095,7 @@ function assertFileId(value, label) {
     }
 }
 function protectDirectory(dirPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
     if (process.platform !== 'win32')
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
 }
@@ -10289,7 +11171,9 @@ class AgentSessionToolExecutor {
         const descriptor = this.descriptor(snapshot, invocation.toolId);
         if (descriptor.execution === 'browser') {
             const timestamp = this.host.now();
-            const deadlineAt = new Date(Date.parse(timestamp) + this.browserToolTimeoutMs).toISOString();
+            const deadlineAt = this.browserToolTimeoutMs === null
+                ? undefined
+                : new Date(Date.parse(timestamp) + this.browserToolTimeoutMs).toISOString();
             const waiting = await this.host.perform(sessionId, writer => {
                 const currentSnapshot = writer.snapshot();
                 const current = currentSnapshot.invocations.find(item => item.id === invocationId);
@@ -10317,7 +11201,7 @@ class AgentSessionToolExecutor {
                     timestamp,
                     invocationId,
                     reason: 'browser',
-                    deadlineAt,
+                    ...(deadlineAt ? { deadlineAt } : {}),
                 });
                 return writer.snapshot().invocations.find(item => item.id === invocationId);
             });
@@ -10348,7 +11232,9 @@ class AgentSessionToolExecutor {
                     },
                 }, { kind: 'agent', id: invocation.runId }, () => this.hostTools.execute(descriptor.id, invocation.arguments, {
                     workspace,
+                    sessionId,
                     runId: invocation.runId,
+                    invocationId: invocation.id,
                     signal,
                 }), {
                     beforeCheckpoint: async (checkpoint) => {
@@ -10431,7 +11317,9 @@ class AgentSessionToolExecutor {
                 if (descriptor.execution === 'host') {
                     result = await this.hostTools.execute(descriptor.id, invocation.arguments, {
                         workspace,
+                        sessionId,
                         runId: invocation.runId,
+                        invocationId: invocation.id,
                         signal,
                     });
                 }
@@ -10553,13 +11441,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 const DEFAULT_BROWSER_LEASE_MS = 60_000;
-const MIN_BROWSER_LEASE_MS = 5_000;
-const MAX_BROWSER_LEASE_MS = 5 * 60_000;
-const MAX_BROWSER_TOOLS = 64;
-const MAX_BROWSER_INSTANCES_PER_CALLER = 16;
-const MAX_BROWSER_TOOLS_PER_CALLER = 128;
-const MAX_BROWSER_REGISTRATION_BYTES = 256 * 1024;
-const BROWSER_TOOL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/;
+const BROWSER_TOOL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]*$/;
 class AgentToolRegistryService {
     hostTools;
     moduleHost;
@@ -10589,13 +11471,11 @@ class AgentToolRegistryService {
         const owner = requiredText(extensionId, 'Browser tool extension id', 128);
         const browserInstanceId = requiredText(request.browserInstanceId, 'Browser instance id', 128);
         const leaseDurationMs = request.leaseDurationMs ?? DEFAULT_BROWSER_LEASE_MS;
-        if (!Number.isSafeInteger(leaseDurationMs)
-            || leaseDurationMs < MIN_BROWSER_LEASE_MS
-            || leaseDurationMs > MAX_BROWSER_LEASE_MS) {
-            throw new Error(`Browser tool leaseDurationMs must be between ${MIN_BROWSER_LEASE_MS} and ${MAX_BROWSER_LEASE_MS}`);
+        if (!Number.isSafeInteger(leaseDurationMs) || leaseDurationMs < 1) {
+            throw new Error('Browser tool leaseDurationMs must be a positive integer');
         }
-        if (!Array.isArray(request.tools) || request.tools.length === 0 || request.tools.length > MAX_BROWSER_TOOLS) {
-            throw new Error(`Browser tool registration must contain between 1 and ${MAX_BROWSER_TOOLS} tools`);
+        if (!Array.isArray(request.tools) || request.tools.length === 0) {
+            throw new Error('Browser tool registration must contain at least one tool');
         }
         let serializedTools;
         try {
@@ -10604,23 +11484,8 @@ class AgentToolRegistryService {
         catch {
             throw new Error('Browser tool registration must be JSON serializable');
         }
-        if (Buffer.byteLength(serializedTools, 'utf8') > MAX_BROWSER_REGISTRATION_BYTES) {
-            throw new Error(`Browser tool registration exceeds ${MAX_BROWSER_REGISTRATION_BYTES} bytes`);
-        }
         this.pruneBrowserRegistrations();
         const registrationKey = browserRegistrationKey(user, owner, browserInstanceId);
-        const callerRegistrations = [...this.browserRegistrations.entries()]
-            .filter(([, registration]) => registration.userHandle === user && registration.extensionId === owner);
-        if (!this.browserRegistrations.has(registrationKey)
-            && callerRegistrations.length >= MAX_BROWSER_INSTANCES_PER_CALLER) {
-            throw new Error(`Browser tool registration limit reached for ${owner}`);
-        }
-        const existingTools = callerRegistrations
-            .filter(([key]) => key !== registrationKey)
-            .reduce((total, [, registration]) => total + registration.tools.length, 0);
-        if (existingTools + request.tools.length > MAX_BROWSER_TOOLS_PER_CALLER) {
-            throw new Error(`Browser tool limit reached for ${owner}`);
-        }
         const localIds = new Set();
         const normalizedTools = request.tools.map(input => {
             const normalized = normalizeBrowserTool(input);
@@ -10701,7 +11566,7 @@ function moduleTransactionSchema(transaction) {
             idempotencyKey: { type: 'string' },
             options: {
                 type: 'object',
-                properties: { timeoutMs: { type: 'integer', minimum: 1, maximum: 600_000 } },
+                properties: { timeoutMs: { type: 'integer', minimum: 1 } },
                 additionalProperties: false,
             },
         },
@@ -10712,11 +11577,11 @@ function moduleTransactionSchema(transaction) {
 function normalizeBrowserTool(input) {
     if (!input || typeof input !== 'object')
         throw new Error('Browser tool descriptor must be an object');
-    const id = requiredText(input.id, 'Browser tool id', 64);
+    const id = requiredText(input.id, 'Browser tool id');
     if (!BROWSER_TOOL_ID_PATTERN.test(id))
         throw new Error(`Browser tool id is invalid: ${id}`);
-    const title = requiredText(input.title, 'Browser tool title', 200);
-    const description = requiredText(input.description, 'Browser tool description', 2_000);
+    const title = requiredText(input.title, 'Browser tool title');
+    const description = requiredText(input.description, 'Browser tool description');
     if (!isSchema(input.inputSchema) || (input.outputSchema !== undefined && !isSchema(input.outputSchema))) {
         throw new Error(`Browser tool schema is invalid: ${id}`);
     }
@@ -10759,7 +11624,7 @@ function requiredText(value, label, maxLength) {
     if (typeof value !== 'string' || !value.trim())
         throw new Error(`${label} is required`);
     const result = value.trim();
-    if (result.length > maxLength)
+    if (maxLength !== undefined && result.length > maxLength)
         throw new Error(`${label} exceeds ${maxLength} characters`);
     return result;
 }
@@ -16695,7 +17560,7 @@ class NativeMigrationService {
                         });
                         this.saveOperation({ ...applying, status: 'needs_rollback', updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(), journal });
                     }
-                    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
+                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
                     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(write.tempPath, write.targetPath);
                     const completedEntry = {
                         archivePath: write.preview.archivePath,
@@ -16786,7 +17651,7 @@ class NativeMigrationService {
         return operation;
     }
     saveOperation(operation) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
     }
     toPublicOperation(operation) {
         const { sourcePath: _sourcePath, rootPath: _rootPath, journal, ...publicOperation } = operation;
@@ -16946,7 +17811,7 @@ function normalizeApplyMode(value) {
     throw new Error(`Unsupported native migration apply mode: ${String(value)}`);
 }
 function prepareNativeWriteTarget(rootPath, relativePath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
     const targetPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(rootPath, relativePath);
     (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
     const realRoot = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
@@ -16996,7 +17861,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
                 continue;
             }
@@ -17015,7 +17880,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
             }
         }
@@ -17769,7 +18634,7 @@ async function scanSafeZip(filePath, options = {}) {
     };
 }
 async function extractSafeZipEntries(filePath, targetRoot, shouldExtract = () => true, options = {}) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
     const parsedEntries = parseZipEntries(filePath, options);
     const extracted = [];
     for (const parsedEntry of parsedEntries) {
@@ -18009,7 +18874,7 @@ function readZip64Extra(extra, values) {
     return { compressedSize, uncompressedSize, localHeaderOffset };
 }
 async function extractParsedEntry(filePath, entry, destinationPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
     const source = node_fs__WEBPACK_IMPORTED_MODULE_1___default().createReadStream(filePath, {
         start: entry.dataStart,
         end: entry.dataStart + entry.compressedSizeBytes - 1,
@@ -18499,7 +19364,7 @@ class StManagerBridgeService {
         return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.statePath, {});
     }
     writeState(state) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
         const tempPath = `${this.statePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, this.statePath);
@@ -18962,7 +19827,7 @@ function readJsonObject(filePath) {
     }
 }
 function atomicWriteBuffer(filePath, buffer) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
     const tempPath = `${filePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, buffer);
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
@@ -19144,7 +20009,7 @@ class StManagerResourceLocator {
         return candidateReal;
     }
     resolveWritablePath(rootPath, relativePath) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
         const rootReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
         const candidate = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(rootReal, relativePath.split('/').join((node_path__WEBPACK_IMPORTED_MODULE_2___default().sep)));
         (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(candidate));
@@ -21213,8 +22078,8 @@ class WorkspaceHistoryService {
         });
     }
     listCommits(workspaceId, limit = 100) {
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
-            throw validationError('Workspace commit limit must be an integer between 1 and 500');
+        if (!Number.isSafeInteger(limit) || limit < 1) {
+            throw validationError('Workspace commit limit must be a positive integer');
         }
         const workspace = this.getStoredWorkspace(workspaceId);
         const ref = this.readRef(workspace);
@@ -21921,7 +22786,7 @@ class WorkspaceHistoryService {
         if (current) {
             this.removeWorkspaceNode(workspace, relativePath, current, warnings);
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
         this.resolveSafeWorkspacePath(workspace, relativePath);
         if (target.kind === 'tree') {
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
@@ -22099,7 +22964,7 @@ class WorkspaceHistoryService {
             this.readCommit(commit.id, commit.workspaceId);
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
     }
     readCommit(commitId, workspaceId) {
         assertOid(commitId);
@@ -22131,7 +22996,7 @@ class WorkspaceHistoryService {
             stats.reusedBytes += content.byteLength;
             return oid;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
         stats.storedBytes += content.byteLength;
         return oid;
     }
@@ -22230,7 +23095,7 @@ class WorkspaceHistoryService {
         return ref;
     }
     writeRef(ref) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
     }
     readRegistry() {
         this.ensureStore();
@@ -22251,7 +23116,7 @@ class WorkspaceHistoryService {
         return registry;
     }
     writeRegistry(registry) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
     }
     getStoredWorkspace(workspaceId) {
         if (workspaceId.length > 128 || !isSafeName(workspaceId)) {
@@ -22339,7 +23204,7 @@ class WorkspaceHistoryService {
             }
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
     }
     removeMatchingRollbackJournal(workspaceId, operationId) {
         const journal = this.readRollbackJournal(workspaceId);
@@ -22357,7 +23222,7 @@ class WorkspaceHistoryService {
     }
     ensureStore() {
         for (const dir of ['objects', 'commits', 'refs', 'journals', 'rollbacks', 'operations', 'locks']) {
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
+            ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
         }
     }
     registryPath() {
@@ -23449,6 +24314,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   atomicWriteJson: () => (/* binding */ atomicWriteJson),
 /* harmony export */   buildPermissionDescriptor: () => (/* binding */ buildPermissionDescriptor),
 /* harmony export */   ensureDir: () => (/* binding */ ensureDir),
+/* harmony export */   fsyncDirectory: () => (/* binding */ fsyncDirectory),
 /* harmony export */   getHttpFetchNetworkClass: () => (/* binding */ getHttpFetchNetworkClass),
 /* harmony export */   getSessionToken: () => (/* binding */ getSessionToken),
 /* harmony export */   getUserContext: () => (/* binding */ getUserContext),
@@ -23848,17 +24714,17 @@ module.exports = require("node:zlib");
 /******/ 	});
 /************************************************************************/
 /******/ 	// The module cache
-/******/ 	var __webpack_module_cache__ = {};
+/******/ 	const __webpack_module_cache__ = {};
 /******/ 	
 /******/ 	// The require function
 /******/ 	function __webpack_require__(moduleId) {
 /******/ 		// Check if module is in cache
-/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		const cachedModule = __webpack_module_cache__[moduleId];
 /******/ 		if (cachedModule !== undefined) {
 /******/ 			return cachedModule.exports;
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
-/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 		const module = __webpack_module_cache__[moduleId] = {
 /******/ 			// no module.id needed
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
@@ -23867,7 +24733,7 @@ module.exports = require("node:zlib");
 /******/ 		// Execute the module function
 /******/ 		if (!(moduleId in __webpack_modules__)) {
 /******/ 			delete __webpack_module_cache__[moduleId];
-/******/ 			var e = new Error("Cannot find module '" + moduleId + "'");
+/******/ 			const e = new Error("Cannot find module '" + moduleId + "'");
 /******/ 			e.code = 'MODULE_NOT_FOUND';
 /******/ 			throw e;
 /******/ 		}
@@ -23882,7 +24748,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// getDefaultExport function for compatibility with non-harmony modules
 /******/ 		__webpack_require__.n = (module) => {
-/******/ 			var getter = module && module.__esModule ?
+/******/ 			const getter = module && module.__esModule ?
 /******/ 				() => (module['default']) :
 /******/ 				() => (module);
 /******/ 			__webpack_require__.d(getter, { a: getter });
@@ -23892,11 +24758,26 @@ module.exports = require("node:zlib");
 /******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
-/******/ 		// define getter functions for harmony exports
+/******/ 		// define getter/value functions for harmony exports
 /******/ 		__webpack_require__.d = (exports, definition) => {
-/******/ 			for(var key in definition) {
-/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
-/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 			if(Array.isArray(definition)) {
+/******/ 				var i = 0;
+/******/ 				while(i < definition.length) {
+/******/ 					var key = definition[i++];
+/******/ 					var binding = definition[i++];
+/******/ 					if(!__webpack_require__.o(exports, key)) {
+/******/ 						if(binding === 0) {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, value: definition[i++] });
+/******/ 						} else {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, get: binding });
+/******/ 						}
+/******/ 					} else if(binding === 0) { i++; }
+/******/ 				}
+/******/ 			} else {
+/******/ 				for(var key in definition) {
+/******/ 					if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 						Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 					}
 /******/ 				}
 /******/ 			}
 /******/ 		};
@@ -23911,7 +24792,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
 /******/ 		__webpack_require__.r = (exports) => {
-/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 			if(Symbol.toStringTag) {
 /******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 /******/ 			}
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
@@ -23919,7 +24800,7 @@ module.exports = require("node:zlib");
 /******/ 	})();
 /******/ 	
 /************************************************************************/
-var __webpack_exports__ = {};
+let __webpack_exports__ = {};
 // This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 /*!**********************!*\

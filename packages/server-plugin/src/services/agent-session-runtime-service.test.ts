@@ -35,6 +35,8 @@ describe('AgentSessionRuntimeService', () => {
                 baseUrl: 'http://localhost:4321/v1',
                 model: 'unsaved-model',
                 apiKey: 'connection-secret',
+                contextWindowTokens: 128_000,
+                maxOutputTokens: 8_192,
                 timeoutMs: 90_000,
             },
         });
@@ -74,6 +76,8 @@ describe('AgentSessionRuntimeService', () => {
                 baseUrl: 'https://api.example.com/v1',
                 model: 'rejected-model',
                 apiKey: 'connection-secret',
+                contextWindowTokens: 128_000,
+                maxOutputTokens: 8_192,
             },
         });
 
@@ -95,6 +99,8 @@ describe('AgentSessionRuntimeService', () => {
                 baseUrl: 'http://localhost:4321/v1',
                 model: 'invalid-key-model',
                 apiKey: 42 as never,
+                contextWindowTokens: 128_000,
+                maxOutputTokens: 8_192,
             },
         })).rejects.toThrow('apiKey must be a string');
         expect(requester).not.toHaveBeenCalled();
@@ -138,24 +144,176 @@ describe('AgentSessionRuntimeService', () => {
         expect(first.session.id).toBe(created.session.id);
     });
 
-    it('atomically creates only one new run when the same failed run is continued twice', async () => {
-        const fixture = await createFixture(sequenceRequester([
-            toolCall('call-read', 'host_read_file', { path: 'state.txt' }),
-            finalMessage('Continued safely.'),
-        ]));
-        fs.writeFileSync(path.join(fixture.root, 'state.txt'), 'current state', 'utf8');
+    it('accepts structured initial context beyond the former 64 KiB envelope', async () => {
+        const requester = vi.fn<AgentCompletionRequester>(async () => finalMessage('Large context received.'));
+        const fixture = await createFixture(requester);
+        const payload = 'x'.repeat(70 * 1024);
         const created = await fixture.runtime.createSession({
             workspaceId: 'workspace',
-            message: 'Inspect the state',
-            mode: 'auto',
-            allowedTools: ['host_read_file'],
-            maxSteps: 1,
+            message: 'Use the supplied context.',
+            context: { payload },
         });
-        const failedRunId = created.runs[0]!.id;
+        const completed = await waitFor(
+            () => fixture.runtime.getSession(created.session.id),
+            snapshot => snapshot.runs[0]?.status === 'completed',
+        );
+
+        const initial = completed.conversation.find(entry => entry.kind === 'message' && entry.role === 'user');
+        expect(initial?.kind === 'message' ? initial.content : undefined).toContain(payload);
+        expect(requester.mock.calls[0]![1].messages.some(message => message.content?.includes(payload))).toBe(true);
+        await fixture.runtime.stop();
+    });
+
+    it('automatically compacts durable context at the configured model window and continues the run', async () => {
+        const requests: Parameters<AgentCompletionRequester>[1][] = [];
+        const responses: AgentLlmCompletionResponse[] = [
+            {
+                message: { role: 'assistant', content: 'First answer with context that remains part of the session.' },
+                finishReason: 'stop',
+                usage: { total_tokens: 1_400 },
+            },
+            finalMessage('## Goal\nContinue the durable task.\n\n## Progress\nThe first answer is complete.'),
+            finalMessage('Second answer after compaction.'),
+        ];
+        const fixture = await createFixture(vi.fn(async (_profile, request) => {
+            requests.push(request);
+            return responses.shift()!;
+        }));
+        fixture.profileStore.upsertProfile({
+            id: 'compact-profile',
+            displayName: 'Compact context',
+            provider: 'openai-compatible',
+            baseUrl: 'http://localhost:1234/v1',
+            model: 'test',
+            contextWindowTokens: 1_500,
+            maxOutputTokens: 256,
+        });
+        const created = await fixture.runtime.createSession({
+            workspaceId: 'workspace',
+            profileId: 'compact-profile',
+            allowedTools: [],
+            message: 'Complete the first part.',
+        });
         await waitFor(
             () => fixture.runtime.getSession(created.session.id),
-            snapshot => snapshot.runs[0]?.status === 'failed',
+            snapshot => snapshot.runs[0]?.status === 'completed',
         );
+
+        const sent = await fixture.runtime.sendMessage(created.session.id, { content: 'Now continue with the second part.' });
+        const completed = await waitFor(
+            () => fixture.runtime.getSession(created.session.id),
+            snapshot => snapshot.runs.find(run => run.id === sent.runId)?.status === 'completed',
+        );
+
+        expect(requests).toHaveLength(3);
+        expect(requests[1]!.tools).toEqual([]);
+        expect(requests[1]!.messages[0]?.content).toContain('context summarization assistant');
+        expect(requests[2]!.messages).toEqual(expect.arrayContaining([
+            expect.objectContaining({ role: 'system', content: expect.stringContaining('Conversation summary:') }),
+        ]));
+        expect(completed.conversation.find(entry => entry.kind === 'compaction')).toMatchObject({
+            sourceLeafEntryId: expect.any(String),
+            sourceLastSequence: expect.any(Number),
+            firstKeptEntryId: null,
+            retainedEntryIds: [],
+            contextWindowTokens: 1_500,
+            tokensBefore: expect.any(Number),
+            tokensAfter: expect.any(Number),
+        });
+        const secondRun = completed.runs.find(run => run.id === sent.runId)!;
+        expect(completed.steps.filter(step => step.runId === secondRun.id).map(step => step.kind))
+            .toEqual(['compaction', 'generation']);
+        expect(secondRun.stepCount).toBe(2);
+        await fixture.runtime.stop();
+    });
+
+    it('recovers a provider-reported context overflow by compacting instead of suspending immediately', async () => {
+        const responses = [
+            finalMessage('## Goal\nRecover the request from a compact checkpoint.'),
+            finalMessage('Recovered after provider overflow.'),
+        ];
+        let requestIndex = 0;
+        const requester = vi.fn<AgentCompletionRequester>(async () => {
+            if (requestIndex++ === 0) throw new Error('maximum context length exceeded');
+            return responses.shift()!;
+        });
+        const fixture = await createFixture(requester);
+        const created = await fixture.runtime.createSession({
+            workspaceId: 'workspace',
+            allowedTools: [],
+            message: 'Complete this request even if the provider reports an overflow.',
+        });
+        const completed = await waitFor(
+            () => fixture.runtime.getSession(created.session.id),
+            snapshot => snapshot.runs[0]?.status === 'completed',
+        );
+
+        expect(requester).toHaveBeenCalledTimes(3);
+        expect(completed.steps.map(step => [step.kind, step.status, step.finishReason])).toEqual([
+            ['generation', 'failed', 'context_overflow'],
+            ['compaction', 'completed', 'context_compacted'],
+            ['generation', 'completed', undefined],
+        ]);
+        expect(completed.conversation.some(entry => entry.kind === 'compaction')).toBe(true);
+        expect(completed.runs[0]).toMatchObject({ status: 'completed', stepCount: 3 });
+        await fixture.runtime.stop();
+    });
+
+    it('shrinks a compaction request when provider tokenization still reports overflow', async () => {
+        const compactionSourceSizes: number[] = [];
+        let ordinaryRequests = 0;
+        const requester = vi.fn<AgentCompletionRequester>(async (_profile, request) => {
+            const isCompaction = request.messages[0]?.content?.includes('context summarization assistant') ?? false;
+            if (!isCompaction) {
+                ordinaryRequests += 1;
+                if (ordinaryRequests === 1) throw new Error('maximum context length exceeded');
+                return finalMessage('Recovered after adaptive compaction.');
+            }
+            const content = request.messages[1]?.content ?? '';
+            const source = /<conversation>\n([\s\S]*?)\n<\/conversation>/.exec(content)?.[1] ?? '';
+            compactionSourceSizes.push(source.length);
+            if (source.length > 24) throw new Error('maximum context length exceeded while summarizing');
+            return finalMessage('## Goal\nRecover adaptively.\n\n## Progress\nContext is checkpointed.');
+        });
+        const fixture = await createFixture(requester);
+        const created = await fixture.runtime.createSession({
+            workspaceId: 'workspace',
+            allowedTools: [],
+            message: 'Keep this conversation recoverable even when the provider tokenizer counts it differently.',
+        });
+        const completed = await waitFor(
+            () => fixture.runtime.getSession(created.session.id),
+            snapshot => snapshot.runs[0]?.status === 'completed',
+        );
+
+        expect(compactionSourceSizes.length).toBeGreaterThan(1);
+        expect(compactionSourceSizes[1]!).toBeLessThan(compactionSourceSizes[0]!);
+        expect(completed.generations.filter(generation => generation.status === 'failed').length).toBeGreaterThan(1);
+        expect(completed.steps.map(step => [step.kind, step.status])).toEqual([
+            ['generation', 'failed'],
+            ['compaction', 'completed'],
+            ['generation', 'completed'],
+        ]);
+        await fixture.runtime.stop();
+    });
+
+    it('atomically creates only one new run when the same failed run is continued twice', async () => {
+        const fixture = await createFixture(sequenceRequester([finalMessage('Continued safely.')]));
+        const created = await fixture.runtime.createSession({ workspaceId: 'workspace' });
+        const failedRunId = 'failed-run';
+        const writer = fixture.sessionStore.openWriter(created.session.id);
+        writer.append(messageEntry('failed-user', null, 'Inspect the state'));
+        writer.append(runEntry('failed-run-entry', failedRunId, 'failed-user'));
+        writer.append({ id: 'failed-run-started', type: 'run.started', timestamp: timestamp(3), runId: failedRunId });
+        writer.append({
+            id: 'failed-run-finished',
+            type: 'run.finished',
+            timestamp: timestamp(4),
+            runId: failedRunId,
+            outcome: 'failed',
+            error: 'Synthetic deterministic failure',
+        });
+        writer.close();
 
         const [first, repeated] = await Promise.all([
             fixture.runtime.continueFailedRun(created.session.id, failedRunId),
@@ -188,6 +346,8 @@ describe('AgentSessionRuntimeService', () => {
             provider: 'openai-compatible',
             baseUrl: 'http://localhost:2345/v1',
             model: 'second',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         });
         const created = await fixture.runtime.createSession({ workspaceId: 'workspace', profileId: 'profile' });
 
@@ -198,7 +358,6 @@ describe('AgentSessionRuntimeService', () => {
             profileId: 'profile-2',
             mode: 'plan',
             allowedTools: ['host_read_file', 'host_search_text'],
-            maxSteps: 31,
             archived: true,
         });
 
@@ -207,7 +366,6 @@ describe('AgentSessionRuntimeService', () => {
             profileId: 'profile-2',
             mode: 'plan',
             allowedTools: ['host_read_file', 'host_search_text'],
-            maxSteps: 31,
             archivedAt: expect.any(String),
         });
         const updateRecords = fixture.sessionStore.readSession(created.session.id).records
@@ -358,7 +516,6 @@ describe('AgentSessionRuntimeService', () => {
             profileId: 'profile',
             mode: 'ask',
             allowedTools: [],
-            maxSteps: 4,
         });
         const writer = sessionStore.openWriter(created.session.id);
         writer.append(messageEntry('user-entry', null, 'Restart me'));
@@ -977,6 +1134,8 @@ async function createBase() {
         provider: 'openai-compatible',
         baseUrl: 'http://localhost:1234/v1',
         model: 'test',
+        contextWindowTokens: 128_000,
+        maxOutputTokens: 8_192,
     });
     return { base, root, history, profileStore };
 }
@@ -1024,7 +1183,6 @@ function runEntry(id: string, runId: string, triggerMessageId: string) {
         profileId: 'profile',
         mode: 'ask' as const,
         allowedTools: [],
-        maxSteps: 4,
     };
 }
 
@@ -1043,7 +1201,6 @@ function seedPendingHostInvocation(
         profileId: 'profile',
         mode: 'auto',
         allowedTools: ['host_write_file'],
-        maxSteps: 4,
     });
     const writer = store.openWriter(sessionId);
     writer.append(messageEntry('pending-user', null, 'Write pending.txt'));

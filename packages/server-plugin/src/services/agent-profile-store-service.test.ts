@@ -21,6 +21,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'http://localhost:1234/v1/',
             model: 'test-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
             apiKey: 'secret-api-key',
         });
         expect(created).not.toHaveProperty('apiKey');
@@ -28,6 +30,8 @@ describe('AgentProfileStoreService', () => {
             baseUrl: 'http://localhost:1234/v1',
             apiKeyConfigured: true,
             apiKeyMasked: 'sec…-key',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         });
 
         const updated = store.upsertProfile({
@@ -36,6 +40,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'http://localhost:1234/v1',
             model: 'test-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         });
         expect(updated.apiKeyConfigured).toBe(true);
         expect(new AgentProfileStoreService(stateDir).getProfileForRequest('main').apiKey).toBe('secret-api-key');
@@ -49,6 +55,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'https://api.example.com/v1',
             model: 'test-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
             apiKey: 'secret-api-key',
         });
 
@@ -58,6 +66,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'https://other.example/v1',
             model: 'test-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         })).toThrow(/apiKey must be supplied or explicitly cleared/);
         expect(() => store.upsertProfile({
             id: 'insecure',
@@ -65,6 +75,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'http://api.example.com/v1',
             model: 'test-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         })).toThrow(/must use HTTPS/);
 
         store.upsertProfile({
@@ -73,6 +85,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'https://other.example/v1',
             model: 'test-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
             apiKey: '',
         });
         expect(store.getProfileForRequest('main').apiKey).toBeNull();
@@ -86,6 +100,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'https://api.example.com/v1',
             model: 'saved-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
             apiKey: 'secret-api-key',
         });
         const profilesPath = path.join(stateDir, 'profiles.json');
@@ -97,6 +113,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'https://api.example.com/v1',
             model: 'unsaved-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         });
 
         expect(prepared).toMatchObject({
@@ -113,6 +131,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'http://localhost:1234/v1',
             model: 'temporary-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         })).toMatchObject({ displayName: 'Temporary', apiKey: null });
         expect(fs.existsSync(path.join(empty.stateDir, 'profiles.json'))).toBe(false);
         expect(() => empty.store.prepareProfileForTest({
@@ -120,6 +140,8 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'http://localhost:1234/v1',
             model: 'temporary-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
             apiKey: 42 as never,
         })).toThrow('apiKey must be a string');
     });
@@ -136,12 +158,39 @@ describe('AgentProfileStoreService', () => {
             provider: 'openai-compatible',
             baseUrl: 'http://localhost:1234/v1',
             model: 'test-model',
+            contextWindowTokens: 128_000,
+            maxOutputTokens: 8_192,
         });
 
         expect(store.deleteProfile('temporary')).toBe(true);
         expect(store.deleteProfile('temporary')).toBe(false);
         expect(new AgentProfileStoreService(stateDir).listProfiles()).toEqual([]);
         expect(fs.readFileSync(legacyRun, 'utf8')).toBe('{"format":"authority-agent-run/v1"}\n');
+    });
+
+    it('requires a coherent context window without imposing an arbitrary upper bound', () => {
+        const { store } = createStore();
+        expect(() => store.upsertProfile({
+            displayName: 'Invalid window',
+            provider: 'openai-compatible',
+            baseUrl: 'http://localhost:1234/v1',
+            model: 'test-model',
+            contextWindowTokens: 8_192,
+            maxOutputTokens: 8_192,
+        })).toThrow(/must be smaller/);
+        expect(store.upsertProfile({
+            displayName: 'Large window',
+            provider: 'openai-compatible',
+            baseUrl: 'http://localhost:1234/v1',
+            model: 'test-model',
+            contextWindowTokens: 10_000_000,
+            maxOutputTokens: 2_000_000,
+            timeoutMs: null,
+        })).toMatchObject({
+            contextWindowTokens: 10_000_000,
+            maxOutputTokens: 2_000_000,
+            timeoutMs: null,
+        });
     });
 });
 

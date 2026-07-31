@@ -115,7 +115,7 @@ export function renderAgentSessionMain(state: AgentWorkbenchState, disabled = ''
                         ${renderSessionMenu(state, snapshot, disabled)}
                     </div>
                 </header>
-                ${run && ACTIVE_RUN_STATUSES.has(run.status) ? `<div class="authority-agent-run-progress authority-mobile-only"><span>${escapeHtml(sessionStatusLabel(run.status))}</span><strong>${escapeHtml(`${run.stepCount} / ${run.maxSteps}`)}</strong></div>` : ''}
+                ${run && ACTIVE_RUN_STATUSES.has(run.status) ? `<div class="authority-agent-run-progress authority-mobile-only"><span>${escapeHtml(sessionStatusLabel(run.status))}</span><strong>${escapeHtml(`${run.stepCount} 步`)}</strong></div>` : ''}
                 ${renderRunRecovery(snapshot.session.id, run, disabled)}
             </div>
             <div class="authority-agent-timeline" data-role="agent-timeline">
@@ -187,9 +187,6 @@ function renderNewSession(state: AgentWorkbenchState, disabled: string): string 
                                     <option value="auto">按全局策略自动执行</option>
                                 </select>
                             </label>
-                            <label class="authority-agent-field">单次运行最大步骤
-                                <input data-role="agent-new-max-steps" type="number" min="1" max="64" value="24" ${disabled} />
-                            </label>
                         </div>
                     </details>
                     <span class="authority-muted">作用域：整个 SillyTavern</span>
@@ -208,7 +205,6 @@ function renderSessionMenu(state: AgentWorkbenchState, snapshot: AgentSessionSna
                 <label class="authority-agent-field">标题<input data-role="agent-session-title" value="${escapeHtml(snapshot.session.title)}" ${disabled} /></label>
                 <label class="authority-agent-field">模型连接<select data-role="agent-session-profile" ${disabled}>${profileOptions(state.profiles, snapshot.session.profileId)}</select></label>
                 <label class="authority-agent-field">执行策略<select data-role="agent-session-mode" ${disabled}>${modeOptions(snapshot.session.mode)}</select></label>
-                <label class="authority-agent-field">最大步骤<input data-role="agent-session-max-steps" type="number" min="1" max="64" value="${escapeHtml(String(snapshot.session.maxSteps))}" ${disabled} /></label>
                 <button type="button" class="authority-action-button authority-action-button--primary" data-action="agent-update-session" data-session-id="${escapeHtml(snapshot.session.id)}" ${disabled}>保存 Session 设置</button>
             </div>
         </details>
@@ -319,7 +315,7 @@ function renderActivityInspector(state: AgentWorkbenchState, disabled: string): 
         <section class="authority-agent-inspector-section">
             <header><strong>当前运行</strong>${run ? renderSessionStatus(run.status) : renderSessionStatus('idle')}</header>
             ${run ? `<dl class="authority-agent-description-list">
-                <div><dt>进度</dt><dd>${escapeHtml(`${run.stepCount} / ${run.maxSteps}`)} 步</dd></div>
+                <div><dt>进度</dt><dd>${escapeHtml(String(run.stepCount))} 步</dd></div>
                 <div><dt>策略</dt><dd>${escapeHtml(modeLabel(run.mode))}</dd></div>
                 <div><dt>恢复</dt><dd>${escapeHtml(String(run.resumeCount))} 次</dd></div>
             </dl>${run.error ? `<div class="authority-inline-note">${escapeHtml(redactSensitiveText(run.error))}</div>` : ''}` : '<div class="authority-muted">Session 当前空闲。</div>'}
@@ -331,7 +327,7 @@ function renderActivityInspector(state: AgentWorkbenchState, disabled: string): 
         </section>
         <details class="authority-agent-inspector-panel">
             <summary><span>运行诊断</span><span>${steps.length} steps · ${snapshot.generations.filter(item => !run || item.runId === run.id).length} generations</span></summary>
-            <div class="authority-agent-inspector-panel__body authority-stack">${steps.slice().reverse().map(step => `<div class="authority-list-card"><strong>Step ${step.index + 1}</strong><span>${escapeHtml(step.status)} · ${escapeHtml(formatDate(step.updatedAt))}</span></div>`).join('') || '<div class="authority-muted">没有执行记录。</div>'}</div>
+            <div class="authority-agent-inspector-panel__body authority-stack">${steps.slice().reverse().map(step => `<div class="authority-list-card"><strong>${step.kind === 'compaction' ? 'Context summary' : `Step ${step.index}`}</strong><span>${escapeHtml(step.status)} · ${escapeHtml(formatDate(step.updatedAt))}</span></div>`).join('') || '<div class="authority-muted">没有执行记录。</div>'}</div>
         </details>
     `;
 }

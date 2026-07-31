@@ -1,13 +1,6 @@
 import type { AgentLlmMessage } from '@stdo/shared-types';
 import type { StoredAgentLlmProfile } from './agent-profile-store-service.js';
 
-const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
-const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
-const MAX_ASSISTANT_CONTENT_CHARS = 256 * 1024;
-const MAX_TOOL_ARGUMENT_CHARS = 128 * 1024;
-const MAX_TOTAL_TOOL_ARGUMENT_CHARS = 1024 * 1024;
-const MAX_USAGE_CHARS = 16 * 1024;
-
 export interface AgentLlmToolDefinition {
     type: 'function';
     function: {
@@ -21,6 +14,7 @@ export interface AgentLlmCompletionRequest {
     messages: AgentLlmMessage[];
     tools: AgentLlmToolDefinition[];
     signal: AbortSignal;
+    maxOutputTokens?: number;
 }
 
 export interface AgentLlmCompletionResponse {
@@ -49,7 +43,9 @@ export class AgentLlmClient {
         } else {
             request.signal.addEventListener('abort', forwardAbort, { once: true });
         }
-        const timer = setTimeout(() => controller.abort(new Error(`LLM request timed out after ${profile.timeoutMs} ms`)), profile.timeoutMs);
+        const timer = profile.timeoutMs === null
+            ? null
+            : setTimeout(() => controller.abort(new Error(`LLM request timed out after ${profile.timeoutMs} ms`)), profile.timeoutMs);
         try {
             throwIfAborted(controller.signal);
             const body = JSON.stringify({
@@ -58,11 +54,10 @@ export class AgentLlmClient {
                 stream: false,
                 ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: 'auto' } : {}),
                 ...(profile.temperature === null ? {} : { temperature: profile.temperature }),
-                ...(profile.maxOutputTokens === null ? {} : { max_tokens: profile.maxOutputTokens }),
+                ...((request.maxOutputTokens ?? profile.maxOutputTokens) === null
+                    ? {}
+                    : { max_tokens: request.maxOutputTokens ?? profile.maxOutputTokens }),
             });
-            if (Buffer.byteLength(body, 'utf8') > MAX_REQUEST_BYTES) {
-                throw new Error('LLM request exceeded the 8 MB limit');
-            }
             const response = await this.fetchImpl(completionUrl(profile.baseUrl), {
                 method: 'POST',
                 headers: {
@@ -72,7 +67,7 @@ export class AgentLlmClient {
                 body,
                 signal: controller.signal,
             });
-            const text = await readLimitedText(response);
+            const text = await response.text();
             throwIfAborted(controller.signal);
             if (!response.ok) {
                 throw new Error(`LLM request failed (${response.status}): ${redact(text.slice(0, 4_000), profile.apiKey)}`);
@@ -86,35 +81,9 @@ export class AgentLlmClient {
             }
             throw error;
         } finally {
-            clearTimeout(timer);
+            if (timer) clearTimeout(timer);
             request.signal.removeEventListener('abort', forwardAbort);
         }
-    }
-}
-
-async function readLimitedText(response: Response): Promise<string> {
-    const declaredLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-        throw new Error('LLM response exceeded the 10 MB limit');
-    }
-    if (!response.body) {
-        return '';
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let total = 0;
-    let text = '';
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-            return text + decoder.decode();
-        }
-        total += value.byteLength;
-        if (total > MAX_RESPONSE_BYTES) {
-            await reader.cancel();
-            throw new Error('LLM response exceeded the 10 MB limit');
-        }
-        text += decoder.decode(value, { stream: true });
     }
 }
 
@@ -167,9 +136,6 @@ function parseCompletion(text: string, responseRequestId: string | null): AgentL
         throw new Error('LLM response did not include an assistant message');
     }
     const content = message.content === null || typeof message.content === 'string' ? message.content : null;
-    if (content !== null && content.length > MAX_ASSISTANT_CONTENT_CHARS) {
-        throw new Error('LLM assistant content exceeded the 256 KB limit');
-    }
     const toolCalls = message.tool_calls === undefined ? undefined : parseToolCalls(message.tool_calls);
     if ((content === null || !content.trim()) && !toolCalls?.length) {
         throw new Error('LLM assistant message was empty');
@@ -182,7 +148,7 @@ function parseCompletion(text: string, responseRequestId: string | null): AgentL
             ...(toolCalls?.length ? { toolCalls } : {}),
         },
         finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
-        ...(payload.usage === undefined ? {} : { usage: boundedUsage(payload.usage) }),
+        ...(payload.usage === undefined ? {} : { usage: payload.usage }),
         ...(requestId ? { providerRequestId: requestId } : {}),
     };
 }
@@ -193,11 +159,10 @@ function providerRequestId(headerValue: string | null, payloadValue: unknown): s
 }
 
 function parseToolCalls(value: unknown): NonNullable<AgentLlmMessage['toolCalls']> {
-    if (!Array.isArray(value) || value.length > 32) {
+    if (!Array.isArray(value)) {
         throw new Error('LLM response contained invalid tool calls');
     }
     const ids = new Set<string>();
-    let totalArgumentChars = 0;
     return value.map((call, index) => {
         const id = call?.id;
         const name = call?.function?.name;
@@ -211,23 +176,10 @@ function parseToolCalls(value: unknown): NonNullable<AgentLlmMessage['toolCalls'
             || typeof name !== 'string'
             || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)
             || typeof args !== 'string'
-            || args.length > MAX_TOOL_ARGUMENT_CHARS
         ) {
             throw new Error(`LLM response contained an invalid tool call at index ${index}`);
-        }
-        totalArgumentChars += args.length;
-        if (totalArgumentChars > MAX_TOTAL_TOOL_ARGUMENT_CHARS) {
-            throw new Error('LLM response tool arguments exceeded the 1 MB combined limit');
         }
         ids.add(id);
         return { id, name, arguments: args };
     });
-}
-
-function boundedUsage(value: unknown): unknown {
-    const serialized = JSON.stringify(value);
-    if (typeof serialized === 'string' && serialized.length <= MAX_USAGE_CHARS) {
-        return value;
-    }
-    return { truncated: true };
 }

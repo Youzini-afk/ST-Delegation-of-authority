@@ -72,7 +72,7 @@ describe('AgentLlmClient', () => {
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('rejects oversized requests and assistant content at the provider boundary', async () => {
+    it('does not impose an Authority request or assistant-content quota', async () => {
         const fetchMock = vi.fn(async () => new Response(JSON.stringify({
             choices: [{
                 finish_reason: 'stop',
@@ -85,17 +85,11 @@ describe('AgentLlmClient', () => {
             messages: [{ role: 'user', content: 'x'.repeat(8 * 1024 * 1024) }],
             tools: [],
             signal: new AbortController().signal,
-        })).rejects.toThrow('request exceeded the 8 MB limit');
-        expect(fetchMock).not.toHaveBeenCalled();
-
-        await expect(client.complete(profile(), {
-            messages: [{ role: 'user', content: 'test' }],
-            tools: [],
-            signal: new AbortController().signal,
-        })).rejects.toThrow('assistant content exceeded the 256 KB limit');
+        })).resolves.toMatchObject({ message: { content: expect.stringMatching(/^x+$/) } });
+        expect(fetchMock).toHaveBeenCalledOnce();
     });
 
-    it('rejects excessive combined tool arguments and bounds provider usage metadata', async () => {
+    it('preserves large tool arguments and provider usage metadata', async () => {
         const calls = Array.from({ length: 9 }, (_, index) => ({
             id: `call-${index}`,
             type: 'function',
@@ -117,8 +111,10 @@ describe('AgentLlmClient', () => {
             signal: new AbortController().signal,
         };
 
-        await expect(client.complete(profile(), request)).rejects.toThrow('tool arguments exceeded the 1 MB combined limit');
-        await expect(client.complete(profile(), request)).resolves.toMatchObject({ usage: { truncated: true } });
+        await expect(client.complete(profile(), request)).resolves.toMatchObject({ message: { toolCalls: expect.any(Array) } });
+        await expect(client.complete(profile(), request)).resolves.toMatchObject({
+            usage: { provider_blob: expect.stringMatching(/^x+$/) },
+        });
     });
 });
 
@@ -134,6 +130,7 @@ function profile(): StoredAgentLlmProfile {
         apiKeyMasked: '********',
         apiKeyFingerprint: 'abc',
         temperature: null,
+        contextWindowTokens: 128_000,
         maxOutputTokens: null,
         timeoutMs: 1_000,
         createdAt: '2026-01-01T00:00:00.000Z',

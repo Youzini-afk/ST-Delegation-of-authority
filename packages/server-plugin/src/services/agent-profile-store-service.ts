@@ -100,9 +100,15 @@ export class AgentProfileStoreService {
         const model = requiredText(input.model, 'LLM profile model', 200);
         const baseUrl = normalizeBaseUrl(input.baseUrl);
         const temperature = optionalNumber(input.temperature, 'LLM profile temperature', 0, 2);
-        const maxOutputTokens = optionalInteger(input.maxOutputTokens, 'LLM profile maxOutputTokens', 1, 1_000_000);
-        const timeoutMs = optionalInteger(input.timeoutMs, 'LLM profile timeoutMs', 1_000, 600_000) ?? 120_000;
+        const contextWindowTokens = positiveInteger(input.contextWindowTokens, 'LLM profile contextWindowTokens');
+        const maxOutputTokens = positiveInteger(input.maxOutputTokens, 'LLM profile maxOutputTokens');
+        if (maxOutputTokens >= contextWindowTokens) {
+            throw new Error('LLM profile maxOutputTokens must be smaller than contextWindowTokens');
+        }
         const existing = requestedId ? profiles.profiles.find(profile => profile.id === requestedId) : undefined;
+        const timeoutMs = input.timeoutMs === undefined
+            ? existing?.timeoutMs ?? null
+            : nullablePositiveInteger(input.timeoutMs, 'LLM profile timeoutMs');
         if (existing && input.apiKey === undefined && new URL(existing.baseUrl).origin !== new URL(baseUrl).origin) {
             throw new Error('LLM profile apiKey must be supplied or explicitly cleared when baseUrl origin changes');
         }
@@ -121,6 +127,7 @@ export class AgentProfileStoreService {
             apiKeyMasked: maskSecret(apiKey),
             apiKeyFingerprint: fingerprintSecret(apiKey),
             temperature,
+            contextWindowTokens,
             maxOutputTokens,
             timeoutMs,
             createdAt: existing?.createdAt ?? timestamp,
@@ -137,6 +144,7 @@ export class AgentProfileStoreService {
         if (value.format !== PROFILE_FORMAT || !Array.isArray(value.profiles)) {
             throw new Error('Invalid Agent LLM profile store');
         }
+        value.profiles = value.profiles.map(normalizeStoredProfile);
         return value;
     }
 
@@ -156,7 +164,21 @@ export class AgentProfileStoreService {
 
 function publicProfile(profile: StoredAgentLlmProfile): AgentLlmProfile {
     const { apiKey: _apiKey, ...value } = profile;
-    return structuredClone(value);
+    return structuredClone({
+        ...value,
+        contextWindowTokens: value.contextWindowTokens ?? null,
+        maxOutputTokens: value.maxOutputTokens ?? null,
+        timeoutMs: value.timeoutMs ?? null,
+    });
+}
+
+function normalizeStoredProfile(profile: StoredAgentLlmProfile): StoredAgentLlmProfile {
+    return {
+        ...profile,
+        contextWindowTokens: profile.contextWindowTokens ?? null,
+        maxOutputTokens: profile.maxOutputTokens ?? null,
+        timeoutMs: profile.timeoutMs ?? null,
+    };
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -207,6 +229,18 @@ function optionalInteger(value: unknown, label: string, minimum: number, maximum
         throw new Error(`${label} must be an integer`);
     }
     return result;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+        throw new Error(`${label} must be a positive integer`);
+    }
+    return value;
+}
+
+function nullablePositiveInteger(value: unknown, label: string): number | null {
+    if (value === null) return null;
+    return positiveInteger(value, label);
 }
 
 function maskSecret(secret: string | null): string | null {
