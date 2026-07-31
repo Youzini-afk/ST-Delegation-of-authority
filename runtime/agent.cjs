@@ -520,7 +520,7 @@ class HostBridgeService {
                     if (!target.backupPath || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(target.backupPath)) {
                         return { ok: false, message: `Host Bridge backup is missing: ${target.relativePath}` };
                     }
-                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(target.backupPath));
+                    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(target.backupPath));
                 }
                 else {
                     node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetPath, { force: true });
@@ -566,7 +566,7 @@ class HostBridgeService {
         return record?.schemaVersion === RECORD_SCHEMA_VERSION ? record : null;
     }
     writeRecord(record) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.recordPath(record.stRoot), record);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.recordPath(record.stRoot), record);
     }
     resolveHostTarget(stRoot, relativePath) {
         const target = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot, normalizeRelative(relativePath));
@@ -2197,7 +2197,7 @@ class WorkspaceHistoryService {
         if (current) {
             this.removeWorkspaceNode(workspace, relativePath, current, warnings);
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
         this.resolveSafeWorkspacePath(workspace, relativePath);
         if (target.kind === 'tree') {
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
@@ -2375,7 +2375,7 @@ class WorkspaceHistoryService {
             this.readCommit(commit.id, commit.workspaceId);
             return;
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
     }
     readCommit(commitId, workspaceId) {
         assertOid(commitId);
@@ -2407,7 +2407,7 @@ class WorkspaceHistoryService {
             stats.reusedBytes += content.byteLength;
             return oid;
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
         stats.storedBytes += content.byteLength;
         return oid;
     }
@@ -2506,7 +2506,7 @@ class WorkspaceHistoryService {
         return ref;
     }
     writeRef(ref) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
     }
     readRegistry() {
         this.ensureStore();
@@ -2527,7 +2527,7 @@ class WorkspaceHistoryService {
         return registry;
     }
     writeRegistry(registry) {
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
     }
     getStoredWorkspace(workspaceId) {
         if (workspaceId.length > 128 || !isSafeName(workspaceId)) {
@@ -2615,7 +2615,7 @@ class WorkspaceHistoryService {
             }
             return;
         }
-        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
+        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
     }
     removeMatchingRollbackJournal(workspaceId, operationId) {
         const journal = this.readRollbackJournal(workspaceId);
@@ -2633,7 +2633,7 @@ class WorkspaceHistoryService {
     }
     ensureStore() {
         for (const dir of ['objects', 'commits', 'refs', 'journals', 'rollbacks', 'operations', 'locks']) {
-            ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
         }
     }
     registryPath() {
@@ -3759,17 +3759,17 @@ module.exports = require("node:path");
 /******/ 	});
 /************************************************************************/
 /******/ 	// The module cache
-/******/ 	const __webpack_module_cache__ = {};
+/******/ 	var __webpack_module_cache__ = {};
 /******/ 	
 /******/ 	// The require function
 /******/ 	function __webpack_require__(moduleId) {
 /******/ 		// Check if module is in cache
-/******/ 		const cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
 /******/ 		if (cachedModule !== undefined) {
 /******/ 			return cachedModule.exports;
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
-/******/ 		const module = __webpack_module_cache__[moduleId] = {
+/******/ 		var module = __webpack_module_cache__[moduleId] = {
 /******/ 			// no module.id needed
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
@@ -3778,7 +3778,7 @@ module.exports = require("node:path");
 /******/ 		// Execute the module function
 /******/ 		if (!(moduleId in __webpack_modules__)) {
 /******/ 			delete __webpack_module_cache__[moduleId];
-/******/ 			const e = new Error("Cannot find module '" + moduleId + "'");
+/******/ 			var e = new Error("Cannot find module '" + moduleId + "'");
 /******/ 			e.code = 'MODULE_NOT_FOUND';
 /******/ 			throw e;
 /******/ 		}
@@ -3793,7 +3793,7 @@ module.exports = require("node:path");
 /******/ 	(() => {
 /******/ 		// getDefaultExport function for compatibility with non-harmony modules
 /******/ 		__webpack_require__.n = (module) => {
-/******/ 			const getter = module && module.__esModule ?
+/******/ 			var getter = module && module.__esModule ?
 /******/ 				() => (module['default']) :
 /******/ 				() => (module);
 /******/ 			__webpack_require__.d(getter, { a: getter });
@@ -3803,26 +3803,11 @@ module.exports = require("node:path");
 /******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
-/******/ 		// define getter/value functions for harmony exports
+/******/ 		// define getter functions for harmony exports
 /******/ 		__webpack_require__.d = (exports, definition) => {
-/******/ 			if(Array.isArray(definition)) {
-/******/ 				var i = 0;
-/******/ 				while(i < definition.length) {
-/******/ 					var key = definition[i++];
-/******/ 					var binding = definition[i++];
-/******/ 					if(!__webpack_require__.o(exports, key)) {
-/******/ 						if(binding === 0) {
-/******/ 							Object.defineProperty(exports, key, { enumerable: true, value: definition[i++] });
-/******/ 						} else {
-/******/ 							Object.defineProperty(exports, key, { enumerable: true, get: binding });
-/******/ 						}
-/******/ 					} else if(binding === 0) { i++; }
-/******/ 				}
-/******/ 			} else {
-/******/ 				for(var key in definition) {
-/******/ 					if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
-/******/ 						Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
-/******/ 					}
+/******/ 			for(var key in definition) {
+/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
 /******/ 				}
 /******/ 			}
 /******/ 		};
@@ -3837,7 +3822,7 @@ module.exports = require("node:path");
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
 /******/ 		__webpack_require__.r = (exports) => {
-/******/ 			if(Symbol.toStringTag) {
+/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
 /******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 /******/ 			}
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
@@ -3845,7 +3830,7 @@ module.exports = require("node:path");
 /******/ 	})();
 /******/ 	
 /************************************************************************/
-let __webpack_exports__ = {};
+var __webpack_exports__ = {};
 // This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 /*!**************************!*\

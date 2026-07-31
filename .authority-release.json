@@ -1,11 +1,11 @@
 {
   "pluginId": "authority",
-  "pluginVersion": "1.6.5",
+  "pluginVersion": "1.6.6",
   "sdkExtensionId": "third-party/st-authority-sdk",
-  "sdkVersion": "1.6.5",
-  "assetHash": "788e707d0c00804baa6fa391ab41525d3164e9688f67e3b5a4428cc82d5b8703",
-  "coreVersion": "1.6.5",
-  "coreArtifactHash": "d1a6a94e66e54a8b4d4fe4bb3919d1081587474b17f8fad602e9518485b4b36f",
+  "sdkVersion": "1.6.6",
+  "assetHash": "95793c3200f4efc7e09c2edc10c7ffa0b579852173b96c4821f379811becc17e",
+  "coreVersion": "1.6.6",
+  "coreArtifactHash": "93ed57ba4f6a91964d473ae17f7533513ec0b2e8c6c5438c8d2e528c5fa1c713",
   "coreArtifactPlatform": "linux-x64",
   "coreArtifactPlatforms": [
     "android-arm64",
@@ -19,41 +19,41 @@
       "platform": "android",
       "arch": "arm64",
       "binaryName": "authority-core",
-      "binarySha256": "a04951e4b024dfa60cfe591d42e1d5a94c7294726beecfcfe213339d7a632b14",
-      "artifactHash": "1196e3b432191dcf579836df1f59c26fe180ad114e430ec52b3c2b42dd9acb8a"
+      "binarySha256": "c338884d14d3a5a19eed0ecbaf1a270eda13d5b2c7ec197f6b9932d7155405bd",
+      "artifactHash": "0b5333a3702dab45ed2c24244a07b62770e3148d8094c7f271200770d6224f11"
     },
     "linux-arm64": {
       "platform": "linux",
       "arch": "arm64",
       "binaryName": "authority-core",
-      "binarySha256": "7ef326a63a933461c49da54183fe37b10a024b107bcd7f6745754e53ac034e42",
-      "artifactHash": "3001412d1582add97b897ce2e3f127aa3ead3504647770699a3a34d16dd754c1"
+      "binarySha256": "09476d16136828496b9e21f169ede3a4d65a698e90c44aa872a6bc2b8463f841",
+      "artifactHash": "7ec92b49268fcbbbd2c3265a321a8c88a8f8523c8f0b0c117fdb39365c0ba594"
     },
     "linux-x64": {
       "platform": "linux",
       "arch": "x64",
       "binaryName": "authority-core",
-      "binarySha256": "a7a4ccb97b79087e3e67dc4e9c5fe5b7c278e03ef5ba1a45b860677f5f4b561e",
-      "artifactHash": "8925a3852307493ab9d67488430d2adba7aa30a64528afd4cd183a4b66aee09e"
+      "binarySha256": "9602d6a8d64bb29878f7c378087434d75c85857c0f3b79f6b20bdfb1f063bbdf",
+      "artifactHash": "1ce62b5ce43f830f58f5660945a3c4881e8dab6edae90a4644094f1e0005f17c"
     },
     "linux-x64-musl": {
       "platform": "linux",
       "arch": "x64",
       "libc": "musl",
       "binaryName": "authority-core",
-      "binarySha256": "23a94484f89f2bc7677f2b5782c5d86551075de9aa989e9da87678d9198e91dc",
-      "artifactHash": "5b97d8984c6f30a627d97ff0efdae0750f6ea3a699ec2919497121a07ead60e4"
+      "binarySha256": "44f2711821af6aa4c8fd8b46408435dc67aef1bc7e9997049cd1817898be0b33",
+      "artifactHash": "93c7f88130f9187c59b8a4ff218b53b1c831d3627c3750e8d5c303776ee9ba0c"
     },
     "win32-x64": {
       "platform": "win32",
       "arch": "x64",
       "binaryName": "authority-core.exe",
-      "binarySha256": "0a367cd9efef597fb991168c0643d4b0b75978816f6bbaf327c0d5b667617b98",
-      "artifactHash": "7cc42506555b3018fde958929379fd2d6e3e9801dd308610c10521732baa9c6b"
+      "binarySha256": "2e0e423a544eef8bfcb93d974a05e1e64ddb69510c2b7078300ee00d40df955d",
+      "artifactHash": "4df596e20fa4e1757e2b6624c56596843e8e99ef563382069b7cf1ecc6b864ef"
     }
   },
-  "coreBinarySha256": "a7a4ccb97b79087e3e67dc4e9c5fe5b7c278e03ef5ba1a45b860677f5f4b561e",
+  "coreBinarySha256": "9602d6a8d64bb29878f7c378087434d75c85857c0f3b79f6b20bdfb1f063bbdf",
   "hostBridgeVersion": "1.1.0",
   "hostBridgeArtifactHash": "03e2539c63b90af1fa5dd1e814eedc518f8113c15676a4824605ce7aaa3cc69d",
-  "buildTime": "2026-07-31T19:36:41.879Z"
+  "buildTime": "2026-07-31T19:45:51.820Z"
 }
