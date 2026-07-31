@@ -398,6 +398,11 @@ export function getLatestAuthorityCommit(metadata) {
 }
 
 export function prepareAuthorityChatCommit({ metadata, messages, chatKey = null, groupId = null } = {}) {
+    // saveChat() builds metadata with a shallow spread. Detach the Authority
+    // state so saving a branch cannot mutate the currently open parent chat.
+    if (metadata?.[HOST_STATE_KEY] && typeof metadata[HOST_STATE_KEY] === 'object') {
+        metadata[HOST_STATE_KEY] = structuredClone(metadata[HOST_STATE_KEY]);
+    }
     const current = snapshotMessages(metadata ?? {}, messages ?? []);
     const previous = committedSnapshots.get(current.conversationId) ?? null;
     const changes = diffSnapshots(previous, current);
@@ -448,6 +453,11 @@ export async function completeAuthorityChatCommit(commit, receipt, { metadata, m
     host.lastEventId = authoritative.eventId ?? commit?.transaction?.eventId ?? null;
     host.lastTransactionId = authoritative.transactionId ?? commit?.transaction?.transactionId ?? null;
     host.committedAt = authoritative.committedAt ?? nowIso();
+    if (authoritative.parentConversationId) {
+        host.parentConversationId = authoritative.parentConversationId;
+        host.parentBranchId = authoritative.parentBranchId ?? null;
+        host.parentRevision = normalizeRevision(authoritative.parentRevision);
+    }
 
     const snapshot = snapshotMessages(metadata ?? {}, messages ?? []);
     snapshot.revision = host.revision;

@@ -109,7 +109,7 @@ function patchScript(source) {
         'saveChat request envelope');
     source = replaceOnce(source,
         '        if (result.ok) {\n            return;\n        }',
-        "        if (result.ok) {\n            const receipt = await result.json();\n            return await completeAuthorityChatCommit(authorityCommit, receipt, {\n                metadata: chat_metadata,\n                messages: trimmedChat,\n                eventSource,\n            });\n        }",
+        "        if (result.ok) {\n            const receipt = await result.json();\n            const authorityTargetMetadata = fileName === characters[this_chid]?.chat\n                ? chat_metadata\n                : metadata;\n            return await completeAuthorityChatCommit(authorityCommit, receipt, {\n                metadata: authorityTargetMetadata,\n                messages: trimmedChat,\n                eventSource,\n            });\n        }",
         'saveChat commit receipt');
     source = replaceOnce(source,
         "        const isIntegrityError = errorData?.error === 'integrity' && !force;\n        if (!isIntegrityError) {",

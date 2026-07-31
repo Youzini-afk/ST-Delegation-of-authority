@@ -75,6 +75,52 @@ describe('Authority Host Bridge runtimes', () => {
         expect(second.host.branchId).toBe(first.host.branchId);
     });
 
+    it('adopts a provisional identity only for an existing legacy file and reports branch parentage', async () => {
+        const runtime = await loadRuntime();
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-host-runtime-'));
+        temporaryRoots.push(root);
+        const legacyPath = path.join(root, 'legacy.jsonl');
+        writeChat(legacyPath, [
+            { chat_metadata: {} },
+            { is_user: true, mes: 'legacy' },
+        ]);
+        const legacyIncoming: any[] = [
+            {
+                chat_metadata: {
+                    authority: {
+                        conversationId: 'conversation:adopted',
+                        branchId: 'branch:adopted',
+                        revision: 0,
+                    },
+                },
+            },
+            { is_user: true, mes: 'legacy' },
+        ];
+
+        const adopted = runtime.prepareAuthorityChatSave(legacyIncoming, legacyPath, {
+            expectedRevision: 0,
+        });
+        expect(adopted.host).toMatchObject({
+            conversationId: 'conversation:adopted',
+            branchId: 'branch:adopted',
+            baseRevision: 0,
+            revision: 1,
+        });
+
+        const branchPath = path.join(root, 'branch.jsonl');
+        const branchIncoming = structuredClone(legacyIncoming);
+        const branched = runtime.prepareAuthorityChatSave(branchIncoming, branchPath, {
+            expectedRevision: 0,
+        });
+        expect(branched.host.conversationId).not.toBe('conversation:adopted');
+        expect(branched.host.branchId).not.toBe('branch:adopted');
+        expect(branched.host).toMatchObject({
+            parentConversationId: 'conversation:adopted',
+            parentBranchId: 'branch:adopted',
+            parentRevision: 1,
+        });
+    });
+
     it('rejects a stale expected revision without mutating the incoming chat', async () => {
         const runtime = await loadRuntime();
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'authority-host-runtime-'));
@@ -199,5 +245,45 @@ describe('Authority Host Bridge runtimes', () => {
             messages: chats.a.chat,
         });
         expect(afterCommitA.transaction.sourceEvents).toHaveLength(0);
+    });
+
+    it('detaches shallow-copied branch metadata from the open parent chat', async () => {
+        const runtime = await loadBrowserRuntime();
+        const parentAuthority = {
+            conversationId: 'conversation:parent',
+            branchId: 'branch:parent',
+            revision: 4,
+            lastEventId: 'event:parent',
+        };
+        const parentMetadata: any = { authority: parentAuthority };
+        const branchMetadata: any = { ...parentMetadata };
+        const messages: any[] = [{ is_user: true, mes: 'branch prefix' }];
+
+        const commit = runtime.prepareAuthorityChatCommit({
+            metadata: branchMetadata,
+            messages,
+            chatKey: 'branch-file',
+        });
+        expect(branchMetadata.authority).not.toBe(parentAuthority);
+
+        await runtime.completeAuthorityChatCommit(commit, {
+            host: {
+                conversationId: 'conversation:child',
+                branchId: 'branch:child',
+                revision: 1,
+                parentConversationId: 'conversation:parent',
+                parentBranchId: 'branch:parent',
+                parentRevision: 4,
+            },
+        }, { metadata: branchMetadata, messages });
+
+        expect(parentMetadata.authority).toEqual(parentAuthority);
+        expect(branchMetadata.authority).toMatchObject({
+            conversationId: 'conversation:child',
+            branchId: 'branch:child',
+            parentConversationId: 'conversation:parent',
+            parentBranchId: 'branch:parent',
+            parentRevision: 4,
+        });
     });
 });

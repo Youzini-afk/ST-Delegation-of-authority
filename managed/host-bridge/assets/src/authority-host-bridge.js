@@ -96,8 +96,17 @@ export function prepareAuthorityChatSave(chatData, filePath, options = {}) {
     const transaction = options.transaction && typeof options.transaction === 'object' && !Array.isArray(options.transaction)
         ? options.transaction
         : {};
-    const conversationId = existingHost?.conversationId || randomId('conversation');
-    const branchId = existingHost?.branchId || randomId('branch');
+    // A legacy file that already exists may safely adopt the provisional
+    // identity prepared by its browser tab.  A new file must never do this:
+    // branch/bookmark saves intentionally carry the parent metadata and need
+    // a fresh lineage instead.
+    const canAdoptIncomingIdentity = fileExists && !existingHost;
+    const conversationId = existingHost?.conversationId
+        || (canAdoptIncomingIdentity ? incomingHost.conversationId : null)
+        || randomId('conversation');
+    const branchId = existingHost?.branchId
+        || (canAdoptIncomingIdentity ? incomingHost.branchId : null)
+        || randomId('branch');
     const eventId = String(transaction.eventId || randomId('chat-commit'));
     const transactionId = String(transaction.transactionId || randomId('host-transaction'));
     const committedAt = new Date().toISOString();
@@ -156,6 +165,11 @@ export function prepareAuthorityChatSave(chatData, filePath, options = {}) {
             correlationId: hostState.lastCommit.correlationId,
             causationId: hostState.lastCommit.causationId,
             changes: hostState.lastCommit.changes,
+            ...(hostState.parentConversationId ? {
+                parentConversationId: hostState.parentConversationId,
+                parentBranchId: hostState.parentBranchId,
+                parentRevision: hostState.parentRevision,
+            } : {}),
         },
     };
 }
