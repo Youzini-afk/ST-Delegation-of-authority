@@ -13,6 +13,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   AUTHORITY_DATA_FOLDER: () => (/* binding */ AUTHORITY_DATA_FOLDER),
 /* harmony export */   AUTHORITY_MANAGED_CORE_DIR: () => (/* binding */ AUTHORITY_MANAGED_CORE_DIR),
 /* harmony export */   AUTHORITY_MANAGED_FILE: () => (/* binding */ AUTHORITY_MANAGED_FILE),
+/* harmony export */   AUTHORITY_MANAGED_HOST_BRIDGE_DIR: () => (/* binding */ AUTHORITY_MANAGED_HOST_BRIDGE_DIR),
 /* harmony export */   AUTHORITY_MANAGED_SDK_DIR: () => (/* binding */ AUTHORITY_MANAGED_SDK_DIR),
 /* harmony export */   AUTHORITY_MODULE_PROTOCOL_VERSION: () => (/* binding */ AUTHORITY_MODULE_PROTOCOL_VERSION),
 /* harmony export */   AUTHORITY_PLUGIN_ID: () => (/* binding */ AUTHORITY_PLUGIN_ID),
@@ -46,6 +47,7 @@ const AUTHORITY_MANAGED_FILE = '.authority-managed.json';
 const AUTHORITY_RELEASE_FILE = '.authority-release.json';
 const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
 const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
+const AUTHORITY_MANAGED_HOST_BRIDGE_DIR = 'managed/host-bridge';
 const SESSION_HEADER = 'x-authority-session-token';
 const MAX_KV_VALUE_BYTES = 128 * 1024;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
@@ -219,6 +221,1086 @@ function buildAuthorityFeatureFlags(isAdmin, moduleCount = 0) {
             count: moduleCount,
         },
     };
+}
+
+
+/***/ },
+
+/***/ "./src/services/host-bridge-service.ts"
+/*!*********************************************!*\
+  !*** ./src/services/host-bridge-service.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   HostBridgeService: () => (/* binding */ HostBridgeService)
+/* harmony export */ });
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+
+
+const RECORD_SCHEMA_VERSION = 1;
+const AUTO_INSTALL_DISABLED = new Set(['0', 'false', 'off', 'no']);
+class HostBridgeService {
+    pluginRoot;
+    stateDir;
+    resolveSillyTavernRoot;
+    env;
+    logger;
+    runtimeRequire;
+    status;
+    constructor(options) {
+        this.pluginRoot = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.pluginRoot);
+        this.stateDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.stateDir);
+        this.resolveSillyTavernRoot = options.resolveSillyTavernRoot;
+        this.env = options.env ?? process.env;
+        this.logger = options.logger ?? console;
+        this.runtimeRequire = resolveRuntimeRequire();
+        this.status = this.buildStatus('missing', 'Authority Host Bridge has not been inspected yet.');
+    }
+    getStatus() {
+        return { ...this.status };
+    }
+    async bootstrap() {
+        const inspected = await this.inspect();
+        if (inspected.status === 'ready' || inspected.status === 'conflict' || inspected.status === 'error') {
+            return inspected;
+        }
+        if (AUTO_INSTALL_DISABLED.has(this.env.AUTHORITY_HOST_BRIDGE_AUTO_INSTALL?.trim().toLowerCase() ?? '')) {
+            return this.setStatus('missing', 'Authority Host Bridge is not installed and automatic installation is disabled.');
+        }
+        return inspected.operationId
+            ? await this.repair()
+            : await this.install();
+    }
+    async inspect() {
+        try {
+            const context = this.resolveContext();
+            const record = this.readRecord(context.stRoot);
+            if (record?.phase === 'applying' || record?.phase === 'rolling_back') {
+                this.logger.warn(`[authority] Recovering interrupted Host Bridge operation ${record.operationId}.`);
+                await this.rollbackRecord(record, true);
+                return this.setStatus('rolled_back', 'Recovered an interrupted Host Bridge operation.', context, record.operationId, true);
+            }
+            if (!record || record.phase === 'rolled_back' || record.phase === 'error') {
+                if (this.hasUnmanagedBridgeMarkers(context)) {
+                    return this.setStatus('conflict', 'Host Bridge markers exist without a matching Authority install record.', context);
+                }
+                return this.setStatus('missing', 'Authority Host Bridge is not installed.', context);
+            }
+            if (record.bridgeVersion !== context.manifest.bridgeVersion || record.artifactHash !== context.artifactHash) {
+                return this.setStatus('missing', 'Authority Host Bridge update is available.', context, record.operationId, true);
+            }
+            const verification = this.verifyRecord(record);
+            if (!verification.ok) {
+                return this.setStatus('conflict', verification.message, context, record.operationId);
+            }
+            return this.setStatus('ready', 'Authority Host Bridge is installed and verified.', context, record.operationId);
+        }
+        catch (error) {
+            return this.setStatus('error', errorMessage(error));
+        }
+    }
+    async install(options = {}) {
+        let context;
+        try {
+            context = this.resolveContext();
+        }
+        catch (error) {
+            return this.setStatus('error', errorMessage(error));
+        }
+        const existing = this.readRecord(context.stRoot);
+        if (existing?.phase === 'ready') {
+            const verification = this.verifyRecord(existing);
+            if (verification.ok && existing.bridgeVersion === context.manifest.bridgeVersion && existing.artifactHash === context.artifactHash) {
+                return this.setStatus('ready', 'Authority Host Bridge is already installed and verified.', context, existing.operationId);
+            }
+            if (!options.repair) {
+                return this.setStatus('conflict', verification.ok
+                    ? 'Authority Host Bridge update requires a controlled repair operation.'
+                    : verification.message, context, existing.operationId);
+            }
+            const rollback = await this.rollbackRecord(existing, false);
+            if (!rollback.ok) {
+                return this.setStatus('conflict', rollback.message, context, existing.operationId);
+            }
+        }
+        const operationId = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().randomUUID();
+        const operationDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.operationRoot(context.stRoot), operationId);
+        const record = {
+            schemaVersion: RECORD_SCHEMA_VERSION,
+            operationId,
+            bridgeVersion: context.manifest.bridgeVersion,
+            stRoot: context.stRoot,
+            hostPackageVersion: context.hostPackageVersion,
+            artifactHash: context.artifactHash,
+            phase: 'applying',
+            createdAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            targets: [],
+        };
+        try {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(operationDir);
+            for (const relativePath of context.patch.targetFiles) {
+                record.targets.push(this.backupTarget(context.stRoot, operationDir, relativePath, 'patch'));
+            }
+            for (const asset of context.manifest.assets) {
+                record.targets.push(this.backupTarget(context.stRoot, operationDir, asset.target, 'asset'));
+            }
+            this.writeRecord(record);
+            for (const target of record.targets.filter(item => item.kind === 'patch')) {
+                const targetPath = this.resolveHostTarget(context.stRoot, target.relativePath);
+                const source = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(targetPath, 'utf8');
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, context.patch.apply(target.relativePath, source));
+                target.patchedHash = hashFile(targetPath);
+                record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+                this.writeRecord(record);
+            }
+            for (const asset of context.manifest.assets) {
+                const sourcePath = this.resolveBundleTarget(context.bundleDir, asset.source);
+                const targetPath = this.resolveHostTarget(context.stRoot, asset.target);
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(sourcePath));
+                const target = record.targets.find(item => item.kind === 'asset' && item.relativePath === normalizeRelative(asset.target));
+                if (target)
+                    target.patchedHash = hashFile(targetPath);
+                record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+                this.writeRecord(record);
+            }
+            this.runSyntaxChecks(context);
+            record.phase = 'ready';
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            this.writeRecord(record);
+            this.logger.info(`[authority] Host Bridge ${record.bridgeVersion} installed for ${context.stRoot}. Restart SillyTavern to activate it.`);
+            return this.setStatus(existing ? 'updated' : 'installed', 'Authority Host Bridge installed successfully. Restart SillyTavern to activate it.', context, operationId, true);
+        }
+        catch (error) {
+            record.phase = 'error';
+            record.error = errorMessage(error);
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            this.writeRecord(record);
+            const rollback = await this.rollbackRecord(record, true);
+            const message = rollback.ok
+                ? `Host Bridge installation failed and was rolled back: ${record.error}`
+                : `Host Bridge installation failed; automatic rollback also failed: ${record.error}; ${rollback.message}`;
+            this.logger.error(`[authority] ${message}`);
+            return this.setStatus('error', message, context, operationId);
+        }
+    }
+    async repair() {
+        return await this.install({ repair: true });
+    }
+    async rollback(options = {}) {
+        try {
+            const context = this.resolveContext();
+            const record = this.readRecord(context.stRoot);
+            if (!record || record.phase === 'rolled_back') {
+                return this.setStatus('rolled_back', 'Authority Host Bridge is already absent.', context, record?.operationId ?? null, true);
+            }
+            const result = await this.rollbackRecord(record, Boolean(options.force));
+            if (!result.ok) {
+                return this.setStatus('conflict', result.message, context, record.operationId);
+            }
+            return this.setStatus('rolled_back', 'Authority Host Bridge was rolled back. Restart SillyTavern to activate the original host files.', context, record.operationId, true);
+        }
+        catch (error) {
+            return this.setStatus('error', errorMessage(error));
+        }
+    }
+    resolveContext() {
+        const bundleDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_HOST_BRIDGE_DIR);
+        const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(bundleDir, 'manifest.json');
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(manifestPath)) {
+            throw new Error('Managed Authority Host Bridge bundle is missing.');
+        }
+        const manifest = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(manifestPath, null);
+        if (!manifest || manifest.schemaVersion !== 1 || manifest.host !== 'sillytavern' || !manifest.bridgeVersion) {
+            throw new Error('Managed Authority Host Bridge manifest is invalid.');
+        }
+        const stRoot = this.resolveSillyTavernRoot();
+        if (!stRoot) {
+            throw new Error('Unable to resolve the SillyTavern root for Host Bridge installation.');
+        }
+        const packageJson = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(stRoot, 'package.json'), {});
+        const hostPackageVersion = String(packageJson.version ?? 'unknown');
+        if (!manifest.supportedPackageVersions.includes(hostPackageVersion)) {
+            throw new Error(`SillyTavern ${hostPackageVersion} is not supported by Host Bridge ${manifest.bridgeVersion}.`);
+        }
+        const patchPath = this.resolveBundleTarget(bundleDir, manifest.patchModule);
+        if (this.runtimeRequire.cache) {
+            delete this.runtimeRequire.cache[patchPath];
+        }
+        const patch = this.runtimeRequire(patchPath);
+        if (!patch || !Array.isArray(patch.targetFiles) || typeof patch.apply !== 'function' || !patch.bridgeMarker) {
+            throw new Error('Managed Authority Host Bridge patch module is invalid.');
+        }
+        return {
+            bundleDir,
+            manifest,
+            patch,
+            stRoot: node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot),
+            hostPackageVersion,
+            artifactHash: hashDirectory(bundleDir),
+        };
+    }
+    hasUnmanagedBridgeMarkers(context) {
+        return context.patch.targetFiles.some(relativePath => {
+            const targetPath = this.resolveHostTarget(context.stRoot, relativePath);
+            return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath) && node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(targetPath, 'utf8').includes(context.patch.bridgeMarker);
+        });
+    }
+    backupTarget(stRoot, operationDir, relativePath, kind) {
+        const normalized = normalizeRelative(relativePath);
+        const targetPath = this.resolveHostTarget(stRoot, normalized);
+        const originalExists = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath);
+        const backupPath = originalExists ? node_path__WEBPACK_IMPORTED_MODULE_3___default().join(operationDir, 'original', ...normalized.split('/')) : null;
+        if (originalExists && backupPath) {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(backupPath));
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().copyFileSync(targetPath, backupPath);
+        }
+        return {
+            relativePath: normalized,
+            kind,
+            originalExists,
+            originalHash: originalExists ? hashFile(targetPath) : null,
+            patchedHash: null,
+            backupPath,
+        };
+    }
+    verifyRecord(record) {
+        for (const target of record.targets) {
+            const targetPath = this.resolveHostTarget(record.stRoot, target.relativePath);
+            if (!target.patchedHash || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath)) {
+                return { ok: false, message: `Host Bridge target is missing: ${target.relativePath}` };
+            }
+            const currentHash = hashFile(targetPath);
+            if (currentHash !== target.patchedHash) {
+                return { ok: false, message: `Host Bridge target drift detected: ${target.relativePath}` };
+            }
+        }
+        return { ok: true };
+    }
+    async rollbackRecord(record, force) {
+        if (!force) {
+            for (const target of record.targets) {
+                const targetPath = this.resolveHostTarget(record.stRoot, target.relativePath);
+                if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath) || !target.patchedHash)
+                    continue;
+                const currentHash = hashFile(targetPath);
+                if (currentHash !== target.patchedHash && currentHash !== target.originalHash) {
+                    return { ok: false, message: `Refusing to overwrite drifted Host Bridge target: ${target.relativePath}` };
+                }
+            }
+        }
+        record.phase = 'rolling_back';
+        record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        this.writeRecord(record);
+        try {
+            for (const target of [...record.targets].reverse()) {
+                const targetPath = this.resolveHostTarget(record.stRoot, target.relativePath);
+                if (target.originalExists) {
+                    if (!target.backupPath || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(target.backupPath)) {
+                        return { ok: false, message: `Host Bridge backup is missing: ${target.relativePath}` };
+                    }
+                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(target.backupPath));
+                }
+                else {
+                    node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetPath, { force: true });
+                }
+            }
+            record.phase = 'rolled_back';
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            delete record.error;
+            this.writeRecord(record);
+            return { ok: true };
+        }
+        catch (error) {
+            record.phase = 'error';
+            record.error = errorMessage(error);
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            this.writeRecord(record);
+            return { ok: false, message: record.error };
+        }
+    }
+    runSyntaxChecks(context) {
+        for (const relativePath of context.manifest.syntaxCheckTargets) {
+            const targetPath = this.resolveHostTarget(context.stRoot, relativePath);
+            const result = node_child_process__WEBPACK_IMPORTED_MODULE_0___default().spawnSync(process.execPath, ['--check', targetPath], {
+                cwd: context.stRoot,
+                env: this.env,
+                encoding: 'utf8',
+                windowsHide: true,
+            });
+            if (result.error || result.status !== 0) {
+                const detail = [result.error?.message, result.stderr?.trim(), result.stdout?.trim()].filter(Boolean).join('\n');
+                throw new Error(`Syntax validation failed for ${relativePath}${detail ? `: ${detail}` : ''}`);
+            }
+        }
+    }
+    recordPath(stRoot) {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.stateDir, 'records', `${rootKey(stRoot)}.json`);
+    }
+    operationRoot(stRoot) {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.stateDir, 'operations', rootKey(stRoot));
+    }
+    readRecord(stRoot) {
+        const record = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(this.recordPath(stRoot), null);
+        return record?.schemaVersion === RECORD_SCHEMA_VERSION ? record : null;
+    }
+    writeRecord(record) {
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.recordPath(record.stRoot), record);
+    }
+    resolveHostTarget(stRoot, relativePath) {
+        const target = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot, normalizeRelative(relativePath));
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isPathInside)(stRoot, target) || target === node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot)) {
+            throw new Error(`Host Bridge target escapes SillyTavern root: ${relativePath}`);
+        }
+        return target;
+    }
+    resolveBundleTarget(bundleDir, relativePath) {
+        const target = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(bundleDir, normalizeRelative(relativePath));
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isPathInside)(bundleDir, target) || target === node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(bundleDir) || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(target)) {
+            throw new Error(`Host Bridge bundle path is invalid: ${relativePath}`);
+        }
+        return target;
+    }
+    setStatus(status, message, context, operationId = null, requiresRestart = false) {
+        this.status = this.buildStatus(status, message, context, operationId, requiresRestart);
+        return this.getStatus();
+    }
+    buildStatus(status, message, context, operationId = null, requiresRestart = false) {
+        return {
+            status,
+            message,
+            bridgeVersion: context?.manifest.bridgeVersion ?? null,
+            hostPackageVersion: context?.hostPackageVersion ?? null,
+            sillyTavernRoot: context?.stRoot ?? null,
+            operationId,
+            requiresRestart,
+            checkedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+        };
+    }
+}
+function rootKey(stRoot) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot).toLowerCase()).digest('hex').slice(0, 24);
+}
+function normalizeRelative(value) {
+    return value.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+function hashFile(filePath) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath)).digest('hex');
+}
+function hashDirectory(rootDir) {
+    const hash = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256');
+    for (const filePath of listFiles(rootDir)) {
+        hash.update(node_path__WEBPACK_IMPORTED_MODULE_3___default().relative(rootDir, filePath).replace(/\\/g, '/'));
+        hash.update('\0');
+        hash.update(node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath));
+        hash.update('\0');
+    }
+    return hash.digest('hex');
+}
+function listFiles(rootDir) {
+    const files = [];
+    const visit = (currentDir) => {
+        for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_2___default().readdirSync(currentDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            const fullPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(currentDir, entry.name);
+            if (entry.isDirectory())
+                visit(fullPath);
+            else if (entry.isFile())
+                files.push(fullPath);
+        }
+    };
+    visit(rootDir);
+    return files;
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function resolveRuntimeRequire() {
+    if (typeof require !== 'undefined') {
+        return require;
+    }
+    return /* createRequire() */ undefined;
+}
+
+
+/***/ },
+
+/***/ "./src/services/install-service.ts"
+/*!*****************************************!*\
+  !*** ./src/services/install-service.ts ***!
+  \*****************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   InstallService: () => (/* binding */ InstallService)
+/* harmony export */ });
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:os */ "node:os");
+/* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_os__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_4__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+
+
+const DEFAULT_VERSION = '0.0.0-dev';
+const TEXT_HASH_EXTENSIONS = new Set([
+    '.cjs',
+    '.css',
+    '.html',
+    '.js',
+    '.json',
+    '.map',
+    '.md',
+    '.mjs',
+    '.svg',
+    '.txt',
+    '.yaml',
+    '.yml',
+]);
+const CORE_AUTOBUILD_DISABLED_VALUES = new Set(['0', 'false', 'off', 'no']);
+class InstallService {
+    runtimeDir;
+    pluginRoot;
+    cwd;
+    env;
+    logger;
+    releaseMetadata;
+    coreBuildMessage;
+    status;
+    constructor(options = {}) {
+        this.runtimeDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(options.runtimeDir ?? __dirname);
+        this.pluginRoot = resolvePluginRoot(this.runtimeDir);
+        this.cwd = node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(options.cwd ?? process.cwd());
+        this.env = options.env ?? process.env;
+        this.logger = options.logger ?? console;
+        this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
+        this.coreBuildMessage = null;
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
+        this.status = {
+            installStatus: 'missing',
+            installMessage: 'Authority SDK deployment has not run yet.',
+            pluginVersion: this.getPluginVersion(),
+            sdkBundledVersion: this.getBundledSdkVersion(),
+            sdkDeployedVersion: null,
+            coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
+            coreArtifactPlatform: this.getCoreArtifactPlatforms().includes(expectedCorePlatform)
+                ? expectedCorePlatform
+                : this.releaseMetadata?.coreArtifactPlatform ?? null,
+            coreArtifactPlatforms: this.getCoreArtifactPlatforms(),
+            coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
+            coreBinarySha256: this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
+                ?? this.releaseMetadata?.coreBinarySha256
+                ?? null,
+            coreVerified: false,
+            coreMessage: null,
+        };
+    }
+    getStatus() {
+        return {
+            ...this.status,
+            coreArtifactPlatforms: [...this.status.coreArtifactPlatforms],
+        };
+    }
+    async bootstrap() {
+        this.refreshReleaseMetadata();
+        this.coreBuildMessage = this.ensureCurrentPlatformCore();
+        this.refreshReleaseMetadata();
+        const bundledDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_SDK_DIR);
+        try {
+            if (!this.releaseMetadata || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(bundledDir)) {
+                return this.setStatus('missing', 'Managed Authority SDK bundle is not embedded in this plugin build.', {
+                    sdkDeployedVersion: null,
+                    coreVerified: false,
+                    coreMessage: 'Managed Authority SDK bundle is not embedded in this plugin build.',
+                });
+            }
+            const coreCheck = this.verifyBundledCore();
+            const coreVerified = coreCheck.ok;
+            const coreMessage = coreCheck.ok ? coreCheck.message : coreCheck.message;
+            const sillyTavernRoot = this.resolveSillyTavernRoot();
+            if (!sillyTavernRoot) {
+                return this.setStatus('missing', 'Unable to resolve the SillyTavern root for managed SDK deployment.', {
+                    sdkDeployedVersion: null,
+                    coreVerified,
+                    coreMessage,
+                });
+            }
+            const targetDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(sillyTavernRoot, 'public', 'scripts', 'extensions', 'third-party', 'st-authority-sdk');
+            const managedFile = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE);
+            const existingManaged = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(managedFile, null);
+            if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir)) {
+                this.deployBundledSdk(bundledDir, targetDir);
+                return this.setStatus('installed', buildInstallMessage('deployed', targetDir, coreCheck), {
+                    sdkDeployedVersion: this.releaseMetadata.sdkVersion,
+                    coreVerified,
+                    coreMessage,
+                });
+            }
+            if (!existingManaged || existingManaged.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID) {
+                return this.setStatus('conflict', `Authority SDK target already exists and is not managed by ${_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID}.`, {
+                    sdkDeployedVersion: null,
+                    coreVerified,
+                    coreMessage,
+                });
+            }
+            const currentHash = hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE]));
+            const needsUpdate = existingManaged.sdkVersion !== this.releaseMetadata.sdkVersion
+                || existingManaged.assetHash !== this.releaseMetadata.assetHash
+                || currentHash !== this.releaseMetadata.assetHash;
+            if (needsUpdate) {
+                this.deployBundledSdk(bundledDir, targetDir);
+                return this.setStatus('updated', buildInstallMessage('updated', targetDir, coreCheck), {
+                    sdkDeployedVersion: this.releaseMetadata.sdkVersion,
+                    coreVerified,
+                    coreMessage,
+                });
+            }
+            return this.setStatus('ready', buildInstallMessage('ready', targetDir, coreCheck), {
+                sdkDeployedVersion: existingManaged.sdkVersion,
+                coreVerified,
+                coreMessage,
+            });
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error(`[authority] Managed SDK deployment failed: ${message}`);
+            return this.setStatus('error', message, {
+                sdkDeployedVersion: null,
+                coreVerified: false,
+                coreMessage: message,
+            });
+        }
+    }
+    getPluginRoot() {
+        return this.pluginRoot;
+    }
+    /**
+     * Returns the resolved SillyTavern root directory, or `null` when the
+     * current working directory and plugin location do not look like a
+     * SillyTavern install. Public so that discovery services can resolve
+     * extension directories without re-implementing the candidate walk.
+     */
+    getSillyTavernRoot() {
+        return this.resolveSillyTavernRoot();
+    }
+    redeployBundledSdk() {
+        return this.bootstrap();
+    }
+    pullLatestFromGit() {
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, '.git'))) {
+            throw new Error('当前 Authority 插件目录不是 Git 仓库，无法执行服务端插件更新。');
+        }
+        const branch = runGit(this.pluginRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], this.env).stdout || null;
+        const previousRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
+        const preflightStatus = runGit(this.pluginRoot, ['status', '--short', '--branch'], this.env, true).stdout || null;
+        let pullResult;
+        try {
+            pullResult = runGit(this.pluginRoot, ['pull', '--ff-only'], this.env, true);
+        }
+        catch (error) {
+            throw new Error(buildGitPullFailureMessage(error, {
+                pluginRoot: this.pluginRoot,
+                branch,
+                previousRevision,
+                preflightStatus,
+            }));
+        }
+        const currentRevision = runGit(this.pluginRoot, ['rev-parse', 'HEAD'], this.env).stdout || null;
+        this.refreshReleaseMetadata();
+        return {
+            pluginRoot: this.pluginRoot,
+            branch,
+            previousRevision,
+            currentRevision,
+            changed: previousRevision !== currentRevision,
+            preflightStatus,
+            stdout: pullResult.stdout || null,
+            stderr: pullResult.stderr || null,
+        };
+    }
+    refreshReleaseMetadata() {
+        this.releaseMetadata = readReleaseMetadata(this.pluginRoot);
+        this.status = {
+            ...this.status,
+            pluginVersion: this.getPluginVersion(),
+            sdkBundledVersion: this.getBundledSdkVersion(),
+            coreBundledVersion: this.releaseMetadata?.coreVersion ?? null,
+            coreArtifactPlatform: this.getResolvedCoreArtifactPlatform(),
+            coreArtifactPlatforms: this.getCoreArtifactPlatforms(),
+            coreArtifactHash: this.releaseMetadata?.coreArtifactHash ?? null,
+            coreBinarySha256: this.getCoreBinarySha256(),
+        };
+    }
+    getPluginVersion() {
+        return this.releaseMetadata?.pluginVersion ?? readPackageVersion(this.pluginRoot) ?? DEFAULT_VERSION;
+    }
+    getBundledSdkVersion() {
+        return this.releaseMetadata?.sdkVersion ?? readBundledSdkVersion(this.pluginRoot) ?? this.getPluginVersion();
+    }
+    getCoreArtifactPlatforms() {
+        return Array.from(new Set([
+            ...getReleaseCorePlatforms(this.releaseMetadata),
+            ...getManagedCorePlatforms(this.pluginRoot),
+        ])).sort();
+    }
+    getResolvedCoreArtifactPlatform() {
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
+        const coreArtifactPlatforms = this.getCoreArtifactPlatforms();
+        return coreArtifactPlatforms.includes(expectedCorePlatform)
+            ? expectedCorePlatform
+            : this.releaseMetadata?.coreArtifactPlatform ?? null;
+    }
+    getCoreBinarySha256() {
+        const expectedCorePlatform = getCurrentCorePlatform(this.env);
+        return this.releaseMetadata?.coreArtifacts?.[expectedCorePlatform]?.binarySha256
+            ?? readManagedCoreArtifact(this.pluginRoot, expectedCorePlatform)?.binarySha256
+            ?? this.releaseMetadata?.coreBinarySha256
+            ?? null;
+    }
+    resolveSillyTavernRoot() {
+        const envRoot = this.env.AUTHORITY_ST_ROOT?.trim();
+        const candidates = [
+            this.cwd,
+            node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(this.pluginRoot, '..', '..'),
+            envRoot ? node_path__WEBPACK_IMPORTED_MODULE_4___default().resolve(envRoot) : null,
+        ];
+        for (const candidate of candidates) {
+            if (candidate && isSillyTavernRoot(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+    deployBundledSdk(bundledDir, targetDir) {
+        const parentDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().dirname(targetDir);
+        node_fs__WEBPACK_IMPORTED_MODULE_2___default().mkdirSync(parentDir, { recursive: true });
+        const backupDir = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir)
+            ? node_path__WEBPACK_IMPORTED_MODULE_4___default().join(parentDir, `${node_path__WEBPACK_IMPORTED_MODULE_4___default().basename(targetDir)}.authority-backup-${Date.now()}-${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}`)
+            : null;
+        if (backupDir) {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().renameSync(targetDir, backupDir);
+        }
+        try {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(bundledDir, targetDir, { recursive: true, force: true });
+            const metadata = {
+                managedBy: _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID,
+                pluginVersion: this.releaseMetadata?.pluginVersion ?? this.status.pluginVersion,
+                sdkVersion: this.releaseMetadata?.sdkVersion ?? this.status.sdkBundledVersion,
+                assetHash: this.releaseMetadata?.assetHash ?? hashDirectory(targetDir, new Set([_constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE])),
+                installedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.nowIso)(),
+                targetPath: targetDir,
+            };
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.atomicWriteJson)(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(targetDir, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_FILE), metadata);
+            if (backupDir) {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(backupDir, { recursive: true, force: true });
+            }
+            this.logger.info(`[authority] Managed SDK deployed to ${targetDir}`);
+        }
+        catch (error) {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetDir, { recursive: true, force: true });
+            if (backupDir && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(backupDir)) {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().renameSync(backupDir, targetDir);
+            }
+            throw error;
+        }
+    }
+    ensureCurrentPlatformCore() {
+        const expectedPlatform = getCurrentCorePlatform(this.env);
+        if (readManagedCoreArtifact(this.pluginRoot, expectedPlatform)) {
+            return null;
+        }
+        const expectedLibc = getCorePlatformLibc(expectedPlatform);
+        if (isCoreAutobuildDisabled(this.env)) {
+            return `Managed authority-core for ${expectedPlatform} is missing and local core build is disabled by AUTHORITY_CORE_AUTOBUILD.`;
+        }
+        if (!canBuildCoreFromSource(this.pluginRoot)) {
+            return `Managed authority-core for ${expectedPlatform} is missing and local source build is unavailable. Install the multi-platform package, or run npm run build:core from a full source checkout.`;
+        }
+        const cargoCheck = node_child_process__WEBPACK_IMPORTED_MODULE_1___default().spawnSync('cargo', ['--version'], {
+            cwd: this.pluginRoot,
+            env: this.env,
+            encoding: 'utf8',
+            windowsHide: true,
+        });
+        if (cargoCheck.error || cargoCheck.status !== 0) {
+            return `Managed authority-core for ${expectedPlatform} is missing and Cargo is not available. Install Rust/Cargo, then run npm run build:core in the plugin directory.`;
+        }
+        const binaryName = process.platform === 'win32' ? 'authority-core.exe' : 'authority-core';
+        const targetDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR, expectedPlatform);
+        const beforeBuild = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetDir) ? node_fs__WEBPACK_IMPORTED_MODULE_2___default().mkdtempSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(node_os__WEBPACK_IMPORTED_MODULE_3___default().tmpdir(), 'authority-core-autobuild-')) : null;
+        if (beforeBuild) {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(targetDir, beforeBuild, { recursive: true, force: true });
+        }
+        this.logger.info(`[authority] Managed authority-core for ${expectedPlatform} is missing; building it locally from source.`);
+        const build = node_child_process__WEBPACK_IMPORTED_MODULE_1___default().spawnSync(process.execPath, ['./scripts/build-core.mjs'], {
+            cwd: this.pluginRoot,
+            env: {
+                ...this.env,
+                AUTHORITY_CORE_PLATFORM_ID: expectedPlatform,
+                AUTHORITY_CORE_TARGET_PLATFORM: process.platform,
+                AUTHORITY_CORE_TARGET_ARCH: process.arch,
+                ...(expectedLibc ? { AUTHORITY_CORE_TARGET_LIBC: expectedLibc } : {}),
+                AUTHORITY_CORE_BINARY_NAME: binaryName,
+            },
+            encoding: 'utf8',
+            windowsHide: true,
+        });
+        if (build.error || build.status !== 0) {
+            if (beforeBuild) {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetDir, { recursive: true, force: true });
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().cpSync(beforeBuild, targetDir, { recursive: true, force: true });
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(beforeBuild, { recursive: true, force: true });
+            }
+            else {
+                node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetDir, { recursive: true, force: true });
+            }
+            const detail = [
+                build.error ? build.error.message : '',
+                build.stderr?.trim() ?? '',
+                build.stdout?.trim() ?? '',
+            ].filter(Boolean).join('\n');
+            return `Managed authority-core for ${expectedPlatform} is missing and local source build failed${detail ? `: ${detail}` : '.'}`;
+        }
+        if (beforeBuild) {
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(beforeBuild, { recursive: true, force: true });
+        }
+        return `Managed authority-core for ${expectedPlatform} was built locally from source.`;
+    }
+    verifyBundledCore() {
+        const release = this.releaseMetadata;
+        if (!release) {
+            return { ok: false, message: 'Authority release metadata is missing.' };
+        }
+        const expectedPlatform = getCurrentCorePlatform(this.env);
+        const expectedLibc = getCorePlatformLibc(expectedPlatform);
+        const releasePlatforms = getReleaseCorePlatforms(release);
+        const localArtifact = readManagedCoreArtifact(this.pluginRoot, expectedPlatform);
+        if (!localArtifact) {
+            const platformMessage = releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)
+                ? `Managed authority-core artifacts target ${releasePlatforms.join(', ')}, but this runtime needs ${expectedPlatform}.`
+                : `Managed authority-core metadata is missing for ${expectedPlatform}.`;
+            return {
+                ok: false,
+                message: [platformMessage, this.coreBuildMessage].filter(Boolean).join(' '),
+            };
+        }
+        const { metadata, binarySha256, platformDir } = localArtifact;
+        if (metadata.managedBy !== _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata for ${expectedPlatform} is invalid.`,
+            };
+        }
+        if (metadata.platform !== process.platform || metadata.arch !== process.arch) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata platform mismatch: ${metadata.platform}-${metadata.arch}.`,
+            };
+        }
+        if ((metadata.libc ?? null) !== expectedLibc) {
+            return {
+                ok: false,
+                message: `Managed authority-core metadata libc mismatch: expected ${expectedLibc ?? 'unspecified'}, found ${metadata.libc ?? 'unspecified'}.`,
+            };
+        }
+        if (release.coreVersion && metadata.version !== release.coreVersion) {
+            return {
+                ok: false,
+                message: `Managed authority-core version mismatch: expected ${release.coreVersion}, found ${metadata.version}.`,
+            };
+        }
+        if (metadata.binarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match its metadata.',
+            };
+        }
+        const releaseArtifact = release.coreArtifacts?.[expectedPlatform];
+        if (releaseArtifact && releaseArtifact.binarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match platform release metadata.',
+            };
+        }
+        if (!releaseArtifact && releasePlatforms.includes(expectedPlatform) && release.coreBinarySha256 && release.coreBinarySha256 !== binarySha256) {
+            return {
+                ok: false,
+                message: 'Managed authority-core binary hash does not match release metadata.',
+            };
+        }
+        const warnings = [];
+        if (!releaseArtifact && releasePlatforms.length > 0 && !releasePlatforms.includes(expectedPlatform)) {
+            warnings.push(`Managed authority-core release metadata targets ${releasePlatforms.join(', ')}, but ${expectedPlatform} is available locally and verified against its local metadata.`);
+        }
+        if (this.coreBuildMessage) {
+            warnings.push(this.coreBuildMessage);
+        }
+        if (releaseArtifact) {
+            const platformArtifactHash = hashDirectory(platformDir);
+            if (releaseArtifact.artifactHash !== platformArtifactHash) {
+                warnings.push('Managed authority-core platform artifact hash drift detected. SDK deployment remains enabled because the core binary itself is verified.');
+            }
+        }
+        if (release.coreArtifactHash) {
+            const artifactHash = hashDirectory(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR));
+            if (artifactHash !== release.coreArtifactHash) {
+                warnings.push('Managed authority-core artifact directory hash drift detected. SDK deployment remains enabled because the current platform binary is verified.');
+            }
+        }
+        return {
+            ok: true,
+            platform: expectedPlatform,
+            message: warnings.length > 0 ? warnings.join(' ') : null,
+        };
+    }
+    setStatus(installStatus, installMessage, patch = {}) {
+        this.status = {
+            ...this.status,
+            ...patch,
+            installStatus,
+            installMessage,
+        };
+        const prefix = `[authority] ${installStatus.toUpperCase()}`;
+        if (installStatus === 'error') {
+            this.logger.error(`${prefix}: ${installMessage}`);
+        }
+        else if (installStatus === 'conflict' || installStatus === 'missing') {
+            this.logger.warn(`${prefix}: ${installMessage}`);
+        }
+        else {
+            this.logger.info(`${prefix}: ${installMessage}`);
+        }
+        return this.getStatus();
+    }
+}
+function buildInstallMessage(kind, targetDir, coreCheck) {
+    const prefix = kind === 'deployed'
+        ? `Authority SDK deployed to ${targetDir}.`
+        : kind === 'updated'
+            ? `Authority SDK refreshed at ${targetDir}.`
+            : `Authority SDK is already available at ${targetDir}.`;
+    if (!coreCheck.ok) {
+        return `${prefix} Core verification warning: ${coreCheck.message}`;
+    }
+    if (coreCheck.message) {
+        return `${prefix} Core verified for ${coreCheck.platform} with warnings: ${coreCheck.message}`;
+    }
+    return `${prefix} Core artifact verified for ${coreCheck.platform}.`;
+}
+function resolvePluginRoot(runtimeDir) {
+    let current = runtimeDir;
+    while (true) {
+        if (node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(current, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_RELEASE_FILE))) {
+            return current;
+        }
+        const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(current, 'package.json');
+        if (node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(packageJsonPath)) {
+            const packageJson = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(packageJsonPath, {});
+            if (packageJson.name === _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_PLUGIN_ID) {
+                return current;
+            }
+        }
+        const parent = node_path__WEBPACK_IMPORTED_MODULE_4___default().dirname(current);
+        if (parent === current) {
+            return runtimeDir;
+        }
+        current = parent;
+    }
+}
+function readReleaseMetadata(pluginRoot) {
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_RELEASE_FILE), null);
+}
+function runGit(cwd, args, env, allowNoisyOutput = false) {
+    const result = node_child_process__WEBPACK_IMPORTED_MODULE_1___default().spawnSync('git', args, {
+        cwd,
+        env,
+        encoding: 'utf8',
+        timeout: 30_000,
+        windowsHide: true,
+    });
+    const stdout = (result.stdout ?? '').trim();
+    const stderr = (result.stderr ?? '').trim();
+    if (result.error) {
+        throw result.error;
+    }
+    if (typeof result.status === 'number' && result.status !== 0) {
+        const message = [stderr, stdout].filter(Boolean).join('\n') || `git ${args.join(' ')} failed with exit code ${result.status}`;
+        throw new Error(message);
+    }
+    if (!allowNoisyOutput && stderr) {
+        return { stdout, stderr: '' };
+    }
+    return { stdout, stderr };
+}
+function buildGitPullFailureMessage(error, context) {
+    const message = error instanceof Error ? error.message : String(error);
+    return [
+        `Safe Git update failed while running git pull --ff-only: ${message}`,
+        `Plugin root: ${context.pluginRoot}`,
+        `Branch: ${context.branch ?? 'unknown'}`,
+        `Previous revision: ${context.previousRevision ?? 'unknown'}`,
+        context.preflightStatus ? `Preflight git status:\n${context.preflightStatus}` : 'Preflight git status: unavailable',
+        'Inspect the repository with git status before retrying. Authority does not reset, rebase, clean, or stash during safe updates.',
+    ].join('\n');
+}
+function getCurrentCorePlatform(env = process.env) {
+    const basePlatform = `${process.platform}-${process.arch}`;
+    return getCurrentLinuxLibc(env) === 'musl'
+        ? `${basePlatform}-musl`
+        : basePlatform;
+}
+function getCurrentLinuxLibc(env) {
+    if (process.platform !== 'linux') {
+        return null;
+    }
+    const override = env.AUTHORITY_CORE_LIBC?.trim().toLowerCase();
+    if (override === 'musl') {
+        return 'musl';
+    }
+    if (override === 'gnu' || override === 'glibc') {
+        return 'gnu';
+    }
+    const report = process.report?.getReport?.();
+    const header = report?.header;
+    return header?.glibcVersionRuntime || header?.glibcVersionCompiler ? 'gnu' : 'musl';
+}
+function getCorePlatformLibc(platformId) {
+    return platformId.endsWith('-musl') ? 'musl' : null;
+}
+function getReleaseCorePlatforms(release) {
+    if (!release) {
+        return [];
+    }
+    if (Array.isArray(release.coreArtifactPlatforms) && release.coreArtifactPlatforms.length > 0) {
+        return [...release.coreArtifactPlatforms].sort();
+    }
+    if (release.coreArtifacts && Object.keys(release.coreArtifacts).length > 0) {
+        return Object.keys(release.coreArtifacts).sort();
+    }
+    return release.coreArtifactPlatform ? [release.coreArtifactPlatform] : [];
+}
+function getManagedCorePlatforms(pluginRoot) {
+    const coreRoot = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(coreRoot)) {
+        return [];
+    }
+    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().readdirSync(coreRoot, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+        .sort();
+}
+function readManagedCoreArtifact(pluginRoot, platformId) {
+    const platformDir = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_CORE_DIR, platformId);
+    const metadataPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(platformDir, 'authority-core.json');
+    const metadata = (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(metadataPath, null);
+    if (!metadata) {
+        return null;
+    }
+    const binaryPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(platformDir, metadata.binaryName);
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(binaryPath)) {
+        return null;
+    }
+    return {
+        platformDir,
+        binaryPath,
+        metadata,
+        binarySha256: hashFile(binaryPath),
+    };
+}
+function isCoreAutobuildDisabled(env) {
+    return CORE_AUTOBUILD_DISABLED_VALUES.has(env.AUTHORITY_CORE_AUTOBUILD?.trim().toLowerCase() ?? '');
+}
+function canBuildCoreFromSource(pluginRoot) {
+    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, 'scripts', 'build-core.mjs'))
+        && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, 'crates', 'authority-core', 'Cargo.toml'));
+}
+function readPackageVersion(pluginRoot) {
+    const packageJsonPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, 'package.json');
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(packageJsonPath)) {
+        return null;
+    }
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(packageJsonPath, {}).version ?? null;
+}
+function readBundledSdkVersion(pluginRoot) {
+    const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_5__.AUTHORITY_MANAGED_SDK_DIR, 'manifest.json');
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(manifestPath)) {
+        return null;
+    }
+    return (0,_utils_js__WEBPACK_IMPORTED_MODULE_6__.readJsonFile)(manifestPath, {}).version ?? null;
+}
+function isSillyTavernRoot(candidate) {
+    return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(candidate, 'plugins'))
+        && node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(node_path__WEBPACK_IMPORTED_MODULE_4___default().join(candidate, 'public', 'scripts', 'extensions'));
+}
+function hashDirectory(rootDir, ignoreNames = new Set()) {
+    const hash = node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256');
+    for (const filePath of listFiles(rootDir, ignoreNames)) {
+        const relativePath = node_path__WEBPACK_IMPORTED_MODULE_4___default().relative(rootDir, filePath).replace(/\\/g, '/');
+        hash.update(relativePath);
+        hash.update('\0');
+        hash.update(readStableHashContent(filePath));
+        hash.update('\0');
+    }
+    return hash.digest('hex');
+}
+function hashFile(filePath) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_0___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath)).digest('hex');
+}
+function readStableHashContent(filePath) {
+    const content = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath);
+    if (!TEXT_HASH_EXTENSIONS.has(node_path__WEBPACK_IMPORTED_MODULE_4___default().extname(filePath).toLowerCase())) {
+        return content;
+    }
+    return Buffer.from(content.toString('utf8').replace(/\r\n?/g, '\n'), 'utf8');
+}
+function listFiles(rootDir, ignoreNames) {
+    const files = [];
+    if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(rootDir)) {
+        return files;
+    }
+    const visit = (currentDir) => {
+        const entries = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readdirSync(currentDir, { withFileTypes: true })
+            .filter(entry => !ignoreNames.has(entry.name))
+            .sort((left, right) => left.name.localeCompare(right.name));
+        for (const entry of entries) {
+            const fullPath = node_path__WEBPACK_IMPORTED_MODULE_4___default().join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                visit(fullPath);
+            }
+            else if (entry.isFile()) {
+                files.push(fullPath);
+            }
+        }
+    };
+    visit(rootDir);
+    return files;
 }
 
 
@@ -1110,7 +2192,7 @@ class WorkspaceHistoryService {
         if (current) {
             this.removeWorkspaceNode(workspace, relativePath, current, warnings);
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
         this.resolveSafeWorkspacePath(workspace, relativePath);
         if (target.kind === 'tree') {
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
@@ -1288,7 +2370,7 @@ class WorkspaceHistoryService {
             this.readCommit(commit.id, commit.workspaceId);
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
     }
     readCommit(commitId, workspaceId) {
         assertOid(commitId);
@@ -1320,7 +2402,7 @@ class WorkspaceHistoryService {
             stats.reusedBytes += content.byteLength;
             return oid;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
         stats.storedBytes += content.byteLength;
         return oid;
     }
@@ -1419,7 +2501,7 @@ class WorkspaceHistoryService {
         return ref;
     }
     writeRef(ref) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
     }
     readRegistry() {
         this.ensureStore();
@@ -1440,7 +2522,7 @@ class WorkspaceHistoryService {
         return registry;
     }
     writeRegistry(registry) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
     }
     getStoredWorkspace(workspaceId) {
         if (workspaceId.length > 128 || !isSafeName(workspaceId)) {
@@ -1528,7 +2610,7 @@ class WorkspaceHistoryService {
             }
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
     }
     removeMatchingRollbackJournal(workspaceId, operationId) {
         const journal = this.readRollbackJournal(workspaceId);
@@ -1546,7 +2628,7 @@ class WorkspaceHistoryService {
     }
     ensureStore() {
         for (const dir of ['objects', 'commits', 'refs', 'journals', 'rollbacks', 'operations', 'locks']) {
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
+            ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
         }
     }
     registryPath() {
@@ -2609,6 +3691,16 @@ function resolveUserDirectories(directories) {
 
 /***/ },
 
+/***/ "node:child_process"
+/*!*************************************!*\
+  !*** external "node:child_process" ***!
+  \*************************************/
+(module) {
+
+module.exports = require("node:child_process");
+
+/***/ },
+
 /***/ "node:crypto"
 /*!******************************!*\
   !*** external "node:crypto" ***!
@@ -2662,17 +3754,17 @@ module.exports = require("node:path");
 /******/ 	});
 /************************************************************************/
 /******/ 	// The module cache
-/******/ 	var __webpack_module_cache__ = {};
+/******/ 	const __webpack_module_cache__ = {};
 /******/ 	
 /******/ 	// The require function
 /******/ 	function __webpack_require__(moduleId) {
 /******/ 		// Check if module is in cache
-/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		const cachedModule = __webpack_module_cache__[moduleId];
 /******/ 		if (cachedModule !== undefined) {
 /******/ 			return cachedModule.exports;
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
-/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 		const module = __webpack_module_cache__[moduleId] = {
 /******/ 			// no module.id needed
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
@@ -2681,7 +3773,7 @@ module.exports = require("node:path");
 /******/ 		// Execute the module function
 /******/ 		if (!(moduleId in __webpack_modules__)) {
 /******/ 			delete __webpack_module_cache__[moduleId];
-/******/ 			var e = new Error("Cannot find module '" + moduleId + "'");
+/******/ 			const e = new Error("Cannot find module '" + moduleId + "'");
 /******/ 			e.code = 'MODULE_NOT_FOUND';
 /******/ 			throw e;
 /******/ 		}
@@ -2696,7 +3788,7 @@ module.exports = require("node:path");
 /******/ 	(() => {
 /******/ 		// getDefaultExport function for compatibility with non-harmony modules
 /******/ 		__webpack_require__.n = (module) => {
-/******/ 			var getter = module && module.__esModule ?
+/******/ 			const getter = module && module.__esModule ?
 /******/ 				() => (module['default']) :
 /******/ 				() => (module);
 /******/ 			__webpack_require__.d(getter, { a: getter });
@@ -2706,11 +3798,26 @@ module.exports = require("node:path");
 /******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
-/******/ 		// define getter functions for harmony exports
+/******/ 		// define getter/value functions for harmony exports
 /******/ 		__webpack_require__.d = (exports, definition) => {
-/******/ 			for(var key in definition) {
-/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
-/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 			if(Array.isArray(definition)) {
+/******/ 				var i = 0;
+/******/ 				while(i < definition.length) {
+/******/ 					var key = definition[i++];
+/******/ 					var binding = definition[i++];
+/******/ 					if(!__webpack_require__.o(exports, key)) {
+/******/ 						if(binding === 0) {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, value: definition[i++] });
+/******/ 						} else {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, get: binding });
+/******/ 						}
+/******/ 					} else if(binding === 0) { i++; }
+/******/ 				}
+/******/ 			} else {
+/******/ 				for(var key in definition) {
+/******/ 					if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 						Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 					}
 /******/ 				}
 /******/ 			}
 /******/ 		};
@@ -2725,7 +3832,7 @@ module.exports = require("node:path");
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
 /******/ 		__webpack_require__.r = (exports) => {
-/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 			if(Symbol.toStringTag) {
 /******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 /******/ 			}
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
@@ -2733,7 +3840,7 @@ module.exports = require("node:path");
 /******/ 	})();
 /******/ 	
 /************************************************************************/
-var __webpack_exports__ = {};
+let __webpack_exports__ = {};
 // This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 /*!**************************!*\
@@ -2745,15 +3852,22 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:path */ "node:path");
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
+/* harmony import */ var _services_host_bridge_service_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./services/host-bridge-service.js */ "./src/services/host-bridge-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
+
+
 
 
 async function runAgentCli(argv) {
     const args = parseArgs(argv);
     const storeDir = args.store
         ? node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(args.store)
-        : (0,_services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_1__.resolveWorkspaceHistoryStore)(args.dataRoot ?? defaultDataRoot());
-    const history = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_1__.WorkspaceHistoryService(storeDir);
+        : (0,_services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_3__.resolveWorkspaceHistoryStore)(args.dataRoot ?? defaultDataRoot());
+    const history = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_3__.WorkspaceHistoryService(storeDir);
+    if (args.command.startsWith('host:')) {
+        return await runHostBridgeCommand(args, storeDir);
+    }
     if (args.command === 'workspaces') {
         return { storeDir, workspaces: history.listWorkspaces() };
     }
@@ -2803,12 +3917,18 @@ async function runAgentCli(argv) {
 }
 function parseArgs(argv) {
     const values = argv[0] === 'rescue' ? argv.slice(1) : argv;
-    const command = values.shift() ?? '';
+    let command = values.shift() ?? '';
+    if (command === 'host') {
+        command = `host:${values.shift() ?? ''}`;
+    }
     const positionals = [];
     let dataRoot;
     let store;
     let workspaceId;
     let operationId;
+    let stRoot;
+    let pluginRoot;
+    let hostState;
     let limit = 100;
     let force = false;
     for (let index = 0; index < values.length; index += 1) {
@@ -2817,7 +3937,7 @@ function parseArgs(argv) {
             force = true;
             continue;
         }
-        if (value === '--data-root' || value === '--store' || value === '--workspace' || value === '--operation-id' || value === '--limit') {
+        if (value === '--data-root' || value === '--store' || value === '--workspace' || value === '--operation-id' || value === '--limit' || value === '--st-root' || value === '--plugin-root' || value === '--host-state') {
             const optionValue = values[index + 1];
             if (!optionValue) {
                 throw new Error(`${value} requires a value`);
@@ -2833,6 +3953,12 @@ function parseArgs(argv) {
                 operationId = optionValue;
             if (value === '--limit')
                 limit = Number(optionValue);
+            if (value === '--st-root')
+                stRoot = optionValue;
+            if (value === '--plugin-root')
+                pluginRoot = optionValue;
+            if (value === '--host-state')
+                hostState = optionValue;
             continue;
         }
         if (value?.startsWith('--')) {
@@ -2854,7 +3980,38 @@ function parseArgs(argv) {
         ...(store ? { store } : {}),
         ...(workspaceId ? { workspaceId } : {}),
         ...(operationId ? { operationId } : {}),
+        ...(stRoot ? { stRoot } : {}),
+        ...(pluginRoot ? { pluginRoot } : {}),
+        ...(hostState ? { hostState } : {}),
     };
+}
+async function runHostBridgeCommand(args, workspaceStoreDir) {
+    const stRoot = node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(args.stRoot ?? process.cwd());
+    const env = { ...process.env, AUTHORITY_ST_ROOT: stRoot };
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_2__.InstallService({
+        runtimeDir: args.pluginRoot ? node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(args.pluginRoot, 'runtime') : __dirname,
+        cwd: stRoot,
+        env,
+    });
+    const bridge = new _services_host_bridge_service_js__WEBPACK_IMPORTED_MODULE_1__.HostBridgeService({
+        pluginRoot: args.pluginRoot ? node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(args.pluginRoot) : install.getPluginRoot(),
+        stateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().resolve(args.hostState ?? node_path__WEBPACK_IMPORTED_MODULE_0___default().join(workspaceStoreDir, '..', 'host-bridge')),
+        resolveSillyTavernRoot: () => install.getSillyTavernRoot(),
+        env,
+        logger: { info() { }, warn() { }, error() { } },
+    });
+    switch (args.command) {
+        case 'host:status':
+            return await bridge.inspect();
+        case 'host:install':
+            return await bridge.install();
+        case 'host:repair':
+            return await bridge.repair();
+        case 'host:rollback':
+            return await bridge.rollback({ force: args.force });
+        default:
+            throw new Error(usage());
+    }
 }
 function resolveWorkspaceId(history, requested) {
     if (requested) {
@@ -2880,6 +4037,7 @@ function usage() {
     return [
         'Usage: node runtime/agent.cjs rescue <command> [options]',
         'Commands: workspaces, status, log, diff <from|empty> <to|head>, checkpoint [paths...], rollback <commit>, resume',
+        'Host commands: host status|install|repair|rollback --st-root <path> [--plugin-root <path>] [--host-state <path>]',
         'Options: --data-root <path>, --store <path>, --workspace <id>, --operation-id <id>, --limit <1-500>, --force',
     ].join('\n');
 }

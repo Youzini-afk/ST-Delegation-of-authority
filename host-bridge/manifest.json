@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "bridgeVersion": "1.0.0",
+  "host": "sillytavern",
+  "supportedPackageVersions": [
+    "1.18.0"
+  ],
+  "patchModule": "patch.cjs",
+  "assets": [
+    {
+      "source": "assets/public/scripts/authority-host-bridge.js",
+      "target": "public/scripts/authority-host-bridge.js"
+    },
+    {
+      "source": "assets/src/authority-host-bridge.js",
+      "target": "src/authority-host-bridge.js"
+    }
+  ],
+  "syntaxCheckTargets": [
+    "public/lib/eventemitter.js",
+    "public/scripts/extensions.js",
+    "public/scripts/events.js",
+    "public/script.js",
+    "public/scripts/group-chats.js",
+    "src/endpoints/chats.js",
+    "public/scripts/authority-host-bridge.js",
+    "src/authority-host-bridge.js"
+  ]
+}

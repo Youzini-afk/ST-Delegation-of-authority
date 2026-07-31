@@ -13,6 +13,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   AUTHORITY_DATA_FOLDER: () => (/* binding */ AUTHORITY_DATA_FOLDER),
 /* harmony export */   AUTHORITY_MANAGED_CORE_DIR: () => (/* binding */ AUTHORITY_MANAGED_CORE_DIR),
 /* harmony export */   AUTHORITY_MANAGED_FILE: () => (/* binding */ AUTHORITY_MANAGED_FILE),
+/* harmony export */   AUTHORITY_MANAGED_HOST_BRIDGE_DIR: () => (/* binding */ AUTHORITY_MANAGED_HOST_BRIDGE_DIR),
 /* harmony export */   AUTHORITY_MANAGED_SDK_DIR: () => (/* binding */ AUTHORITY_MANAGED_SDK_DIR),
 /* harmony export */   AUTHORITY_MODULE_PROTOCOL_VERSION: () => (/* binding */ AUTHORITY_MODULE_PROTOCOL_VERSION),
 /* harmony export */   AUTHORITY_PLUGIN_ID: () => (/* binding */ AUTHORITY_PLUGIN_ID),
@@ -46,6 +47,7 @@ const AUTHORITY_MANAGED_FILE = '.authority-managed.json';
 const AUTHORITY_RELEASE_FILE = '.authority-release.json';
 const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
 const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
+const AUTHORITY_MANAGED_HOST_BRIDGE_DIR = 'managed/host-bridge';
 const SESSION_HEADER = 'x-authority-session-token';
 const MAX_KV_VALUE_BYTES = 128 * 1024;
 const MAX_BLOB_BYTES = 16 * 1024 * 1024;
@@ -4264,23 +4266,25 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! ./services/data-transfer-service.js */ "./src/services/data-transfer-service.ts");
 /* harmony import */ var _services_extension_service_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! ./services/extension-service.js */ "./src/services/extension-service.ts");
 /* harmony import */ var _services_http_service_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(/*! ./services/http-service.js */ "./src/services/http-service.ts");
-/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
-/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
-/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
-/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
-/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
-/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
-/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
-/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
-/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
-/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
-/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
-/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
-/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
-/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
-/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
-/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
-/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+/* harmony import */ var _services_host_bridge_service_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(/*! ./services/host-bridge-service.js */ "./src/services/host-bridge-service.ts");
+/* harmony import */ var _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(/*! ./services/idempotency-service.js */ "./src/services/idempotency-service.ts");
+/* harmony import */ var _services_install_service_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(/*! ./services/install-service.js */ "./src/services/install-service.ts");
+/* harmony import */ var _services_job_service_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(/*! ./services/job-service.js */ "./src/services/job-service.ts");
+/* harmony import */ var _services_lock_service_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(/*! ./services/lock-service.js */ "./src/services/lock-service.ts");
+/* harmony import */ var _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(/*! ./services/module-discovery-service.js */ "./src/services/module-discovery-service.ts");
+/* harmony import */ var _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_18__ = __webpack_require__(/*! ./services/module-host-service.js */ "./src/services/module-host-service.ts");
+/* harmony import */ var _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(/*! ./services/native-migration-service.js */ "./src/services/native-migration-service.ts");
+/* harmony import */ var _services_permission_service_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(/*! ./services/permission-service.js */ "./src/services/permission-service.ts");
+/* harmony import */ var _services_policy_service_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(/*! ./services/policy-service.js */ "./src/services/policy-service.ts");
+/* harmony import */ var _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(/*! ./services/private-fs-service.js */ "./src/services/private-fs-service.ts");
+/* harmony import */ var _services_session_service_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(/*! ./services/session-service.js */ "./src/services/session-service.ts");
+/* harmony import */ var _services_storage_service_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(/*! ./services/storage-service.js */ "./src/services/storage-service.ts");
+/* harmony import */ var _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(/*! ./services/st-manager-bridge-service.js */ "./src/services/st-manager-bridge-service.ts");
+/* harmony import */ var _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_26__ = __webpack_require__(/*! ./services/st-manager-control-service.js */ "./src/services/st-manager-control-service.ts");
+/* harmony import */ var _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_27__ = __webpack_require__(/*! ./services/trivium-service.js */ "./src/services/trivium-service.ts");
+/* harmony import */ var _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_28__ = __webpack_require__(/*! ./services/workspace-history-service.js */ "./src/services/workspace-history-service.ts");
+/* harmony import */ var _store_authority_paths_js__WEBPACK_IMPORTED_MODULE_29__ = __webpack_require__(/*! ./store/authority-paths.js */ "./src/store/authority-paths.ts");
+
 
 
 
@@ -4316,26 +4320,31 @@ function createAuthorityRuntime() {
     const audit = new _services_audit_service_js__WEBPACK_IMPORTED_MODULE_6__.AuditService(core);
     const transfers = new _services_data_transfer_service_js__WEBPACK_IMPORTED_MODULE_9__.DataTransferService();
     const extensions = new _services_extension_service_js__WEBPACK_IMPORTED_MODULE_10__.ExtensionService(core);
-    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_13__.InstallService();
-    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_20__.PolicyService(core);
-    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_19__.PermissionService(policies, core);
-    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_22__.SessionService(core);
-    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_23__.StorageService(core);
-    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_24__.StManagerBridgeService();
-    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_25__.StManagerControlService();
-    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_21__.PrivateFsService(core);
+    const install = new _services_install_service_js__WEBPACK_IMPORTED_MODULE_14__.InstallService();
+    const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_29__.getGlobalAuthorityPaths)();
+    const hostBridge = new _services_host_bridge_service_js__WEBPACK_IMPORTED_MODULE_12__.HostBridgeService({
+        pluginRoot: install.getPluginRoot(),
+        stateDir: globalPaths.hostBridgeStateDir,
+        resolveSillyTavernRoot: () => install.getSillyTavernRoot(),
+    });
+    const policies = new _services_policy_service_js__WEBPACK_IMPORTED_MODULE_21__.PolicyService(core);
+    const permissions = new _services_permission_service_js__WEBPACK_IMPORTED_MODULE_20__.PermissionService(policies, core);
+    const sessions = new _services_session_service_js__WEBPACK_IMPORTED_MODULE_23__.SessionService(core);
+    const storage = new _services_storage_service_js__WEBPACK_IMPORTED_MODULE_24__.StorageService(core);
+    const stManagerBridge = new _services_st_manager_bridge_service_js__WEBPACK_IMPORTED_MODULE_25__.StManagerBridgeService();
+    const stManagerControl = new _services_st_manager_control_service_js__WEBPACK_IMPORTED_MODULE_26__.StManagerControlService();
+    const files = new _services_private_fs_service_js__WEBPACK_IMPORTED_MODULE_22__.PrivateFsService(core);
     const http = new _services_http_service_js__WEBPACK_IMPORTED_MODULE_11__.HttpService(core);
-    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_14__.JobService(core);
-    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_26__.TriviumService(core);
-    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_18__.NativeMigrationService();
+    const jobs = new _services_job_service_js__WEBPACK_IMPORTED_MODULE_15__.JobService(core);
+    const trivium = new _services_trivium_service_js__WEBPACK_IMPORTED_MODULE_27__.TriviumService(core);
+    const nativeMigrations = new _services_native_migration_service_js__WEBPACK_IMPORTED_MODULE_19__.NativeMigrationService();
     const adminPackages = new _services_admin_package_service_js__WEBPACK_IMPORTED_MODULE_1__.AdminPackageService(core, extensions, permissions, policies, storage, files, trivium);
-    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_17__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
-    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_16__.ModuleDiscoveryService(install);
-    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_15__.LockService();
-    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_12__.IdempotencyService(storage);
+    const modules = new _services_module_host_service_js__WEBPACK_IMPORTED_MODULE_18__.ModuleHostService(permissions, audit, trivium, storage, files, jobs, events);
+    const moduleDiscovery = new _services_module_discovery_service_js__WEBPACK_IMPORTED_MODULE_17__.ModuleDiscoveryService(install);
+    const locks = new _services_lock_service_js__WEBPACK_IMPORTED_MODULE_16__.LockService();
+    const idempotency = new _services_idempotency_service_js__WEBPACK_IMPORTED_MODULE_13__.IdempotencyService(storage);
     const companionLoader = new _services_companion_module_loader_service_js__WEBPACK_IMPORTED_MODULE_7__.CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
-    const globalPaths = (0,_store_authority_paths_js__WEBPACK_IMPORTED_MODULE_28__.getGlobalAuthorityPaths)();
-    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_27__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
+    const workspaceHistory = new _services_workspace_history_service_js__WEBPACK_IMPORTED_MODULE_28__.WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
     const agentProfiles = new _services_agent_profile_store_service_js__WEBPACK_IMPORTED_MODULE_3__.AgentProfileStoreService(globalPaths.agentStateDir);
     const agentHostTools = new _services_agent_host_tools_js__WEBPACK_IMPORTED_MODULE_2__.AgentHostToolService(workspaceHistory);
     const agentSessions = new _services_agent_session_runtime_service_js__WEBPACK_IMPORTED_MODULE_4__.AgentSessionRuntimeService(new _services_agent_session_store_service_js__WEBPACK_IMPORTED_MODULE_5__.AgentSessionStoreService(globalPaths.agentStateDir), agentProfiles, workspaceHistory, agentHostTools, { moduleHost: modules });
@@ -4347,6 +4356,7 @@ function createAuthorityRuntime() {
         transfers,
         extensions,
         install,
+        hostBridge,
         policies,
         permissions,
         sessions,
@@ -5455,7 +5465,7 @@ class AdminPackageService {
         return operation;
     }
     saveOperation(user, operation) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.getOperationStatePath(user, operation.id), operation);
     }
     toPublicOperation(operation) {
         const { artifactPath: _artifactPath, sourcePath: _sourcePath, ...publicOperation } = operation;
@@ -5847,7 +5857,7 @@ function writeFile(root, args, signal) {
     }
     // ponytail: Node has no portable dirfd-relative atomic rename; repeated realpath/lstat checks cover ordinary races.
     // Move writes into a native openat/handle layer if hostile same-account filesystem races enter the threat model.
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(resolved.absolutePath, content);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(resolved.absolutePath, content);
     return { path: resolved.relativePath, bytesWritten: Buffer.byteLength(content) };
 }
 function replaceText(root, args, signal) {
@@ -5875,7 +5885,7 @@ function replaceText(root, args, signal) {
     if (signal.aborted) {
         throw abortError(signal);
     }
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(writeTarget.absolutePath, next);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(writeTarget.absolutePath, next);
     return { path: resolved.relativePath, replacements: replaceAll ? matches : 1 };
 }
 async function runShell(root, args, context, artifacts) {
@@ -6804,7 +6814,7 @@ function readJson(filePath, label) {
     }
 }
 function protectDirectory(dirPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(dirPath);
     if (process.platform !== 'win32') {
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
     }
@@ -10953,7 +10963,7 @@ function createAndSync(filePath, content) {
         if (descriptor !== null)
             node_fs__WEBPACK_IMPORTED_MODULE_1___default().closeSync(descriptor);
     }
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.fsyncDirectory)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(filePath));
 }
 function truncateAndSync(filePath, length) {
     let descriptor = null;
@@ -11095,7 +11105,7 @@ function assertFileId(value, label) {
     }
 }
 function protectDirectory(dirPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(dirPath);
     if (process.platform !== 'win32')
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().chmodSync(dirPath, 0o700);
 }
@@ -14370,6 +14380,420 @@ class ExtensionService {
 
 /***/ },
 
+/***/ "./src/services/host-bridge-service.ts"
+/*!*********************************************!*\
+  !*** ./src/services/host-bridge-service.ts ***!
+  \*********************************************/
+(__unused_webpack_module, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   HostBridgeService: () => (/* binding */ HostBridgeService)
+/* harmony export */ });
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! node:child_process */ "node:child_process");
+/* harmony import */ var node_child_process__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_child_process__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! node:crypto */ "node:crypto");
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! node:fs */ "node:fs");
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! node:path */ "node:path");
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_3__);
+/* harmony import */ var _constants_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ../constants.js */ "./src/constants.ts");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../utils.js */ "./src/utils.ts");
+
+
+
+
+
+
+
+const RECORD_SCHEMA_VERSION = 1;
+const AUTO_INSTALL_DISABLED = new Set(['0', 'false', 'off', 'no']);
+class HostBridgeService {
+    pluginRoot;
+    stateDir;
+    resolveSillyTavernRoot;
+    env;
+    logger;
+    runtimeRequire;
+    status;
+    constructor(options) {
+        this.pluginRoot = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.pluginRoot);
+        this.stateDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(options.stateDir);
+        this.resolveSillyTavernRoot = options.resolveSillyTavernRoot;
+        this.env = options.env ?? process.env;
+        this.logger = options.logger ?? console;
+        this.runtimeRequire = resolveRuntimeRequire();
+        this.status = this.buildStatus('missing', 'Authority Host Bridge has not been inspected yet.');
+    }
+    getStatus() {
+        return { ...this.status };
+    }
+    async bootstrap() {
+        const inspected = await this.inspect();
+        if (inspected.status === 'ready' || inspected.status === 'conflict' || inspected.status === 'error') {
+            return inspected;
+        }
+        if (AUTO_INSTALL_DISABLED.has(this.env.AUTHORITY_HOST_BRIDGE_AUTO_INSTALL?.trim().toLowerCase() ?? '')) {
+            return this.setStatus('missing', 'Authority Host Bridge is not installed and automatic installation is disabled.');
+        }
+        return inspected.operationId
+            ? await this.repair()
+            : await this.install();
+    }
+    async inspect() {
+        try {
+            const context = this.resolveContext();
+            const record = this.readRecord(context.stRoot);
+            if (record?.phase === 'applying' || record?.phase === 'rolling_back') {
+                this.logger.warn(`[authority] Recovering interrupted Host Bridge operation ${record.operationId}.`);
+                await this.rollbackRecord(record, true);
+                return this.setStatus('rolled_back', 'Recovered an interrupted Host Bridge operation.', context, record.operationId, true);
+            }
+            if (!record || record.phase === 'rolled_back' || record.phase === 'error') {
+                if (this.hasUnmanagedBridgeMarkers(context)) {
+                    return this.setStatus('conflict', 'Host Bridge markers exist without a matching Authority install record.', context);
+                }
+                return this.setStatus('missing', 'Authority Host Bridge is not installed.', context);
+            }
+            if (record.bridgeVersion !== context.manifest.bridgeVersion || record.artifactHash !== context.artifactHash) {
+                return this.setStatus('missing', 'Authority Host Bridge update is available.', context, record.operationId, true);
+            }
+            const verification = this.verifyRecord(record);
+            if (!verification.ok) {
+                return this.setStatus('conflict', verification.message, context, record.operationId);
+            }
+            return this.setStatus('ready', 'Authority Host Bridge is installed and verified.', context, record.operationId);
+        }
+        catch (error) {
+            return this.setStatus('error', errorMessage(error));
+        }
+    }
+    async install(options = {}) {
+        let context;
+        try {
+            context = this.resolveContext();
+        }
+        catch (error) {
+            return this.setStatus('error', errorMessage(error));
+        }
+        const existing = this.readRecord(context.stRoot);
+        if (existing?.phase === 'ready') {
+            const verification = this.verifyRecord(existing);
+            if (verification.ok && existing.bridgeVersion === context.manifest.bridgeVersion && existing.artifactHash === context.artifactHash) {
+                return this.setStatus('ready', 'Authority Host Bridge is already installed and verified.', context, existing.operationId);
+            }
+            if (!options.repair) {
+                return this.setStatus('conflict', verification.ok
+                    ? 'Authority Host Bridge update requires a controlled repair operation.'
+                    : verification.message, context, existing.operationId);
+            }
+            const rollback = await this.rollbackRecord(existing, false);
+            if (!rollback.ok) {
+                return this.setStatus('conflict', rollback.message, context, existing.operationId);
+            }
+        }
+        const operationId = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().randomUUID();
+        const operationDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.operationRoot(context.stRoot), operationId);
+        const record = {
+            schemaVersion: RECORD_SCHEMA_VERSION,
+            operationId,
+            bridgeVersion: context.manifest.bridgeVersion,
+            stRoot: context.stRoot,
+            hostPackageVersion: context.hostPackageVersion,
+            artifactHash: context.artifactHash,
+            phase: 'applying',
+            createdAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+            targets: [],
+        };
+        try {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(operationDir);
+            for (const relativePath of context.patch.targetFiles) {
+                record.targets.push(this.backupTarget(context.stRoot, operationDir, relativePath, 'patch'));
+            }
+            for (const asset of context.manifest.assets) {
+                record.targets.push(this.backupTarget(context.stRoot, operationDir, asset.target, 'asset'));
+            }
+            this.writeRecord(record);
+            for (const target of record.targets.filter(item => item.kind === 'patch')) {
+                const targetPath = this.resolveHostTarget(context.stRoot, target.relativePath);
+                const source = node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(targetPath, 'utf8');
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, context.patch.apply(target.relativePath, source));
+                target.patchedHash = hashFile(targetPath);
+                record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+                this.writeRecord(record);
+            }
+            for (const asset of context.manifest.assets) {
+                const sourcePath = this.resolveBundleTarget(context.bundleDir, asset.source);
+                const targetPath = this.resolveHostTarget(context.stRoot, asset.target);
+                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(sourcePath));
+                const target = record.targets.find(item => item.kind === 'asset' && item.relativePath === normalizeRelative(asset.target));
+                if (target)
+                    target.patchedHash = hashFile(targetPath);
+                record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+                this.writeRecord(record);
+            }
+            this.runSyntaxChecks(context);
+            record.phase = 'ready';
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            this.writeRecord(record);
+            this.logger.info(`[authority] Host Bridge ${record.bridgeVersion} installed for ${context.stRoot}. Restart SillyTavern to activate it.`);
+            return this.setStatus(existing ? 'updated' : 'installed', 'Authority Host Bridge installed successfully. Restart SillyTavern to activate it.', context, operationId, true);
+        }
+        catch (error) {
+            record.phase = 'error';
+            record.error = errorMessage(error);
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            this.writeRecord(record);
+            const rollback = await this.rollbackRecord(record, true);
+            const message = rollback.ok
+                ? `Host Bridge installation failed and was rolled back: ${record.error}`
+                : `Host Bridge installation failed; automatic rollback also failed: ${record.error}; ${rollback.message}`;
+            this.logger.error(`[authority] ${message}`);
+            return this.setStatus('error', message, context, operationId);
+        }
+    }
+    async repair() {
+        return await this.install({ repair: true });
+    }
+    async rollback(options = {}) {
+        try {
+            const context = this.resolveContext();
+            const record = this.readRecord(context.stRoot);
+            if (!record || record.phase === 'rolled_back') {
+                return this.setStatus('rolled_back', 'Authority Host Bridge is already absent.', context, record?.operationId ?? null, true);
+            }
+            const result = await this.rollbackRecord(record, Boolean(options.force));
+            if (!result.ok) {
+                return this.setStatus('conflict', result.message, context, record.operationId);
+            }
+            return this.setStatus('rolled_back', 'Authority Host Bridge was rolled back. Restart SillyTavern to activate the original host files.', context, record.operationId, true);
+        }
+        catch (error) {
+            return this.setStatus('error', errorMessage(error));
+        }
+    }
+    resolveContext() {
+        const bundleDir = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.pluginRoot, _constants_js__WEBPACK_IMPORTED_MODULE_4__.AUTHORITY_MANAGED_HOST_BRIDGE_DIR);
+        const manifestPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(bundleDir, 'manifest.json');
+        if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(manifestPath)) {
+            throw new Error('Managed Authority Host Bridge bundle is missing.');
+        }
+        const manifest = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(manifestPath, null);
+        if (!manifest || manifest.schemaVersion !== 1 || manifest.host !== 'sillytavern' || !manifest.bridgeVersion) {
+            throw new Error('Managed Authority Host Bridge manifest is invalid.');
+        }
+        const stRoot = this.resolveSillyTavernRoot();
+        if (!stRoot) {
+            throw new Error('Unable to resolve the SillyTavern root for Host Bridge installation.');
+        }
+        const packageJson = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(stRoot, 'package.json'), {});
+        const hostPackageVersion = String(packageJson.version ?? 'unknown');
+        if (!manifest.supportedPackageVersions.includes(hostPackageVersion)) {
+            throw new Error(`SillyTavern ${hostPackageVersion} is not supported by Host Bridge ${manifest.bridgeVersion}.`);
+        }
+        const patchPath = this.resolveBundleTarget(bundleDir, manifest.patchModule);
+        if (this.runtimeRequire.cache) {
+            delete this.runtimeRequire.cache[patchPath];
+        }
+        const patch = this.runtimeRequire(patchPath);
+        if (!patch || !Array.isArray(patch.targetFiles) || typeof patch.apply !== 'function' || !patch.bridgeMarker) {
+            throw new Error('Managed Authority Host Bridge patch module is invalid.');
+        }
+        return {
+            bundleDir,
+            manifest,
+            patch,
+            stRoot: node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot),
+            hostPackageVersion,
+            artifactHash: hashDirectory(bundleDir),
+        };
+    }
+    hasUnmanagedBridgeMarkers(context) {
+        return context.patch.targetFiles.some(relativePath => {
+            const targetPath = this.resolveHostTarget(context.stRoot, relativePath);
+            return node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath) && node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(targetPath, 'utf8').includes(context.patch.bridgeMarker);
+        });
+    }
+    backupTarget(stRoot, operationDir, relativePath, kind) {
+        const normalized = normalizeRelative(relativePath);
+        const targetPath = this.resolveHostTarget(stRoot, normalized);
+        const originalExists = node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath);
+        const backupPath = originalExists ? node_path__WEBPACK_IMPORTED_MODULE_3___default().join(operationDir, 'original', ...normalized.split('/')) : null;
+        if (originalExists && backupPath) {
+            (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(backupPath));
+            node_fs__WEBPACK_IMPORTED_MODULE_2___default().copyFileSync(targetPath, backupPath);
+        }
+        return {
+            relativePath: normalized,
+            kind,
+            originalExists,
+            originalHash: originalExists ? hashFile(targetPath) : null,
+            patchedHash: null,
+            backupPath,
+        };
+    }
+    verifyRecord(record) {
+        for (const target of record.targets) {
+            const targetPath = this.resolveHostTarget(record.stRoot, target.relativePath);
+            if (!target.patchedHash || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath)) {
+                return { ok: false, message: `Host Bridge target is missing: ${target.relativePath}` };
+            }
+            const currentHash = hashFile(targetPath);
+            if (currentHash !== target.patchedHash) {
+                return { ok: false, message: `Host Bridge target drift detected: ${target.relativePath}` };
+            }
+        }
+        return { ok: true };
+    }
+    async rollbackRecord(record, force) {
+        if (!force) {
+            for (const target of record.targets) {
+                const targetPath = this.resolveHostTarget(record.stRoot, target.relativePath);
+                if (!node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(targetPath) || !target.patchedHash)
+                    continue;
+                const currentHash = hashFile(targetPath);
+                if (currentHash !== target.patchedHash && currentHash !== target.originalHash) {
+                    return { ok: false, message: `Refusing to overwrite drifted Host Bridge target: ${target.relativePath}` };
+                }
+            }
+        }
+        record.phase = 'rolling_back';
+        record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+        this.writeRecord(record);
+        try {
+            for (const target of [...record.targets].reverse()) {
+                const targetPath = this.resolveHostTarget(record.stRoot, target.relativePath);
+                if (target.originalExists) {
+                    if (!target.backupPath || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(target.backupPath)) {
+                        return { ok: false, message: `Host Bridge backup is missing: ${target.relativePath}` };
+                    }
+                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteFile)(targetPath, node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(target.backupPath));
+                }
+                else {
+                    node_fs__WEBPACK_IMPORTED_MODULE_2___default().rmSync(targetPath, { force: true });
+                }
+            }
+            record.phase = 'rolled_back';
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            delete record.error;
+            this.writeRecord(record);
+            return { ok: true };
+        }
+        catch (error) {
+            record.phase = 'error';
+            record.error = errorMessage(error);
+            record.updatedAt = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)();
+            this.writeRecord(record);
+            return { ok: false, message: record.error };
+        }
+    }
+    runSyntaxChecks(context) {
+        for (const relativePath of context.manifest.syntaxCheckTargets) {
+            const targetPath = this.resolveHostTarget(context.stRoot, relativePath);
+            const result = node_child_process__WEBPACK_IMPORTED_MODULE_0___default().spawnSync(process.execPath, ['--check', targetPath], {
+                cwd: context.stRoot,
+                env: this.env,
+                encoding: 'utf8',
+                windowsHide: true,
+            });
+            if (result.error || result.status !== 0) {
+                const detail = [result.error?.message, result.stderr?.trim(), result.stdout?.trim()].filter(Boolean).join('\n');
+                throw new Error(`Syntax validation failed for ${relativePath}${detail ? `: ${detail}` : ''}`);
+            }
+        }
+    }
+    recordPath(stRoot) {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.stateDir, 'records', `${rootKey(stRoot)}.json`);
+    }
+    operationRoot(stRoot) {
+        return node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.stateDir, 'operations', rootKey(stRoot));
+    }
+    readRecord(stRoot) {
+        const record = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.readJsonFile)(this.recordPath(stRoot), null);
+        return record?.schemaVersion === RECORD_SCHEMA_VERSION ? record : null;
+    }
+    writeRecord(record) {
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.recordPath(record.stRoot), record);
+    }
+    resolveHostTarget(stRoot, relativePath) {
+        const target = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot, normalizeRelative(relativePath));
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isPathInside)(stRoot, target) || target === node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot)) {
+            throw new Error(`Host Bridge target escapes SillyTavern root: ${relativePath}`);
+        }
+        return target;
+    }
+    resolveBundleTarget(bundleDir, relativePath) {
+        const target = node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(bundleDir, normalizeRelative(relativePath));
+        if (!(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.isPathInside)(bundleDir, target) || target === node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(bundleDir) || !node_fs__WEBPACK_IMPORTED_MODULE_2___default().existsSync(target)) {
+            throw new Error(`Host Bridge bundle path is invalid: ${relativePath}`);
+        }
+        return target;
+    }
+    setStatus(status, message, context, operationId = null, requiresRestart = false) {
+        this.status = this.buildStatus(status, message, context, operationId, requiresRestart);
+        return this.getStatus();
+    }
+    buildStatus(status, message, context, operationId = null, requiresRestart = false) {
+        return {
+            status,
+            message,
+            bridgeVersion: context?.manifest.bridgeVersion ?? null,
+            hostPackageVersion: context?.hostPackageVersion ?? null,
+            sillyTavernRoot: context?.stRoot ?? null,
+            operationId,
+            requiresRestart,
+            checkedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(),
+        };
+    }
+}
+function rootKey(stRoot) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_path__WEBPACK_IMPORTED_MODULE_3___default().resolve(stRoot).toLowerCase()).digest('hex').slice(0, 24);
+}
+function normalizeRelative(value) {
+    return value.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+function hashFile(filePath) {
+    return node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256').update(node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath)).digest('hex');
+}
+function hashDirectory(rootDir) {
+    const hash = node_crypto__WEBPACK_IMPORTED_MODULE_1___default().createHash('sha256');
+    for (const filePath of listFiles(rootDir)) {
+        hash.update(node_path__WEBPACK_IMPORTED_MODULE_3___default().relative(rootDir, filePath).replace(/\\/g, '/'));
+        hash.update('\0');
+        hash.update(node_fs__WEBPACK_IMPORTED_MODULE_2___default().readFileSync(filePath));
+        hash.update('\0');
+    }
+    return hash.digest('hex');
+}
+function listFiles(rootDir) {
+    const files = [];
+    const visit = (currentDir) => {
+        for (const entry of node_fs__WEBPACK_IMPORTED_MODULE_2___default().readdirSync(currentDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            const fullPath = node_path__WEBPACK_IMPORTED_MODULE_3___default().join(currentDir, entry.name);
+            if (entry.isDirectory())
+                visit(fullPath);
+            else if (entry.isFile())
+                files.push(fullPath);
+        }
+    };
+    visit(rootDir);
+    return files;
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function resolveRuntimeRequire() {
+    if (typeof require !== 'undefined') {
+        return require;
+    }
+    return /* createRequire() */ undefined;
+}
+
+
+/***/ },
+
 /***/ "./src/services/http-service.ts"
 /*!**************************************!*\
   !*** ./src/services/http-service.ts ***!
@@ -17560,7 +17984,7 @@ class NativeMigrationService {
                         });
                         this.saveOperation({ ...applying, status: 'needs_rollback', updatedAt: (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.nowIso)(), journal });
                     }
-                    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
+                    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(write.targetPath));
                     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(write.tempPath, write.targetPath);
                     const completedEntry = {
                         archivePath: write.preview.archivePath,
@@ -17651,7 +18075,7 @@ class NativeMigrationService {
         return operation;
     }
     saveOperation(operation) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.atomicWriteJson)(this.getOperationStatePath(operation.id), operation);
     }
     toPublicOperation(operation) {
         const { sourcePath: _sourcePath, rootPath: _rootPath, journal, ...publicOperation } = operation;
@@ -17811,7 +18235,7 @@ function normalizeApplyMode(value) {
     throw new Error(`Unsupported native migration apply mode: ${String(value)}`);
 }
 function prepareNativeWriteTarget(rootPath, relativePath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(rootPath);
     const targetPath = (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.resolveContainedPath)(rootPath, relativePath);
     (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
     const realRoot = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
@@ -17861,7 +18285,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
                 continue;
             }
@@ -17880,7 +18304,7 @@ function rollbackJournal(rootPath, journal) {
                 if (entry.previousChecksumSha256 && computeFileSha256(entry.backupPath) !== entry.previousChecksumSha256) {
                     throw new Error(`Backup checksum mismatch: ${entry.targetPath}`);
                 }
-                (0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
+                ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_5__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(targetPath));
                 node_fs__WEBPACK_IMPORTED_MODULE_1___default().copyFileSync(entry.backupPath, targetPath);
             }
         }
@@ -18634,7 +19058,7 @@ async function scanSafeZip(filePath, options = {}) {
     };
 }
 async function extractSafeZipEntries(filePath, targetRoot, shouldExtract = () => true, options = {}) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(targetRoot);
     const parsedEntries = parseZipEntries(filePath, options);
     const extracted = [];
     for (const parsedEntry of parsedEntries) {
@@ -18874,7 +19298,7 @@ function readZip64Extra(extra, values) {
     return { compressedSize, uncompressedSize, localHeaderOffset };
 }
 async function extractParsedEntry(filePath, entry, destinationPath) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_7__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(destinationPath));
     const source = node_fs__WEBPACK_IMPORTED_MODULE_1___default().createReadStream(filePath, {
         start: entry.dataStart,
         end: entry.dataStart + entry.compressedSizeBytes - 1,
@@ -19364,7 +19788,7 @@ class StManagerBridgeService {
         return (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.readJsonFile)(this.statePath, {});
     }
     writeState(state) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(this.statePath));
         const tempPath = `${this.statePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
         node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, this.statePath);
@@ -19827,7 +20251,7 @@ function readJsonObject(filePath) {
     }
 }
 function atomicWriteBuffer(filePath, buffer) {
-    (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
+    ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(filePath));
     const tempPath = `${filePath}.${node_crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID()}.tmp`;
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().writeFileSync(tempPath, buffer);
     node_fs__WEBPACK_IMPORTED_MODULE_1___default().renameSync(tempPath, filePath);
@@ -20009,7 +20433,7 @@ class StManagerResourceLocator {
         return candidateReal;
     }
     resolveWritablePath(rootPath, relativePath) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(rootPath);
         const rootReal = node_fs__WEBPACK_IMPORTED_MODULE_1___default().realpathSync(rootPath);
         const candidate = node_path__WEBPACK_IMPORTED_MODULE_2___default().resolve(rootReal, relativePath.split('/').join((node_path__WEBPACK_IMPORTED_MODULE_2___default().sep)));
         (0,_utils_js__WEBPACK_IMPORTED_MODULE_3__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_2___default().dirname(candidate));
@@ -22786,7 +23210,7 @@ class WorkspaceHistoryService {
         if (current) {
             this.removeWorkspaceNode(workspace, relativePath, current, warnings);
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().dirname(absolutePath));
         this.resolveSafeWorkspacePath(workspace, relativePath);
         if (target.kind === 'tree') {
             (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(absolutePath);
@@ -22964,7 +23388,7 @@ class WorkspaceHistoryService {
             this.readCommit(commit.id, commit.workspaceId);
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, commit);
     }
     readCommit(commitId, workspaceId) {
         assertOid(commitId);
@@ -22996,7 +23420,7 @@ class WorkspaceHistoryService {
             stats.reusedBytes += content.byteLength;
             return oid;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteFile)(filePath, content);
         stats.storedBytes += content.byteLength;
         return oid;
     }
@@ -23095,7 +23519,7 @@ class WorkspaceHistoryService {
         return ref;
     }
     writeRef(ref) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.refPath(ref.workspaceId, ref.name), ref);
     }
     readRegistry() {
         this.ensureStore();
@@ -23116,7 +23540,7 @@ class WorkspaceHistoryService {
         return registry;
     }
     writeRegistry(registry) {
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(this.registryPath(), registry);
     }
     getStoredWorkspace(workspaceId) {
         if (workspaceId.length > 128 || !isSafeName(workspaceId)) {
@@ -23204,7 +23628,7 @@ class WorkspaceHistoryService {
             }
             return;
         }
-        (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
+        ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.atomicWriteJson)(filePath, completed);
     }
     removeMatchingRollbackJournal(workspaceId, operationId) {
         const journal = this.readRollbackJournal(workspaceId);
@@ -23222,7 +23646,7 @@ class WorkspaceHistoryService {
     }
     ensureStore() {
         for (const dir of ['objects', 'commits', 'refs', 'journals', 'rollbacks', 'operations', 'locks']) {
-            (0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
+            ;(0,_utils_js__WEBPACK_IMPORTED_MODULE_4__.ensureDir)(node_path__WEBPACK_IMPORTED_MODULE_3___default().join(this.storeDir, dir));
         }
     }
     registryPath() {
@@ -24294,6 +24718,7 @@ function getGlobalAuthorityPaths() {
         controlDbFile: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'control.sqlite'),
         agentWorkspacesDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'agent-workspaces'),
         agentStateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'agent'),
+        hostBridgeStateDir: node_path__WEBPACK_IMPORTED_MODULE_0___default().join(stateDir, 'host-bridge'),
     };
 }
 
@@ -24714,17 +25139,17 @@ module.exports = require("node:zlib");
 /******/ 	});
 /************************************************************************/
 /******/ 	// The module cache
-/******/ 	var __webpack_module_cache__ = {};
+/******/ 	const __webpack_module_cache__ = {};
 /******/ 	
 /******/ 	// The require function
 /******/ 	function __webpack_require__(moduleId) {
 /******/ 		// Check if module is in cache
-/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		const cachedModule = __webpack_module_cache__[moduleId];
 /******/ 		if (cachedModule !== undefined) {
 /******/ 			return cachedModule.exports;
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
-/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 		const module = __webpack_module_cache__[moduleId] = {
 /******/ 			// no module.id needed
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
@@ -24733,7 +25158,7 @@ module.exports = require("node:zlib");
 /******/ 		// Execute the module function
 /******/ 		if (!(moduleId in __webpack_modules__)) {
 /******/ 			delete __webpack_module_cache__[moduleId];
-/******/ 			var e = new Error("Cannot find module '" + moduleId + "'");
+/******/ 			const e = new Error("Cannot find module '" + moduleId + "'");
 /******/ 			e.code = 'MODULE_NOT_FOUND';
 /******/ 			throw e;
 /******/ 		}
@@ -24748,7 +25173,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// getDefaultExport function for compatibility with non-harmony modules
 /******/ 		__webpack_require__.n = (module) => {
-/******/ 			var getter = module && module.__esModule ?
+/******/ 			const getter = module && module.__esModule ?
 /******/ 				() => (module['default']) :
 /******/ 				() => (module);
 /******/ 			__webpack_require__.d(getter, { a: getter });
@@ -24758,11 +25183,26 @@ module.exports = require("node:zlib");
 /******/ 	
 /******/ 	/* webpack/runtime/define property getters */
 /******/ 	(() => {
-/******/ 		// define getter functions for harmony exports
+/******/ 		// define getter/value functions for harmony exports
 /******/ 		__webpack_require__.d = (exports, definition) => {
-/******/ 			for(var key in definition) {
-/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
-/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 			if(Array.isArray(definition)) {
+/******/ 				var i = 0;
+/******/ 				while(i < definition.length) {
+/******/ 					var key = definition[i++];
+/******/ 					var binding = definition[i++];
+/******/ 					if(!__webpack_require__.o(exports, key)) {
+/******/ 						if(binding === 0) {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, value: definition[i++] });
+/******/ 						} else {
+/******/ 							Object.defineProperty(exports, key, { enumerable: true, get: binding });
+/******/ 						}
+/******/ 					} else if(binding === 0) { i++; }
+/******/ 				}
+/******/ 			} else {
+/******/ 				for(var key in definition) {
+/******/ 					if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 						Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 					}
 /******/ 				}
 /******/ 			}
 /******/ 		};
@@ -24777,7 +25217,7 @@ module.exports = require("node:zlib");
 /******/ 	(() => {
 /******/ 		// define __esModule on exports
 /******/ 		__webpack_require__.r = (exports) => {
-/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 			if(Symbol.toStringTag) {
 /******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 /******/ 			}
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
@@ -24785,7 +25225,7 @@ module.exports = require("node:zlib");
 /******/ 	})();
 /******/ 	
 /************************************************************************/
-var __webpack_exports__ = {};
+let __webpack_exports__ = {};
 // This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 /*!**********************!*\
@@ -24825,6 +25265,13 @@ async function init(router) {
     runtime ??= (0,_runtime_js__WEBPACK_IMPORTED_MODULE_1__.createAuthorityRuntime)();
     (0,_routes_js__WEBPACK_IMPORTED_MODULE_2__.registerRoutes)(router, runtime);
     await runtime.install.bootstrap();
+    const hostBridgeStatus = await runtime.hostBridge.bootstrap();
+    if (hostBridgeStatus.requiresRestart) {
+        console.warn(`[authority] ${hostBridgeStatus.message}`);
+    }
+    else if (hostBridgeStatus.status === 'conflict' || hostBridgeStatus.status === 'error') {
+        console.warn(`[authority] Host Bridge ${hostBridgeStatus.status}: ${hostBridgeStatus.message}`);
+    }
     try {
         const workspace = await (0,_services_default_agent_workspace_js__WEBPACK_IMPORTED_MODULE_3__.ensureDefaultAgentWorkspace)(runtime);
         if (!workspace) {

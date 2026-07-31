@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { HostBridgeService } from './services/host-bridge-service.js';
+import { InstallService } from './services/install-service.js';
 import { WorkspaceHistoryService, resolveWorkspaceHistoryStore } from './services/workspace-history-service.js';
 
 interface ParsedArgs {
@@ -8,6 +10,9 @@ interface ParsedArgs {
     store?: string;
     workspaceId?: string;
     operationId?: string;
+    stRoot?: string;
+    pluginRoot?: string;
+    hostState?: string;
     limit: number;
     force: boolean;
 }
@@ -18,6 +23,10 @@ export async function runAgentCli(argv: string[]): Promise<unknown> {
         ? path.resolve(args.store)
         : resolveWorkspaceHistoryStore(args.dataRoot ?? defaultDataRoot());
     const history = new WorkspaceHistoryService(storeDir);
+
+    if (args.command.startsWith('host:')) {
+        return await runHostBridgeCommand(args, storeDir);
+    }
 
     if (args.command === 'workspaces') {
         return { storeDir, workspaces: history.listWorkspaces() };
@@ -70,12 +79,18 @@ export async function runAgentCli(argv: string[]): Promise<unknown> {
 
 function parseArgs(argv: string[]): ParsedArgs {
     const values = argv[0] === 'rescue' ? argv.slice(1) : argv;
-    const command = values.shift() ?? '';
+    let command = values.shift() ?? '';
+    if (command === 'host') {
+        command = `host:${values.shift() ?? ''}`;
+    }
     const positionals: string[] = [];
     let dataRoot: string | undefined;
     let store: string | undefined;
     let workspaceId: string | undefined;
     let operationId: string | undefined;
+    let stRoot: string | undefined;
+    let pluginRoot: string | undefined;
+    let hostState: string | undefined;
     let limit = 100;
     let force = false;
 
@@ -85,7 +100,7 @@ function parseArgs(argv: string[]): ParsedArgs {
             force = true;
             continue;
         }
-        if (value === '--data-root' || value === '--store' || value === '--workspace' || value === '--operation-id' || value === '--limit') {
+        if (value === '--data-root' || value === '--store' || value === '--workspace' || value === '--operation-id' || value === '--limit' || value === '--st-root' || value === '--plugin-root' || value === '--host-state') {
             const optionValue = values[index + 1];
             if (!optionValue) {
                 throw new Error(`${value} requires a value`);
@@ -96,6 +111,9 @@ function parseArgs(argv: string[]): ParsedArgs {
             if (value === '--workspace') workspaceId = optionValue;
             if (value === '--operation-id') operationId = optionValue;
             if (value === '--limit') limit = Number(optionValue);
+            if (value === '--st-root') stRoot = optionValue;
+            if (value === '--plugin-root') pluginRoot = optionValue;
+            if (value === '--host-state') hostState = optionValue;
             continue;
         }
         if (value?.startsWith('--')) {
@@ -117,7 +135,39 @@ function parseArgs(argv: string[]): ParsedArgs {
         ...(store ? { store } : {}),
         ...(workspaceId ? { workspaceId } : {}),
         ...(operationId ? { operationId } : {}),
+        ...(stRoot ? { stRoot } : {}),
+        ...(pluginRoot ? { pluginRoot } : {}),
+        ...(hostState ? { hostState } : {}),
     };
+}
+
+async function runHostBridgeCommand(args: ParsedArgs, workspaceStoreDir: string): Promise<unknown> {
+    const stRoot = path.resolve(args.stRoot ?? process.cwd());
+    const env = { ...process.env, AUTHORITY_ST_ROOT: stRoot };
+    const install = new InstallService({
+        runtimeDir: args.pluginRoot ? path.resolve(args.pluginRoot, 'runtime') : __dirname,
+        cwd: stRoot,
+        env,
+    });
+    const bridge = new HostBridgeService({
+        pluginRoot: args.pluginRoot ? path.resolve(args.pluginRoot) : install.getPluginRoot(),
+        stateDir: path.resolve(args.hostState ?? path.join(workspaceStoreDir, '..', 'host-bridge')),
+        resolveSillyTavernRoot: () => install.getSillyTavernRoot(),
+        env,
+        logger: { info() {}, warn() {}, error() {} },
+    });
+    switch (args.command) {
+        case 'host:status':
+            return await bridge.inspect();
+        case 'host:install':
+            return await bridge.install();
+        case 'host:repair':
+            return await bridge.repair();
+        case 'host:rollback':
+            return await bridge.rollback({ force: args.force });
+        default:
+            throw new Error(usage());
+    }
 }
 
 function resolveWorkspaceId(history: WorkspaceHistoryService, requested: string | undefined): string {
@@ -147,6 +197,7 @@ function usage(): string {
     return [
         'Usage: node runtime/agent.cjs rescue <command> [options]',
         'Commands: workspaces, status, log, diff <from|empty> <to|head>, checkpoint [paths...], rollback <commit>, resume',
+        'Host commands: host status|install|repair|rollback --st-root <path> [--plugin-root <path>] [--host-state <path>]',
         'Options: --data-root <path>, --store <path>, --workspace <id>, --operation-id <id>, --limit <1-500>, --force',
     ].join('\n');
 }

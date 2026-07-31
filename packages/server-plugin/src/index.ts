@@ -24,6 +24,12 @@ export async function init(router: any): Promise<void> {
     runtime ??= createAuthorityRuntime();
     registerRoutes(router, runtime);
     await runtime.install.bootstrap();
+    const hostBridgeStatus = await runtime.hostBridge.bootstrap();
+    if (hostBridgeStatus.requiresRestart) {
+        console.warn(`[authority] ${hostBridgeStatus.message}`);
+    } else if (hostBridgeStatus.status === 'conflict' || hostBridgeStatus.status === 'error') {
+        console.warn(`[authority] Host Bridge ${hostBridgeStatus.status}: ${hostBridgeStatus.message}`);
+    }
     try {
         const workspace = await ensureDefaultAgentWorkspace(runtime);
         if (!workspace) {

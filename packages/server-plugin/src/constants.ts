@@ -7,6 +7,7 @@ export const AUTHORITY_MANAGED_FILE = '.authority-managed.json';
 export const AUTHORITY_RELEASE_FILE = '.authority-release.json';
 export const AUTHORITY_MANAGED_SDK_DIR = 'managed/sdk-extension';
 export const AUTHORITY_MANAGED_CORE_DIR = 'managed/core';
+export const AUTHORITY_MANAGED_HOST_BRIDGE_DIR = 'managed/host-bridge';
 
 export const SESSION_HEADER = 'x-authority-session-token';
 

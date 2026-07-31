@@ -123,18 +123,22 @@ function stageInstallable() {
     const serverDist = path.join(repoRoot, 'packages', 'server-plugin', 'dist', 'authority');
     const sdkDist = path.join(repoRoot, 'packages', 'sdk-extension', 'dist', 'extension');
     const coreDist = path.join(repoRoot, 'managed', 'core');
+    const hostBridgeSource = path.join(repoRoot, 'host-bridge');
 
     assertExists(path.join(serverDist, 'index.cjs'), 'Run `npm run build` before staging installable outputs.');
     assertExists(path.join(serverDist, 'agent.cjs'), 'Run `npm run build` before staging installable outputs.');
     assertExists(path.join(sdkDist, 'manifest.json'), 'Run `npm run build` before staging installable outputs.');
     assertExists(coreDist, 'Run `npm run build:core` before staging installable outputs.');
+    assertExists(path.join(hostBridgeSource, 'manifest.json'), 'Managed Host Bridge source is missing.');
 
     const runtimeDir = path.join(stageDir, 'runtime');
     const managedSdkDir = path.join(stageDir, 'managed', 'sdk-extension');
     const managedCoreDir = path.join(stageDir, 'managed', 'core');
+    const managedHostBridgeDir = path.join(stageDir, 'managed', 'host-bridge');
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.mkdirSync(managedSdkDir, { recursive: true });
     fs.mkdirSync(managedCoreDir, { recursive: true });
+    fs.mkdirSync(managedHostBridgeDir, { recursive: true });
 
     copyFile(path.join(serverDist, 'index.cjs'), path.join(runtimeDir, 'index.cjs'));
     copyOptionalFile(path.join(serverDist, 'index.cjs.map'), path.join(runtimeDir, 'index.cjs.map'));
@@ -144,12 +148,15 @@ function stageInstallable() {
     copySdkRuntime(sdkDist, managedSdkDir);
     patchSdkManifest(path.join(managedSdkDir, 'manifest.json'));
     fs.cpSync(coreDist, managedCoreDir, { recursive: true, force: true });
+    fs.cpSync(hostBridgeSource, managedHostBridgeDir, { recursive: true, force: true });
 
-    validateRuntimeArtifacts(runtimeDir, managedSdkDir, managedCoreDir);
+    validateRuntimeArtifacts(runtimeDir, managedSdkDir, managedCoreDir, managedHostBridgeDir);
 
     const assetHash = hashDirectory(managedSdkDir);
     const coreArtifactHash = hashDirectory(managedCoreDir);
-    const buildTime = resolveBuildTime(pluginVersion, assetHash, coreArtifactHash);
+    const hostBridgeArtifactHash = hashDirectory(managedHostBridgeDir);
+    const hostBridgeManifest = readJson(path.join(managedHostBridgeDir, 'manifest.json'));
+    const buildTime = resolveBuildTime(pluginVersion, assetHash, coreArtifactHash, hostBridgeArtifactHash);
     const coreArtifacts = readCoreArtifacts(managedCoreDir);
     const coreArtifactPlatforms = Object.keys(coreArtifacts).sort();
     validateRequiredCoreArtifactPlatforms(coreArtifactPlatforms);
@@ -167,6 +174,8 @@ function stageInstallable() {
         coreArtifactPlatforms,
         coreArtifacts,
         coreBinarySha256: coreArtifacts[coreArtifactPlatform].binarySha256,
+        hostBridgeVersion: hostBridgeManifest.bridgeVersion,
+        hostBridgeArtifactHash,
         buildTime,
     };
 
@@ -177,6 +186,7 @@ function stageInstallable() {
         runtimeDir,
         managedSdkDir,
         managedCoreDir,
+        managedHostBridgeDir,
         releasePath,
     };
 }
@@ -192,16 +202,19 @@ function syncInstallable(staged) {
     const runtimeTarget = path.join(repoRoot, 'runtime');
     const managedTarget = path.join(repoRoot, 'managed', 'sdk-extension');
     const managedCoreTarget = path.join(repoRoot, 'managed', 'core');
+    const managedHostBridgeTarget = path.join(repoRoot, 'managed', 'host-bridge');
     const releaseTarget = path.join(repoRoot, '.authority-release.json');
 
     fs.rmSync(runtimeTarget, { recursive: true, force: true });
     fs.rmSync(managedTarget, { recursive: true, force: true });
     fs.rmSync(managedCoreTarget, { recursive: true, force: true });
+    fs.rmSync(managedHostBridgeTarget, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(managedTarget), { recursive: true });
 
     fs.cpSync(staged.runtimeDir, runtimeTarget, { recursive: true, force: true });
     fs.cpSync(staged.managedSdkDir, managedTarget, { recursive: true, force: true });
     fs.cpSync(staged.managedCoreDir, managedCoreTarget, { recursive: true, force: true });
+    fs.cpSync(staged.managedHostBridgeDir, managedHostBridgeTarget, { recursive: true, force: true });
     copyFile(staged.releasePath, releaseTarget);
 }
 
@@ -210,6 +223,7 @@ function checkInstallable(staged) {
         { staged: staged.runtimeDir, actual: path.join(repoRoot, 'runtime') },
         { staged: staged.managedSdkDir, actual: path.join(repoRoot, 'managed', 'sdk-extension') },
         { staged: staged.managedCoreDir, actual: path.join(repoRoot, 'managed', 'core') },
+        { staged: staged.managedHostBridgeDir, actual: path.join(repoRoot, 'managed', 'host-bridge') },
     ];
 
     for (const pair of expected) {
@@ -246,7 +260,7 @@ function patchSdkManifest(manifestPath) {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
 }
 
-function validateRuntimeArtifacts(runtimeDir, managedSdkDir, managedCoreDir) {
+function validateRuntimeArtifacts(runtimeDir, managedSdkDir, managedCoreDir, managedHostBridgeDir) {
     const invalidTokens = [
         '@stdo/',
         `${path.sep}node_modules${path.sep}`,
@@ -258,6 +272,7 @@ function validateRuntimeArtifacts(runtimeDir, managedSdkDir, managedCoreDir) {
         ...listFiles(runtimeDir).filter(filePath => filePath.endsWith('.cjs') || filePath.endsWith('.js')),
         ...listFiles(managedSdkDir).filter(filePath => filePath.endsWith('.js')),
         ...listFiles(managedCoreDir).filter(filePath => filePath.endsWith('.json')),
+        ...listFiles(managedHostBridgeDir).filter(filePath => filePath.endsWith('.js') || filePath.endsWith('.cjs') || filePath.endsWith('.json')),
     ];
 
     for (const filePath of jsFiles) {
@@ -294,7 +309,7 @@ function compareFiles(actualPath, stagedPath) {
     }
 }
 
-function resolveBuildTime(nextPluginVersion, nextAssetHash, nextCoreArtifactHash) {
+function resolveBuildTime(nextPluginVersion, nextAssetHash, nextCoreArtifactHash, nextHostBridgeArtifactHash) {
     const releasePath = path.join(repoRoot, '.authority-release.json');
     if (fs.existsSync(releasePath)) {
         const currentRelease = readJson(releasePath);
@@ -302,6 +317,7 @@ function resolveBuildTime(nextPluginVersion, nextAssetHash, nextCoreArtifactHash
             currentRelease.pluginVersion === nextPluginVersion
             && currentRelease.assetHash === nextAssetHash
             && currentRelease.coreArtifactHash === nextCoreArtifactHash
+            && currentRelease.hostBridgeArtifactHash === nextHostBridgeArtifactHash
             && typeof currentRelease.buildTime === 'string'
         ) {
             return currentRelease.buildTime;

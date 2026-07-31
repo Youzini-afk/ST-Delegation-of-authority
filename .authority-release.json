@@ -53,5 +53,7 @@
     }
   },
   "coreBinarySha256": "a27a1c30fba516fe7b7c7abb0a493201916e522340b10de65ab7021e9bd3f148",
-  "buildTime": "2026-07-31T01:13:53.045Z"
+  "hostBridgeVersion": "1.0.0",
+  "hostBridgeArtifactHash": "09660ac7215230bfb45ff176a2ac0adff1ecba6e24ab0be0ad16da95c9c256a6",
+  "buildTime": "2026-07-31T19:09:06.004Z"
 }

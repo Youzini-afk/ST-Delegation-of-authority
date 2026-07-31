@@ -10,6 +10,7 @@ import { CoreService } from './services/core-service.js';
 import { DataTransferService } from './services/data-transfer-service.js';
 import { ExtensionService } from './services/extension-service.js';
 import { HttpService } from './services/http-service.js';
+import { HostBridgeService } from './services/host-bridge-service.js';
 import { IdempotencyService } from './services/idempotency-service.js';
 import { InstallService } from './services/install-service.js';
 import { JobService } from './services/job-service.js';
@@ -36,6 +37,7 @@ export interface AuthorityRuntime {
     transfers: DataTransferService;
     extensions: ExtensionService;
     install: InstallService;
+    hostBridge: HostBridgeService;
     policies: PolicyService;
     permissions: PermissionService;
     sessions: SessionService;
@@ -85,6 +87,12 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const transfers = new DataTransferService();
     const extensions = new ExtensionService(core);
     const install = new InstallService();
+    const globalPaths = getGlobalAuthorityPaths();
+    const hostBridge = new HostBridgeService({
+        pluginRoot: install.getPluginRoot(),
+        stateDir: globalPaths.hostBridgeStateDir,
+        resolveSillyTavernRoot: () => install.getSillyTavernRoot(),
+    });
     const policies = new PolicyService(core);
     const permissions = new PermissionService(policies, core);
     const sessions = new SessionService(core);
@@ -102,7 +110,6 @@ export function createAuthorityRuntime(): AuthorityRuntime {
     const locks = new LockService();
     const idempotency = new IdempotencyService(storage);
     const companionLoader = new CompanionModuleLoaderService(modules, permissions, audit, trivium, core, locks, idempotency);
-    const globalPaths = getGlobalAuthorityPaths();
     const workspaceHistory = new WorkspaceHistoryService(globalPaths.agentWorkspacesDir);
     const agentProfiles = new AgentProfileStoreService(globalPaths.agentStateDir);
     const agentHostTools = new AgentHostToolService(workspaceHistory);
@@ -122,6 +129,7 @@ export function createAuthorityRuntime(): AuthorityRuntime {
         transfers,
         extensions,
         install,
+        hostBridge,
         policies,
         permissions,
         sessions,

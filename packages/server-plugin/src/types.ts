@@ -144,6 +144,8 @@ export interface AuthorityReleaseMetadata {
         artifactHash: string;
     }>;
     coreBinarySha256?: string;
+    hostBridgeVersion?: string;
+    hostBridgeArtifactHash?: string;
     buildTime: string;
 }
 
@@ -180,6 +182,19 @@ export interface InstallStatusSnapshot {
     coreBinarySha256: string | null;
     coreVerified: boolean;
     coreMessage: string | null;
+}
+
+export type HostBridgeStatusCode = 'missing' | 'ready' | 'installed' | 'updated' | 'rolled_back' | 'conflict' | 'error';
+
+export interface HostBridgeStatusSnapshot {
+    status: HostBridgeStatusCode;
+    message: string;
+    bridgeVersion: string | null;
+    hostPackageVersion: string | null;
+    sillyTavernRoot: string | null;
+    operationId: string | null;
+    requiresRestart: boolean;
+    checkedAt: string;
 }
 
 export type AdminUpdateAction = 'git-pull' | 'redeploy-sdk';
